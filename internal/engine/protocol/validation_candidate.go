@@ -45,7 +45,8 @@ func candidateCorrelation(p CandidateParameters) string {
 		key.RepairTask = p.RepairTask
 		key.SourceTasks, key.Paths, key.Base = p.SourceTasks, p.Paths, p.Base
 	case "AUTHORING":
-		key.Base = p.Base
+		key.Base, key.Paths, key.QAArtifacts = p.Base, p.Paths, p.QAArtifacts
+		key.TestFiles, key.ReviewCases = p.TestFiles, p.ReviewCases
 	case "QA_ARTIFACT":
 		key.TestFiles = p.TestFiles
 		key.Base, key.Paths = p.Base, p.Paths
@@ -533,9 +534,20 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 		params.Base = base
 	case s.nextRepairWork() != nil:
 		return CandidateParameters{}, false, nil
-	case slices.Contains(s.validationKinds(), coverage.ReviewWhitebox) && v.Sets[coverage.ReviewWhitebox] == nil && v.AuthoringWorkspace == "":
+	case slices.Contains(s.validationKinds(), coverage.ReviewWhitebox) && v.AuthoringWorkspace == "" && (v.Sets[coverage.ReviewWhitebox] == nil || v.Sets[coverage.ReviewWhitebox].Status == "DRAFT" || v.Sets[coverage.ReviewWhitebox].Status == "THAWED"):
 		params.Stage = "AUTHORING"
 		params.Base = v.DevelopmentSnapshot
+		params.Paths = nil
+		if set := v.Sets[coverage.ReviewWhitebox]; set != nil {
+			resource := s.qaDesignResource(coverage.ReviewWhitebox)
+			if len(set.Paths) > 0 {
+				if resource.Identity == "" {
+					return CandidateParameters{}, false, validationError("QA authoring lacks its original native artifact")
+				}
+				params.Paths = slices.Clone(set.Paths)
+				params.QAArtifacts = map[coverage.ReviewKind]CandidateArtifact{coverage.ReviewWhitebox: {Identity: resource.Identity, Paths: slices.Clone(set.Paths)}}
+			}
+		}
 	default:
 		set := v.Sets[coverage.ReviewWhitebox]
 
@@ -576,7 +588,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			params.Finalize = true
 		}
 	}
-	if params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
+	if params.Stage == "AUTHORING" || params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
 		if set := v.Sets[coverage.ReviewWhitebox]; set != nil {
 			params.TestFiles = set.Manifest.TestFiles()
 			params.ReviewCases = map[string]string{}
@@ -587,7 +599,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 		params.CaseVersions = map[coverage.ReviewKind]string{}
 		params.DesignTasks = map[coverage.ReviewKind]runtime.TaskKey{}
 		for mode, set := range v.Sets {
-			if params.Stage == "QA_ARTIFACT" && mode != coverage.ReviewWhitebox {
+			if params.Stage != "REVIEW_READY" && mode != coverage.ReviewWhitebox {
 				continue
 			}
 			params.CaseVersions[mode] = set.Version
@@ -620,6 +632,10 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 }
 
 func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	return s.nativeActionAllowed(intent) && s.candidateInputsCurrent(intent, cd)
+}
+
+func (s *State) nativeActionAllowed(intent HostActionIntent) bool {
 	if !s.parentReviewReady() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
 		return false
 	}
@@ -629,5 +645,5 @@ func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.Compil
 	if s.abortRequested() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
 		return false
 	}
-	return s.candidateInputsCurrent(intent, cd)
+	return true
 }

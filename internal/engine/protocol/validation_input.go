@@ -101,6 +101,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			break
 		}
 	}
+	if role == "engine.qa.design" && mode == coverage.ReviewWhitebox {
+		input.ReviewBase = s.Validation.DevelopmentSnapshot
+	}
 	if role == "engine.qa.review.rationale" && mode == coverage.ReviewWhitebox {
 		input.ReviewBase = s.Validation.DevelopmentSnapshot
 		if set := s.Validation.Sets[mode]; set != nil && set.Candidate != "" {

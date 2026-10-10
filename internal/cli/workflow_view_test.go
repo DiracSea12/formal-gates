@@ -170,3 +170,55 @@ func TestWorkflowConfirmationUsesPreparedAskAndPreservesPreparationErrors(t *tes
 		t.Fatal("confirmation did not use the prepared event's original Ask", questions)
 	}
 }
+
+func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
+	root := t.TempDir()
+	f := startAdmittedEngineRun(t, root)
+	saved := filepath.Join(t.TempDir(), "confirmation.json")
+	var out, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--run-id", "writer-exclusive", "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"request":"ABORT"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	before := snapshotEngineRunTree(t, root, "writer-exclusive")
+	for _, target := range [][]string{{"--root", t.TempDir()}, {"--run-id", "different-run"}} {
+		out.Reset()
+		stderr.Reset()
+		args := append([]string{"workflow", "submit", "--confirmation", saved, "--single-step"}, target...)
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "confirmation belongs to a different project or run") || out.Len() != 0 {
+			t.Fatalf("conflicting explicit target was accepted: %d %s", code, stderr.String())
+		}
+		if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+			t.Fatal("conflicting target changed the original run")
+		}
+	}
+	for _, decision := range []bool{false, true} {
+		if decision {
+			run, err := f.Show()
+			if err != nil || len(run.PendingAsks) != 1 || run.PendingAsks[0].Control != protocol.ControlAbort {
+				t.Fatal("saved request did not create its original user Ask", err)
+			}
+			out.Reset()
+			stderr.Reset()
+			if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--run-id", run.RunID, "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"ask":1,"choice":"decline","reason":"Keep the active run"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
+				t.Fatal(stderr.String())
+			}
+		}
+		out.Reset()
+		stderr.Reset()
+		args := []string{"workflow", "submit", "--confirmation", saved, "--single-step"}
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+			t.Fatalf("saved target did not submit: %d %s", code, stderr.String())
+		}
+		accepted := snapshotEngineRunTree(t, root, "writer-exclusive")
+		var err error
+		f, err = facade.Open(root, "writer-exclusive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		stderr.Reset()
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || !reflect.DeepEqual(accepted, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+			t.Fatalf("reopened replay changed the original event or run: %d %s", code, stderr.String())
+		}
+	}
+}

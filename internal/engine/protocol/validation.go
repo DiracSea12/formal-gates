@@ -630,7 +630,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 		switch set.Status {
 		case "DRAFT", "THAWED":
-			add("engine.qa.design", s.nextDesignScope(mode, cd), s.prewaveBlocked(mode, "engine.qa.design", cd))
+			add("engine.qa.design", s.nextDesignScope(mode, cd), s.prewaveBlocked(mode, "engine.qa.design", cd) || mode == coverage.ReviewWhitebox && v.AuthoringWorkspace == "")
 		case "REVIEW":
 			add("engine.qa.review.rationale", s.reviewTask(mode, v.Generation, set.Version, cd).Scope, s.prewaveBlocked(mode, "engine.qa.review.rationale", cd) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
 		}

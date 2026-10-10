@@ -317,16 +317,8 @@ func (d *candidateDriver) abort() {
 		}
 		d.submit(event)
 	}
-	request, err := protocol.NewRequestEvent(d.id(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop interrupted run"})
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	d.submit(request)
-	event, err := protocol.NewDecideEvent(d.id(), protocol.RequestID(request.ID), d.token(string(request.ID)), "abort")
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	d.submit(event)
+	d.control(facade.ControlInput{Request: protocol.ControlAbort})
+	d.control(facade.ControlInput{Ask: d.ask(protocol.ControlAbort), Choice: "abort", Reason: "Stop interrupted run"})
 }
 
 func (d *candidateDriver) showTerminal() {
@@ -564,15 +556,7 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 			if d.run.Status != "FINALIZING_CLEANUP" {
 				t.Fatalf("no genuine cleanup prefix: %s", d.run.Status)
 			}
-			options := []protocol.AskOption{{ID: "abort", Label: "Abort run"}}
-			if control == protocol.ControlRequestRequirementChange {
-				options = []protocol.AskOption{{ID: "proceed", Label: "Revise"}, {ID: "abort", Label: "Keep requirement"}}
-			}
-			request, err := protocol.NewRequestEvent(d.id(), control, options...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			d.submit(request)
+			d.control(facade.ControlInput{Request: control})
 			target := func() string {
 				return strings.Join([]string{d.p.git(t, "rev-parse", "HEAD"), d.p.git(t, "rev-parse", "HEAD^{tree}"), d.p.git(t, "write-tree"), d.p.git(t, "status", "--porcelain=v1")}, "\n")
 			}
@@ -588,7 +572,7 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 			stateBytes := readInstalledFile(t, statePath)
 			var next decision.NextResult
 			for _, command := range []string{"next", "show", "status"} {
-				out := d.call(nil, "workflow", command, "--root", d.p.project, "--run-id", "candidate")
+				out := d.call(nil, "workflow", command, "--machine", "--root", d.p.project, "--run-id", "candidate")
 				if command == "next" {
 					if err := json.Unmarshal(out, &next); err != nil {
 						t.Fatal(err)
@@ -617,16 +601,12 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 					t.Fatal("requirement barrier changed original native facts")
 				}
 			}
-			decide, err := protocol.NewDecideEvent(d.id(), protocol.RequestID(request.ID), d.token(string(request.ID)), "abort")
-			if err != nil {
-				t.Fatal(err)
-			}
-			d.submit(decide)
+			decide := d.control(facade.ControlInput{Ask: d.ask(control), Choice: "abort", Reason: "Resolve the active cleanup control"})
 			original := d.accepted[len(d.accepted)-1].receipt
 			_, decided := d.p.bindings(t, "candidate", "codex")
-			d.submit(decide)
+			repeated, _ := d.replay(decide)
 			_, replayed := d.p.bindings(t, "candidate", "codex")
-			if !reflect.DeepEqual(d.accepted[len(d.accepted)-1].receipt, original) || !reflect.DeepEqual(decided, replayed) {
+			if !reflect.DeepEqual(repeated, original) || !reflect.DeepEqual(decided, replayed) {
 				t.Fatal("duplicate control decision changed its acceptance or durable state")
 			}
 			d.drive()

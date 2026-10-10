@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -172,6 +173,93 @@ func TestNativeCandidateFreezeMapsCopiedSourceAndRejectsForeignCommits(t *testin
 					t.Fatalf("%s accepted or mutated: %+v %t %t %v", scenario, bad, complete, invoked, err)
 				}
 				t.Logf("%s rejected with native message/range proof: %v", scenario, err)
+			}
+		})
+	}
+}
+
+func TestNativeWhiteboxArtifactRetainsMaterialsAcrossSemanticAndFileRevisions(t *testing.T) {
+	for _, name := range []string{"svn", "p4"} {
+		t.Run(name, func(t *testing.T) {
+			f, state, native, runner := nativeCandidateWorkspace(t, name)
+			resource := state.NativeResources["editing"]
+			base := resource.Source
+			materialContents := map[string]string{}
+			write := func(name, body string) {
+				t.Helper()
+				materialContents[name] = body
+				if err := os.WriteFile(filepath.Join(resource.Path, name), []byte(body), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			freeze := func(id string, paths []string) nativeResult {
+				t.Helper()
+				intent := nativeCandidateIntent(t, "QA_ARTIFACT", base, paths...)
+				intent.ActionID, intent.PayloadDigest = id, "candidate-input-"+id
+				actual, complete, err := f.candidateEvidence(state, intent, true, new(bool))
+				if err != nil || !complete || actual.Candidate == nil {
+					t.Fatalf("freeze %s: %+v %t %v", id, actual, complete, err)
+				}
+				reopened := &Facade{root: f.root, vcs: vcs.NewNative(f.root, name, runner), admission: f.admission}
+				invoked := false
+				observed, complete, err := reopened.candidateEvidence(state, intent, false, &invoked)
+				if err != nil || !complete || invoked || !reflect.DeepEqual(actual, observed) {
+					t.Fatalf("observe %s: %+v %t %t %v", id, observed, complete, invoked, err)
+				}
+				resource.Identity = actual.Candidate.Identity
+				state.NativeResources[resource.ID] = resource
+				return actual
+			}
+			write("retained_test.go", "package command\nimport \"testing\"\nfunc TestRetained(t *testing.T) { if !Valid(\"yes\") { t.Fatal(\"valid\") } }\n")
+			write("removed_test.go", "package command\nimport \"testing\"\nfunc TestRemoved(t *testing.T) { if Valid(\"\") { t.Fatal(\"invalid\") } }\n")
+			first := freeze("initial-tests", []string{"removed_test.go", "retained_test.go"})
+			paths, err := native.ChangedPathsFrom(base)
+			if err != nil || !reflect.DeepEqual(paths, []string{"removed_test.go", "retained_test.go"}) {
+				t.Fatal("committed material paths lost", paths, err)
+			}
+			semantic := freeze("oracle-clarification", paths)
+			if semantic.Candidate.Identity != first.Candidate.Identity || !reflect.DeepEqual(semantic.Candidate.Changes, first.Candidate.Changes) {
+				t.Fatal("semantic revision changed actual material", semantic)
+			}
+			if err := os.Remove(filepath.Join(resource.Path, "removed_test.go")); err != nil {
+				t.Fatal(err)
+			}
+			write("added_test.go", "package command\nimport \"testing\"\nfunc TestAdded(t *testing.T) { if !Valid(\"word\") { t.Fatal(\"valid\") } }\n")
+			paths, err = native.ChangedPathsFrom(base)
+			if err != nil || !reflect.DeepEqual(paths, []string{"added_test.go", "retained_test.go"}) {
+				t.Fatal("actual add/remove diff lost", paths, err)
+			}
+			revised := freeze("changed-tests", paths)
+			for _, path := range []string{"added_test.go", "retained_test.go"} {
+				entry, err := native.Entry(revised.Candidate.Identity, path)
+				if err != nil || entry == "" {
+					t.Fatal("candidate lacks actual retained/addition material", path, err)
+				}
+				var stored struct{ Content []byte }
+				if err := json.Unmarshal([]byte(entry), &stored); err != nil || string(stored.Content) != materialContents[path] {
+					t.Fatal("candidate material content differs from the actual assertion", path, err)
+				}
+			}
+			entry, err := native.Entry(revised.Candidate.Identity, "removed_test.go")
+			if err != nil || entry != "" {
+				t.Fatal("candidate kept removed material", entry, err)
+			}
+			for _, path := range []string{"added_test.go", "retained_test.go"} {
+				if err := os.Remove(filepath.Join(resource.Path, path)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths, err = native.ChangedPathsFrom(base)
+			if err != nil || len(paths) != 0 {
+				t.Fatal("removal back to development has a false artifact diff", paths, err)
+			}
+			removed := freeze("remove-all-tests", paths)
+			if len(removed.Candidate.Changes) != 0 {
+				t.Fatal("removed candidate differs from development", removed)
+			}
+			status, err := native.Status()
+			if err != nil || status != "" {
+				t.Fatal("net-empty deletion left native debt", status, err)
 			}
 		})
 	}

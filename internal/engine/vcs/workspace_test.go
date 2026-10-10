@@ -350,3 +350,46 @@ func TestGoOwnershipUsesAncestorConfigurationAndExplicitReference(t *testing.T) 
 		})
 	}
 }
+
+func TestSVNChangedPathsFromPreservesNativeValuesAndReversions(t *testing.T) {
+	p, runner := svnFixture(t)
+	base := nativeIdentityAt(t, p)
+	paths, err := p.ChangedPathsFrom(base)
+	if err != nil || len(paths) != 0 {
+		t.Fatal("unchanged native source has a false diff", paths, err)
+	}
+	if err := os.WriteFile(filepath.Join(p.root, "body.txt"), []byte("changed material\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, runner, p.root, "svn", "propset", "custom:directory", "changed", "empty")
+	if err := os.Remove(filepath.Join(p.root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("empty", filepath.Join(p.root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	paths, err = p.ChangedPathsFrom(base)
+	if err != nil || !reflect.DeepEqual(paths, []string{"body.txt", "empty", "link"}) {
+		t.Fatal("complete native file/property/link diff differs", paths, err)
+	}
+	if err := p.Track(paths); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("test material values"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.root, "body.txt"), []byte(" leading\ntrailing\n\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, runner, p.root, "svn", "propset", "custom:directory", " directory \n", "empty")
+	if err := os.Remove(filepath.Join(p.root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("body.txt", filepath.Join(p.root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	paths, err = p.ChangedPathsFrom(base)
+	if err != nil || len(paths) != 0 {
+		t.Fatal("native values restored to development retained a false diff", paths, err)
+	}
+}

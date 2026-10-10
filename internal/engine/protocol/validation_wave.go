@@ -250,7 +250,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (bool, error) 
 		}
 	}
 	set := v.Sets[coverage.ReviewWhitebox]
-	if set != nil && set.Status == "REVIEW" && set.Candidate == "" && len(set.Paths) == 0 {
+	if s.NativeRoot == "" && set != nil && set.Status == "REVIEW" && set.Candidate == "" && len(set.Paths) == 0 {
 		set.Candidate = v.DevelopmentSnapshot
 		changed = true
 	}

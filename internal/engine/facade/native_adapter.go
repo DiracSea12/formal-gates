@@ -628,9 +628,12 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, err
 	}
 	workspaceBase := p.Base
+	if p.Stage == "QA_ARTIFACT" {
+		workspaceBase = r.Identity
+	}
 	// A copied source maps to its workspace baseline. An issued editing
 	// prefix already belongs to the native workspace and remains authoritative.
-	if native.Name() != "git" && p.Base == r.Source {
+	if native.Name() != "git" && p.Stage != "QA_ARTIFACT" && p.Base == r.Source {
 		workspaceBase = s.ResourceStartIdentity(r)
 	}
 	message := "formal-gates candidate " + s.RunID + " " + intent.ActionID + " " + intent.PayloadDigest
@@ -664,7 +667,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 
-	completed := p.Stage == "AUTHORING" && head == workspaceBase
+	completed := p.Stage == "AUTHORING" && head == workspaceBase && len(p.QAArtifacts) == 0
 	if head != workspaceBase {
 		observed, err := native.Message(head)
 		if err != nil {
@@ -737,7 +740,26 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 	if !completed {
-		changes, pending, err := native.ValidateDeclaredChanges(p.Base, paths)
+		var changes, artifactPaths []string
+		var pending vcs.Pending
+		if p.Stage == "QA_ARTIFACT" {
+			artifactPaths, err = native.ChangedPathsFrom(p.Base)
+			if err == nil {
+				changes, err = native.ChangedPaths()
+			}
+			if err == nil {
+				pending, err = native.Pending(p.Base, "")
+			}
+			if err == nil {
+				for _, path := range artifactPaths {
+					if !slices.Contains(paths, path) && !slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
+						return nativeResult{}, false, fmt.Errorf("candidate contains undeclared change: %s", path)
+					}
+				}
+			}
+		} else {
+			changes, pending, err = native.ValidateDeclaredChanges(p.Base, paths)
+		}
 		if err != nil {
 			return nativeResult{}, false, err
 		}
@@ -760,7 +782,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				}
 			}
 		}
-		if p.Stage == "REVIEW_READY" {
+		if p.Stage == "REVIEW_READY" || p.Stage == "AUTHORING" {
 
 			kinds := make([]coverage.ReviewKind, 0, len(p.QAArtifacts))
 			for kind := range p.QAArtifacts {
@@ -797,6 +819,9 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				return nativeResult{}, false, err
 			}
 			for _, path := range changes {
+				if !slices.Contains(artifactPaths, path) {
+					continue
+				}
 				if slices.ContainsFunc(pending.Changes, func(c vcs.Change) bool { return c.Path == path && c.IsDirectoryContainer(paths) }) {
 					continue
 				}
@@ -813,9 +838,13 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				}
 			}
 		}
+		trackPaths := paths
+		if p.Stage == "QA_ARTIFACT" {
+			trackPaths = changes
+		}
 		if err := f.admission.write(func() error {
 			*invoked = true
-			return native.Track(paths)
+			return native.Track(trackPaths)
 		}); err != nil {
 			return nativeResult{}, false, err
 		}
@@ -851,8 +880,8 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 			return nativeResult{}, false, err
 		}
 		if ref != head {
-			if ref != "" && ref != p.Base {
-				return nativeResult{}, false, fmt.Errorf("candidate ref %s points to %s, expected its base %s or freeze %s", r.Ref, ref, p.Base, head)
+			if ref != "" && ref != workspaceBase {
+				return nativeResult{}, false, fmt.Errorf("candidate ref %s points to %s, expected its base %s or freeze %s", r.Ref, ref, workspaceBase, head)
 			}
 			if !mayWrite {
 				return nativeResult{observedEffect: true}, false, nil
@@ -875,7 +904,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 	evidence := protocol.CandidateEvidence{Changes: changes, ParametersDigest: intent.PayloadDigest, WorkspaceID: p.WorkspaceID, Identity: head, Digest: digest, Paths: p.Paths}
-	if p.Stage == "QA_ARTIFACT" {
+	if p.Stage == "QA_ARTIFACT" || p.Stage == "AUTHORING" && len(p.QAArtifacts) > 0 {
 		baseOwned, owned, err := f.testOwnership(s, native, p.Base, p.ReviewCases, p.TestFiles)
 		if err != nil {
 			return nativeResult{}, false, err

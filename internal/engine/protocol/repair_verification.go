@@ -46,7 +46,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 		}
 		proof, ready := s.editSourceProof(r.ActionID)
 		if ready {
-			contexts = append(contexts, s.newRepairComparison(work.wave, []WorkerResult{*r}, proof, false, cd))
+			contexts = append(contexts, s.newRepairComparison(work.wave, []WorkerResult{*r}, proof, nil, cd))
 		}
 	}
 	for i := range s.Validation.Waves {
@@ -64,7 +64,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 				originals = append(originals, *r)
 			}
 		}
-		contexts = append(contexts, s.newRepairComparison(work.wave, originals, proof, true, cd))
+		contexts = append(contexts, s.newRepairComparison(work.wave, originals, proof, work, cd))
 	}
 
 	for action, binding := range s.DispatchBindings {
@@ -122,7 +122,8 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 	return contexts
 }
 
-func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult, source CandidateEvidence, final bool, cd *compiler.CompiledDefinition) repairComparison {
+func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult, source CandidateEvidence, verification *repairWork, cd *compiler.CompiledDefinition) repairComparison {
+	final := verification != nil
 	context := repairComparison{originals: originals, source: source, wave: w, final: final}
 	var actions []string
 	for _, r := range originals {
@@ -141,10 +142,8 @@ func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult,
 		Final         bool
 	}{actions, source.Digest, digestOfCanonical(context.affected), final}), "sha256:")
 	task := s.replacementFold(pipelineTask(cd, "engine.repair.verify", scope))
-	if final {
-		if work := s.repairVerificationWork(w, cd); work != nil {
-			task = work.task
-		}
+	if verification != nil {
+		task = verification.task
 	}
 	context.resource = s.resource("repair-verification", source.Identity, task.String())
 	if registered, ok := s.NativeResources[context.resource.ID]; ok {
@@ -153,8 +152,8 @@ func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult,
 	context.binding = WorkBinding{Task: task, WaveID: w.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest(), WorkspaceID: context.resource.ID, Candidate: source.Identity, PureP2: true}
 	if !final {
 		context.binding.VerificationSource = originals[0].ActionID
-	} else if work := s.repairVerificationWork(w, cd); work != nil {
-		intent, _, _ := s.repairFinalSource(*work)
+	} else {
+		intent, _, _ := s.repairFinalSource(*verification)
 		context.binding.VerificationSource = intent.ActionID
 	}
 	for action, binding := range s.DispatchBindings {
@@ -219,13 +218,16 @@ func (s *State) repairComparisonPlans(context repairComparison, cd *compiler.Com
 	return plans, nil
 }
 
-func (s *State) repairPlanReceipt(plan CheckParameters, cd *compiler.CompiledDefinition) (ExecutionOperationFact, bool) {
+// The current comparison plan owns input qualification; the exactly matching
+// original receipt owns execution evidence.
+func (s *State) repairPlanReceipt(plan CheckParameters) (ExecutionOperationFact, bool) {
+	expectedDigest := digestOfCanonical(plan)
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok {
+		if !ok || intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[receipt.ActionID]; obsolete {
@@ -235,7 +237,7 @@ func (s *State) repairPlanReceipt(plan CheckParameters, cd *compiler.CompiledDef
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || digestOfCanonical(p) != digestOfCanonical(plan) || !s.NativeActionCurrent(intent, cd) || validateCheckReceipt(intent, receipt) != nil {
+		if err != nil || digestOfCanonical(p) != expectedDigest || !s.nativeActionAllowed(intent) || validateCheckReceipt(intent, receipt) != nil {
 			continue
 		}
 		var evidence CheckEvidence
@@ -253,7 +255,7 @@ func (s *State) repairComparisonFacts(context repairComparison, cd *compiler.Com
 	}
 	facts := map[string]*ExecutionFact{}
 	for _, plan := range plans {
-		actual, done := s.repairPlanReceipt(plan, cd)
+		actual, done := s.repairPlanReceipt(plan)
 		if !done || actual.Evidence.Error != "" {
 			return nil
 		}
@@ -286,7 +288,7 @@ func (s *State) repairComparisonReady(context repairComparison, cd *compiler.Com
 		return false
 	}
 	for _, plan := range plans {
-		fact, done := s.repairPlanReceipt(plan, cd)
+		fact, done := s.repairPlanReceipt(plan)
 		if !done || fact.Evidence.Error != "" || plan.QA == nil && fact.Evidence.ExitCode != 0 || plan.QA != nil && !qaOperationExecuted(fact) {
 			return false
 		}
@@ -307,7 +309,7 @@ func (e *Engine) advanceRepairComparisons(s *State, revision uint64) (bool, erro
 			return false, err
 		}
 		for _, plan := range plans {
-			if fact, done := s.repairPlanReceipt(plan, e.cfg.Definition); done {
+			if fact, done := s.repairPlanReceipt(plan); done {
 				if fact.Evidence.Error != "" || plan.QA == nil && fact.Evidence.ExitCode != 0 {
 					break
 				}
@@ -403,7 +405,7 @@ func (s *State) repairVerificationFailure(cd *compiler.CompiledDefinition) *deci
 			return &decision.Fact{Source: decision.SourceReceipt, Key: context.binding.Task.String(), Value: err.Error()}
 		}
 		for _, plan := range plans {
-			if fact, done := s.repairPlanReceipt(plan, cd); done && (fact.Evidence.Error != "" || plan.QA == nil && fact.Evidence.ExitCode != 0 || plan.QA != nil && !qaOperationExecuted(fact)) {
+			if fact, done := s.repairPlanReceipt(plan); done && (fact.Evidence.Error != "" || plan.QA == nil && fact.Evidence.ExitCode != 0 || plan.QA != nil && !qaOperationExecuted(fact)) {
 				return &decision.Fact{Source: decision.SourceReceipt, Key: fact.ActionID, Value: fmt.Sprintf("repair full verification failed (exit %d): %s", fact.Evidence.ExitCode, fact.Evidence.Error)}
 			}
 		}
@@ -421,7 +423,7 @@ func (s *State) nextRepairCheckParameters(task runtime.TaskKey, cd *compiler.Com
 		return CheckParameters{}, false
 	}
 	for _, plan := range plans {
-		if fact, done := s.repairPlanReceipt(plan, cd); done {
+		if fact, done := s.repairPlanReceipt(plan); done {
 			if fact.Evidence.Error != "" || plan.QA == nil && fact.Evidence.ExitCode != 0 || plan.QA != nil && !qaOperationExecuted(fact) {
 				return CheckParameters{}, false
 			}

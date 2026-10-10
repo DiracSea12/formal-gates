@@ -186,11 +186,68 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				validation[name] = field
 			}
 		}
-		if input.Validation.Workspace != nil {
-			validation["workspace"], err = json.Marshal(map[string]string{"path": input.Validation.Workspace.Path})
+		if input.Validation.Development != nil && validation["development"] != nil {
+			development := input.Validation.Development
+			validation["development"], err = json.Marshal(map[string]any{"batch": development.Batch, "dependencies": development.Dependencies, "result": development.Result, "checks": promptChecks(development.Checks)})
 			if err != nil {
 				return Material{}, err
 			}
+		}
+		if validation["executionFacts"] != nil {
+			facts := make([]any, 0, len(input.Validation.ExecutionFacts))
+			for _, fact := range input.Validation.ExecutionFacts {
+				var operations []any
+				for _, operation := range fact.Operations {
+					qa := operation.Parameters.QA
+					operations = append(operations, map[string]any{"source": qa.Source, "ordinal": qa.Ordinal, "operation": qa.Operation, "goTestRef": qa.GoTestRef, "directory": qa.Directory, "evidence": promptCheck(operation.Evidence)})
+				}
+				facts = append(facts, map[string]any{"caseId": fact.CaseID, "operations": operations})
+			}
+			validation["executionFacts"], err = json.Marshal(facts)
+			if err != nil {
+				return Material{}, err
+			}
+		}
+		for _, field := range []string{"completed", "inherited"} {
+			if validation[field] != nil {
+				var records []coverage.ExecutionRecord
+				if err := json.Unmarshal(validation[field], &records); err != nil {
+					return Material{}, err
+				}
+				validation[field], err = json.Marshal(promptRecords(records, false))
+				if err != nil {
+					return Material{}, err
+				}
+			}
+		}
+		if input.Validation.Repair != nil && validation["repair"] != nil {
+			var repair map[string]json.RawMessage
+			if err := json.Unmarshal(validation["repair"], &repair); err != nil {
+				return Material{}, err
+			}
+			failures := make([]any, 0, len(input.Validation.Repair.ExecutionFailures))
+			for _, failure := range input.Validation.Repair.ExecutionFailures {
+				failures = append(failures, map[string]any{"findingId": failure.FindingID, "records": promptRecords(failure.Records, true)})
+			}
+			if repair["executionFailures"] != nil {
+				repair["executionFailures"], err = json.Marshal(failures)
+				if err != nil {
+					return Material{}, err
+				}
+			}
+			validation["repair"], err = json.Marshal(repair)
+			if err != nil {
+				return Material{}, err
+			}
+		}
+		if validation["observation"] != nil {
+			validation["observation"], err = promptObservation(validation["observation"])
+			if err != nil {
+				return Material{}, err
+			}
+		}
+		if input.Validation.Workspace != nil {
+			instructions += " The workspace tool is bound to this role's registered workspace; select files through its listings and reads."
 		}
 		contextValue["validation"] = validation
 	}
@@ -201,6 +258,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Current requirement]\n"+input.RequirementDocument.Content, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
+	if planRole || input.Handler == "engine.development.batch" || input.Handler == "engine.repair" || input.Handler == "engine.qa.design" {
+		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
+	}
 	if planRole {
 		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL checks are supplied automatically; optional checks reuse a number or author a new local command."
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
@@ -208,4 +268,171 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	blocks = append(blocks, "[Result contract]\n"+instructions+"\nReturn exactly one JSON object matching the supplied semantic schema, using only its direct body or allowed inability/continuation alternative. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted.\n")
 	value.Prompt = strings.Join(blocks, "\n\n") + "\n"
 	return value, nil
+}
+
+// promptCheck keeps actual execution observations; request and receipt bindings
+// remain in Material.Input for program admission and recovery.
+func promptCheck(e protocol.CheckEvidence) map[string]any {
+	return map[string]any{"exitCode": e.ExitCode, "error": e.Error, "stdout": e.Stdout, "stderr": e.Stderr, "stdoutText": e.StdoutText, "stderrText": e.StderrText, "tool": e.Tool, "environment": e.Environment, "invocation": e.Invocation, "goTestName": e.GoTestName, "goResult": e.GoResult}
+}
+
+func promptChecks(checks []protocol.CheckEvidence) []any {
+	result := make([]any, 0, len(checks))
+	for _, check := range checks {
+		result = append(result, promptCheck(check))
+	}
+	return result
+}
+
+func promptRecords(records []coverage.ExecutionRecord, execution bool) []any {
+	result := make([]any, 0, len(records))
+	for _, record := range records {
+		value := map[string]any{"reviewKind": record.ReviewKind, "sourceId": record.SourceID, "pointId": record.PointID, "caseId": record.CaseID, "result": record.Result, "comparison": record.Comparison}
+		if execution {
+			// ExecutionFact.Render owns this newline-separated JSON representation.
+			// Plain semantic text is retained without interpreting its contents.
+			for _, field := range []struct{ name, text string }{{"procedure", record.Procedure}, {"observation", record.Observation}} {
+				rows := []any{}
+				structured := field.text != ""
+				for _, line := range strings.Split(field.text, "\n") {
+					var original map[string]json.RawMessage
+					if json.Unmarshal([]byte(line), &original) != nil || original == nil {
+						structured = false
+						break
+					}
+					if field.name == "procedure" && original["operation"] == nil || field.name == "observation" && (original["actionId"] == nil || original["parametersDigest"] == nil) {
+						structured = false
+						break
+					}
+					projected := map[string]json.RawMessage{}
+					names := []string{"source", "ordinal", "operation", "goTestRef", "invocation"}
+					if field.name == "observation" {
+						names = []string{"exitCode", "error", "stdout", "stderr", "stdoutText", "stderrText", "tool", "environment", "invocation", "goTestName", "goResult"}
+					}
+					for _, name := range names {
+						if original[name] != nil {
+							projected[name] = original[name]
+						}
+					}
+					rows = append(rows, projected)
+				}
+				if structured {
+					value[field.name] = rows
+				} else {
+					value[field.name] = field.text
+				}
+			}
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+// promptExecutionContext projects the execution report held by a target or
+// worker result. Their raw protocol values remain in Material.Input.
+func promptExecutionContext(raw json.RawMessage, actual bool) (json.RawMessage, error) {
+	var context map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &context); err != nil {
+		return nil, err
+	}
+	if context["validation"] != nil && string(context["validation"]) != "null" {
+		var err error
+		context["validation"], err = promptExecutionContext(context["validation"], actual)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if context["execution"] != nil && string(context["execution"]) != "null" {
+		var report map[string]json.RawMessage
+		if err := json.Unmarshal(context["execution"], &report); err != nil {
+			return nil, err
+		}
+		var records []coverage.ExecutionRecord
+		if err := json.Unmarshal(report["records"], &records); err != nil {
+			return nil, err
+		}
+		var err error
+		report["records"], err = json.Marshal(promptRecords(records, actual))
+		if err != nil {
+			return nil, err
+		}
+		context["execution"], err = json.Marshal(report)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(context)
+}
+
+func promptObservation(raw json.RawMessage) (json.RawMessage, error) {
+	var observation map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &observation); err != nil {
+		return nil, err
+	}
+	for _, group := range []string{"findings", "problems", "scopes", "gateImpacts", "suggestions"} {
+		if observation[group] == nil {
+			continue
+		}
+		var items []map[string]json.RawMessage
+		if err := json.Unmarshal(observation[group], &items); err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			var err error
+			switch group {
+			case "findings":
+				err = promptFinding(item)
+			case "problems":
+				var findings []map[string]json.RawMessage
+				if err = json.Unmarshal(item["findings"], &findings); err != nil {
+					return nil, err
+				}
+				for _, finding := range findings {
+					if err = promptFinding(finding); err != nil {
+						return nil, err
+					}
+				}
+				item["findings"], err = json.Marshal(findings)
+			case "scopes":
+				if item["baseline"] != nil {
+					item["baseline"], err = promptExecutionContext(item["baseline"], false)
+				}
+			case "gateImpacts":
+				item["evidence"], err = promptExecutionContext(item["evidence"], false)
+			case "suggestions":
+				delete(item, "workspace")
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		var err error
+		observation[group], err = json.Marshal(items)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(observation)
+}
+
+func promptFinding(item map[string]json.RawMessage) error {
+	for _, field := range []string{"target", "evidence"} {
+		var err error
+		item[field], err = promptExecutionContext(item[field], true)
+		if err != nil {
+			return err
+		}
+	}
+	if item["failedCases"] != nil {
+		var records []coverage.ExecutionRecord
+		if err := json.Unmarshal(item["failedCases"], &records); err != nil {
+			return err
+		}
+		var err error
+		item["failedCases"], err = json.Marshal(promptRecords(records, true))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

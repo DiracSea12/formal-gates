@@ -123,6 +123,19 @@ func (s *State) resource(role, source, scope string) NativeResource {
 	}
 	return resource
 }
+func (s *State) qaDesignResource(mode coverage.ReviewKind) NativeResource {
+	if s.Validation != nil {
+		if set := s.Validation.Sets[mode]; set != nil {
+			for _, binding := range s.DispatchBindings {
+				if binding.Task == set.DesignTask && s.resourceUsable(binding.WorkspaceID) {
+					return s.NativeResources[binding.WorkspaceID]
+				}
+			}
+		}
+	}
+	return NativeResource{}
+}
+
 func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinition) NativeResource {
 	if s.NativeRoot == "" || s.Validation == nil {
 		return NativeResource{}
@@ -188,6 +201,9 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		if s.validationMode(key) == coverage.ReviewWhitebox {
 			role = "whitebox-authoring"
 			source = s.Validation.DevelopmentSnapshot
+			if resource := s.qaDesignResource(coverage.ReviewWhitebox); resource.Source == source && s.resourceUsable(resource.ID) {
+				return resource
+			}
 			scope = key.Scope + ":" + strconv.FormatUint(s.Validation.Generation, 10)
 		} else {
 			scope += ":" + strconv.FormatUint(s.Validation.Generation, 10)
@@ -300,7 +316,8 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return chosen
 	case "AUTHORING":
-		return s.taskResource(pipelineTask(cd, "engine.qa.design", s.nextDesignScope(coverage.ReviewWhitebox, cd)), cd)
+		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
+		return s.taskResource(task, cd)
 	case "QA_ARTIFACT":
 		return s.taskResource(p.DesignTasks[coverage.ReviewWhitebox], cd)
 	case "REVIEW_READY":

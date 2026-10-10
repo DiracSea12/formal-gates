@@ -22,8 +22,8 @@ import (
 )
 
 // installedStartProject uses a complete package and a real Git repository.
-// Hooks are skipped: these tests exercise the public process boundary and
-// submitted protocol observations without starting a host model.
+// Hooks are skipped: controls and native effects cross the installed process
+// boundary; simulated host observations use the typed facade without a model.
 type installedStartProject struct {
 	binary, home, source, project, intakePath, base string
 	intake                                          facade.IntakeConfirmationReceipt
@@ -136,7 +136,7 @@ func (p installedStartProject) startArgs(runID, route string) []string {
 
 func (p installedStartProject) run(t *testing.T, command, runID string) facade.Run {
 	t.Helper()
-	output := p.call(t, nil, "workflow", command, "--root", p.project, "--run-id", runID)
+	output := p.call(t, nil, "workflow", command, "--machine", "--root", p.project, "--run-id", runID)
 	var run facade.Run
 	if err := json.Unmarshal(output, &run); err != nil {
 		t.Fatalf("decode %s: %v\n%s", command, err, output)
@@ -251,18 +251,22 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	}
 	wrong := event
 	wrong.Spawn = &protocol.SpawnReceiptPayload{ActionID: actions[0], Provider: "codex", Correlation: "declared-worker", Status: protocol.SpawnStatusSpawned}
-	wrongData := installedJSON(t, wrong)
+	opened, err := facade.Open(p.project, "native-review")
+	if err != nil {
+		t.Fatal(err)
+	}
 	before = readInstalledFile(t, statePath)
-	output, err := p.command(wrongData, "workflow", "submit", "--root", p.project, "--run-id", "native-review").CombinedOutput()
-	if err == nil || !strings.Contains(string(output), string(protocol.CodeProviderMismatch)) {
-		t.Fatalf("wrong host receipt accepted: err=%v output=%s", err, output)
+	_, _, err = opened.Submit(wrong)
+	if err == nil || !strings.Contains(err.Error(), string(protocol.CodeProviderMismatch)) {
+		t.Fatalf("wrong host receipt accepted: %v", err)
 	}
 	after = readInstalledFile(t, statePath)
 	if !bytes.Equal(before, after) {
 		t.Fatal("wrong host receipt changed state")
 	}
-	data := installedJSON(t, event)
-	p.call(t, data, "workflow", "submit", "--root", p.project, "--run-id", "native-review")
+	if _, _, err = opened.Submit(event); err != nil {
+		t.Fatal(err)
+	}
 	_, state := p.bindings(t, "native-review", "zcode")
 	if receipt := state.SpawnReceipts[actions[0]]; receipt.Provider != "zcode" || receipt.Correlation != "declared-worker" || receipt.Status != protocol.SpawnStatusSpawned {
 		t.Fatalf("submitted receipt lost its identity: %+v", receipt)
@@ -287,6 +291,7 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	// use either the common read entry or the common writers to mutate the run.
 	before = readInstalledFile(t, statePath)
 	p.install(t, "zcode", "global")
+	data := installedJSON(t, facade.ControlInput{Request: protocol.ControlAbort})
 	for _, command := range []string{"show", "drive", "submit"} {
 		output, err := p.command(data, "workflow", command, "--root", p.project, "--run-id", "native-review").CombinedOutput()
 		if err == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL") {
@@ -490,11 +495,7 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	if !fenced {
 		t.Fatal("normal reinstall did not advance the owning token")
 	}
-	event, err := protocol.NewRequestEvent("delayed-abort", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.NewEncoder(input).Encode(event); err != nil {
+	if err := json.NewEncoder(input).Encode(facade.ControlInput{Request: protocol.ControlAbort}); err != nil {
 		t.Fatal(err)
 	}
 	if err := input.Close(); err != nil {

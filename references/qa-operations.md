@@ -15,7 +15,11 @@
 字符串，空格、引号和特殊字符都是该参数的原值。`SHELL` 必须提供非空 `command`，
 不能提供非空 `argv`。操作不含 cwd、env、插件、条件或循环字段。完整 shell 文本可以
 表达已批准的环境设置或目录切换；程序不改写文本。执行目录由 registered QA workspace
-提供。shared-step 的操作由引用它的 case 使用，载荷本身不表示全局只执行一次。
+提供。程序同时从这个 registered workspace 注入 `FORMAL_GATES_WORKSPACE` 环境变量；
+需要根目录的 shell 操作用 `"$FORMAL_GATES_WORKSPACE"` 引用，其他文件使用仓库相对路径。
+模型不填写物理工作区路径；已批准的 `command`、`argv` 与 `stdin` 保持原文。固定物理
+目录的原操作必须经原设计/审查责任修订，程序不会把它改成另一工作区。shared-step 的操作由引用它的 case
+使用，载荷本身不表示全局只执行一次。
 
 Go 白盒测试可以只保留精确引用 `<仓库相对路径>_test.go::TestName`。标准库 resolver
 读取指定候选文件，解析 Go 源码，核对该文件中唯一的同名包级测试函数及

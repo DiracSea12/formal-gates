@@ -98,7 +98,12 @@ func nativePathEvidence(directory, raw string, capture bool) (*nativePathFacts, 
 		return nil, fmt.Errorf("native terminal lacks its issued VCS workspace")
 	}
 	resource := input.Validation.Workspace
-	expected.Paths, err = vcs.NewNative(resource.Path, input.VCS, nil).At(resource.Path, resource.Handle).ChangedPaths()
+	native := vcs.NewNative(resource.Path, input.VCS, nil).At(resource.Path, resource.Handle)
+	if input.Handler == "engine.qa.design" {
+		expected.Paths, err = native.ChangedPathsFrom(input.Validation.ReviewBase)
+	} else {
+		expected.Paths, err = native.ChangedPaths()
+	}
 	if err != nil {
 		return nil, err
 	}

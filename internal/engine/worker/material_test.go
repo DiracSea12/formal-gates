@@ -185,13 +185,13 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 			v.RequiredCases, v.PendingCases = []string{"new", "prior"}, []string{"prior", "new"}
 			v.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "prior"}, {CaseID: "new"}}
 			v.Completed = []coverage.ExecutionRecord{{CaseID: "done", Comparison: "accepted comparison", Result: coverage.ExecutedFail}}
-			v.Inherited = []coverage.ExecutionRecord{{CaseID: "inherited", Observation: "original inherited observation", Result: coverage.ExecutedPass}}
+			v.Inherited = []coverage.ExecutionRecord{{CaseID: "inherited", Comparison: "accepted inherited comparison", Result: coverage.ExecutedPass}}
 			before, _ := json.Marshal(input)
 			material, err := Render(input, catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, forbidden := range []string{"program-only-", "unrelated-development-duty", "unrelated-route-choice", "Available route choices", "Design retainCases"} {
+			for _, forbidden := range []string{"program-only-", "issued-workspace", "unrelated-development-duty", "unrelated-route-choice", "Available route choices", "Design retainCases"} {
 				if strings.Contains(material.Prompt, forbidden) {
 					t.Fatalf("role received unrelated control facts or duties: %s", forbidden)
 				}
@@ -201,8 +201,8 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 			if err := json.Unmarshal([]byte(raw), &context); err != nil {
 				t.Fatal(err)
 			}
-			if context.Validation.Workspace.Path != v.Workspace.Path || context.Validation.Binding.Task != (protocol.WorkBinding{}).Task {
-				t.Fatal("role lost its workspace or received dispatch binding")
+			if context.Validation.Workspace != nil || context.Validation.Binding.Task != (protocol.WorkBinding{}).Task {
+				t.Fatal("role received a physical workspace or dispatch binding")
 			}
 			if handler == "engine.gate" {
 				if !reflect.DeepEqual(context.Validation.Gate, v.Gate) || len(context.Validation.Manifest.Cases) != 0 || len(context.Validation.ExecutionFacts) != 0 {

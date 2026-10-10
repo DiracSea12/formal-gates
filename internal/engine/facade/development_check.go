@@ -252,7 +252,7 @@ func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionInten
 			return nil, fmt.Errorf("QA operation has no approved invocation")
 		}
 	}
-	return map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{}, "parameters_digest": intent.PayloadDigest, "engine": map[string]any{"root": f.root, "runId": f.runID, "actionId": intent.ActionID}}, nil
+	return map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{"FORMAL_GATES_WORKSPACE": workspace.Path}, "parameters_digest": intent.PayloadDigest, "engine": map[string]any{"root": f.root, "runId": f.runID, "actionId": intent.ActionID}}, nil
 }
 
 func (f *Facade) checkBridge(operation string, payload any, result any) error {

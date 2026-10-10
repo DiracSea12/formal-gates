@@ -110,6 +110,88 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 	return slices.Compact(paths), nil
 }
 
+// ChangedPathsFrom compares the actual editing workspace with its complete
+// immutable source, including materials already committed in that workspace.
+func (p *Provider) ChangedPathsFrom(base string) ([]string, error) {
+	if p.name == "git" {
+		out, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", base, "--")
+		if err != nil {
+			return nil, err
+		}
+		untracked, err := p.runner.Run(p.root, "git", "ls-files", "--others", "--exclude-standard", "-z")
+		if err != nil {
+			return nil, err
+		}
+		paths := nulPaths(out)
+		for _, path := range nulPaths(untracked) {
+			if !p.isRuntimeStatusPath(path) {
+				paths = append(paths, path)
+			}
+		}
+		slices.Sort(paths)
+		return slices.Compact(paths), nil
+	}
+	source, err := p.TreeEntries(base)
+	if err != nil {
+		return nil, err
+	}
+	head, err := p.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	current, err := p.TreeEntries(head)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := p.IndexEntries()
+	if err != nil {
+		return nil, err
+	}
+	working := map[string]string{}
+	for _, entry := range entries {
+		working[entry.Path] = entry.Metadata
+	}
+	pending, err := p.ChangedPaths()
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range pending {
+		target := materialPath(p.root, path)
+		info, err := os.Lstat(target)
+		if os.IsNotExist(err) {
+			delete(current, path)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			current[path] = working[path]
+			continue
+		}
+		value := nativeEntry{Kind: "file"}
+		if working[path] != "" {
+			if err := json.Unmarshal([]byte(working[path]), &value); err != nil {
+				return nil, err
+			}
+		}
+		body, err := workingBytes(target)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 && value.Properties["svn:special"] != nil {
+			body = append([]byte("link "), body...)
+		}
+		value.Content, value.Action, value.Resolve = body, "", nil
+		current[path] = entryValue(value)
+	}
+	var paths []string
+	for _, change := range entryChanges(source, current) {
+		paths = append(paths, change.Path)
+	}
+	return paths, nil
+}
+
 // ValidateDeclaredChanges admits only declared workspace changes and native
 // directory containers required to hold declared descendants.
 func (p *Provider) ValidateDeclaredChanges(base string, paths []string) ([]string, Pending, error) {

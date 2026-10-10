@@ -3,6 +3,8 @@ package worker
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -33,6 +35,55 @@ func TestPlanAllocatesIdentitiesAndMapsSemanticChoices(t *testing.T) {
 	value.Batches[0].Route.Selected = []int{3}
 	if _, err := DecodeGranularity(input, value, nil, nil, false); err == nil {
 		t.Fatal("unknown gate selector accepted")
+	}
+}
+
+func TestRepairRoutesPreserveCompleteAndSubsetMeaning(t *testing.T) {
+	input := protocol.WorkerInput{AvailableRouteCandidates: []string{"quality", "complexity"}}
+	batch := Batch{Subtasks: []Subtask{{Description: "Restore public behavior"}}, NewArtifacts: []string{"command.ext"}, Deliverable: "Restored command", PublicEntry: "command", Interfaces: "Public command contract", StateBoundary: "Command files", Risk: "Local behavior", DoD: []Criterion{{Description: "Public oracle holds"}}, Checks: []Check{{Command: "check-command"}}, Rollback: "Restore original file", Recovery: "Continue the issued repair", Handoff: "Ready for native verification", ContextCost: "One command"}
+	for _, sample := range []struct {
+		name     string
+		route    RouteProposal
+		selected []string
+		invalid  bool
+	}{
+		{name: "full", route: RouteProposal{Mode: "full"}},
+		{name: "custom", route: RouteProposal{Mode: "custom", Selected: []int{2}}, selected: []string{"complexity"}},
+		{name: "full-subset", route: RouteProposal{Mode: "full", Selected: []int{1, 2}}, invalid: true},
+		{name: "custom-empty", route: RouteProposal{Mode: "custom"}, invalid: true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			batch.Route = &sample.route
+			value := &Granularity{Reason: "One cohesive repair", VerificationTier: "FINAL", Batches: []Batch{batch}}
+			before, _ := json.Marshal(value)
+			plan, err := DecodeGranularity(input, value, nil, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = protocol.ValidateRepairPlan(plan, false)
+			if (err != nil) != sample.invalid {
+				t.Fatalf("route meaning changed: %v", err)
+			}
+			if sample.name == "full-subset" && !strings.Contains(err.Error(), "full route selects the complete gate list without a subset") {
+				t.Fatalf("full subset lost its original rejection: %v", err)
+			}
+			if !sample.invalid && (!slices.Equal(plan.Batches[0].Route.Gates, input.AvailableRouteCandidates) || !slices.Equal(plan.Batches[0].Route.Selected, sample.selected)) {
+				t.Fatal("program changed the issued complete gate list or semantic subset")
+			}
+			after, _ := json.Marshal(value)
+			if string(before) != string(after) {
+				t.Fatal("route assembly rewrote authored semantic output")
+			}
+			stored, _ := json.Marshal(input)
+			var recovered protocol.WorkerInput
+			if err := json.Unmarshal(stored, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := DecodeGranularity(recovered, value, nil, nil, false)
+			if err != nil || !reflect.DeepEqual(plan, replay) {
+				t.Fatalf("recovery changed route assembly: %v", err)
+			}
+		})
 	}
 }
 

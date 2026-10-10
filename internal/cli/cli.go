@@ -16,6 +16,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
@@ -542,6 +543,27 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	var saved *facade.ControlCandidate
+	if *confirmationPath != "" && *materialPath == "" {
+		var candidate facade.ControlCandidate
+		if err := readWorkflowInput(*confirmationPath, streams.Stdin, &candidate); err != nil {
+			return 1, err
+		}
+		mismatch := false
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "root":
+				mismatch = mismatch || !vcs.SamePath(*root, candidate.Root)
+			case "run-id":
+				mismatch = mismatch || *runID != candidate.Run.RunID
+			}
+		})
+		if mismatch {
+			return 1, fmt.Errorf("confirmation belongs to a different project or run")
+		}
+		*root, *runID = candidate.Root, candidate.Run.RunID
+		saved = &candidate
+	}
 	f, ok, err := openEngineIfPresent(*root, *runID)
 	if !ok {
 		return 1, fmt.Errorf("workflow submit is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
@@ -573,14 +595,8 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		return printJSON(streams.Stdout, workflowConsumptionView(workflowConsumption{Run: run, Acceptance: &acceptance}))
 	}
 	var event protocol.Event
-	var saved *facade.ControlCandidate
-	if *confirmationPath != "" {
-		var candidate facade.ControlCandidate
-		if err := readWorkflowInput(*confirmationPath, streams.Stdin, &candidate); err != nil {
-			return 1, err
-		}
-		saved = &candidate
-		event = candidate.Event
+	if saved != nil {
+		event = saved.Event
 	} else {
 		var input facade.ControlInput
 		if err := readWorkflowInput("-", streams.Stdin, &input); err != nil {

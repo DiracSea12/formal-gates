@@ -116,7 +116,7 @@ formal-gates workflow submit --root <repo> --run-id <id> < <request-choices.json
 formal-gates workflow next --root <repo> --run-id <id> --decision <choices.json> \
   --save-candidate <confirmation.json>
 # 展示程序返回的当前确认内容，获得用户明确确认后：
-formal-gates workflow submit --root <repo> --run-id <id> --confirmation <confirmation.json>
+formal-gates workflow submit --confirmation <confirmation.json>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
@@ -135,6 +135,7 @@ Ask，不直接授权。决定使用 `next --decision --save-candidate`：`ask` 
 未决 Ask 的一基序号，`choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
 Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation`
 接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
+完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
 路线的候选门全集、计划绑定、审查候选和 finding、reset 保留与清理范围、需求变更的

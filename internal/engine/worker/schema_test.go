@@ -425,6 +425,63 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 	}
 }
 
+func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
+	for _, handler := range []string{"engine.readiness.plan", "engine.repair"} {
+		t.Run(handler, func(t *testing.T) {
+			input := protocol.WorkerInput{Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
+			if handler == "engine.readiness.plan" {
+				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
+			} else {
+				input.Validation = &protocol.ValidationInput{Repair: &protocol.RepairInput{}}
+			}
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, body := range schema["anyOf"].([]any) {
+				plan, ok := body.(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)
+				if !ok {
+					continue
+				}
+				batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+				route := batch["properties"].(map[string]any)["route"].(map[string]any)
+				if route["properties"] != nil {
+					t.Fatal("route publishes an unqualified mode/subset combination")
+				}
+				branches := route["anyOf"].([]any)
+				if len(branches) != 2 {
+					t.Fatal("route must separate complete and subset selection")
+				}
+				full := branches[0].(map[string]any)
+				fullFields := full["properties"].(map[string]any)
+				if full["additionalProperties"] != false || len(fullFields) != 1 || !reflect.DeepEqual(fullFields["mode"].(map[string]any)["enum"], []string{"full"}) || !reflect.DeepEqual(full["required"], []string{"mode"}) {
+					t.Fatal("full route asks the model for a gate subset")
+				}
+				custom := branches[1].(map[string]any)
+				customFields := custom["properties"].(map[string]any)
+				selected := customFields["selected"].(map[string]any)
+				if custom["additionalProperties"] != false || len(customFields) != 2 || !reflect.DeepEqual(customFields["mode"].(map[string]any)["enum"], []string{"custom"}) || !reflect.DeepEqual(custom["required"], []string{"mode", "selected"}) || selected["minItems"] != 1 || selected["uniqueItems"] != true || !reflect.DeepEqual(selected["items"].(map[string]any)["enum"], []int{1, 2}) {
+					t.Fatal("custom route permits missing, repeated or unissued gate choices")
+				}
+			}
+			input.AvailableRouteCandidates = nil
+			material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-worker"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema = material.ResultSchema
+			for _, body := range schema["anyOf"].([]any) {
+				if plan, ok := body.(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any); ok {
+					batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+					if batch["properties"].(map[string]any)["route"] != nil {
+						t.Fatal("empty gate inventory publishes an unusable route choice")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
 	input := protocol.WorkerInput{Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	for _, scenario := range []string{"proposed", "issued"} {

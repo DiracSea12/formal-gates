@@ -149,3 +149,80 @@ func TestNativeTerminalPathsBindOriginalRequestAndRawAnswer(t *testing.T) {
 		t.Fatal("captured facts accepted another native request")
 	}
 }
+
+func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *testing.T) {
+	workspace, job := nativePathsFixture(t)
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workspace
+		body, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal(err, string(body))
+		}
+		return strings.TrimSpace(string(body))
+	}
+	base := git("rev-parse", "HEAD")
+	for _, name := range []string{"retained_test.txt", "removed_test.txt"} {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte("assert actual behavior\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("add", "--all")
+	git("commit", "-qm", "Test materials")
+	directory := job("whitebox", "")
+	materialPath := filepath.Join(directory, "material.json")
+	body, err := os.ReadFile(materialPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var material worker.Material
+	if err := json.Unmarshal(body, &material); err != nil {
+		t.Fatal(err)
+	}
+	material.Input.Handler = "engine.qa.design"
+	material.Input.Validation.Workspace.Source = base
+	material.Input.Validation.ReviewBase = base
+	body, err = json.Marshal(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(materialPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNativeAnswer(directory, `{ "cases": [] }`, "FIXTURE"); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := nativePathEvidence(directory, `{ "cases": [] }`, false)
+	if err != nil || !reflect.DeepEqual(facts.Paths, []string{"removed_test.txt", "retained_test.txt"}) {
+		t.Fatalf("semantic revision lost committed test materials: %+v %v", facts, err)
+	}
+	if err := os.Remove(filepath.Join(workspace, "removed_test.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "added_test.txt"), []byte("new assertion\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	directory = job("whitebox", "")
+	materialPath = filepath.Join(directory, "material.json")
+	if err := os.WriteFile(materialPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err != nil {
+		t.Fatal(err)
+	}
+	facts, err = nativePathEvidence(directory, `{}`, false)
+	if err != nil || !reflect.DeepEqual(facts.Paths, []string{"added_test.txt", "retained_test.txt"}) {
+		t.Fatalf("complete material diff retained a file deleted back to development: %+v %v", facts, err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "exit.json"), map[string]any{"exit_code": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "later_test.txt"), []byte("later\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := nativePathEvidence(directory, `{}`, false)
+	if err != nil || !reflect.DeepEqual(facts, recovered) {
+		t.Fatal("recovery changed original complete paths", recovered, err)
+	}
+}

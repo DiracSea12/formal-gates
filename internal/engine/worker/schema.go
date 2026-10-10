@@ -106,6 +106,16 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			check = map[string]any{"anyOf": alternatives}
 		}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
+		delete(properties, "route")
+		if len(input.AvailableRouteCandidates) > 0 {
+			properties["route"] = map[string]any{"anyOf": []any{
+				fixedObject(map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"full"}}}, []string{"mode"}),
+				fixedObject(map[string]any{
+					"mode":     map[string]any{"type": "string", "enum": []string{"custom"}},
+					"selected": map[string]any{"type": "array", "items": indexSchema(input.AvailableRouteCandidates), "minItems": 1, "uniqueItems": true},
+				}, []string{"mode", "selected"}),
+			}}
+		}
 	}
 	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
