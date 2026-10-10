@@ -15,11 +15,160 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestCursorManagedToolsUseOriginalWorkspaceAndPolicy(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the source package")
+	}
+	binary := filepath.Join(t.TempDir(), "formal-gates")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build current CLI: %v\n%s", err, output)
+	}
+	for _, readOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readOnly=%t", readOnly), func(t *testing.T) {
+			scenario := newCursorScenario(t, "88888888-8888-4888-8888-888888888888", "model-a", "high", readOnly)
+			workspace, directory := scenario.workspace, scenario.directory
+			path := filepath.Join(workspace, "input.txt")
+			if err := os.WriteFile(path, []byte("original\nkeep\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			native := exec.Command(binary, "harness", "native", directory)
+			if output, err := native.CombinedOutput(); err != nil {
+				t.Fatalf("original native plugin registration: %v\n%s", err, output)
+			}
+			plugin := filepath.Join(directory, "cursor-tools")
+			hooks, err := readJSONFile(filepath.Join(plugin, "hooks/hooks.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mcp, err := readJSONFile(filepath.Join(plugin, ".mcp.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := getOf(getOf(mcp, "mcpServers"), "formal-gates")
+			invoke := func(entry string, input any) map[string]any {
+				t.Helper()
+				body, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var command *exec.Cmd
+				if entry == "native-tools" {
+					args := []string{}
+					for _, arg := range listOf(getOf(server, "args")) {
+						args = append(args, textOf(arg))
+					}
+					command = exec.Command(textOf(getOf(server, "command")), args...)
+				} else {
+					event := textOf(getOf(input, "hook_event_name"))
+					rows := listOf(getOf(getOf(hooks, "hooks"), event))
+					if len(rows) != 1 {
+						t.Fatalf("wrong registered hook: %#v", hooks)
+					}
+					command = exec.Command("sh", "-c", textOf(getOf(rows[0], "command")))
+				}
+				command.Stdin = bytes.NewReader(body)
+				var stderr bytes.Buffer
+				command.Stderr = &stderr
+				output, err := command.Output()
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", entry, err, stderr.String())
+				}
+				var result map[string]any
+				if err := json.Unmarshal(output, &result); err != nil {
+					t.Fatalf("%s returned invalid JSON: %v\n%s", entry, err, output)
+				}
+				return result
+			}
+			permission := func(event, tool, server, cwd string) bool {
+				t.Helper()
+				result := invoke("cursor-tool-permission", map[string]any{"hook_event_name": event, "tool_name": tool, "mcp_server_name": server, "cwd": cwd, "tool_input": map[string]any{}, "tool_use_id": "original-call"})
+				if len(result) != 1 || (result["permission"] != "allow" && result["permission"] != "deny") {
+					t.Fatalf("invalid native permission response: %#v", result)
+				}
+				return result["permission"] == "allow"
+			}
+			for _, tool := range []string{"Read", "Write", "Shell", "Grep", "Glob", "LS", "SemanticSearch"} {
+				if permission("preToolUse", tool, "", workspace) {
+					t.Fatalf("builtin %s was allowed", tool)
+				}
+			}
+			if permission("preToolUse", "MCP:workspace", "", t.TempDir()) {
+				t.Fatal("another workspace was allowed")
+			}
+			call := func(server string, arguments any) map[string]any {
+				t.Helper()
+				if !permission("preToolUse", "MCP:workspace", "", workspace) {
+					t.Fatal("native MCP candidate was rejected before server check")
+				}
+				if !permission("beforeMCPExecution", "workspace", server, "") {
+					return nil
+				}
+				response := invoke("native-tools", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "workspace", "arguments": arguments}})
+				if response["jsonrpc"] != "2.0" || response["id"] != float64(1) || response["error"] != nil {
+					t.Fatalf("wrong MCP response identity: %#v", response)
+				}
+				return objectOrEmpty(response["result"])
+			}
+			if call("other-server", map[string]any{"action": "list"}) != nil {
+				t.Fatal("same-name MCP tool from another server executed")
+			}
+			if _, err := os.Stat(filepath.Join(directory, nativeToolCallsFile)); !os.IsNotExist(err) {
+				t.Fatalf("denied server produced tool effects: %v", err)
+			}
+			decode := func(result map[string]any) map[string]any {
+				t.Helper()
+				if result["isError"] != false {
+					t.Fatalf("managed tool failed: %#v", result)
+				}
+				content := listOf(result["content"])
+				if len(content) != 1 || getOf(content[0], "type") != "text" {
+					t.Fatalf("invalid MCP content: %#v", result)
+				}
+				var value map[string]any
+				if err := json.Unmarshal([]byte(textOf(getOf(content[0], "text"))), &value); err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
+			listing := decode(call("formal-gates", map[string]any{"action": "list"}))
+			entries := listOf(listing["entries"])
+			if len(entries) != 1 || getOf(entries[0], "name") != "input.txt" {
+				t.Fatalf("wrong original listing: %#v", listing)
+			}
+			read := decode(call("formal-gates", map[string]any{"action": "read", "listing": listing["listing"], "entry": getOf(entries[0], "entry")}))
+			if !valuesEqual(read["lines"], []any{"original\n", "keep\n"}) {
+				t.Fatalf("wrong original read: %#v", read)
+			}
+			result := call("formal-gates", map[string]any{"action": "replace", "read": read["read"], "from": 1, "to": 1, "content": "changed\n"})
+			want := "changed\nkeep\n"
+			if readOnly {
+				want = "original\nkeep\n"
+				if result["isError"] != true || !strings.Contains(textOf(getOf(listOf(result["content"])[0], "text")), "read-only") {
+					t.Fatalf("read-only policy did not reject the write: %#v", result)
+				}
+			} else {
+				decode(result)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil || string(body) != want {
+				t.Fatalf("actual workspace effects: %q, %v; want %q", body, err, want)
+			}
+			if err := verifyNativeToolEvidence(directory); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 type cursorPeer struct {
 	UUID            string            `json:"uuid"`
@@ -85,7 +234,7 @@ func TestCursorCLI(t *testing.T) {
 		os.Exit(0)
 	}
 	if reflect.DeepEqual(args, []string{"--help"}) {
-		fmt.Println("--mode ask --model bracket overrides --resume stream-json create-chat")
+		fmt.Println("--mode ask --model bracket overrides --resume stream-json create-chat --plugin-dir")
 		os.Exit(0)
 	}
 	call, err := os.OpenFile(peer.Calls, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -105,6 +254,39 @@ func TestCursorCLI(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, peer.Args) {
 		fmt.Fprintf(os.Stderr, "wrong argv: %q != %q\n", args, peer.Args)
+		os.Exit(91)
+	}
+	plugin := ""
+	for index, arg := range args {
+		if arg == "--plugin-dir" && index+1 < len(args) {
+			plugin = args[index+1]
+		}
+	}
+	readPlugin := func(name string) map[string]any {
+		body, err := os.ReadFile(filepath.Join(plugin, name))
+		var value map[string]any
+		if err != nil || json.Unmarshal(body, &value) != nil {
+			fmt.Fprintln(os.Stderr, "native plugin file is missing or invalid", name)
+			os.Exit(91)
+		}
+		return value
+	}
+	manifest := readPlugin(".cursor-plugin/plugin.json")
+	if manifest["hooks"] != "hooks/hooks.json" {
+		fmt.Fprintln(os.Stderr, "wrong native hook reference")
+		os.Exit(91)
+	}
+	hooks := readPlugin("hooks/hooks.json")
+	for _, name := range []string{"preToolUse", "beforeMCPExecution"} {
+		rows := listOf(getOf(getOf(hooks, "hooks"), name))
+		if len(rows) != 1 || getOf(rows[0], "matcher") != "*" || getOf(rows[0], "failClosed") != true || getOf(rows[0], "timeout") != nil || !strings.Contains(textOf(getOf(rows[0], "command")), "harness cursor-tool-permission") {
+			fmt.Fprintln(os.Stderr, "wrong native permission hook", name)
+			os.Exit(91)
+		}
+	}
+	server := getOf(getOf(readPlugin(".mcp.json"), "mcpServers"), "formal-gates")
+	if !valuesEqual(getOf(server, "args"), []any{"harness", "native-tools", filepath.Dir(plugin)}) {
+		fmt.Fprintln(os.Stderr, "wrong native MCP owner")
 		os.Exit(91)
 	}
 	prior, err := os.ReadFile(peer.Store)
@@ -245,7 +427,7 @@ func (s *cursorScenario) save(t *testing.T) {
 			model += "[effort=" + effort + "]"
 		}
 	}
-	s.peer.Args = []string{"-p", "--output-format", "stream-json", "--workspace", s.workspace, "--resume", s.peer.UUID}
+	s.peer.Args = []string{"-p", "--output-format", "stream-json", "--workspace", s.workspace, "--resume", s.peer.UUID, "--plugin-dir", filepath.Join(s.directory, "cursor-tools")}
 	if s.request["read_only"] == true {
 		s.peer.Args = append(s.peer.Args, "--mode", "ask")
 	}

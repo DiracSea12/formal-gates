@@ -12,10 +12,8 @@ import (
 	"time"
 )
 
-// supervisorBinary returns the formal-gates driver, building it on the fly if the
-// prebuilt binary is missing. Tests spawn it as an independent process because the
-// supervisor's contract is process ownership, which an in-process call cannot
-// demonstrate (and SIGTERM cancellation must not disturb the test process).
+// supervisorBinary builds the current source as an independent driver. Process
+// ownership and SIGTERM cancellation require a separate process.
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
@@ -24,18 +22,7 @@ func supervisorBinary(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		name = "formal-gates.exe"
 	}
-	bin := filepath.Join(root, ".harness", "bin", name)
-	if _, err := os.Stat(bin); err == nil {
-		return bin
-	}
-	tmp, err := os.MkdirTemp("", "formal-gates-test-bin")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	out := filepath.Join(tmp, name)
-	// The package path is relative to the repository root, not this package's
-	// directory; without Dir the build looks for internal/harness/cmd/... and
-	// fails on any tree that has no prebuilt .harness binary (clean CI checkouts).
+	out := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", out, "./cmd/formal-gates")
 	build.Dir = root
 	if b, err := build.CombinedOutput(); err != nil {

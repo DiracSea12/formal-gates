@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -194,6 +195,91 @@ func cursorCheckSelection(request, snapshot any) (map[string]any, error) {
 	return map[string]any{"model": actual, "reasoning_effort": parameters["effort"], "parameters": getOf(selected, "parameters"), "display_name": getOf(model, "displayName")}, nil
 }
 
+// cursorToolPlugin uses Cursor's native plugin and generic permission hooks.
+// PreToolUse blocks builtins; BeforeMCPExecution supplies the actual server key.
+func cursorToolPlugin(directory string) (string, error) {
+	server, err := nativeToolServer(directory)
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(directory, "cursor-tools")
+	if err := os.MkdirAll(filepath.Join(root, ".cursor-plugin"), 0700); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Join(root, "hooks"), 0700); err != nil {
+		return "", err
+	}
+	quote := func(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\\''") + "'" }
+	command := quote(textOf(server["command"])) + " harness cursor-tool-permission " + quote(directory)
+	hook := map[string]any{"command": command, "matcher": "*", "failClosed": true}
+	for _, file := range []struct {
+		name string
+		body any
+	}{
+		{".cursor-plugin/plugin.json", map[string]any{"name": "formal-gates-runtime", "hooks": "hooks/hooks.json"}},
+		{"hooks/hooks.json", map[string]any{"version": 1, "hooks": map[string]any{"preToolUse": []any{hook}, "beforeMCPExecution": []any{hook}}}},
+		{".mcp.json", map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": server["command"], "args": server["args"]}}}},
+	} {
+		if err := writeAtomicJSON(filepath.Join(root, file.name), file.body); err != nil {
+			return "", err
+		}
+	}
+	return root, nil
+}
+
+// CursorToolPermission checks original hook facts against the issued native
+// request. Actual workspace operations remain with NativeTools and its admission.
+func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+	var input struct {
+		Event  string `json:"hook_event_name"`
+		Tool   string `json:"tool_name"`
+		Server string `json:"mcp_server_name"`
+		Cwd    string `json:"cwd"`
+	}
+	if err := json.NewDecoder(in).Decode(&input); err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	tools, err := newNativeWorkspaceTools(directory, admissions...)
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	if textOf(getOf(request, "provider")) != "cursor" {
+		fmt.Fprintln(errout, "Cursor hook requires its original provider request")
+		return 1
+	}
+	release, err := admitExecution(directory, objectOrEmpty(request), admissions)
+	if err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	if release != nil {
+		defer release()
+	}
+	allowed := false
+	switch input.Event {
+	case "preToolUse":
+		allowed = input.Tool == "MCP:"+nativeWorkspaceTool && resolveNativePath(input.Cwd) == tools.workspace
+	case "beforeMCPExecution":
+		allowed = input.Server == "formal-gates" && input.Tool == nativeWorkspaceTool && (input.Cwd == "" || resolveNativePath(input.Cwd) == tools.workspace)
+	}
+	permission := "deny"
+	if allowed {
+		permission = "allow"
+	}
+	if err := json.NewEncoder(out).Encode(map[string]any{"permission": permission}); err != nil {
+		fmt.Fprintln(errout, err)
+		return 1
+	}
+	return 0
+}
+
 func cursorExecute(request any, directory string, probe bool) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
@@ -240,7 +326,7 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 		if err != nil {
 			return nil, err
 		}
-		for _, capability := range []string{"--mode", "--model", "--resume", "stream-json", "create-chat"} {
+		for _, capability := range []string{"--mode", "--model", "--resume", "stream-json", "create-chat", "--plugin-dir"} {
 			if !strings.Contains(string(help), capability) {
 				return nil, &blockedError{message: "CURSOR_CAPABILITY: missing " + capability}
 			}
@@ -329,7 +415,11 @@ func cursorExecute(request any, directory string, probe bool) (map[string]any, e
 	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 		return nil, err
 	}
-	argv := append(append([]string{}, prefix...), "-p", "--output-format", "stream-json", "--workspace", workspace, "--resume", identity)
+	plugin, err := cursorToolPlugin(directory)
+	if err != nil {
+		return nil, err
+	}
+	argv := append(append([]string{}, prefix...), "-p", "--output-format", "stream-json", "--workspace", workspace, "--resume", identity, "--plugin-dir", plugin)
 	if readOnly {
 		argv = append(argv, "--mode", "ask")
 	}
