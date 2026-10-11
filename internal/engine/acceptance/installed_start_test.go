@@ -387,6 +387,21 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	if _, err := os.Stat(dir + ".start.intent.json"); !os.IsNotExist(err) {
 		t.Fatalf("recovery left start intent: %v", err)
 	}
+	referenceTime, err := time.Parse(time.RFC3339Nano, referenceState.StartedAt)
+	if err != nil {
+		t.Fatal("normal start lacks its actual start time", err)
+	}
+	recoveredTime, err := time.Parse(time.RFC3339Nano, recoveredState.StartedAt)
+	if err != nil || recoveredTime.Before(referenceTime) {
+		t.Fatal("recovered initialization lacks its actual start time", recoveredState.StartedAt, err)
+	}
+	p.run(t, "show", runID)
+	_, reopenedState := p.bindings(t, runID, "zcode")
+	if reopenedState.StartedAt != recoveredState.StartedAt {
+		t.Fatal("reopen changed the original recovered start time")
+	}
+	// Independent initializations have separate clocks; all binding values match.
+	referenceState.StartedAt = recoveredState.StartedAt
 	referenceRequest.RunID = runID
 	referenceState.RunID = runID
 	if !reflect.DeepEqual(referenceRequest, recoveredRequest) || !reflect.DeepEqual(referenceState, recoveredState) {

@@ -555,7 +555,7 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 	} else {
 		s.peer.ThreadParams["ephemeral"] = false
 		var material *worker.Material
-		if path := textOf(getOf(getOf(getOf(s.request, "engine"), "workerMaterial"), "path")); path != "" && path != "null" {
+		if path := textOf(getOf(getOf(getOf(codexPlain(t, s.request), "engine"), "workerMaterial"), "path")); path != "" && path != "null" {
 			if body, err := os.ReadFile(path); err == nil {
 				var original worker.Material
 				if json.Unmarshal(body, &original) == nil {

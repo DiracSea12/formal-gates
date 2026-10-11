@@ -73,7 +73,7 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 		if err = json.Unmarshal(body, &material); err != nil {
 			t.Fatal(err)
 		}
-		if material.Input.RunID != "canary" || material.Input.Provider != "codex" || material.Input.Pending.ActionID == "" || !strings.Contains(material.Prompt, "The installed workflow must complete its verified route.") || len(material.ResultSchema) == 0 {
+		if material.Input.RunID != "canary" || material.Input.Provider != "codex" || material.Input.Pending.ActionID == "" || !strings.Contains(material.Input.RequirementDocument.Content, "The installed workflow must complete its verified route.") || material.Input.RequirementDocument.ContentDigest == "" || !strings.Contains(material.Prompt, "workspace requirement operation reads the complete original confirmed document") || len(material.ResultSchema) == 0 {
 			t.Fatalf("worker material lost complete production context: %s", path)
 		}
 		if material.Input.Handler == "engine.qa.execution" {

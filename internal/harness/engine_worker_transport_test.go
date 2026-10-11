@@ -193,7 +193,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			var payload any
 			switch handler {
 			case "engine.qa.design":
-				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
+				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Case: 1, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
 			case "engine.qa.review.rationale":
 				payload = &worker.CaseReview{SourceDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "oracle valid"}}}
 			case "engine.qa.execution":
@@ -202,6 +202,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
 			case "engine.qa.design":
+				expected.DesignChange = &protocol.QADesignChange{RemoveCases: []string{}, RemoveSharedSteps: []string{}, CoveragePoints: []string{"AC"}}
 				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: []string{}, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
 			case "engine.qa.review.rationale":
 				expected.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}, SharedStepDecisions: []coverage.ReviewDecision{}, SetStatus: coverage.StatusPass}
@@ -239,15 +240,15 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			if handler == "engine.qa.design" {
 				actual := event.Result.Validation.Manifest
-				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID == "case" {
-					t.Fatal("design did not issue a new program identity")
+				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID != "case" {
+					t.Fatal("substantive design replacement changed its original program identity")
 				}
 				expected.Manifest.Cases[0].CaseID = actual.Cases[0].CaseID
 				expected.Manifest.Edges = append([]coverage.CoverageEdge{}, manifest.Edges...)
 				expected.Manifest.Edges[0].CaseID = actual.Cases[0].CaseID
 			}
 			if !reflect.DeepEqual(event.Result.Validation, &expected) {
-				t.Fatalf("typed role evidence lost: got=%#v expected=%#v; manifest got=%#v expected=%#v", event.Result.Validation, expected, event.Result.Validation.Manifest, expected.Manifest)
+				t.Fatalf("typed role evidence lost: got=%#v expected=%#v; manifest got=%#v expected=%#v change got=%#v expected=%#v", event.Result.Validation, expected, event.Result.Validation.Manifest, expected.Manifest, event.Result.Validation.DesignChange, expected.DesignChange)
 				t.Fatal("typed role/issued binding lost", err)
 			}
 		})
