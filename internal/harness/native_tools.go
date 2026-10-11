@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 )
@@ -449,7 +450,17 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
-		return map[string]any{"read": number, "lines": lines}, err
+		value := map[string]any{"read": number, "lines": lines}
+		if strings.HasSuffix(relative, "_test.go") {
+			if symbols, parseErr := coverage.GoTestSymbols(relative, body); parseErr == nil {
+				choices := make([]map[string]any, 0, len(symbols))
+				for index, symbol := range symbols {
+					choices = append(choices, map[string]any{"testSymbol": index + 1, "name": symbol})
+				}
+				value["testSymbols"] = choices
+			}
+		}
+		return value, err
 	case "replace":
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
@@ -624,7 +635,7 @@ func nativeWorkspaceToolSchema(readOnly bool) map[string]any {
 	if !readOnly {
 		actions = append(actions, "replace", "create", "mkdir", "remove", "copy", "move")
 	}
-	return map[string]any{"name": nativeWorkspaceTool, "description": "Select existing files by original listing and entry numbers. Replace selects an original read and one-based line range (empty: from=1,to=0) and supplies new content. Copy/move select the source listing/entry, a target directory listing/entry (omit for workspace root), and a new filename; the program transfers original bytes. Comparison uses issued versions. Numbers remain bound across continuation and resume.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": actions}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}, "read": map[string]any{"type": "integer", "minimum": 1}, "from": map[string]any{"type": "integer", "minimum": 1}, "to": map[string]any{"type": "integer", "minimum": 0}, "targetListing": map[string]any{"type": "integer", "minimum": 1}, "targetEntry": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []any{"action"}, "additionalProperties": false}}
+	return map[string]any{"name": nativeWorkspaceTool, "description": "Select existing files by original listing and entry numbers. Replace selects an original read and one-based line range (empty: from=1,to=0) and supplies new content. Copy/move select the source listing/entry, a target directory listing/entry (omit for workspace root), and a new filename; the program transfers original bytes. Comparison uses issued versions. Read publishes Go testSymbols from the original full source for result selection. Numbers remain bound across continuation and resume.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": actions}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}, "read": map[string]any{"type": "integer", "minimum": 1}, "from": map[string]any{"type": "integer", "minimum": 1}, "to": map[string]any{"type": "integer", "minimum": 0}, "targetListing": map[string]any{"type": "integer", "minimum": 1}, "targetEntry": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []any{"action"}, "additionalProperties": false}}
 }
 
 // NativeTools serves only MCP's handshake, discovery and tool-call methods.

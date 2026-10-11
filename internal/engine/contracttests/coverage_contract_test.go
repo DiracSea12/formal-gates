@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"errors"
@@ -124,7 +124,7 @@ func coverageCode(t *testing.T, err error, want string) *coverage.ValidationErro
 // A confirmed source list is the sole inventory. Bindings, source IDs,
 // categories, and applicability are all required and reject common malformed
 // records before manifest traversal starts.
-func TestWhiteboxRequiredSourcesRejectMalformedInventory(t *testing.T) {
+func TestRequiredSourcesRejectMalformedInventory(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageContract)
@@ -164,7 +164,7 @@ func TestWhiteboxRequiredSourcesRejectMalformedInventory(t *testing.T) {
 // Selected review kinds and manifest bindings form a one-to-one scoped
 // structure: every selected kind needs exactly one matching manifest, and the
 // source/run/revision/route/topology binding must remain intact.
-func TestWhiteboxManifestSelectionAndScopeBinding(t *testing.T) {
+func TestManifestSelectionAndScopeBinding(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageContract)
@@ -200,14 +200,14 @@ func TestWhiteboxManifestSelectionAndScopeBinding(t *testing.T) {
 
 // A source may be covered by more than one selected QA kind. Each manifest is
 // independently bound and contributes its own points/cases to the aggregate.
-func TestWhiteboxMultiKindManifestsCoverSharedSource(t *testing.T) {
+func TestMultiKindManifestsCoverSharedSource(t *testing.T) {
 	c := coverageContract()
 	c.SelectedKinds = []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox}
 	whitebox := coverage.AcceptanceManifest{
 		Binding: coverageManifestBinding(coverage.ReviewWhitebox),
 		Sources: []string{"REQ-A"},
 		Points:  []coverage.AcceptancePoint{{PointID: "POINT-W", ObservableBehavior: "whitebox structure is checked", Oracle: "test reference is bound"}},
-		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-W", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxMultiKindManifestsCoverSharedSource", Oracle: "PASS"}},
+		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-W", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/contracttests/coverage_contract_test.go::TestMultiKindManifestsCoverSharedSource", Oracle: "PASS"}},
 		Edges:   []coverage.CoverageEdge{{ReviewKind: coverage.ReviewWhitebox, SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W"}},
 	}
 	c.Manifests = append(c.Manifests, whitebox)
@@ -230,7 +230,7 @@ func TestWhiteboxMultiKindManifestsCoverSharedSource(t *testing.T) {
 
 // Every manifest source, point, and case must participate in at least one
 // source↔point↔case edge; an otherwise well-formed orphan is still incomplete.
-func TestWhiteboxManifestGraphRejectsOrphanObjects(t *testing.T) {
+func TestManifestGraphRejectsOrphanObjects(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageContract)
@@ -279,7 +279,7 @@ func TestWhiteboxManifestGraphRejectsOrphanObjects(t *testing.T) {
 // Reverse graph queries derive sorted, de-duplicated views from the single edge
 // relation, and Map returns an isolated edge slice rather than caller-owned
 // storage.
-func TestWhiteboxCoverageQueriesDeriveStableReverseViews(t *testing.T) {
+func TestCoverageQueriesDeriveStableReverseViews(t *testing.T) {
 	manifest := coverage.AcceptanceManifest{Edges: []coverage.CoverageEdge{
 		{SourceID: "SRC-2", PointID: "POINT-2", CaseID: "CASE-2"},
 		{SourceID: "SRC-1", PointID: "POINT-1", CaseID: "CASE-2"},
@@ -306,7 +306,7 @@ func TestWhiteboxCoverageQueriesDeriveStableReverseViews(t *testing.T) {
 // A map projection must exactly match its manifest, including binding and
 // edge identity; missing, unknown, duplicate, or wrong-kind edges are distinct
 // structural failures.
-func TestWhiteboxCoverageMapRejectsDriftAndDuplicates(t *testing.T) {
+func TestCoverageMapRejectsDriftAndDuplicates(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageMap)
@@ -335,7 +335,7 @@ func TestWhiteboxCoverageMapRejectsDriftAndDuplicates(t *testing.T) {
 // Case records are closed by review kind: blackbox/merge require the public
 // entry shape, while whitebox requires one unique test reference and forbids
 // public-entry fields.
-func TestWhiteboxCaseBindingVariantsAreClosed(t *testing.T) {
+func TestCaseBindingVariantsAreClosed(t *testing.T) {
 	validKinds := []struct {
 		kind coverage.ReviewKind
 		mode coverage.CaseMode
@@ -352,7 +352,7 @@ func TestWhiteboxCaseBindingVariantsAreClosed(t *testing.T) {
 		m.Binding = coverageManifestBinding(tc.kind)
 		m.Cases = []coverage.AcceptanceCase{{CaseID: "CASE-CLOSED", Mode: tc.mode, Oracle: "observable result"}}
 		if tc.mode == coverage.CaseWhitebox {
-			m.Cases[0].TestRef = "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxCaseBindingVariantsAreClosed"
+			m.Cases[0].TestRef = "internal/engine/contracttests/coverage_contract_test.go::TestCaseBindingVariantsAreClosed"
 		} else {
 			m.Cases[0].PublicEntry = "formal-gates coverage validate"
 			m.Cases[0].Preconditions = "JSON fixture"
@@ -398,7 +398,7 @@ func TestWhiteboxCaseBindingVariantsAreClosed(t *testing.T) {
 			c.Manifests[0].Cases[0].PublicEntry = ""
 			c.Manifests[0].Cases[0].Preconditions = ""
 			c.Manifests[0].Cases[0].Steps = ""
-			c.Manifests[0].Cases[0].TestRef = "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxCaseBindingVariantsAreClosed"
+			c.Manifests[0].Cases[0].TestRef = "internal/engine/contracttests/coverage_contract_test.go::TestCaseBindingVariantsAreClosed"
 			tc.mutate(&c.Manifests[0].Cases[0])
 			coverageCode(t, c.Validate(), coverage.CodeInvalidCaseBinding)
 		})
@@ -409,8 +409,8 @@ func TestWhiteboxCaseBindingVariantsAreClosed(t *testing.T) {
 		c.SelectedKinds = []coverage.ReviewKind{coverage.ReviewWhitebox}
 		c.Manifests[0].Binding = coverageManifestBinding(coverage.ReviewWhitebox)
 		c.Manifests[0].Cases = []coverage.AcceptanceCase{
-			{CaseID: "CASE-W1", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxCaseBindingVariantsAreClosed", Oracle: "PASS"},
-			{CaseID: "CASE-W2", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxCaseBindingVariantsAreClosed", Oracle: "PASS"},
+			{CaseID: "CASE-W1", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/contracttests/coverage_contract_test.go::TestCaseBindingVariantsAreClosed", Oracle: "PASS"},
+			{CaseID: "CASE-W2", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/contracttests/coverage_contract_test.go::TestCaseBindingVariantsAreClosed", Oracle: "PASS"},
 		}
 		c.Manifests[0].Points = []coverage.AcceptancePoint{{PointID: "POINT-W", ObservableBehavior: "whitebox structure is checked", Oracle: "test reference is bound"}}
 		c.Manifests[0].Edges = []coverage.CoverageEdge{{SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W1"}, {SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W2"}}
@@ -421,7 +421,7 @@ func TestWhiteboxCaseBindingVariantsAreClosed(t *testing.T) {
 // Every NON_QA source needs one documented reason, method, PASS result, and
 // evidence record; explanations, unknown sources, duplicate records, and
 // non-PASS statuses cannot close the source.
-func TestWhiteboxAlternativeVerificationRequiresEvidenceClosure(t *testing.T) {
+func TestAlternativeVerificationRequiresEvidenceClosure(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageContract)
@@ -450,7 +450,7 @@ func TestWhiteboxAlternativeVerificationRequiresEvidenceClosure(t *testing.T) {
 // Review projection is item-complete, binding-scoped, and PASS-only. A set
 // status or a partially filled list cannot stand in for source/point/case
 // decisions.
-func TestWhiteboxReviewProjectionRequiresCompletePassDecisions(t *testing.T) {
+func TestReviewProjectionRequiresCompletePassDecisions(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.ReviewResult)
@@ -488,7 +488,7 @@ func validateReviewsForCoverage(t *testing.T) (coverage.ApprovedWhitelist, error
 // Required-source, manifest, and map digests are canonical projections: input
 // ordering does not matter, the digest has sha256: encoding, and digesting
 // never reorders caller-owned slices.
-func TestWhiteboxCanonicalDigestsIgnoreInputOrder(t *testing.T) {
+func TestCanonicalDigestsIgnoreInputOrder(t *testing.T) {
 	c := coverageContract()
 	c.RequiredSources.Sources = append(c.RequiredSources.Sources, coverage.RequiredSource{SourceID: "REQ-B", Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability})
 	c.Manifests[0].Sources = append(c.Manifests[0].Sources, "REQ-B")
@@ -500,7 +500,7 @@ func TestWhiteboxCanonicalDigestsIgnoreInputOrder(t *testing.T) {
 		Binding: coverageManifestBinding(coverage.ReviewWhitebox),
 		Sources: []string{"REQ-A"},
 		Points:  []coverage.AcceptancePoint{{PointID: "POINT-W", ObservableBehavior: "whitebox structure is checked", Oracle: "test reference is bound"}},
-		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-W", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/whitebox_qa/coverage_contract_test.go::TestWhiteboxCanonicalDigestsIgnoreInputOrder", Oracle: "PASS"}},
+		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-W", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/contracttests/coverage_contract_test.go::TestCanonicalDigestsIgnoreInputOrder", Oracle: "PASS"}},
 		Edges:   []coverage.CoverageEdge{{ReviewKind: coverage.ReviewWhitebox, SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W"}},
 	})
 	originalSources := append([]coverage.RequiredSource(nil), c.RequiredSources.Sources...)
@@ -546,7 +546,7 @@ func coverageEdgeKey(e coverage.CoverageEdge) string {
 // FULL execution must account for every approved edge exactly once and cannot
 // smuggle inherited/not-executed records or an auxiliary NotExecuted list into
 // a full PASS.
-func TestWhiteboxFullExecutionRequiresExactExecutedPartition(t *testing.T) {
+func TestFullExecutionRequiresExactExecutedPartition(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.ExecutionReport)
@@ -585,7 +585,7 @@ func TestWhiteboxFullExecutionRequiresExactExecutedPartition(t *testing.T) {
 // AFFECTED execution permits executed and inherited PASS records only when
 // inheritance cites a distinct candidate and evidence; NOT_EXECUTED records
 // must be explicitly partitioned and never count as PASS.
-func TestWhiteboxAffectedExecutionRequiresInheritanceEvidence(t *testing.T) {
+func TestAffectedExecutionRequiresInheritanceEvidence(t *testing.T) {
 	c, w, report := coverageWhitelistAndFullReport(t)
 	report.Binding.Scope = coverage.ScopeAffected
 	for i := range report.Records {
@@ -643,7 +643,7 @@ func TestWhiteboxAffectedExecutionRequiresInheritanceEvidence(t *testing.T) {
 // Execution is bound to all contract/whitelist digests and the independently
 // supplied current candidate identity and digest. Any stale binding invalidates the
 // report before edge reconciliation.
-func TestWhiteboxExecutionRejectsStaleDigestOrCandidateBinding(t *testing.T) {
+func TestExecutionRejectsStaleDigestOrCandidateBinding(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*coverage.CoverageContract, *coverage.ExecutionReport)
@@ -689,7 +689,7 @@ func TestWhiteboxExecutionRejectsStaleDigestOrCandidateBinding(t *testing.T) {
 // Projection digests cover all approved edges and alternative-verification
 // records. Mutating either projection without recomputing its digest is
 // detectable and cannot be accepted as a current whitelist.
-func TestWhiteboxWhitelistProjectionDigestDetectsMutation(t *testing.T) {
+func TestWhitelistProjectionDigestDetectsMutation(t *testing.T) {
 	c := coverageContractWithNonQA()
 	w, err := c.ValidateReviews([]coverage.ReviewResult{coveragePassReview(c, 0)})
 	if err != nil {
@@ -714,7 +714,7 @@ func TestWhiteboxWhitelistProjectionDigestDetectsMutation(t *testing.T) {
 
 // Package-level helpers and value methods are thin adapters over the same
 // validated pure logic and must agree on successful projections/execution.
-func TestWhiteboxExportedCoverageAdaptersDelegateConsistently(t *testing.T) {
+func TestExportedCoverageAdaptersDelegateConsistently(t *testing.T) {
 	c := coverageContract()
 	reviews := []coverage.ReviewResult{coveragePassReview(c, 0)}
 	if err := coverage.Validate(c); err != nil {

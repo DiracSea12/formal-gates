@@ -1,7 +1,6 @@
-// Package whitebox_qa 承载决策内核的独立白盒结构测试：用例从已确认需求
-// 与本套测试自行构造的夹具出发，直接面向 internal/engine 各包的实现结构
-// 编写，不依赖其它任何测试。
-package whitebox_qa
+// Package contracttests verifies engine contracts with independent fixtures.
+// Tests cover authoring, compilation, state transitions and durable protocols.
+package contracttests
 
 import (
 	"bytes"

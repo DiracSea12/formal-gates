@@ -23,8 +23,8 @@ type CaseChange struct {
 	Preconditions *string               `json:"preconditions,omitempty"`
 	Steps         *string               `json:"steps,omitempty"`
 	Oracle        *string               `json:"oracle,omitempty"`
-	TestRef       *string               `json:"testRef,omitempty"`
 	TestFile      *int                  `json:"testFile,omitempty"`
+	TestSymbol    *int                  `json:"testSymbol,omitempty"`
 }
 type SharedStepChange struct {
 	Procedure  *string               `json:"procedure,omitempty"`

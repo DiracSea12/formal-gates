@@ -510,27 +510,23 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
 		if mode == coverage.ReviewWhitebox {
-			c.TestRef, c.TestFile = "TestWhiteboxDirectBehavior", 1
+			c.TestFile, c.TestSymbol = 1, 1
 			c.PublicEntry, c.Preconditions, c.Steps = "", "", ""
 			c.Operations = nil
 			c.Oracle = canaryWhiteboxOracle
-			missing.TestRef, missing.TestFile = "TestWhiteboxMissingArtifact", 1
+			missing.TestFile, missing.TestSymbol = 1, 2
 			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
 			missing.Operations = nil
 			missing.Oracle = canaryWhiteboxOracle
 			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
 				return payload, err
 			}
-			entries, err := os.ReadDir(workspace)
+			body, err := os.ReadFile(filepath.Join(workspace, "whitebox_delivered_test.go"))
 			if err != nil {
 				return payload, err
 			}
-			listing := worker.LocationFact{Kind: "listing"}
-			for _, entry := range entries {
-				listing.Paths = append(listing.Paths, entry.Name())
-			}
-			*facts = append(*facts, listing)
-			files := []worker.Location{{Listing: len(*facts), Entry: slices.Index(listing.Paths, "whitebox_delivered_test.go") + 1}}
+			*facts = append(*facts, worker.LocationFact{Kind: "read", Paths: []string{"whitebox_delivered_test.go"}, Content: string(body)})
+			files := []worker.Location{{Read: len(*facts)}}
 			c.Files, missing.Files = &files, &files
 		}
 		manifest := worker.DesignManifest{Cases: []worker.DesignedCase{c, missing}, Coverage: [][]int{}}

@@ -180,16 +180,16 @@ func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
 func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
-	files := []Location{{Listing: 1, Entry: 1}, {Listing: 1, Entry: 2}}
+	files := []Location{{Read: 2}, {Listing: 1, Entry: 2}}
 	sharedFiles := []Location{{Listing: 1, Entry: 3}}
 	unused := []Location{{Listing: 1, Entry: 4}}
-	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestRef: "TestUsage", Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{1}, nil}}}
+	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestSymbol: 1, Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{1}, nil}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
 	paths := []string{"analytics_test.go", "frob_test.go", "fixture.data", "unrelated.go", "helper.data"}
-	facts := []LocationFact{{Kind: "listing", Paths: paths}}
+	facts := []LocationFact{{Kind: "listing", Paths: paths}, {Kind: "read", Paths: paths[:1], Content: "package analytics\nimport \"testing\"\nfunc TestUsage(t *testing.T) {}\n"}}
 	event, err := DecodeResultWithFacts(input, "result", raw, "original-raw-digest", paths, facts)
 	if err != nil {
 		t.Fatal(err)

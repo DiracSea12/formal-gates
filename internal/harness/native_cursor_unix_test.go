@@ -1077,3 +1077,55 @@ func TestCursorCredentialStoreRemainsBound(t *testing.T) {
 		t.Fatal("credential probe created or prompted a session")
 	}
 }
+
+func TestCursorFreshConfigPathIdentity(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		t.Run(fmt.Sprintf("alias=%t", alias), func(t *testing.T) {
+			s := newCursorScenario(t, "99999999-9999-4999-8999-999999999999", "model-a", "high", true)
+			root := resolveNativePath(t.TempDir())
+			real := filepath.Join(root, "real")
+			if err := os.MkdirAll(real, 0755); err != nil {
+				t.Fatal(err)
+			}
+			prefix := real
+			if alias {
+				prefix = filepath.Join(root, "link")
+				if err := os.Symlink(real, prefix); err != nil {
+					t.Fatal(err)
+				}
+			}
+			requestedConfig := filepath.Join(prefix, "fresh", "config")
+			t.Setenv("CURSOR_CONFIG_DIR", requestedConfig)
+			t.Setenv("PATH", filepath.Dir(textOf(getOf(getOf(s.request["binding"], "launch"), "executable")))+string(os.PathListSeparator)+os.Getenv("PATH"))
+			for key, value := range s.peer.Environment {
+				if key != "CURSOR_CONFIG_DIR" && key != "CURSOR_PEER_SCRIPT" {
+					t.Setenv(key, value)
+				}
+			}
+			binding, captureErr := cursorCaptureBinding()
+			if captureErr != nil {
+				t.Fatal(captureErr)
+			}
+			binding["environment"].(map[string]any)["CURSOR_PEER_SCRIPT"] = s.script
+			s.request["binding"] = binding
+			config := textOf(getOf(getOf(binding, "environment"), "CURSOR_CONFIG_DIR"))
+			t.Logf("original captured config=%s", config)
+			s.peer.Environment["CURSOR_CONFIG_DIR"] = config
+			s.request["binding"].(map[string]any)["environment"].(map[string]any)["CURSOR_CONFIG_DIR"] = config
+			sum := md5.Sum([]byte(s.workspace))
+			s.peer.Store = filepath.Join(config, "chats", hex.EncodeToString(sum[:]), s.peer.UUID, "store.db")
+			s.save(t)
+			source, err := runNativeJob(s.directory)
+			t.Logf("original native calls=%d persisted-context=%q error=%v", cursorCalls(t, s), string(readBytes(t, s.peer.Store)), err)
+			if err != nil {
+				t.Fatalf("normal fresh Cursor config must complete: %v", err)
+			}
+			if source["identity"] != s.peer.UUID {
+				t.Fatal("wrong original identity")
+			}
+			if string(readBytes(t, s.peer.Store)) != s.peer.UUID+":completed" {
+				t.Fatal("native peer did not persist actual completion")
+			}
+		})
+	}
+}

@@ -21,6 +21,8 @@
 目录的原操作必须经原设计/审查责任修订，程序不会把它改成另一工作区。shared-step 的操作由引用它的 case
 使用，载荷本身不表示全局只执行一次。
 
+设计结果用 `files` 原 read、`testFile` 本用例文件序号和该 read 的 `testSymbol` 序号选择 Go 测试，程序按声明顺序从原全文解析并装配精确引用。已有和新写函数共用该选择；新名称只在写代码时创作，读取后不再抄写。省略选择保留原已签发引用。
+
 Go 白盒测试可以只保留精确引用 `<仓库相对路径>_test.go::TestName`。标准库 resolver
 读取指定候选文件，解析 Go 源码，核对该文件中唯一的同名包级测试函数及
 `func(*testing.T)` 签名，支持普通、别名和 dot import。测试名遵守 Go 的 `Test` 命名
@@ -32,8 +34,8 @@ go test -timeout=0 -count=1 -json -run ^<精确测试名>$ .
 
 测试名经 `regexp.QuoteMeta` 转义。该协议只接受完整包级测试，不接受裸函数名、`#`
 分隔符、子测试路径或其他语言的引用，也不搜索其他文件来猜测目标。Go 精确引用不能
-同时声明 case operations；共享准备操作仍由 shared-step 单独持有。其他不透明 testRef
-保留语义引用，需要已批准 operations 才能解析执行动作。
+同时声明 case operations；共享准备操作仍由 shared-step 单独持有。已签发的其他不透明 testRef
+保留原引用，其执行需要已批准 operations；新设计使用 operations，不把其他语言伪装成 Go 引用。
 
 `coverage.ResolveCaseOperations` 只返回 `ResolvedOperation`（原操作、派生目录与 Go
 精确测试名），不启动进程或判断 oracle。缺文件、缺测试、同名函数歧义、错误签名、

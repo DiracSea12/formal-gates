@@ -165,20 +165,22 @@ func TestWhiteboxDesignKeepsCompleteNativeDeliveryPaths(t *testing.T) {
 	}
 }
 
-func TestCaseFileSelectionsPreserveReferencesAndRejectCopiedPaths(t *testing.T) {
+func TestCaseFileSelectionsPreserveReferencesAndSelectPublishedSymbols(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
-	input.Validation.Manifest.Cases[0].Files = []string{"case.data", "support.data"}
-	input.Validation.Manifest.Cases[0].TestRef = "case.data::Class::method"
+	input.Validation.Manifest.Cases[0].Files = []string{"case_test.go", "support.data"}
+	input.Validation.Manifest.Cases[0].TestRef = "case_test.go::TestOriginal"
 	input.Validation.AffectedCases = []string{"new"}
-	facts := []LocationFact{{Kind: "listing", Paths: []string{"case.data", "support.data", "replacement.data"}}}
+	facts := []LocationFact{
+		{Kind: "listing", Paths: []string{"case_test.go", "support.data", "replacement_test.go"}},
+		{Kind: "read", Paths: []string{"case_test.go"}, Content: "package sample\nimport \"testing\"\nfunc TestOriginal(t *testing.T) {}\nfunc TestOther(t *testing.T) {}\n"},
+		{Kind: "read", Paths: []string{"replacement_test.go"}, Content: "package sample\nimport check \"testing\"\nfunc TestCreated(t *check.T) {}\n"},
+	}
 	for _, sample := range []struct{ raw, ref string }{
-		{`{"cases":[{}]}`, "case.data::Class::method"},
-		{`{"cases":[{"testFile":2}]}`, "support.data::Class::method"},
-		{`{"cases":[{"testFile":1,"testRef":"Class::other"}]}`, "case.data::Class::other"},
-		{`{"cases":[{"testRef":"Class::method"}]}`, "Class::method"},
-		{`{"cases":[{"testRef":""}]}`, ""},
-		{`{"cases":[{"files":[{"listing":1,"entry":3}],"testFile":1}]}`, "replacement.data::Class::method"},
+		{`{"cases":[{}]}`, "case_test.go::TestOriginal"},
+		{`{"cases":[{"operations":[{"kind":"ARGV","argv":["go","test","."]}]}]}`, ""},
+		{`{"cases":[{"files":[{"read":2}],"testFile":1,"testSymbol":2}]}`, "case_test.go::TestOther"},
+		{`{"cases":[{"files":[{"read":3}],"testFile":1,"testSymbol":1}]}`, "replacement_test.go::TestCreated"},
 	} {
 		event, err := DecodeResultWithFacts(input, "result", []byte(sample.raw), "original-source", []string{}, facts)
 		if err != nil {
@@ -195,19 +197,23 @@ func TestCaseFileSelectionsPreserveReferencesAndRejectCopiedPaths(t *testing.T) 
 		input.Validation.Interruption = nil
 	}
 	for _, raw := range []string{
-		`{"cases":[{"files":["case.data"]}]}`,
-		`{"cases":[{"files":[{"read":1,"line":1}]}]}`,
+		`{"cases":[{"files":["case_test.go"]}]}`,
+		`{"cases":[{"files":[{"read":2,"line":1}],"testFile":1,"testSymbol":1}]}`,
 		`{"cases":[{"files":[{"requirementLine":1}]}]}`,
-		`{"cases":[{"testRef":"case.data::Class::method"}]}`,
-		`{"cases":[{"testRef":"replacement.data::Class::method"}]}`,
-		`{"cases":[{"testFile":3,"testRef":"Class::method"}]}`,
-		`{"cases":[{"files":[],"testFile":1,"testRef":"Class::method"}]}`,
+		`{"cases":[{"testRef":"case_test.go::TestOriginal"}]}`,
+		`{"cases":[{"testRef":"TestCreated"}]}`,
+		`{"cases":[{"testFile":1,"testSymbol":1}]}`,
+		`{"cases":[{"files":[{"listing":1,"entry":1}],"testFile":1,"testSymbol":1}]}`,
+		`{"cases":[{"files":[{"read":2}],"testFile":2,"testSymbol":1}]}`,
+		`{"cases":[{"files":[{"read":3}],"testFile":1,"testSymbol":2}]}`,
+		`{"cases":[{"files":[{"read":2}],"testFile":1}]}`,
+		`{"cases":[{"files":[{"read":2}],"testSymbol":1}]}`,
 	} {
 		if _, err := DecodeResultWithFacts(input, "invalid", []byte(raw), "original-source", []string{}, facts); err == nil {
 			t.Fatal("copied/invalid file identity accepted", raw)
 		}
 	}
-	if input.Validation.Manifest.Cases[0].TestRef != "case.data::Class::method" || !reflect.DeepEqual(input.Validation.Manifest.Cases[0].Files, []string{"case.data", "support.data"}) {
+	if input.Validation.Manifest.Cases[0].TestRef != "case_test.go::TestOriginal" || !reflect.DeepEqual(input.Validation.Manifest.Cases[0].Files, []string{"case_test.go", "support.data"}) {
 		t.Fatal("assembly mutated original file/reference facts")
 	}
 }
@@ -223,7 +229,7 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 	item := body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
 	properties := item["properties"].(map[string]any)
 	location := properties["files"].(map[string]any)["items"].(map[string]any)
-	if location["type"] != "object" || properties["testFile"] == nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
+	if location["type"] != "object" || properties["testFile"] == nil || properties["testSymbol"] == nil || properties["testRef"] != nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
 		t.Fatal("schema publishes raw/non-file identity", location)
 	}
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewBlackbox
@@ -233,7 +239,7 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 	}
 	body = schema["anyOf"].([]any)[0].(map[string]any)
 	item = body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
-	if item["properties"].(map[string]any)["testFile"] != nil {
+	if item["properties"].(map[string]any)["testFile"] != nil || item["properties"].(map[string]any)["testSymbol"] != nil {
 		t.Fatal("blackbox receives file-bound whitebox reference choice")
 	}
 }

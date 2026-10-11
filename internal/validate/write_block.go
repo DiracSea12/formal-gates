@@ -20,13 +20,12 @@ import (
 // Development/QA authors may edit their work; owners and reviewers remain read-only.
 
 // reviewerAgentTypes 是审查类代理的 agent_type：product-review、start-readiness、
-// qa-review、qa-execution、carry 继承判定、各门审查。这些代理不得写代码或 run 状态。
+// qa-review、qa-execution、各门审查。这些代理不得写代码或 run 状态。
 var reviewerAgentTypes = map[string]bool{
 	"product-review":              true,
 	"start-readiness":             true,
 	"qa-review":                   true,
 	"qa-execution":                true,
-	"carry":                       true,
 	"gate-review":                 true,
 	"merge-review":                true,
 	"complexity-gate":             true,

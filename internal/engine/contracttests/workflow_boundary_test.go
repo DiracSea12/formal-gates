@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"bytes"
@@ -51,11 +51,11 @@ func verticalStartRequest(runID string, receipt facade.IntakeConfirmationReceipt
 	}
 }
 
-// TestPhase3FacadeAdmissionAndPreWriteInputFence proves that runtime identity
+// TestFacadeAdmissionAndPreWriteInputFence proves that runtime identity
 // comes from launcher admission, while mismatched caller fields, unsupported
 // routes, invalid run IDs, and negative capacity are rejected before the
 // engine namespace is created.
-func TestPhase3FacadeAdmissionAndPreWriteInputFence(t *testing.T) {
+func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	root := t.TempDir()
 	admission := fixtureAdmission(t, root, "sha256:admitted", "target-qa")
 	_, run, err := facade.Start(facade.StartOptions{
@@ -118,11 +118,11 @@ func TestPhase3FacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	}
 }
 
-// TestPhase3ProtocolIntakeReceiptIsExactlyOnce checks that the first-drive
+// TestProtocolIntakeReceiptIsExactlyOnce checks that the first-drive
 // intake projection is bound to the typed confirmation, that exact replay is
 // revision-idempotent, and that a changed receipt is rejected without bytes
 // changing.
-func TestPhase3ProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
+func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	root := t.TempDir()
 	store, err := persistence.NewStore(root, persistence.Config{PackageDigest: "sha256:vertical-package"})
 	if err != nil {
@@ -204,10 +204,10 @@ func TestPhase3ProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly proves that a completed
+// TestFacadeOpenTerminalSummaryReplayIsReadOnly proves that a completed
 // engine run can be reopened after active state cleanup from its immutable
 // summary, and that Show/Status/Next do not rewrite terminal bytes.
-func TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
+func TestFacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	runID := "terminal-open-replay"
 	f, _, err := facade.Start(facade.StartOptions{
@@ -292,10 +292,10 @@ func TestFacadeDiagnoseRawVersionBarrierIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestPhase3TestkitNextResultSequenceHasExactlySixTypedBoundaries exercises
+// TestTestkitNextResultSequenceHasExactlySixTypedBoundaries exercises
 // the test-only sequence harness and checks each closed NextResult kind has
 // exactly the payload branch associated with that kind.
-func TestPhase3TestkitNextResultSequenceHasExactlySixTypedBoundaries(t *testing.T) {
+func TestTestkitNextResultSequenceHasExactlySixTypedBoundaries(t *testing.T) {
 	report, err := testkit.RunHarness(testkit.HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "next-sequence"})
 	if err != nil {
 		t.Fatalf("next-sequence harness: %v", err)
@@ -311,10 +311,10 @@ func TestPhase3TestkitNextResultSequenceHasExactlySixTypedBoundaries(t *testing.
 	}
 }
 
-// TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite proves Submit is a
+// TestSubmitFencesUnknownKindAndProviderBeforeWrite proves Submit is a
 // closed typed event channel: free kinds and mismatched providers are rejected
 // before an event ledger or revision change.
-func TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite(t *testing.T) {
+func TestSubmitFencesUnknownKindAndProviderBeforeWrite(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("new protocol fixture: %v", err)

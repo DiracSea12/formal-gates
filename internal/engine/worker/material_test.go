@@ -337,3 +337,46 @@ func TestMaterialRestrictsComparisonAndConflictResponsibilities(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, handler := range []string{"engine.review.worker", "engine.readiness.plan", "engine.qa.review.rationale", "engine.qa.execution", "engine.validation.observation", "engine.gate"} {
+		t.Run(handler, func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = handler
+			input.RequirementDocument.Content = "Confirmed complete requirement"
+			if handler == "engine.review.worker" || handler == "engine.readiness.plan" {
+				input.Validation = nil
+				action := review.ProductReview
+				if handler == "engine.readiness.plan" {
+					action = review.StartReadiness
+				}
+				input.Review = &protocol.WorkerReviewInput{Action: action}
+			}
+			if handler == "engine.validation.observation" {
+				input.Validation.Observation = &protocol.ObservationInput{}
+			}
+			if handler == "engine.gate" {
+				input.Validation.Gate = &protocol.GateInput{Gate: "implementation-quality-gate"}
+			}
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(material.Prompt, "## 门审材料") != (handler == "engine.gate") || strings.Contains(material.Prompt, "独立 QA 的用例正文、执行证据及新编结构测试不作门判据") != (handler == "engine.gate") {
+				t.Fatal("gate-only contract was missing or leaked into another action", handler)
+			}
+			for _, shared := range []string{"## 范围与实证", "## 严重度与发现证据", "正常操作或常见失误复现", "不存在范围内 P0/P1 时结论为 PASS"} {
+				if !strings.Contains(material.Prompt, shared) {
+					t.Fatal("shared single-owner evidence rule was lost", shared)
+				}
+			}
+			if strings.Contains(material.Prompt, "门审必填") || strings.Contains(material.Prompt, "产品审、技术审只审确认文档；QA") {
+				t.Fatal("other-role instructions remained")
+			}
+		})
+	}
+}

@@ -630,4 +630,15 @@ func TestResolveNativePath(t *testing.T) {
 	if got := resolveNativePath(filepath.Join(link, "child")); got != filepath.Join(resolvedReal, "child") {
 		t.Fatalf("resolveNativePath = %q, want %q", got, filepath.Join(resolvedReal, "child"))
 	}
+	missing := filepath.Join(link, "nested", "child", "leaf")
+	want := filepath.Join(resolvedReal, "nested", "child", "leaf")
+	if got := resolveNativePath(missing); got != want {
+		t.Fatalf("multi-level missing path = %q, want %q", got, want)
+	}
+	if err := os.MkdirAll(missing, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveNativePath(missing); got != want {
+		t.Fatalf("created path identity changed = %q, want %q", got, want)
+	}
 }

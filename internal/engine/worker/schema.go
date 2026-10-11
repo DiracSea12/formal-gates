@@ -255,6 +255,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				item["description"] = "Change only this issued case: " + id
 				if !whitebox {
 					delete(item["properties"].(map[string]any), "testFile")
+					delete(item["properties"].(map[string]any), "testSymbol")
 				}
 				cases = append(cases, item)
 			}
@@ -274,6 +275,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		if !whitebox {
 			item := fields["cases"].(map[string]any)["items"].(map[string]any)
 			delete(item["properties"].(map[string]any), "testFile")
+			delete(item["properties"].(map[string]any), "testSymbol")
 		}
 		items := []any{}
 		for _, point := range input.Validation.Manifest.Points {
@@ -396,10 +398,11 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			}
 			if field.Name == "TestFile" {
 				child["minimum"] = 1
-				child["description"] = "Select a 1-based position in this case's related files; testRef supplies only the test symbol. Omit testFile for a non-file native reference."
+				child["description"] = "Select the 1-based original read position in this case's files, together with its published testSymbol number. Omit both to retain the issued reference; operations replaces an issued Go test invocation with the authored recipe."
 			}
-			if field.Name == "TestRef" {
-				child["description"] = "Author a test symbol with testFile, or a non-file native test reference. Omit an issued reference to preserve it."
+			if field.Name == "TestSymbol" {
+				child["minimum"] = 1
+				child["description"] = "Select the published testSymbol number from the original full read selected by testFile. New functions must be written and read before selection."
 			}
 			properties[name] = child
 			if !strings.Contains(options, "omitempty") {

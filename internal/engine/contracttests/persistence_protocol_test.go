@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"encoding/json"
@@ -107,7 +107,7 @@ func protocolRejectionCode(t *testing.T, err error) string {
 
 // Every envelope identity field is a pre-write fence. Missing and mismatched
 // values must be classified before fingerprint collection or protocol writes.
-func TestPhase2WhiteboxEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
+func TestEngineEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
 	seedDir := t.TempDir()
 	seedStore := protocolStore(t, seedDir, nil)
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
@@ -206,7 +206,7 @@ func TestPhase2WhiteboxEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T
 
 // Each named crash window must recover to one whole revision: either the
 // previous committed state or the complete next state, never a partial mix.
-func TestPhase2WhiteboxEveryDurableCrashWindowConverges(t *testing.T) {
+func TestEngineEveryDurableCrashWindowConverges(t *testing.T) {
 	cases := []struct {
 		point          persistence.FaultPoint
 		outcome        persistence.RecoveryOutcome
@@ -283,7 +283,7 @@ func TestPhase2WhiteboxEveryDurableCrashWindowConverges(t *testing.T) {
 // Failure classification is a closed routing table. Engine and invariant
 // failures may not drift onto the agent edge; only the explicit agent-
 // recoverable class permits that route.
-func TestPhase2WhiteboxFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) {
+func TestEngineFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) {
 	cases := []struct {
 		class  authoring.FailureClass
 		action protocol.RecoveryAction
@@ -339,7 +339,7 @@ func TestPhase2WhiteboxFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) 
 // Provider and Attempt bindings fence every unified admission family before
 // ledger mutation. Rejections across receipt, result, task, lifecycle, and
 // HostAction paths must leave the same revision and state projection.
-func TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
+func TestEngineProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -428,7 +428,7 @@ func TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 // Constructing the persistent engine with an explicit isolated project root must
 // leave host, resource, and stable namespaces untouched. The only durable file
 // is the engine state selected by the test-only fixture.
-func TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot(t *testing.T) {
+func TestEngineEngineWritesStayInsideExplicitIsolationRoot(t *testing.T) {
 	project, err := testkit.NewIsolatedProject(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewIsolatedProject: %v", err)
@@ -491,7 +491,7 @@ func TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot(t *testing.T)
 
 // A stale writer must fail its revision comparison before collecting external
 // facts or creating any persistence protocol artifacts.
-func TestPhase2WhiteboxCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
+func TestEngineCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	store := protocolStore(t, dir, nil)
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
@@ -541,7 +541,7 @@ func TestPhase2WhiteboxCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 
 // Recovery may only rename a staged document after validating the staged
 // runtime envelope. A foreign staged package is residual, not a new state.
-func TestPhase2WhiteboxRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
+func TestEngineRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 	dir := t.TempDir()
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
 	store := protocolStore(t, dir, nil)
@@ -621,7 +621,7 @@ func TestPhase2WhiteboxRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 // Event-ledger replay is a read-only path: once an acceptance is durable, a
 // changed or unavailable external fingerprint cannot turn the same event into
 // a second write attempt.
-func TestPhase2WhiteboxReplaySkipsFingerprintRevalidation(t *testing.T) {
+func TestEngineReplaySkipsFingerprintRevalidation(t *testing.T) {
 	collectCalls := 0
 	var collectErr error
 	engine := protocolEngine(t, func() (string, error) {
@@ -665,7 +665,7 @@ func TestPhase2WhiteboxReplaySkipsFingerprintRevalidation(t *testing.T) {
 // A duplicate payload under a fresh event ID must durably occupy that ID.
 // This rotates revision-bound freshness, and the occupied ID can never be
 // reused for different canonical bytes.
-func TestPhase2WhiteboxNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
+func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	engine := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
 	request, err := protocol.NewRequestEvent("protocol-freshness-request", protocol.ControlAbort,
 		protocol.AskOption{ID: "keep", Label: "keep"})
@@ -747,7 +747,7 @@ func TestPhase2WhiteboxNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T)
 // UNKNOWN receipt reconciliation may attach only lifecycle evidence matching
 // that receipt's correlation. An unrelated unique pair must not release a
 // staged worker result or advance the workflow.
-func TestPhase2WhiteboxUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
+func TestEngineUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -879,7 +879,7 @@ func TestPhase2WhiteboxUnknownReceiptRequiresMatchingLifecycleEvidence(t *testin
 // An interruption with unchanged bindings and an unknown cause must persist a
 // recovery Ask while preserving the current Attempt. The subsequent decision
 // records user intent but does not silently replace that Attempt.
-func TestPhase2WhiteboxRecoveryAskPreservesCurrentAttempt(t *testing.T) {
+func TestEngineRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -966,7 +966,7 @@ func TestPhase2WhiteboxRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 // A corrupt authoritative document is not a recoverable crash artifact. Load,
 // Save, and Recover must all surface the integrity failure without rewriting
 // the state or starting a new transaction.
-func TestPhase2WhiteboxIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
+func TestEngineIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
 	dir := t.TempDir()
 	store := protocolStore(t, dir, nil)
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
@@ -1040,7 +1040,7 @@ func TestPhase2WhiteboxIntegrityMismatchFencesEveryStateOperation(t *testing.T) 
 // External facts are checked on both sides of the atomic replacement. A
 // pre-write change is zero-write; a post-write change reports that the whole
 // new revision committed and requires re-observation rather than rollback.
-func TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testing.T) {
+func TestEngineFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testing.T) {
 	dir := t.TempDir()
 	store := protocolStore(t, dir, nil)
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
@@ -1128,7 +1128,7 @@ func TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites(t
 // Event identity is a hard ledger key. Reusing an ID with different canonical
 // bytes must fail before fingerprint collection and leave the first durable
 // acceptance untouched.
-func TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
+func TestEngineSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	collectCalls := 0
 	engine := protocolEngine(t, func() (string, error) {
 		collectCalls++
@@ -1170,7 +1170,7 @@ func TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 // Freshness is revision-bound. A real typed Operator observation rotates the
 // token; the stale decision is rejected without ledger mutation, while a
 // decision using the re-fetched token is accepted.
-func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
+func TestEngineInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	engine := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
 	request, err := protocol.NewRequestEvent("protocol-stale-request", protocol.ControlAbort,
 		protocol.AskOption{ID: "cancel", Label: "Keep running"})
@@ -1234,7 +1234,7 @@ func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) 
 // Two writers may race after reading the same revision, but the directory
 // lock and CAS must prevent a lost update. Retrying only the rejected caller
 // converges to two durable events and two pending Asks.
-func TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
+func TestEngineConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1302,7 +1302,7 @@ func TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) 
 
 // A worker result that arrives before its SpawnReceipt must survive an engine
 // restart. The later SPAWNED receipt settles the staged result exactly once.
-func TestPhase2WhiteboxResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testing.T) {
+func TestEngineResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1388,7 +1388,7 @@ func TestPhase2WhiteboxResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testi
 // HostAction side effects are preceded by a durable intent. An UNKNOWN
 // receipt may wait, enter Operator, or reconcile as fulfilled, but none of
 // those paths may execute the side effect a second time.
-func TestPhase2WhiteboxHostActionUnknownReconcilesWithoutReexecution(t *testing.T) {
+func TestEngineHostActionUnknownReconcilesWithoutReexecution(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1535,7 +1535,7 @@ func protocolInitializeBindingFixture(t *testing.T) *testkit.ProtocolFixture {
 // A reconciled UNKNOWN HostAction is a successful completion fact. It must
 // advance the concrete frontier step and let the normal settle/refill path
 // continue without executing the side effect again.
-func TestPhase2WhiteboxReconciledHostActionAdvancesFrontier(t *testing.T) {
+func TestEngineReconciledHostActionAdvancesFrontier(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1598,7 +1598,7 @@ func TestPhase2WhiteboxReconciledHostActionAdvancesFrontier(t *testing.T) {
 
 // Each Ask decision and each repeated-operation HostAction receipt must settle
 // only the concrete step that owns its durable binding.
-func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
+func TestEngineSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 	fixture := protocolInitializeBindingFixture(t)
 	submit := func(event protocol.Event) protocol.Acceptance {
 		t.Helper()
@@ -1746,7 +1746,7 @@ func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
 // Binding changes retire the old execution instance before installing a new
 // Attempt. A late result remains visible as OBSOLETE_RESULT and cannot advance
 // or replace the current Attempt.
-func TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult(t *testing.T) {
+func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)

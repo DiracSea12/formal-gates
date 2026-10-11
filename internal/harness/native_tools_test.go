@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -899,4 +900,79 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	body := "package sample\nimport (\"testing\"; \"os\")\nfunc helper() {}\nfunc TestWrong(t *testing.T) { t.Fatal(\"wrong test executed\") }\nfunc TestChosen(t *testing.T) { if err := os.WriteFile(\"selected.txt\", []byte(\"chosen\"), 0600); err != nil { t.Fatal(err) } }\n"
+	for name, value := range map[string]string{"sample_test.go": body, "go.mod": "module sample\ngo 1.22\n"} {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing := callWorkspace(t, tools, `{"action":"list"}`)
+	entry := 0
+	for _, row := range listing["entries"].([]any) {
+		if getOf(row, "name") == "sample_test.go" {
+			entry = getOf(row, "entry").(int)
+		}
+	}
+	read := callWorkspace(t, tools, fmt.Sprintf(`{"action":"read","listing":%d,"entry":%d}`, listing["listing"].(int), entry))
+	choices := read["testSymbols"].([]map[string]any)
+	if len(choices) != 2 || choices[0]["name"] != "TestWrong" || choices[1]["name"] != "TestChosen" || choices[1]["testSymbol"] != 2 {
+		t.Fatal("published symbol choices did not match full source declarations", choices)
+	}
+	originalRead := read["read"].(int)
+	// A later read has different ordinal positions; the case selects its original read.
+	body = strings.Replace(body, "func helper() {}\n", "func helper() {}\nfunc TestCreated(t *testing.T) {}\n", 1)
+	if err := os.WriteFile(filepath.Join(workspace, "sample_test.go"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	created := callWorkspace(t, tools, fmt.Sprintf(`{"action":"read","listing":%d,"entry":%d}`, listing["listing"].(int), entry))
+	if len(created["testSymbols"].([]map[string]any)) != 3 {
+		t.Fatal("new code symbol was not published")
+	}
+	resumed, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := make([]worker.LocationFact, 0, len(resumed.facts))
+	for _, fact := range resumed.facts {
+		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
+	}
+	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","files":[{"read":%d}],"testFile":1,"testSymbol":2}],"coverage":[]}`, originalRead))
+	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRaw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"created test passes","files":[{"read":%d}],"testFile":1,"testSymbol":1}],"coverage":[]}`, created["read"].(int)))
+	newEvent, err := worker.DecodeResultWithFacts(input, "created-result", newRaw, "created-output", []string{}, facts)
+	if err != nil || newEvent.Result.Validation.Manifest.Cases[0].TestRef != "sample_test.go::TestCreated" {
+		t.Fatal("created code lost its symbol selection", err)
+	}
+	qaCase := event.Result.Validation.Manifest.Cases[0]
+	if qaCase.TestRef != "sample_test.go::TestChosen" {
+		t.Fatal("result used another read's symbol table", qaCase.TestRef)
+	}
+	operations, err := coverage.ResolveCaseOperations(workspace, qaCase)
+	if err != nil || len(operations) != 1 {
+		t.Fatal("selected test cannot execute", err)
+	}
+	operation := operations[0]
+	cmd := exec.Command(operation.Operation.Argv[0], operation.Operation.Argv[1:]...)
+	cmd.Dir = operation.Directory
+	output, err := cmd.CombinedOutput()
+	if err != nil || coverage.GoTestExecutionResult(output, operation.GoTestName) != "pass" {
+		t.Fatalf("original selected test did not actually pass: %v\n%s", err, output)
+	}
+	value, err := os.ReadFile(filepath.Join(workspace, "selected.txt"))
+	if err != nil || string(value) != "chosen" {
+		t.Fatal("actual selected test side effect differs", err)
+	}
+	t.Logf("read=%d testSymbol=2 original=%s actual Go event=pass persisted=%q", originalRead, qaCase.TestRef, value)
 }

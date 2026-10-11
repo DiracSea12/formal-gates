@@ -10,7 +10,6 @@
 | start-readiness | 技术准备审，内容只读 |
 | qa-review | 用例审查，内容只读 |
 | qa-execution | 原生事实与判据比较，内容只读 |
-| carry | 原 PASS 的影响判断，内容只读 |
 | gate-review / 具体门 | 实现门审，内容只读 |
 
 write_block 只作辅助写隔离：从当前 engine 已签发开发 Batch 判断开发边界，不维护第二份状态。仅限制活动开发 run 的仓库根及原 owner/角色；开发前、终态和明确仓库外目标不启用。

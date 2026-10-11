@@ -108,18 +108,20 @@ formal-gates workflow start --root <repo> --package-root <installed-package> \
 formal-gates workflow start --root <repo> --package-root <installed-package> \
   --run-id <id> --route lightweight --intake-receipt <receipt.json>
 
-formal-gates workflow drive --root <repo> --run-id <id>
-formal-gates workflow show --root <repo> --run-id <id>
-formal-gates workflow status --root <repo> --run-id <id>
-formal-gates workflow next --root <repo> --run-id <id>
-formal-gates workflow submit --root <repo> --run-id <id> < <request-choices.json>
-formal-gates workflow next --root <repo> --run-id <id> --decision <choices.json> \
+formal-gates workflow drive --root <repo>
+formal-gates workflow show --root <repo>
+formal-gates workflow status --root <repo>
+formal-gates workflow next --root <repo>
+formal-gates workflow submit --root <repo> < <request-choices.json>
+formal-gates workflow next --root <repo> --decision <choices.json> \
   --save-candidate <confirmation.json>
 # 展示程序返回的当前确认内容，获得用户明确确认后：
 formal-gates workflow submit --confirmation <confirmation.json>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
+
+show/status/next/drive/主动 submit 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。`submit --confirmation` 仍从原候选自动绑定项目和 run。
 
 start/show/status/next/drive/submit 默认展示当前语义问题、短选择、必要确认材料及实际执行边界，
 不输出内部派发材料或 adapter 指令。程序调用者需要完整原投影时显式使用 `--machine`；

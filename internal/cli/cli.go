@@ -416,15 +416,19 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow show", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "engine run id")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	if *machine {
@@ -438,16 +442,20 @@ func runWorkflowStatus(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow status", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "engine run id")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
-	if !ok {
-		return 1, fmt.Errorf("workflow status is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
-	}
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
+	}
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
+		return 1, fmt.Errorf("workflow status is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	if *machine {
 		run, err := f.Status()
@@ -460,17 +468,21 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow next", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "engine run id")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	draftPath := fs.String("decision", "", "semantic control choices JSON; - reads stdin")
 	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated control confirmation")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("workflow next is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	if *draftPath == "" {
@@ -510,17 +522,21 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow drive", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "engine run id")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	singleStep := fs.Bool("single-step", false, "diagnostic: advance engine facts without consuming native workers")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
-	if !ok {
-		return 1, fmt.Errorf("workflow drive is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
-	}
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
+	}
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
+		return 1, fmt.Errorf("workflow drive is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	if *singleStep {
 		run, err := f.Drive()
@@ -537,7 +553,8 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow submit", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "engine run id")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	materialPath := fs.String("worker-material", "", "issued material reference JSON file")
 	nativeDirectory := fs.String("native-directory", "", "original native evidence directory")
 	sourcePath := fs.String("native-source", "", "original native source receipt JSON")
@@ -557,6 +574,8 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 			switch f.Name {
 			case "root":
 				mismatch = mismatch || !vcs.SamePath(*root, candidate.Root)
+			case "run":
+				mismatch = true
 			case "run-id":
 				mismatch = mismatch || *runID != candidate.Run.RunID
 			}
@@ -567,12 +586,15 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		*root, *runID = candidate.Root, candidate.Run.RunID
 		saved = &candidate
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
-	if !ok {
-		return 1, fmt.Errorf("workflow submit is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
-	}
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
+	}
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
+		return 1, fmt.Errorf("workflow submit is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
 	if *materialPath != "" {
 		var material facade.WorkerMaterial

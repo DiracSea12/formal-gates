@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ import (
 // A fulfilled observation is a durable completion fact for the concrete
 // HostAction step. The normal settle/refill path must continue from it without
 // executing the adapter a second time.
-func TestQAPersistenceProtocolReconciledHostActionContinuesFrontier(t *testing.T) {
+func TestPersistenceProtocolReconciledHostActionContinuesFrontier(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -156,7 +156,7 @@ func qaRepairBindingDefinition(t *testing.T) *compiler.CompiledDefinition {
 	return compiled
 }
 
-func TestQAPersistenceProtocolBindsRepeatedAsksAndOperationsPerStep(t *testing.T) {
+func TestPersistenceProtocolBindsRepeatedAsksAndOperationsPerStep(t *testing.T) {
 	compiled := qaRepairBindingDefinition(t)
 	fixture, err := testkit.NewProtocolFixtureWithDefinition(t.TempDir(), compiled, definition.Registry(), 4)
 	if err != nil {
@@ -431,7 +431,7 @@ func qaP2ArtifactNames(t *testing.T, dir string) []string {
 	return names
 }
 
-func TestQAPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
+func TestPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
 	seedDir := t.TempDir()
 	stable := func() (string, error) { return qaP2Fingerprint, nil }
 	qaP2Save(t, qaP2Store(t, seedDir, nil), 0, map[string]string{"value": "trusted"}, stable)
@@ -514,7 +514,7 @@ func TestQAPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *te
 	}
 }
 
-func TestQAPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
+func TestPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
 	cases := []struct {
 		point    persistence.FaultPoint
 		outcome  persistence.RecoveryOutcome
@@ -577,7 +577,7 @@ func TestQAPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
 	}
 }
 
-func TestQAPersistenceProtocolFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) {
+func TestPersistenceProtocolFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) {
 	routes := []struct {
 		class  authoring.FailureClass
 		action protocol.RecoveryAction
@@ -622,7 +622,7 @@ func TestQAPersistenceProtocolFailureRoutingIsClosedAndNonAgentByDefault(t *test
 	}
 }
 
-func TestQAPersistenceProtocolProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
+func TestPersistenceProtocolProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -691,7 +691,7 @@ func TestQAPersistenceProtocolProviderAndAttemptRejectionsAreZeroWrite(t *testin
 	}
 }
 
-func TestQAPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *testing.T) {
+func TestPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *testing.T) {
 	project, err := testkit.NewIsolatedProject(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewIsolatedProject: %v", err)
@@ -739,7 +739,7 @@ func TestQAPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *tes
 	}
 }
 
-func TestQAPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
+func TestPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	stable := func() (string, error) { return qaP2Fingerprint, nil }
 	qaP2Save(t, qaP2Store(t, dir, nil), 0, map[string]string{"value": "committed"}, stable)
@@ -773,7 +773,7 @@ func TestQAPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing
 	}
 }
 
-func TestQAPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
+func TestPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 	dir := t.TempDir()
 	stable := func() (string, error) { return qaP2Fingerprint, nil }
 	qaP2Save(t, qaP2Store(t, dir, nil), 0, map[string]string{"value": "baseline"}, stable)
@@ -848,7 +848,7 @@ func mustReadDir(t *testing.T, dir string) []os.DirEntry {
 	return entries
 }
 
-func TestQAPersistenceProtocolReplaySkipsFingerprintRevalidation(t *testing.T) {
+func TestPersistenceProtocolReplaySkipsFingerprintRevalidation(t *testing.T) {
 	collectorCalls := 0
 	var collectorErr error
 	engine := qaP2Engine(t, func() (string, error) {
@@ -885,7 +885,7 @@ func TestQAPersistenceProtocolReplaySkipsFingerprintRevalidation(t *testing.T) {
 	}
 }
 
-func TestQAPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
+func TestPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	engine := qaP2Engine(t, func() (string, error) { return qaP2Fingerprint, nil })
 	request, err := protocol.NewRequestEvent("qa-duplicate-source", protocol.ControlAbort, protocol.AskOption{ID: "keep", Label: "keep"})
 	if err != nil {
@@ -954,7 +954,7 @@ func TestQAPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *tes
 	}
 }
 
-func TestQAPersistenceProtocolUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
+func TestPersistenceProtocolUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1072,7 +1072,7 @@ func TestQAPersistenceProtocolUnknownReceiptRequiresMatchingLifecycleEvidence(t 
 	}
 }
 
-func TestQAPersistenceProtocolRecoveryAskPreservesCurrentAttempt(t *testing.T) {
+func TestPersistenceProtocolRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1148,7 +1148,7 @@ func TestQAPersistenceProtocolRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 	}
 }
 
-func TestQAPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
+func TestPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
 	dir := t.TempDir()
 	stable := func() (string, error) { return qaP2Fingerprint, nil }
 	store := qaP2Store(t, dir, nil)
@@ -1208,7 +1208,7 @@ func TestQAPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *test
 	}
 }
 
-func TestQAPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testing.T) {
+func TestPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testing.T) {
 	dir := t.TempDir()
 	stable := func() (string, error) { return qaP2Fingerprint, nil }
 	store := qaP2Store(t, dir, nil)
@@ -1267,7 +1267,7 @@ func TestQAPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedW
 	}
 }
 
-func TestQAPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
+func TestPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	collectorCalls := 0
 	engine := qaP2Engine(t, func() (string, error) {
 		collectorCalls++
@@ -1304,7 +1304,7 @@ func TestQAPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T
 	}
 }
 
-func TestQAPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
+func TestPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	engine := qaP2Engine(t, func() (string, error) { return qaP2Fingerprint, nil })
 	request, err := protocol.NewRequestEvent("qa-freshness-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
@@ -1350,7 +1350,7 @@ func TestQAPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *test
 	}
 }
 
-func TestQAPersistenceProtocolConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
+func TestPersistenceProtocolConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1414,7 +1414,7 @@ func TestQAPersistenceProtocolConcurrentSubmitConvergesWithoutLostUpdate(t *test
 	}
 }
 
-func TestQAPersistenceProtocolResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testing.T) {
+func TestPersistenceProtocolResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testing.T) {
 	root := t.TempDir()
 	fixture, err := testkit.NewProtocolFixture(root)
 	if err != nil {
@@ -1482,7 +1482,7 @@ func TestQAPersistenceProtocolResultBeforeReceiptSurvivesRestartAndSettlesOnce(t
 	}
 }
 
-func TestQAPersistenceProtocolHostActionUnknownReconcilesWithoutReexecution(t *testing.T) {
+func TestPersistenceProtocolHostActionUnknownReconcilesWithoutReexecution(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1557,7 +1557,7 @@ func TestQAPersistenceProtocolHostActionUnknownReconcilesWithoutReexecution(t *t
 	}
 }
 
-func TestQAPersistenceProtocolReplacementAttemptQuarantinesLateResult(t *testing.T) {
+func TestPersistenceProtocolReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1690,7 +1690,7 @@ func TestQAPersistenceProtocolReplacementAttemptQuarantinesLateResult(t *testing
 	}
 }
 
-func TestQAPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T) {
+func TestPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1781,7 +1781,7 @@ func TestQAPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites(t *te
 	}
 }
 
-func TestQAPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) {
+func TestPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -1857,7 +1857,7 @@ func TestQAPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *test
 	}
 }
 
-func TestQAPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) {
+func TestPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) {
 	root := t.TempDir()
 	terminal, err := testkit.RunHarness(testkit.HarnessOptions{ProjectRoot: root, Scenario: "terminal"})
 	if err != nil || terminal.Terminal == nil {
@@ -1974,7 +1974,7 @@ func TestQAPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly(t *test
 	}
 }
 
-func TestQAPersistenceProtocolRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
+func TestPersistenceProtocolRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
 	supported := persistence.Envelope{
 		Writer:                    persistence.Writer,
 		StateSchemaVersion:        encoder.StateSchemaVersion,

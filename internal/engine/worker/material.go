@@ -62,7 +62,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
 		case "engine.qa.design":
-			instructions = "Return coverage in issued point order, selecting 1-based case positions: retained cases first, then new cases. [] clears relations; null preserves original relations for remaining cases. retainCases/retainSharedSteps select original list positions; cases/sharedSteps contain only new authored entries, and absent entries are deleted. Case sharedSteps selects original shared instructions followed by new ones. BLACKBOX/MERGE require publicEntry/preconditions/steps and omit testRef; WHITEBOX associates test material through original file selections. testFile selects a case file position; testRef supplies its symbol or, without testFile, a non-file native reference. Omit public-entry fields."
+			instructions = "Return coverage in issued point order, selecting 1-based case positions: retained cases first, then new cases. [] clears relations; null preserves original relations for remaining cases. retainCases/retainSharedSteps select original list positions; cases/sharedSteps contain only new authored entries, and absent entries are deleted. Case sharedSteps selects original shared instructions followed by new ones. BLACKBOX/MERGE require publicEntry/preconditions/steps and use operations. WHITEBOX associates test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
 			if len(input.Validation.AffectedCases) > 0 {
 				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
 			}
@@ -120,7 +120,17 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks := []string{}
 	if value.ReadOnly {
-		blocks = append(blocks, "[Shared reviewer contract]\n"+catalog.Base)
+		base := catalog.Base
+		if input.Handler != "engine.gate" {
+			before, gate, found := strings.Cut(base, "\n## 门审材料\n")
+			if found {
+				_, after, found := strings.Cut(gate, "\n## 严重度与发现证据\n")
+				if found {
+					base = before + "\n## 严重度与发现证据\n" + after
+				}
+			}
+		}
+		blocks = append(blocks, "[Shared reviewer contract]\n"+base)
 	}
 	if input.Handler == "engine.gate" {
 		if input.Validation.Gate == nil {

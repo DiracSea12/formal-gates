@@ -14,6 +14,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/prompts"
 	"formal-gates/internal/validate"
 )
 
@@ -124,6 +125,12 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 func startAdmittedEngineRun(t *testing.T, root string) *facade.Facade {
 	t.Helper()
 	source := writeInstallSource(t, "source")
+	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range prompts.RequiredActionIDs {
+		mustWriteCLI(t, filepath.Join(source, "prompts", "actions", id+".md"), id+" instructions\n")
+	}
 	homePath, homeErr := os.UserHomeDir()
 	if homeErr != nil {
 		t.Fatal(homeErr)

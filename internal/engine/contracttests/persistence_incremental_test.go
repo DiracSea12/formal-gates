@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"formal-gates/internal/engine/testkit"
 )
 
-func requirePhase2ProtocolCode(t *testing.T, err error, want string) {
+func requireProtocolCode(t *testing.T, err error, want string) {
 	t.Helper()
 	var rejected *protocol.RejectedError
 	if !errors.As(err, &rejected) || rejected.Code != want {
@@ -29,7 +29,7 @@ func requirePhase2ProtocolCode(t *testing.T, err error, want string) {
 	}
 }
 
-func requirePhase2SnapshotUnchanged(t *testing.T, before protocol.Snapshot, engine *protocol.Engine) {
+func requireSnapshotUnchanged(t *testing.T, before protocol.Snapshot, engine *protocol.Engine) {
 	t.Helper()
 	after, err := engine.Load()
 	if err != nil {
@@ -40,7 +40,7 @@ func requirePhase2SnapshotUnchanged(t *testing.T, before protocol.Snapshot, engi
 	}
 }
 
-func requirePhase2LiveTaskLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey, attempt protocol.Attempt, pending protocol.PendingAction, status runtime.TaskStatus, revision uint64) {
+func requireLiveTaskLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey, attempt protocol.Attempt, pending protocol.PendingAction, status runtime.TaskStatus, revision uint64) {
 	t.Helper()
 	live, err := engine.Load()
 	if err != nil {
@@ -68,7 +68,7 @@ func requirePhase2LiveTaskLedger(t *testing.T, engine *protocol.Engine, task run
 // Adapter HostAction intents and receipts are both closed by the registered
 // operation and its exact parameter/evidence schemas. Rejected forms must not
 // create an intent or consume a revision.
-func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T) {
+func TestEngineHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -100,8 +100,8 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 	for _, tc := range invalidIntents {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := fixture.Engine.ExecuteHostAction(tc.operation, tc.params, fingerprint)
-			requirePhase2ProtocolCode(t, err, tc.code)
-			requirePhase2SnapshotUnchanged(t, baseline, fixture.Engine)
+			requireProtocolCode(t, err, tc.code)
+			requireSnapshotUnchanged(t, baseline, fixture.Engine)
 		})
 	}
 
@@ -149,9 +149,9 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 	if _, err := fixture.Engine.Submit(invalidReceipt, fingerprint); err == nil {
 		t.Fatal("receipt with undeclared evidence was accepted")
 	} else {
-		requirePhase2ProtocolCode(t, err, protocol.CodeOperationSchemaInvalid)
+		requireProtocolCode(t, err, protocol.CodeOperationSchemaInvalid)
 	}
-	requirePhase2SnapshotUnchanged(t, afterIntent, fixture.Engine)
+	requireSnapshotUnchanged(t, afterIntent, fixture.Engine)
 
 	validProvider := "fake-host"
 	validCorrelation := "receipt-correlation-exact"
@@ -204,7 +204,7 @@ func TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites(t *testing.T
 // The expected-task ledger, current Attempt, and pending action are one
 // transactionally consistent index. Only legal progress for that current
 // task may advance it, and TERMINAL removes all three live entries together.
-func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) {
+func TestEngineTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewProtocolFixture: %v", err)
@@ -235,7 +235,7 @@ func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) 
 		pending.Step != string(attempt.Step) || pending.AttemptID != attempt.ID {
 		t.Fatalf("pending action = %+v present=%v", pending, ok)
 	}
-	requirePhase2LiveTaskLedger(t, fixture.Engine, action.Task, attempt, pending, runtime.TaskIssued, baseline.Revision)
+	requireLiveTaskLedger(t, fixture.Engine, action.Task, attempt, pending, runtime.TaskIssued, baseline.Revision)
 	fingerprint, err := fixture.Engine.ObserveFingerprint()
 	if err != nil {
 		t.Fatalf("ObserveFingerprint: %v", err)
@@ -253,9 +253,9 @@ func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) 
 	if _, err := fixture.Engine.Submit(notCurrent, fingerprint); err == nil {
 		t.Fatal("progress for a task outside the expected set was accepted")
 	} else {
-		requirePhase2ProtocolCode(t, err, protocol.CodeEventNotCurrent)
+		requireProtocolCode(t, err, protocol.CodeEventNotCurrent)
 	}
-	requirePhase2SnapshotUnchanged(t, baseline, fixture.Engine)
+	requireSnapshotUnchanged(t, baseline, fixture.Engine)
 
 	illegal, err := protocol.NewTaskEvent(
 		"protocol-task-illegal-transition",
@@ -269,9 +269,9 @@ func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) 
 	if _, err := fixture.Engine.Submit(illegal, fingerprint); err == nil {
 		t.Fatal("ISSUED to VALIDATING transition was accepted")
 	} else {
-		requirePhase2ProtocolCode(t, err, protocol.CodeIllegalTransition)
+		requireProtocolCode(t, err, protocol.CodeIllegalTransition)
 	}
-	requirePhase2SnapshotUnchanged(t, baseline, fixture.Engine)
+	requireSnapshotUnchanged(t, baseline, fixture.Engine)
 
 	for index, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
 		event, err := protocol.NewTaskEvent(
@@ -291,7 +291,7 @@ func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) 
 			t.Fatalf("%s acceptance = %+v", status, acceptance)
 		}
 		if status != runtime.TaskTerminal {
-			requirePhase2LiveTaskLedger(t, fixture.Engine, action.Task, attempt, pending, status, acceptance.Revision)
+			requireLiveTaskLedger(t, fixture.Engine, action.Task, attempt, pending, status, acceptance.Revision)
 		}
 	}
 	final, err := fixture.Engine.Load()
@@ -321,7 +321,7 @@ func TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger(t *testing.T) 
 // Terminal fallback is valid only through an exact engine envelope and the
 // retained final receipts. Query and replay are read-only and can never
 // recreate an active state after completion.
-func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) {
+func TestEngineTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) {
 	root := t.TempDir()
 	terminal, err := testkit.RunHarness(testkit.HarnessOptions{ProjectRoot: root, Scenario: "terminal"})
 	if err != nil {
@@ -402,7 +402,7 @@ func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) 
 	}); err == nil {
 		t.Fatal("terminal replay accepted a different event digest")
 	} else {
-		requirePhase2ProtocolCode(t, err, protocol.CodeDuplicateEventMismatch)
+		requireProtocolCode(t, err, protocol.CodeDuplicateEventMismatch)
 	}
 	if _, err := testkit.RunHarness(testkit.HarnessOptions{
 		ProjectRoot: root, Scenario: "submit-request", EventID: "protocol-after-terminal",
@@ -472,7 +472,7 @@ func TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly(t *testing.T) 
 // The raw diagnose path must preserve unsupported and malformed inputs while
 // reporting the bytes it can safely understand. It never invokes the normal
 // versioned loader or creates recovery artifacts.
-func TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
+func TestEngineRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
 	supported := persistence.Envelope{
 		Writer:                    persistence.Writer,
 		StateSchemaVersion:        encoder.StateSchemaVersion,

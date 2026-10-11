@@ -86,8 +86,8 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "bin", nativeBinaryName()), string(stubBinaryPayload(t)), 0o755)
 	admissionWrite(t, filepath.Join(root, "prompts", "reviewer-base.md"), "sample reviewer base\n", 0o600)
 	for _, action := range []string{
-		"carry", "development-worker", "product-review", "qa-design",
-		"qa-execution", "qa-review", "requirements-clarification", "start-readiness", "validation-observation",
+		"development-worker", "product-review", "qa-design",
+		"qa-execution", "qa-review", "start-readiness", "validation-observation",
 	} {
 		admissionWrite(t, filepath.Join(root, "prompts", "actions", action+".md"), action+" prompt\n", 0o600)
 	}

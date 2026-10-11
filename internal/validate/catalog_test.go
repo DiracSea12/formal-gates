@@ -121,7 +121,7 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 func TestActionCatalogIsFixedWhileGatesRemainFileDriven(t *testing.T) {
 	for _, mutate := range []func(string){
 		func(root string) {
-			if err := os.Remove(filepath.Join(root, "prompts", "actions", "carry.md")); err != nil {
+			if err := os.Remove(filepath.Join(root, "prompts", "actions", "qa-review.md")); err != nil {
 				t.Fatal(err)
 			}
 		},

@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"bytes"
@@ -13,14 +13,14 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// TestPhase3ProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite
+// TestProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite
 // covers the protocol-side boundary that is distinct from façade start
 // validation: a first-drive receipt must reproduce every typed confirmation
 // binding captured during InitWithMetadata.  Each mismatch is made internally
 // self-consistent by recomputing its digest, so the rejection is specifically
 // attributable to the start-confirmation comparison rather than digest
 // parsing.  The revision, bytes, and receipt pointer must remain unchanged.
-func TestPhase3ProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite(t *testing.T) {
+func TestProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite(t *testing.T) {
 	baseConfirmation := facade.IntakeConfirmationReceipt{
 		Source:              facade.DefaultIntakeSource,
 		Authority:           facade.DefaultIntakeAuthority,

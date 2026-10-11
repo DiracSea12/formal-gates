@@ -293,7 +293,7 @@ func isIntegerLiteral(v any) bool {
 // --- paths ---------------------------------------------------------------------
 
 // resolveNativePath resolves an absolute, cleaned path and its existing symlinks.
-// A missing trailing component retains the resolved existing prefix.
+// Missing trailing components retain the resolved nearest existing prefix.
 func resolveNativePath(path string) string {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -302,11 +302,18 @@ func resolveNativePath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
 		return resolved
 	}
-	parent, base := filepath.Split(absolute)
-	if resolved, err := filepath.EvalSymlinks(filepath.Clean(parent)); err == nil {
-		return filepath.Join(resolved, base)
+	for current := filepath.Dir(absolute); ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			tail, err := filepath.Rel(current, absolute)
+			if err != nil {
+				return absolute
+			}
+			return filepath.Clean(filepath.Join(resolved, tail))
+		}
+		if filepath.Dir(current) == current {
+			return absolute
+		}
 	}
-	return absolute
 }
 
 // --- shared evidence helpers (native_transport) --------------------------------
@@ -920,9 +927,8 @@ func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directo
 	if runtime.GOOS != "windows" {
 		group, groupErr := nativeProcessGroupID(c.cmd.Process.Pid)
 		if groupErr != nil {
-			// The reference implementation's constructor raises here and leaks
-			// the just-spawned child; reaping it is observably identical and
-			// avoids a zombie.
+			// A started child must be terminated and reaped when its process
+			// group cannot be observed.
 			c.stdin.Close()
 			stdoutRead.Close()
 			_ = c.cmd.Process.Kill()

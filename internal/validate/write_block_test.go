@@ -313,7 +313,7 @@ func TestWriteBlockGatesReadOnlyMentionAllowed(t *testing.T) {
 		{name: "reviewer grep mentions gates", command: "grep -rn gates .gates/results/", agent: "qa-review"},
 		{name: "reviewer cat gates file", command: "cat .gates/cases/blackbox.md", agent: "product-review"},
 		{name: "reviewer ls gates dir", command: "ls -la .gates/", agent: "start-readiness"},
-		{name: "reviewer git log over gates path", command: "git log --oneline -- .gates/results/", agent: "carry"},
+		{name: "reviewer git log over gates path", command: "git log --oneline -- .gates/results/", agent: "qa-review"},
 		{name: "main thread python3 read gates", command: "python3 read.py .gates/cases/blackbox.md"},
 		{name: "main thread find in gates", command: "find .gates -name '*.md'"},
 		{name: "main thread read-only git status", command: "git status --short .gates/"},

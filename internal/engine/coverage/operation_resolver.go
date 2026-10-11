@@ -88,6 +88,36 @@ func resolveGoTest(workspace, ref string) (ResolvedOperation, error) {
 	return operation, nil
 }
 
+// GoTestSymbols lists executable test declarations in their source order.
+// The same declaration signature and reference rules govern execution.
+func GoTestSymbols(file string, body []byte) ([]string, error) {
+	source, err := parser.ParseFile(token.NewFileSet(), file, body, 0)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for _, declaration := range source.Decls {
+		if fn, ok := declaration.(*ast.FuncDecl); ok && fn.Recv == nil {
+			counts[fn.Name.Name]++
+		}
+	}
+	names := []string{}
+	for _, declaration := range source.Decls {
+		fn, ok := declaration.(*ast.FuncDecl)
+		if !ok || !goTestSignature(source, fn) {
+			continue
+		}
+		if _, err := GoTestOperation(file + "::" + fn.Name.Name); err != nil {
+			continue
+		}
+		if counts[fn.Name.Name] != 1 {
+			return nil, fmt.Errorf("Go test symbol %s has multiple function declarations", fn.Name.Name)
+		}
+		names = append(names, fn.Name.Name)
+	}
+	return names, nil
+}
+
 func goTestSignature(source *ast.File, fn *ast.FuncDecl) bool {
 	if fn.Recv != nil || fn.Type.TypeParams != nil || (fn.Type.Results != nil && len(fn.Type.Results.List) != 0) || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
 		return false

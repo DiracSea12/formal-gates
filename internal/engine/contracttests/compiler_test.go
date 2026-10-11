@@ -1,4 +1,4 @@
-package whitebox_qa
+package contracttests
 
 import (
 	"testing"

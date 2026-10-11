@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -176,8 +175,8 @@ type DesignedCase struct {
 	Preconditions string               `json:"preconditions,omitempty"`
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
-	TestRef       string               `json:"testRef,omitempty"`
 	TestFile      int                  `json:"testFile,omitempty"`
+	TestSymbol    int                  `json:"testSymbol,omitempty"`
 }
 type Manifest struct {
 	RetainCases       []string            `json:"retainCases,omitempty"`
@@ -202,8 +201,8 @@ type Case struct {
 	Preconditions string               `json:"preconditions,omitempty"`
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
-	TestRef       *string              `json:"testRef,omitempty"`
 	TestFile      int                  `json:"testFile,omitempty"`
+	TestSymbol    int                  `json:"testSymbol,omitempty"`
 }
 type Decision struct {
 	Status coverage.DecisionStatus `json:"status"`
@@ -404,7 +403,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 						originalRef = original.TestRef
 					}
 				}
-				c.TestRef, err = selectedTestRef(item, c.Files, originalRef, paths, locationFacts)
+				c.TestRef, err = selectedTestRef(item, c.Files, originalRef, locationFacts)
 				if err != nil {
 					return protocol.Event{}, err
 				}
@@ -883,34 +882,32 @@ func selectedTestFiles(locations []Location, facts []LocationFact) ([]string, er
 	return LocationPaths(locations, facts, requirement.FrozenRequirementProjection{})
 }
 
-func selectedTestRef(item Case, files []string, original string, paths []string, facts []LocationFact) (string, error) {
-	if item.TestRef == nil && item.TestFile == 0 {
+func selectedTestRef(item Case, files []string, original string, facts []LocationFact) (string, error) {
+	if item.TestFile == 0 && item.TestSymbol == 0 {
+		if len(item.Operations) > 0 {
+			if _, err := coverage.GoTestOperation(original); err == nil {
+				return "", nil
+			}
+		}
 		return original, nil
 	}
-	ref := original
-	if item.TestRef != nil {
-		ref = *item.TestRef
-		prefix, _, _ := strings.Cut(ref, "::")
-		matches := func(file string) bool { return filepath.Clean(prefix) == filepath.Clean(filepath.FromSlash(file)) }
-		copied := slices.ContainsFunc(files, matches) || slices.ContainsFunc(paths, matches)
-		for _, fact := range facts {
-			copied = copied || slices.ContainsFunc(fact.Paths, matches)
-		}
-		if copied {
-			return "", fmt.Errorf("test reference selects its known file by testFile, not a copied path")
-		}
-	} else {
-		_, symbol, qualified := strings.Cut(original, "::")
-		if !qualified {
-			return "", fmt.Errorf("original test reference has no file-bound symbol")
-		}
-		ref = symbol
+	if item.TestFile < 1 || item.TestFile > len(files) || item.TestSymbol < 1 || item.Files == nil || item.TestFile > len(*item.Files) {
+		return "", fmt.Errorf("testFile and testSymbol select an original read in this case's files")
 	}
-	if item.TestFile == 0 {
-		return ref, nil
+	location := (*item.Files)[item.TestFile-1]
+	if location.Read < 1 || location.Read > len(facts) {
+		return "", fmt.Errorf("test symbol selection requires its published original read")
 	}
-	if item.TestFile < 1 || item.TestFile > len(files) || strings.TrimSpace(ref) == "" {
-		return "", fmt.Errorf("testFile selects a related case file and requires its test symbol")
+	fact := facts[location.Read-1]
+	if fact.Kind != "read" || len(fact.Paths) != 1 || fact.Paths[0] != files[item.TestFile-1] {
+		return "", fmt.Errorf("test symbol selection differs from its original read file")
 	}
-	return files[item.TestFile-1] + "::" + ref, nil
+	symbols, err := coverage.GoTestSymbols(fact.Paths[0], []byte(fact.Content))
+	if err != nil {
+		return "", err
+	}
+	if item.TestSymbol > len(symbols) {
+		return "", fmt.Errorf("testSymbol is not in the selected read's published test symbols")
+	}
+	return files[item.TestFile-1] + "::" + symbols[item.TestSymbol-1], nil
 }

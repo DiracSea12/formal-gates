@@ -223,7 +223,7 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 		if err != nil {
 			return nil, err
 		}
-		result.Cases = append(result.Cases, Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestRef: &item.TestRef, TestFile: item.TestFile})
+		result.Cases = append(result.Cases, Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestFile: item.TestFile, TestSymbol: item.TestSymbol})
 		selectedCaseIDs = append(selectedCaseIDs, id)
 	}
 	if len(value.Coverage) != len(issued.Points) {
