@@ -766,10 +766,9 @@ func phaseRank(phase runtime.RunPhase) int {
 	}
 }
 
-// verifyPhaseAgainstLedgers 重算 phase 与账本的一致性：非 TERMINAL 的
-// phase 越过账本 residue 能证明的最远位置（手工拨过门）即拒绝。落后于
-// residue 的 phase 不拒绝——下一次提交会沿门控补进，兼容审查账本字段
-// 上线前落盘的既有 run。
+// verifyPhaseAgainstLedgers 校验 phase 不超过持久账本证明的 floor；
+// TERMINAL、有 receipt 的 SLICE_READY 和已开始清理的 FINALIZING_CLEANUP 豁免。
+// phase 可以落后于 floor，后续提交仍按门控推进。
 func (s *State) verifyPhaseAgainstLedgers(cd *compiler.CompiledDefinition) error {
 	if s.Phase == runtime.PhaseTerminal {
 		return nil

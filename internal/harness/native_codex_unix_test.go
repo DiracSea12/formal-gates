@@ -31,21 +31,22 @@ import (
 )
 
 type codexPeerInput struct {
-	Workspace      string         `json:"workspace"`
-	Home           string         `json:"home"`
-	Config         string         `json:"config"`
-	ThreadParams   map[string]any `json:"thread_params"`
-	ToolArgument   string         `json:"tool_argument"`
-	TurnParams     map[string]any `json:"turn_params"`
-	Configuration  map[string]any `json:"configuration"`
-	Mode           string         `json:"mode"`
-	MessageText    string         `json:"message_text,omitempty"`
-	Reverse        []any          `json:"reverse"`
-	Answer         map[string]any `json:"answer,omitempty"`
-	Replies        []any          `json:"replies"`
-	WorkerAction   string         `json:"worker_action,omitempty"`
-	WorkerAttempt  string         `json:"worker_attempt,omitempty"`
-	WorkerMaterial string         `json:"-"`
+	Workspace           string         `json:"workspace"`
+	Home                string         `json:"home"`
+	Config              string         `json:"config"`
+	ThreadParams        map[string]any `json:"thread_params"`
+	ToolArgument        string         `json:"tool_argument"`
+	TurnParams          map[string]any `json:"turn_params"`
+	Configuration       map[string]any `json:"configuration"`
+	Mode                string         `json:"mode"`
+	MessageText         string         `json:"message_text,omitempty"`
+	Reverse             []any          `json:"reverse"`
+	Answer              map[string]any `json:"answer,omitempty"`
+	Replies             []any          `json:"replies"`
+	WorkerAction        string         `json:"worker_action,omitempty"`
+	WorkerAttempt       string         `json:"worker_attempt,omitempty"`
+	WorkerMaterial      string         `json:"-"`
+	WaitAfterSubmission bool           `json:"wait_after_submission,omitempty"`
 }
 
 func codexPeerID(text string) string {
@@ -273,7 +274,7 @@ func TestCodexRPCPeer(t *testing.T) {
 		check(getOf(answered, "result"), peer.Replies[i])
 		emit(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": thread, "turnId": turn, "item": map[string]any{"type": "commandExecution", "id": getOf(params, "itemId"), "command": "echo", "cwd": cwd, "status": "completed", "commandActions": []any{}}, "completedAtMs": 1}})
 	}
-	if peer.Mode == "workflow-held" {
+	holdTurn := func() {
 		if err := os.WriteFile(filepath.Join(peer.Config, "held-turn"), []byte(thread+"\n"+turn), 0600); err != nil {
 			panic(err)
 		}
@@ -285,6 +286,9 @@ func TestCodexRPCPeer(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+	if peer.Mode == "workflow-held" && !peer.WaitAfterSubmission {
+		holdTurn()
 	}
 	if peer.Mode == "steer" || peer.Mode == "steer-unacknowledged" {
 		frame = read()
@@ -306,9 +310,6 @@ func TestCodexRPCPeer(t *testing.T) {
 		status = peer.Mode
 	}
 	answer := map[string]any{"status": "PASS", "summary": strings.Join(history, " / "), "findings": []any{}, "check_reviews": map[string]any{}}
-	if peer.Answer != nil {
-		answer = peer.Answer
-	}
 	if workflow {
 		body, err := os.ReadFile(peer.WorkerMaterial)
 		if err != nil {
@@ -391,6 +392,9 @@ func TestCodexRPCPeer(t *testing.T) {
 		}
 		answer = domain
 	}
+	if peer.Answer != nil {
+		answer = peer.Answer
+	}
 	if status == "completed" && peer.Mode != "bad_json" {
 		var semanticSchema any
 		for _, tool := range declaredTools {
@@ -404,6 +408,9 @@ func TestCodexRPCPeer(t *testing.T) {
 		check(getOf(accepted, "id"), "semantic-submit")
 		if getOf(getOf(accepted, "result"), "success") != true {
 			panic("semantic submission rejected: " + textOf(accepted))
+		}
+		if peer.WaitAfterSubmission {
+			holdTurn()
 		}
 	}
 	text := []byte("Completed the semantic tool submission.")

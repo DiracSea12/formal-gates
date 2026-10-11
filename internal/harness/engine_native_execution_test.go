@@ -804,8 +804,11 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.request["binding"] = binding
+	resolution := protocol.FindingResolution{FindingID: observation.Findings[0].Finding.ID, Decision: "DISMISSED", Requirement: original.RequirementDocument.Requirements[0].AcceptanceConditions[0].ID, NormalPath: "go run app.go", Module: "command", RootCause: "The report applies an ordering condition absent from the confirmed command contract", Consequence: "The permitted command output was classified as a defect", Severity: "P3", SeverityRationale: "The additional ordering preference is outside the confirmed scope", Verification: review.FindingVerification{Scope: "confirmed command contract", Severity: "no blocked command behavior", Causality: "the report uses an additional ordering condition", Reproduction: "compare the actual command output with the confirmed acceptance", Classification: "the confirmed contract permits this output"}, Reason: "The confirmed requirement permits the reported ordering"}
+	judgments := worker.ObservationJudgments{Findings: []worker.FindingJudgment{{Decision: resolution.Decision, Requirement: resolution.Requirement, NormalPath: resolution.NormalPath, Module: resolution.Module, RootCause: resolution.RootCause, Consequence: resolution.Consequence, Severity: resolution.Severity, SeverityRationale: resolution.SeverityRationale, Verification: resolution.Verification, Reason: resolution.Reason}}, Scopes: []worker.ScopeJudgment{}, GateImpacts: []worker.ImpactJudgment{}}
 	s.peer.Mode = "workflow-held"
-	s.peer.Answer = nil
+	s.peer.Answer = codexPlain(t, judgments).(map[string]any)
+	s.peer.WaitAfterSubmission = true
 	s.save(t)
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), supervised); err != nil {
 		t.Fatal(err)
@@ -824,6 +827,33 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() { err := cmd.Wait(); log.Close(); finished <- err }()
 	t.Cleanup(func() { _ = StopNativeJob(directory) })
+	if evidence := os.Getenv("CODEX_NATIVE_TEST_EVIDENCE"); evidence != "" {
+		t.Cleanup(func() {
+			entries, err := os.ReadDir(directory)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			target := filepath.Join(evidence, t.Name()+"_native")
+			if err := os.MkdirAll(target, 0755); err != nil {
+				t.Error(err)
+				return
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				body, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+				if err != nil {
+					t.Error(err)
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(target, entry.Name()), body, 0644); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
 	for {
 		if _, err := os.Stat(filepath.Join(s.config, "held-turn")); err == nil {
 			break
@@ -832,12 +862,45 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 		}
 		select {
 		case err := <-finished:
-			t.Fatalf("original native worker exited before its acknowledgement: %v", err)
+			failure, _ := os.ReadFile(filepath.Join(directory, "native-error.json"))
+			stderr, _ := os.ReadFile(filepath.Join(directory, "stderr.log"))
+			t.Fatalf("original native worker exited before its acknowledgement: %v %s %s", err, failure, stderr)
 		default:
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	identity, err := NativeStartEvidence("codex", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.ReadFile(filepath.Join(s.config, "held-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := strings.Split(string(held), "\n")
+	if len(ids) != 2 || ids[0] != identity {
+		t.Fatal("held completion lost its original native identity", string(held), identity)
+	}
+	calls, err := os.ReadFile(filepath.Join(directory, nativeToolCallsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(calls), []byte{'\n'})
+	if len(lines) != 1 {
+		t.Fatal("held invocation did not submit exactly one original semantic call", string(calls))
+	}
+	var call map[string]any
+	if err := json.Unmarshal(lines[0], &call); err != nil {
+		t.Fatal(err)
+	}
+	params := getOf(getOf(call, "request"), "params")
+	if getOf(getOf(call, "request"), "method") != "item/tool/call" || getOf(params, "tool") != nativeSemanticTool || getOf(params, "threadId") != ids[0] || getOf(params, "turnId") != ids[1] || !valuesEqual(getOf(params, "arguments"), s.peer.Answer) || getOf(getOf(call, "result"), "success") != true {
+		t.Fatal("held marker preceded the successful original semantic RPC", string(calls))
+	}
+	if _, err := os.Stat(filepath.Join(directory, "exit.json")); !os.IsNotExist(err) {
+		t.Fatal("held turn already had a terminal process receipt", err)
+	}
+	beforeFacts, err := os.ReadFile(filepath.Join(filepath.Dir(directory), "tool-facts.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +911,6 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution := protocol.FindingResolution{FindingID: observation.Findings[0].Finding.ID, Decision: "DISMISSED", Requirement: original.RequirementDocument.Requirements[0].AcceptanceConditions[0].ID, NormalPath: "go run app.go", Module: "command", RootCause: "The report applies an ordering condition absent from the confirmed command contract", Consequence: "The permitted command output was classified as a defect", Severity: "P3", SeverityRationale: "The additional ordering preference is outside the confirmed scope", Verification: review.FindingVerification{Scope: "confirmed command contract", Severity: "no blocked command behavior", Causality: "the report uses an additional ordering condition", Reproduction: "compare the actual command output with the confirmed acceptance", Classification: "the confirmed contract permits this output"}, Reason: "The confirmed requirement permits the reported ordering"}
 	submit(protocol.Event{ID: "typed-ordering-fact", Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: observation.WaveID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	run, err = f.Show()
 	if err != nil {
@@ -870,6 +932,35 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err := f.ObserveWorkerStart(ref, directory, NativeStartEvidence); err != nil {
 		t.Fatal(err)
 	}
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: facade.AdmitExecution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticBody, err := json.Marshal(s.peer.Answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invocation := range []struct {
+		name string
+		body json.RawMessage
+	}{
+		{nativeSemanticTool, semanticBody},
+		{nativeWorkspaceTool, json.RawMessage(`{"action":"list"}`)},
+		{nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"retired.txt","content":"unissued work"}`)},
+	} {
+		if _, err := tools.invoke(invocation.name, invocation.body); err == nil || !strings.Contains(err.Error(), "no current issued action/attempt") {
+			t.Fatal("retired worker admitted a new tool operation", invocation.name, err)
+		} else {
+			t.Logf("retired %s %s rejected: %s", invocation.name, invocation.body, err)
+		}
+	}
+	afterFacts, err := os.ReadFile(filepath.Join(filepath.Dir(directory), "tool-facts.jsonl"))
+	if err != nil || !bytes.Equal(beforeFacts, afterFacts) {
+		t.Fatal("retired tool rejection altered the original completion evidence", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.workspace, "retired.txt")); !os.IsNotExist(err) {
+		t.Fatal("retired invocation wrote a workspace artifact", err)
+	}
 	if err := os.WriteFile(filepath.Join(s.config, "release-turn"), []byte("continue"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -880,10 +971,23 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	evidence, err := NativeWorkerResultEvidence("codex", directory, source)
+	if err != nil || !bytes.Equal(evidence.Answer, semanticBody) || source["identity"] != identity || nativePeerTurns(t, s) != 1 {
+		t.Fatal("late completion changed its original semantic source or invoked new work", evidence, err)
+	}
+	recovered, err := NativeJobSource("codex", directory)
+	if err != nil || !valuesEqual(source, recovered) {
+		t.Fatal("recovery changed the original late native source", err)
+	}
+	recoveredEvidence, err := NativeWorkerResultEvidence("codex", directory, recovered)
+	if err != nil || !bytes.Equal(evidence.Answer, recoveredEvidence.Answer) || evidence.Digest != recoveredEvidence.Digest {
+		t.Fatal("recovery changed original completion bytes or digest", err)
+	}
 	accepted, _, err := f.SubmitWorkerResult("late-native-observation", ref, directory, source, NativeWorkerResultEvidence)
 	if err != nil || accepted.Status != "OBSOLETE_RESULT" {
 		t.Fatal("actual late native source bypassed obsolete admission", accepted, err)
 	}
+	t.Logf("original action=%s attempt=%s identity=%s semanticDigest=%s calls=%d result=%s", ref.ActionID, ref.AttemptID, identity, evidence.Digest, nativePeerTurns(t, s), accepted.Status)
 	if err := f.ObserveWorkerTerminal(ref, identity); err != nil {
 		t.Fatal(err)
 	}
