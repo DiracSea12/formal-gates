@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,6 +248,25 @@ func (t *nativeWorkspaceTools) publish(f nativeToolFact) (int, error) {
 	return len(t.facts), nil
 }
 
+func (t *nativeWorkspaceTools) publishRead(relative string, body []byte) (map[string]any, error) {
+	number, err := t.publish(nativeToolFact{Kind: "read", Paths: []string{relative}, Content: string(body)})
+	lines := strings.SplitAfter(string(body), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	value := map[string]any{"read": number, "lines": lines}
+	if strings.HasSuffix(relative, "_test.go") {
+		if symbols, parseErr := coverage.GoTestSymbols(relative, body); parseErr == nil {
+			choices := make([]map[string]any, 0, len(symbols))
+			for index, symbol := range symbols {
+				choices = append(choices, map[string]any{"testSymbol": index + 1, "name": symbol})
+			}
+			value["testSymbols"] = choices
+		}
+	}
+	return value, err
+}
+
 func (t *nativeWorkspaceTools) fact(number int, kind string) (nativeToolFact, error) {
 	if number < 1 || number > len(t.facts) || t.facts[number-1].Kind != kind {
 		return nativeToolFact{}, fmt.Errorf("select an original published %s fact", kind)
@@ -315,6 +335,7 @@ func (t *nativeWorkspaceTools) writable(path string) error {
 
 type nativeWorkspaceArguments struct {
 	Action        string `json:"action"`
+	Query         string `json:"query,omitempty"`
 	Listing       int    `json:"listing,omitempty"`
 	Entry         int    `json:"entry,omitempty"`
 	Read          int    `json:"read,omitempty"`
@@ -428,6 +449,86 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 			readable = append(readable, value)
 		}
 		return map[string]any{"changes": readable}, nil
+	case "search":
+		if a.Query == "" {
+			return nil, fmt.Errorf("search requires nonempty literal query text")
+		}
+		path, err := t.path(relative, true)
+		if err != nil {
+			return nil, err
+		}
+		type matchFile struct {
+			path  string
+			body  []byte
+			lines []map[string]any
+		}
+		var files []matchFile
+		err = filepath.WalkDir(path, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(t.workspace, path)
+			if err != nil {
+				return err
+			}
+			visible, err := t.path(rel, true)
+			if err != nil {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := os.Stat(visible)
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			body, err := os.ReadFile(visible)
+			if err != nil {
+				return err
+			}
+			if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
+				return nil
+			}
+			var lines []map[string]any
+			for i, line := range strings.SplitAfter(string(body), "\n") {
+				if strings.Contains(line, a.Query) {
+					lines = append(lines, map[string]any{"line": i + 1, "text": line})
+				}
+			}
+			if len(lines) > 0 {
+				files = append(files, matchFile{rel, body, lines})
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		paths := make([]string, len(files))
+		for i, file := range files {
+			paths[i] = file.path
+		}
+		listing, err := t.publish(nativeToolFact{Kind: "listing", Paths: paths})
+		if err != nil {
+			return nil, err
+		}
+		matches := []map[string]any{}
+		for i, file := range files {
+			read, err := t.publishRead(file.path, file.body)
+			if err != nil {
+				return nil, err
+			}
+			for _, line := range file.lines {
+				line["listing"], line["entry"], line["read"], line["path"] = listing, i+1, read["read"], file.path
+				matches = append(matches, line)
+			}
+		}
+		return map[string]any{"listing": listing, "matches": matches}, nil
 	case "list":
 		path, err := t.path(relative, true)
 		if err != nil {
@@ -465,22 +566,7 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		number, err := t.publish(nativeToolFact{Kind: "read", Paths: []string{relative}, Content: string(body)})
-		lines := strings.SplitAfter(string(body), "\n")
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		value := map[string]any{"read": number, "lines": lines}
-		if strings.HasSuffix(relative, "_test.go") {
-			if symbols, parseErr := coverage.GoTestSymbols(relative, body); parseErr == nil {
-				choices := make([]map[string]any, 0, len(symbols))
-				for index, symbol := range symbols {
-					choices = append(choices, map[string]any{"testSymbol": index + 1, "name": symbol})
-				}
-				value["testSymbols"] = choices
-			}
-		}
-		return value, err
+		return t.publishRead(relative, body)
 	case "replace":
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
@@ -655,9 +741,9 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 	if len(materials) > 0 {
 		material = materials[0]
 	}
-	actions := []any{"list", "read"}
-	properties := map[string]any{"listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}}
-	description := "Select existing files by original listing and entry numbers. Numbers remain bound across continuation and resume."
+	actions := []any{"list", "read", "search"}
+	properties := map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}}
+	description := "Search performs recursive literal content matching in the selected directory (omit listing/entry for root), publishing original listing/read numbers and matching lines. Select existing files by original listing and entry numbers. Numbers remain bound across continuation and resume."
 	if material != nil && material.Input.RequirementDocument.Content != "" {
 		actions = append(actions, "requirement")
 		description += " Requirement reads the bound original confirmed document, optionally by from/to lines."

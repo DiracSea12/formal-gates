@@ -799,6 +799,10 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				}
 				return value, false
 			}
+			searched, failed := rpc(map[string]any{"action": "search", "query": "QA case"})
+			if failed || (len(listOf(searched["matches"])) == 0) != (role == "engine.gate") {
+				t.Fatal("search violates the original test-owned role boundary", role, searched)
+			}
 			comparison, failed := rpc(map[string]any{"action": "comparison"})
 			if failed {
 				t.Fatal("issued comparison failed")
