@@ -12,11 +12,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Workflow unit tests exercise the workflow logic against the native
-	// lifecycle in a clean host environment: the test process may itself run
-	// inside a real host shell (e.g. `go test` from Claude Code), and host
-	// environment detection must not turn the lenient default provider into a
-	// required provider that rejects lifecycle-less unit flow.
+	// Isolate workflow and canary fixtures from the driving host identity environment.
 	for _, key := range lifecycle.ProviderEnvironmentKeys() {
 		os.Setenv(key, "")
 	}
@@ -91,4 +87,18 @@ func fixtureRegisteredInvocation(registry, target, recordID string) func() {
 		}
 	}
 	return func() { os.Args[0] = original }
+}
+
+func prepareInstalledRuntimeFixture(t *testing.T, source, target string) {
+	t.Helper()
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := installPackageFiles(source, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := copyInstallPackageFiles(source, target, entries); err != nil {
+		t.Fatal(err)
+	}
 }

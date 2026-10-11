@@ -139,7 +139,7 @@ $HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <
 ### 参数语义
 
 - `--force`：目标已存在时替换它。
-- `--skip-hooks`：只安装包，不改宿主 hook 配置（只有当 hook 配置必须逐字节不变时才用）。
+- `--skip-hooks`：只安装包，不改宿主 hook 配置和受理规则（只有当这些内容必须逐字节不变时才用）。
 
 ---
 

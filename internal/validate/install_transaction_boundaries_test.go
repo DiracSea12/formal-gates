@@ -448,9 +448,7 @@ func TestBootstrapReceiptBindsExactRegistryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := copyInstallRuntime(source, targets[0].targetPath, true); err != nil {
-		t.Fatal(err)
-	}
+	prepareInstalledRuntimeFixture(t, source, targets[0].targetPath)
 	installWriteFile(t, launcher, installReadFile(t, filepath.Join(source, "bin", nativeBinaryName())), 0o700)
 	report, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true})
 	if err != nil {

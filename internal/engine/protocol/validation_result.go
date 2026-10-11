@@ -294,10 +294,10 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
-	if p.Status == "CONTINUE" && role != "engine.development.batch.v4" && role != "engine.repair.v4" {
+	if p.Status == "CONTINUE" && role != "engine.development.batch.v4" && role != "engine.repair.v5" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair.v4" {
+	if p.GranularityReview != nil && role != "engine.repair.v5" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
 	if p.DesignChange != nil && role != "engine.qa.design.v3" {
@@ -345,7 +345,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		}
 	case "engine.repair.verify.v2":
 		return s.acceptRepairComparison(record, e.cfg.Definition)
-	case "engine.repair.v4":
+	case "engine.repair.v5":
 		return s.acceptRepairResult(record)
 	case "engine.development.batch.v4":
 		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {

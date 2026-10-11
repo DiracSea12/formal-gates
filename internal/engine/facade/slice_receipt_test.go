@@ -506,7 +506,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 		finding = id
 	}
 	resolveGateFinding(child, finding, wave.ID)
-	repair, input := child.action("engine.repair.v4")
+	repair, input := child.action("engine.repair.v5")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\n// documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

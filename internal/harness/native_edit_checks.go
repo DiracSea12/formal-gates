@@ -19,13 +19,13 @@ func materialEditChecks(material *worker.Material) []protocol.DevelopmentCheck {
 		return nil
 	}
 	input := material.Input
-	if input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v4" {
+	if input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v5" {
 		return nil
 	}
 	var checks []protocol.DevelopmentCheck
 	if input.Validation != nil && input.Validation.Development != nil {
 		checks = input.Validation.Development.Batch.Checks
-	} else if input.Handler == "engine.repair.v4" {
+	} else if input.Handler == "engine.repair.v5" {
 		checks = input.ApprovedChecks
 	}
 	var edits []protocol.DevelopmentCheck

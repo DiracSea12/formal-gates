@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"formal-gates/internal/engine/protocol"
 )
@@ -257,7 +258,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		}
 		if !reused || item.changes.Checks != nil {
 			batch.Checks = nil
-			if input.Handler == "engine.repair.v4" {
+			if input.Handler == "engine.repair.v5" {
 				for _, check := range input.ApprovedChecks {
 					if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests || check.Purpose == protocol.CheckEdit {
 						batch.Checks = append(batch.Checks, check)
@@ -267,17 +268,32 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			for i, check := range item.Checks {
 				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
 				if check.Reuse != 0 {
-					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" {
+					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 {
 						return nil, fmt.Errorf("check reuse selects only an original approved check")
 					}
 					selected = input.ApprovedChecks[check.Reuse-1]
 				} else {
+					if check.Read != 0 {
+						if check.Command != "" || check.Read < 1 || check.Read > len(facts) || facts[check.Read-1].Kind != "read" {
+							return nil, fmt.Errorf("check requires an original published read without an authored command")
+						}
+						lines := strings.SplitAfter(string(facts[check.Read-1].Content), "\n")
+						if lines[len(lines)-1] == "" {
+							lines = lines[:len(lines)-1]
+						}
+						if check.From < 1 || check.To < check.From || check.To > len(lines) {
+							return nil, fmt.Errorf("check selects source lines from the original read")
+						}
+						selected.Command = strings.Join(lines[check.From-1:check.To], "")
+					} else if check.From != 0 || check.To != 0 {
+						return nil, fmt.Errorf("check range requires an original published read")
+					}
 					for _, approved := range input.ApprovedChecks {
-						if approved.Command == check.Command {
+						if approved.Command == selected.Command {
 							return nil, fmt.Errorf("approved command requires its original check selection")
 						}
 					}
-					if check.Command == "" || input.Handler == "engine.repair.v4" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+					if selected.Command == "" || input.Handler == "engine.repair.v5" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
 						return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
 					}
 				}

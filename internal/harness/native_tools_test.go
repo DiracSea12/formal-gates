@@ -891,7 +891,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
 	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v4", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v5", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			material.Input.Handler = handler
 			if err := writeAtomicJSON(path, material); err != nil {

@@ -157,9 +157,8 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 	return report, result
 }
 
-// withoutHostEnv clears the host lifecycle environment and returns a restore
-// function. Empty is treated as unset by providerFromEnvironment, so clearing
-// and restoring with empty values is behavior-preserving.
+// withoutHostEnv clears the host identity environment keys declared by the
+// lifecycle registry and returns a restore function.
 func withoutHostEnv() func() {
 	prior := map[string]string{}
 	for _, key := range lifecycle.ProviderEnvironmentKeys() {

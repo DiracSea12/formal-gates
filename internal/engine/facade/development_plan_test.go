@@ -301,13 +301,13 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 				t.Fatal("repair allowance detached from checkpoint obligation")
 			}
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v4" || input.Development != nil {
+				if input.Handler == "engine.repair.v5" || input.Development != nil {
 					t.Fatal("checkpoint bypassed finite repair decision")
 				}
 			}
 			break
 		}
-		repair, ri := d.action("engine.repair.v4")
+		repair, ri := d.action("engine.repair.v5")
 		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
@@ -326,7 +326,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	repair, ri := d.action("engine.repair.v4")
+	repair, ri := d.action("engine.repair.v5")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()

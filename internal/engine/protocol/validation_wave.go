@@ -791,7 +791,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 		return false, nil
 	}
 
-	task := pipelineTask(e.cfg.Definition, "engine.repair.v4", w.Candidate.Identity)
+	task := pipelineTask(e.cfg.Definition, "engine.repair.v5", w.Candidate.Identity)
 	// Native identities may contain separators; the logical snapshot key uses
 	// its content digest, never a platform path embedded in TaskKey syntax.
 	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")

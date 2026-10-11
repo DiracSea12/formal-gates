@@ -1832,7 +1832,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v4" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v4") {
+			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v4" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v5") {
 				for _, prior := range state.RecoverableResults[actionID] {
 					if prior.Digest == payloadDigest {
 						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil

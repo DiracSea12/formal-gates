@@ -2,16 +2,11 @@ package host
 
 import (
 	"os"
-	"strings"
 )
 
 func claudeAdapter() *Lifecycle {
 	return &Lifecycle{
-		Name: Claude,
-		ExecutableMatches: func(path string) bool {
-			return strings.Contains(NormalizeExecutablePath(path), "/.claude/skills/formal-gates/bin/")
-		},
-		AgentPrefixes:   []string{"claude-code"},
+		Name:            Claude,
 		EnvironmentKeys: []string{"CLAUDE_CODE_ENTRYPOINT"},
 		NormalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(Claude, eventName, "SubagentStart", "SubagentStop")

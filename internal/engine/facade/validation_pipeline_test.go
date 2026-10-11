@@ -1082,7 +1082,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			}
 			d.drive()
-			_, repair := d.action("engine.repair.v4")
+			_, repair := d.action("engine.repair.v5")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}

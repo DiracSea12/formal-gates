@@ -78,9 +78,9 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 		input  protocol.WorkerInput
 		domain any
 	}{
-		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
+		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
 		{"confirmed-batch", protocol.WorkerInput{Handler: "engine.development.batch.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
-		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
+		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, err := worker.ResultSchema(sample.input)
@@ -182,7 +182,7 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)

@@ -355,9 +355,9 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 		t.Run(fmt.Sprintf("thaw=%t", thaw), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, wave)
-			_, original := d.action("engine.repair.v4")
+			_, original := d.action("engine.repair.v5")
 			for i := 0; i < 2; i++ {
-				id, _ := d.action("engine.repair.v4")
+				id, _ := d.action("engine.repair.v5")
 				d.receipt(id)
 				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: string(d.eventID())}})
 			}
@@ -404,7 +404,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 					}
 				}
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.repair.v4" {
+					if in.Handler == "engine.repair.v5" {
 						t.Fatal("THAW revived previously carried repair")
 					}
 				}
@@ -420,7 +420,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 			}
 			raw, _ := json.Marshal(before.State.RejectedResults)
 			decideValidation(d, ask, "approve")
-			id, in := d.action("engine.repair.v4")
+			id, in := d.action("engine.repair.v5")
 			if in.Binding != original.Binding || d.run.Attempts[in.Binding.Task].Attempts != 2 || d.run.Attempts[in.Binding.Task].MaxAttempts != 3 {
 				t.Fatal("carried repair changed signed duty or allowance")
 			}

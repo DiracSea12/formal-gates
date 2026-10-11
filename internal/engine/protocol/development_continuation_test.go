@@ -17,13 +17,13 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 	t.Helper()
 	cd := compiledCanonicalWorkflow(t)
 	s, _, task := developmentCheckState(t)
-	if role == "engine.repair.v4" {
+	if role == "engine.repair.v5" {
 		task = pipelineTask(cd, role, "repair-candidate")
 		s.Validation.Waves = []ValidationWave{{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}
 	}
 	binding := s.DispatchBindings["edit-action"]
 	binding.Task = task
-	if role == "engine.repair.v4" {
+	if role == "engine.repair.v5" {
 		binding.WaveID = "wave"
 	}
 	s.DispatchBindings["edit-action"] = binding
@@ -48,7 +48,7 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 }
 
 func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
+	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
 		t.Run(role, func(t *testing.T) {
 			e, s, pending := unfinishedDevelopmentState(t, role)
 			originalAttempt := s.Attempts[pending.Task]
@@ -74,7 +74,7 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 			}
 			input := s.WorkerInputs(e.cfg.Definition)[pending.ActionID]
 			var projected *WorkerResult
-			if role == "engine.repair.v4" {
+			if role == "engine.repair.v5" {
 				projected = input.Validation.Repair.Result
 			} else {
 				projected = input.Validation.Development.Result
@@ -188,7 +188,7 @@ func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) 
 }
 
 func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
-	_, s, pending := unfinishedDevelopmentState(t, "engine.repair.v4")
+	_, s, pending := unfinishedDevelopmentState(t, "engine.repair.v5")
 	original := RequirementWork{Task: pending.Task}
 	entry := ConfirmedRevision{Revision: "req", StateRevision: 1, WorkDecisions: []RequirementWorkDecision{{Work: original, Disposition: RequirementWorkRedo}}}
 	task := replacementWorkTask(entry, 0)
@@ -208,7 +208,7 @@ func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
 }
 
 func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.repair.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.repair.v5")
 	plan := plannedReviewEvidence(review.StartReadiness, "plan", "", "PASS", "approved member", nil).GranularityReview
 	origin := pending.Task
 	s.Results["plan"] = WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: origin}, Status: "PASS", GranularityReview: plan}}

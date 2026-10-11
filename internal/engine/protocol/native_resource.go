@@ -177,7 +177,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair.v4":
+	case "engine.repair.v5":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity

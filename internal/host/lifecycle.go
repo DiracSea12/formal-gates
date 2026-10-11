@@ -2,7 +2,6 @@ package host
 
 import (
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"strings"
 )
@@ -16,30 +15,15 @@ type Lifecycle struct {
 	Name       string
 	Required   bool
 	HookEvents []string
-	// Identity signals are declared by the adapter that owns the host
-	// integration. The detector below only scans these declarations; it does
-	// not contain a second host-specific switch.
-	ExecutableMatches func(string) bool
-	AgentPrefixes     []string
-	EnvironmentKeys   []string
-	NormalizeEvent    func(string) (string, error)
-	Identity          func(string, any) string
-	Correlation       func(string, any) string
-	ProjectRoots      func(any) []string
-	TranscriptPath    func(any) string
+	// EnvironmentKeys declares host identity signals for environment isolation.
+	EnvironmentKeys []string
+	NormalizeEvent  func(string) (string, error)
+	Identity        func(string, any) string
+	Correlation     func(string, any) string
+	ProjectRoots    func(any) []string
+	TranscriptPath  func(any) string
 	// Reason 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码），供自动记录。
 	Reason func(any) string
-}
-
-func NormalizeExecutablePath(path string) string {
-	path = strings.TrimSpace(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
 func normalizeNamedEvent(provider, eventName, startName, stopName string) (string, error) {

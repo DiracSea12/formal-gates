@@ -25,7 +25,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}
-	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v4" {
+	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v5" {
 		input.AvailableRouteCandidates = catalog.RouteCandidates()
 		input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
@@ -41,7 +41,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		if input.Review.Action == review.StartReadiness {
 			instructions += " Every finding requires a technical category from the schema; implementation-detail has severity P2 or P3."
-			instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Checks declare EDIT for project low-cost deterministic checks after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
+			instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Checks declare EDIT for project low-cost deterministic checks after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. Existing project commands select original workspace read/from/to line ranges; the program supplies their exact bytes. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
 		}
 		instructions += " verification follows the issued check order with non-empty actual evidence; do not copy keys. Findings carry independent evidence and severity rationale."
 
@@ -53,7 +53,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.repair.verify.v2":
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
 			value.ReadOnly = true
-		case "engine.repair.v4":
+		case "engine.repair.v5":
 			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report summary. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
 			if len(repairCaseIDs(input.Validation)) > 0 {
 				instructions += " affectedCases selects the affected cases from contract manifests in their original order, with duplicates removed; use 1-based positions."
@@ -112,9 +112,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	switch input.Handler {
 	case "engine.review.worker.v2":
 		actionID = "product-review"
-	case "engine.readiness.plan.v3":
+	case "engine.readiness.plan.v4":
 		actionID = "start-readiness"
-	case "engine.development.batch.v4", "engine.repair.v4":
+	case "engine.development.batch.v4", "engine.repair.v5":
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
 		actionID = "qa-execution"
@@ -165,7 +165,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
 	}
-	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v4" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
+	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v5" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		if input.ApprovedPlan != nil {
 			contextValue["approvedPlan"] = input.ApprovedPlan
@@ -189,7 +189,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		switch input.Handler {
 		case "engine.development.batch.v4":
 			names = []string{"development"}
-		case "engine.repair.v4":
+		case "engine.repair.v5":
 			names = []string{"repair", "development", "contract"}
 		case "engine.merge.resolve.v3":
 			names = []string{"conflict"}
@@ -339,11 +339,11 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
-	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v4" || input.Handler == "engine.qa.design.v3" {
+	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5" || input.Handler == "engine.qa.design.v3" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {
-		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional checks reuse a number or author a new local command."
+		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional checks reuse a number, select a new local command by original read/from/to lines, or author a new local invocation."
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}
 	instructions += " The workspace requirement operation reads the complete original confirmed document (optional from/to line range); its path and contentDigest are in Action input. Keep the full requirement and acceptance scope; read the relevant original sections as your role requires."

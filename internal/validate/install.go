@@ -1729,40 +1729,6 @@ func installHomeDir() (string, error) {
 	return filepath.Clean(home), nil
 }
 
-func copyInstallRuntime(source, target string, force bool) error {
-	source = filepath.Clean(source)
-	target = filepath.Clean(target)
-	if samePath(source, target) {
-		return nil
-	}
-	if exists(target) {
-		if !force {
-			return fmt.Errorf("target already exists: %s; re-run with --force to replace it", target)
-		}
-		if err := removeExistingInstallTarget(target); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		return err
-	}
-	entries, err := installPackageFiles(source, true)
-	if err != nil {
-		return err
-	}
-	return copyInstallPackageFiles(source, target, entries)
-}
-
-func removeExistingInstallTarget(target string) error {
-	target = filepath.Clean(target)
-	leaf := filepath.Base(target)
-	parentLeaf := filepath.Base(filepath.Dir(target))
-	if leaf != "formal-gates" || (parentLeaf != "skills" && parentLeaf != ".cursor") {
-		return fmt.Errorf("refusing to replace unexpected target path: %s", target)
-	}
-	return os.RemoveAll(target)
-}
-
 func isScriptRuntimeExtension(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs":

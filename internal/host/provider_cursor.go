@@ -7,11 +7,7 @@ import (
 
 func cursorAdapter() *Lifecycle {
 	return &Lifecycle{
-		Name: Cursor,
-		ExecutableMatches: func(path string) bool {
-			return strings.Contains(NormalizeExecutablePath(path), "/.cursor/formal-gates/bin/")
-		},
-		AgentPrefixes:   []string{"cursor"},
+		Name:            Cursor,
 		EnvironmentKeys: []string{"CURSOR_TRACE_ID", "CURSOR_RUNTIME"},
 		NormalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(Cursor, eventName, "subagentStart", "subagentStop")

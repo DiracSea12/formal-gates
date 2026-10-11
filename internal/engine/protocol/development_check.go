@@ -341,7 +341,7 @@ func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefi
 		return false
 	}
 	role := s.validationRole(pending.Task, cd)
-	return (role == "engine.development.batch.v4" || role == "engine.repair.v4") && result.Validation.Status == "CONTINUE" || role == "engine.development.batch.v4" && s.developmentChecksFailed(result)
+	return (role == "engine.development.batch.v4" || role == "engine.repair.v5") && result.Validation.Status == "CONTINUE" || role == "engine.development.batch.v4" && s.developmentChecksFailed(result)
 }
 
 func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {

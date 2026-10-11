@@ -12,7 +12,7 @@ import (
 )
 
 func TestDevelopmentContinuationPreservesSemanticProgress(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
+	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Provider: "host", Handler: role, Pending: protocol.PendingAction{ActionID: "edit", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "batch"}}}}
 			schema, err := ResultSchema(input)

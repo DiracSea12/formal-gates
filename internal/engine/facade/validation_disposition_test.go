@@ -117,12 +117,12 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 			t.Run(fmt.Sprintf("retry=%v/%s", retry, choice), func(t *testing.T) {
 				d, finding, wave := validationWithGateFinding(t)
 				resolveGateFinding(d, finding, wave)
-				id, input := d.action("engine.repair.v4")
+				id, input := d.action("engine.repair.v5")
 				if retry {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "unavailable-workspace"}})
 					d.drive()
-					id, input = d.action("engine.repair.v4")
+					id, input = d.action("engine.repair.v5")
 				}
 				result := gateRepairResult(input)
 				delivered := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "verified-repair", Validation: &result}}
@@ -188,7 +188,7 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, wave)
-			id, input := d.action("engine.repair.v4")
+			id, input := d.action("engine.repair.v5")
 			d.receipt(id)
 			if terminal {
 				for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {

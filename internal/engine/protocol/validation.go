@@ -352,7 +352,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch.v4", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v4", "engine.repair.verify.v2":
+	case "engine.development.batch.v4", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v5", "engine.repair.verify.v2":
 		return string(p.Handler)
 	}
 	return ""
@@ -536,7 +536,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			b.Candidate = set.Candidate
 		}
 	}
-	if role == "engine.repair.v4" {
+	if role == "engine.repair.v5" {
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				b.PureP2 = work.wave.Repair.PureP2 || work.pureP2

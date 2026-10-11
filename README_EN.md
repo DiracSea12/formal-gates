@@ -157,7 +157,7 @@ Marker-based rule cleanup does not need the runtime or a rule source directory.
 ### Flag semantics
 
 - `--force` — replace an existing target.
-- `--skip-hooks` — install the package without touching host hooks (only when the host hook config must stay byte-for-byte unchanged).
+- `--skip-hooks` — install the package without touching host hook configuration or intake rules (only when these must stay byte-for-byte unchanged).
 
 ---
 

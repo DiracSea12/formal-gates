@@ -156,7 +156,7 @@ func TestGuardIssuanceBlocksUnbackedTask(t *testing.T) {
 	cd := engine.cfg.Definition
 	// 伪造一个不在任何 wave/plan/set 中的 repair 任务：唯一 repair 来源是
 	// wave.Repair（adjudication 完成、收齐后建立），本状态没有。
-	rogue := pipelineTask(cd, "engine.repair.v4", "sha256:rogue-candidate")
+	rogue := pipelineTask(cd, "engine.repair.v5", "sha256:rogue-candidate")
 	gate := engine.guardIssuanceGate(state)
 	err := gate(decision.IssuedSet{{ActionID: "act:rogue", Task: rogue, Step: rogue.Step}})
 	var rejected *RejectedError
@@ -272,7 +272,7 @@ func TestGuardBlocksOutOfPlanBatchScope(t *testing.T) {
 func TestGuardBlockedBugOnMisalignedLedger(t *testing.T) {
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
-	rogue := pipelineTask(cd, "engine.repair.v4", "sha256:rogue-candidate")
+	rogue := pipelineTask(cd, "engine.repair.v5", "sha256:rogue-candidate")
 	state.DispatchBindings["act:rogue"] = WorkBinding{Task: rogue, WaveID: "wave-1"}
 	_, err := engine.deriveGuardBudget(state)
 	var rejected *RejectedError
@@ -417,7 +417,7 @@ func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P2", AcceptedRevision: 2}},
 	}
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v4", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
 	// 返修已签发（签发代数在账）。
 	state.DispatchBindings["act:repair-1"] = WorkBinding{Task: w.Repair.Task, WaveID: w.ID, Candidate: "native-1", Generation: 1}
 	state.DispatchIssueRevisions["act:repair-1"] = 8
@@ -489,7 +489,7 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 	// 收齐且裁决完成后：finding 指向 problem、有效义务与唯一 repair TaskKey
 	// 进入 basis（预授权 repair 机械加入，未签发也占槽）。
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v4", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
 	state.Validation.Findings["finding-1"] = &ValidationFinding{
 		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", AcceptedRevision: 2}},
@@ -608,7 +608,7 @@ func guardRepairFixture(t *testing.T) (*Engine, *State) {
 		}
 	}
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v4", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
 	state.Validation.Findings["finding-1"] = &ValidationFinding{
 		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", Reason: "broken normal path", AcceptedRevision: 2}},

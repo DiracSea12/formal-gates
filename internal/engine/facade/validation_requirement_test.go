@@ -262,7 +262,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v4")
+	id, in := d.action("engine.repair.v5")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"

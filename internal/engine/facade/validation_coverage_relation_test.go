@@ -192,7 +192,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	for finding := range d.run.Validation.Findings {
 		resolveGateFinding(d, finding, wave.ID)
 	}
-	id, in = d.action("engine.repair.v4")
+	id, in = d.action("engine.repair.v5")
 	repair := gateRepairResult(in)
 	d.business(id, repair)
 	d.verifyRepair(repair)

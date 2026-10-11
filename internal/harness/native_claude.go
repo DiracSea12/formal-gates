@@ -74,9 +74,6 @@ var claudeStream = streamAdapter{provider: "claude", prefix: "CLAUDE", capture: 
 func claudeExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
 	return streamExecute(claudeStream, request, directory, probe, services...)
 }
-func claudeObserve(directory string) (map[string]any, error) {
-	return streamObserve(claudeStream, directory)
-}
 func claudeReconcile(directory string, process any) (map[string]any, error) {
 	return streamReconcile(claudeStream, directory, process)
 }

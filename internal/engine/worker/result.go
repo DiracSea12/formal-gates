@@ -103,9 +103,41 @@ type Criterion struct {
 }
 type Check struct {
 	Reuse   int    `json:"reuse,omitempty"`
+	Read    int    `json:"read,omitempty"`
+	From    int    `json:"from,omitempty"`
+	To      int    `json:"to,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
 	Command string `json:"command,omitempty"`
 }
+
+func (item *Check) UnmarshalJSON(raw []byte) error {
+	type body Check
+	if err := decodeObject(raw, (*body)(item)); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	allowed, required := []string{"command", "purpose"}, []string{"command"}
+	if _, present := fields["reuse"]; present {
+		allowed, required = []string{"reuse"}, []string{"reuse"}
+	} else if _, present := fields["read"]; present {
+		allowed, required = []string{"read", "from", "to", "purpose"}, []string{"read", "from", "to"}
+	}
+	for name := range fields {
+		if !slices.Contains(allowed, name) {
+			return fmt.Errorf("check selects one approved check, original read range, or new command")
+		}
+	}
+	for _, name := range required {
+		if value, present := fields[name]; !present || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("check requires %s", name)
+		}
+	}
+	return nil
+}
+
 type RouteProposal struct {
 	Mode     string `json:"mode"`
 	Selected []int  `json:"selected,omitempty"`
@@ -282,7 +314,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	} else if value.Validation != nil {
 		proposed = value.Validation.GranularityReview
 	}
-	completed := input.Handler == "engine.repair.v4" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	completed := input.Handler == "engine.repair.v5" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
 	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
 	if err != nil {
 		return protocol.Event{}, err
@@ -650,7 +682,7 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 	switch input.Handler {
 	case "engine.development.batch.v4":
 		return &Development{}, nil
-	case "engine.repair.v4":
+	case "engine.repair.v5":
 		return &Repair{}, nil
 	case "engine.merge.resolve.v3":
 		return &ConflictResolution{}, nil
@@ -687,7 +719,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		return decodedResult{}, "", err
 	}
 	if _, present := fields["remainingWork"]; present {
-		if input.Validation == nil || input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v4" {
+		if input.Validation == nil || input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v5" {
 			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
 		}
 		var partial DevelopmentContinuation
@@ -801,7 +833,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	if input.Handler == "engine.repair.v4" && fields["completion"] != nil && fields["granularityReview"] != nil {
+	if input.Handler == "engine.repair.v5" && fields["completion"] != nil && fields["granularityReview"] != nil {
 		var plan struct {
 			Batches []map[string]json.RawMessage `json:"batches"`
 		}
@@ -908,7 +940,7 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 	if input.Handler == "engine.development.batch.v4" && input.Validation.Development != nil {
 		return input.Validation.Development.Result
 	}
-	if input.Handler == "engine.repair.v4" && input.Validation.Repair != nil {
+	if input.Handler == "engine.repair.v5" && input.Validation.Repair != nil {
 		return input.Validation.Repair.Result
 	}
 	return nil

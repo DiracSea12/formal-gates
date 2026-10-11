@@ -26,7 +26,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
 	alternatives := []any{body, interruption}
-	if input.Validation != nil && (input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v4") {
+	if input.Validation != nil && (input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5") {
 		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
 		if err != nil {
 			return nil, err
@@ -36,7 +36,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		alternatives = append(alternatives, partial)
 	}
-	if input.Handler == "engine.repair.v4" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+	if input.Handler == "engine.repair.v5" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
 		fields := body["properties"].(map[string]any)
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
@@ -75,7 +75,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
-	if input.Handler == "engine.repair.v4" {
+	if input.Handler == "engine.repair.v5" {
 		if cases := repairCaseIDs(input.Validation); len(cases) > 0 {
 			fields["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
 		} else {
@@ -99,15 +99,15 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
 			command["not"] = map[string]any{"enum": commands}
-			if input.Handler == "engine.repair.v4" {
+			if input.Handler == "engine.repair.v5" {
 				purpose["enum"] = []string{""}
 			}
 		}
-		alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
-		check := alternatives[0]
-		if len(alternatives) > 1 {
-			check = map[string]any{"anyOf": alternatives}
-		}
+		selection := map[string]any{"type": "integer", "minimum": 1}
+		original := fixedObject(map[string]any{"read": selection, "from": selection, "to": selection, "purpose": purpose}, []string{"read", "from", "to"})
+		original["description"] = "Select an original workspace read and its inclusive line range; the program retains its exact command bytes, including line endings."
+		alternatives = append(alternatives, original, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
+		check := map[string]any{"anyOf": alternatives}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
 		delete(properties, "route")
 		if len(input.AvailableRouteCandidates) > 0 {
@@ -264,7 +264,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 	}
 
 	if batch := completionBatch(input); batch != nil {
-		if input.Handler == "engine.repair.v4" {
+		if input.Handler == "engine.repair.v5" {
 			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
 			body["required"] = append(body["required"].([]any), "summary")
 		}
@@ -274,7 +274,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			items = append(items, map[string]any{"type": "string", "minLength": 1, "description": criterion.Description})
 		}
 		completion["dod"] = orderedSchema(items)
-	} else if !(input.Handler == "engine.repair.v4" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+	} else if !(input.Handler == "engine.repair.v5" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
 	if input.Handler == "engine.repair.verify.v2" {
@@ -549,7 +549,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 // Completion keys come only from the issued member batch. Final-candidate
 // verification and repair planning have different evidence duties.
 func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
-	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v4") {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v5") {
 		return nil
 	}
 	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {

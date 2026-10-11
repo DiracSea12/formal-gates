@@ -34,7 +34,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run invalid", Module: "input", RootCause: "diagnostic formatter", Consequence: "wrong diagnostic", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "confirmed input behavior", Severity: "limited output", Causality: "formatter", Reproduction: "app run invalid", Classification: "implementation"}, Reason: "observed actual output"}
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 				d.drive()
-				repair, ri := d.action("engine.repair.v4")
+				repair, ri := d.action("engine.repair.v5")
 				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}}
 				d.business(repair, edit)
 				d.verifyRepair(edit)
@@ -196,7 +196,7 @@ func repairedExecutionDriver(t *testing.T) *validationDriver {
 	t.Helper()
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v4")
+	id, in := d.action("engine.repair.v5")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	d.verifyRepair(edit)
@@ -336,7 +336,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				}
 			}
 			d.drive()
-			id, in := d.action("engine.repair.v4")
+			id, in := d.action("engine.repair.v5")
 			edit := gateRepairResult(in)
 			d.business(id, edit)
 			if edit.Binding.PureP2 {

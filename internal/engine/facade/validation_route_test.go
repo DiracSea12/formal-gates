@@ -61,7 +61,7 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 		t.Fatal("route update rewrote/duplicated original evidence")
 	}
 	resolveGateFinding(d, finding, w.ID)
-	_, in = d.action("engine.repair.v4")
+	_, in = d.action("engine.repair.v5")
 	if in.Binding.Candidate != w.Candidate.Identity {
 		t.Fatal("repair candidate changed without a repair")
 	}
@@ -72,13 +72,13 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, oldID)
-	repairID, repairInput := d.action("engine.repair.v4")
+	repairID, repairInput := d.action("engine.repair.v5")
 	d.receipt(repairID)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.repair.v4")
+	id, in := d.action("engine.repair.v5")
 	if id != repairID || in.Binding != repairInput.Binding {
 		t.Fatal("route addition replaced an already issued repair obligation")
 	}
@@ -107,11 +107,11 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 		t.Run(map[bool]string{false: "original", true: "replacement"}[replacement], func(t *testing.T) {
 			d, finding, oldID := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, oldID)
-			oldRepair, _ := d.action("engine.repair.v4")
+			oldRepair, _ := d.action("engine.repair.v5")
 			if replacement {
 				confirmValidationWork(d, oldRepair)
 				d.materialize()
-				current, _ := d.action("engine.repair.v4")
+				current, _ := d.action("engine.repair.v5")
 				if current == oldRepair {
 					t.Fatal("REDO retained original dispatch")
 				}
@@ -121,7 +121,7 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 			d.reopen()
 			d.drive()
 			for action, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v4" {
+				if input.Handler == "engine.repair.v5" {
 					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
 				}
 			}
@@ -398,12 +398,12 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v4")
+	id, in := d.action("engine.repair.v5")
 	task := in.Binding.Task
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-interrupted"}})
 	d.drive()
-	id, retry := d.action("engine.repair.v4")
+	id, retry := d.action("engine.repair.v5")
 	before := d.run.Attempts[task]
 	if before.Attempts != 1 || before.MaxAttempts != 2 || retry.Binding.Task != task {
 		t.Fatal("setup did not retain first failure")
@@ -565,7 +565,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v4")
+	id, in := d.action("engine.repair.v5")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	d.verifyRepair(edit)
@@ -617,7 +617,7 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "input", RootCause: "valid input panic", Consequence: "normal command cannot complete", Severity: "P1", SeverityRationale: "core valid input fails with no workaround", Verification: review.FindingVerification{Scope: "confirmed input", Severity: "core failure", Causality: "input panic", Reproduction: "app run valid-input", Classification: "implementation"}, Reason: "observed valid input panic"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v4")
+	id, in = d.action("engine.repair.v5")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	if edit.Binding.PureP2 {

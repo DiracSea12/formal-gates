@@ -126,7 +126,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 				if _, executed := state.HostActionReceipts[original.ActionID]; executed {
 					t.Fatal("REDO executed the obsolete workspace")
 				}
-				_, repair := d.action("engine.repair.v4")
+				_, repair := d.action("engine.repair.v5")
 				if repair.Binding.Task == *originalInput.Task || repair.Binding.WorkspaceID == originalInput.Resource.ID {
 					t.Fatal("replacement borrowed the original task or resource")
 				}
@@ -189,7 +189,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			if after.HostActionReceipts[original.ActionID].Digest != receipt.Digest || len(after.HostActionReceipts) != len(beforeExecution.HostActionReceipts) {
 				t.Fatal("reopen reexecuted the original workspace")
 			}
-			_, repair := d.action("engine.repair.v4")
+			_, repair := d.action("engine.repair.v5")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}

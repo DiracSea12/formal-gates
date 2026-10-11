@@ -262,7 +262,7 @@ func TestClaudeNativeCompletionAndObservation(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := proofsOf(t, s.directory, nativeSourceFiles)
-			observed, err := claudeObserve(s.directory)
+			observed, err := streamObserve(claudeStream, s.directory)
 			if err != nil || !valuesEqual(source, observed) || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
 				t.Fatalf("original observation = %v, %v", observed, err)
 			}
@@ -452,8 +452,7 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 
 func TestClaudeReconcileOriginalEvidence(t *testing.T) {
 	s := newClaudeScenario(t, "recovered-session", true)
-	// A captured native completion is the setup material for an eligible
-	// formatting refusal. These are evidence fixtures, not workflow state.
+	peerSubmitSemantics(s.directory, getOf(s.peer.Events[1], "structured_output"))
 	nativeSource := map[string]any{"sessionId": "recovered-session", "workspace": s.workspace,
 		"selection": map[string]any{"model": "claude-fixture-model", "reasoning_effort": "high"},
 		"process":   map[string]any{"exit_code": 0, "error": ""}}
@@ -467,23 +466,33 @@ func TestClaudeReconcileOriginalEvidence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.directory, "native-events.jsonl"), stream.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAtomicJSON(filepath.Join(s.directory, "native-error.json"), map[string]any{"error": "RuntimeBlocked: NATIVE_RESULT: could not frame final output"}); err != nil {
-		t.Fatal(err)
-	}
 	before := readBytes(t, filepath.Join(s.directory, "native-source.json"))
-	process := map[string]any{"exit_code": 1, "error": ""}
+	toolsBefore := readBytes(t, filepath.Join(s.directory, nativeToolCallsFile))
+	for _, process := range []map[string]any{{"exit_code": 1, "error": ""}, {"exit_code": 0, "error": "interrupted"}} {
+		original := mustCanonical(t, process)
+		if source, err := claudeReconcile(s.directory, process); err == nil || source != nil {
+			t.Fatalf("unsuccessful original process admitted: %v, %v", source, err)
+		}
+		if mustCanonical(t, process) != original {
+			t.Fatal("refusal rewrote the supervisor result")
+		}
+		if _, err := os.Stat(filepath.Join(s.directory, "source.json")); !os.IsNotExist(err) {
+			t.Fatal("unsuccessful process produced a source receipt")
+		}
+	}
+	process := map[string]any{"exit_code": 0, "error": ""}
 	source, err := claudeReconcile(s.directory, process)
-	if err != nil || source["identity"] != "recovered-session" || !valuesEqual(getOf(source["reconciliation"], "new_model_calls"), 0) {
+	if err != nil || source["identity"] != "recovered-session" {
 		t.Fatalf("reconcile = %v, %v", source, err)
 	}
 	second, err := claudeReconcile(s.directory, process)
-	if err != nil || !valuesEqual(source, second) || !bytes.Equal(before, readBytes(t, filepath.Join(s.directory, "native-source.json"))) || !bytes.Equal(stream.Bytes(), readBytes(t, filepath.Join(s.directory, "native-events.jsonl"))) {
+	if err != nil || !valuesEqual(source, second) || !bytes.Equal(before, readBytes(t, filepath.Join(s.directory, "native-source.json"))) || !bytes.Equal(stream.Bytes(), readBytes(t, filepath.Join(s.directory, "native-events.jsonl"))) || !bytes.Equal(toolsBefore, readBytes(t, filepath.Join(s.directory, nativeToolCallsFile))) {
 		t.Fatalf("repeat observation = %v, %v", second, err)
 	}
 	if _, err := os.Stat(s.peer.Calls); !os.IsNotExist(err) {
 		t.Fatal("reconcile launched a CLI")
 	}
-	if !valuesEqual(process, map[string]any{"exit_code": 1, "error": ""}) {
+	if !valuesEqual(process, map[string]any{"exit_code": 0, "error": ""}) {
 		t.Fatal("reconcile rewrote the supervisor result")
 	}
 }

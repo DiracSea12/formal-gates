@@ -128,7 +128,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.reopen()
 			d.drive()
-			repair, ri := d.action("engine.repair.v4")
+			repair, ri := d.action("engine.repair.v5")
 			if len(ri.Repair.Problems) != 1 || len(ri.Repair.ExecutionFailures) != 2 || ri.Repair.Obligation.PureP2 {
 				t.Fatalf("wrong repair diagnosis: %+v", ri.Repair)
 			}
@@ -186,7 +186,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d, finding, origin := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, origin)
-	action, input := d.action("engine.repair.v4")
+	action, input := d.action("engine.repair.v5")
 	originalTask := input.Binding.Task
 	repairResult := gateRepairResult(input)
 	d.business(action, repairResult)
@@ -218,7 +218,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: origin, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{correction}}}})
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair.v4")
+	_, repair := d.action("engine.repair.v5")
 	if repair.Binding.Task == originalTask || repair.Binding.Candidate != completed.Candidate.Identity || repair.Repair == nil {
 		t.Fatal("new problem did not follow the repaired candidate's unique duty")
 	}
@@ -299,7 +299,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	}
 	d.drive()
-	_, repair := d.action("engine.repair.v4")
+	_, repair := d.action("engine.repair.v5")
 	if len(repair.Repair.Problems) != 2 || len(repair.Repair.ExecutionFailures) != 2 {
 		t.Fatal("independent mode diagnoses lost their responsibilities")
 	}
@@ -338,7 +338,7 @@ func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	}
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair.v4")
+	_, repair := d.action("engine.repair.v5")
 	problem := d.run.Validation.Findings[caseID].History[0].ProblemID
 	if len(repair.Repair.Obligation.Problems) != 1 || repair.Repair.Obligation.Problems[0] != problem {
 		t.Fatal("independent advisory was promoted into mandatory repair")

@@ -13,7 +13,6 @@ import (
 
 func TestLifecycleCaptureAndVerification(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderClaude)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +31,7 @@ func TestLifecycleCaptureAndVerification(t *testing.T) {
 	if start.Event != eventStart || !duplicate.Duplicate {
 		t.Fatalf("unexpected capture results: start=%+v duplicate=%+v", start, duplicate)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderClaude); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -47,7 +46,6 @@ func TestLifecycleCaptureAndVerification(t *testing.T) {
 
 func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *testing.T) {
 	root, otherRoot := t.TempDir(), t.TempDir()
-	useProvider(t, ProviderCursor)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +62,7 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 	if _, err := Capture("", ProviderCursor, "subagentStart", start); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "cursor-agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "cursor-agent-1", ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -78,7 +76,7 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 	if _, err := Capture("", ProviderCursor, "subagentStart", cursorPayload(otherRoot, true)); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(otherRoot, "run-2", "dispatch-2", "cursor-agent-1"); err != nil {
+	if err := BindDispatchWithProvider(otherRoot, "run-2", "dispatch-2", "cursor-agent-1", ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
 	other, err := VerifyDispatch(otherRoot, "run-2", "dispatch-2")
@@ -92,8 +90,7 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 
 func TestLifecycleRequiredProviderRejectsMissingOrMismatchedEvents(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCursor)
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderCursor, "subagentStart", []byte(`{"subagent_id":"other-agent","conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"different task"}`)); err != nil {
@@ -192,7 +189,6 @@ func TestLifecycleFactoryRegistryCoversEveryInstallableHost(t *testing.T) {
 
 func TestZCodeToolHooksCorrelateAgentCallLifecycle(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderZCode)
 	if err := BeginRun(root, "run-zcode"); err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +221,10 @@ func TestZCodeToolHooksCorrelateAgentCallLifecycle(t *testing.T) {
 
 func TestLifecycleStopCaptureStoresTranscriptPath(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCodex)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderCodex); err != nil {
 		t.Fatal(err)
 	}
 	payload := []byte(`{"subagent_id":"agent-1","agent_transcript_path":"/tmp/sessions/agent-1.jsonl"}`)
@@ -250,11 +245,10 @@ func TestLifecycleStopCaptureStoresTranscriptPath(t *testing.T) {
 
 func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCodex)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderCodex); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderCodex, "SubagentStop", []byte(`{"subagent_id":"agent-1"}`)); err != nil {
@@ -263,8 +257,7 @@ func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) 
 	if _, path, err := DispatchTranscriptPath(root, "run-1", "dispatch-1"); err != nil || path != "" {
 		t.Fatalf("pathless stop reported path %q err %v", path, err)
 	}
-	useProvider(t, ProviderCursor)
-	if err := BindDispatch(root, "run-1", "dispatch-cursor", "cursor-agent"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-cursor", "cursor-agent", ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
 	cursor := []byte(`{"subagent_id":"cursor-agent","agent_transcript_path":"/tmp/sessions/cursor.jsonl","conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared formal-gates dispatch"}`)
@@ -281,11 +274,10 @@ func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) 
 // events and records it on the stop event; a host without a reason records "未知".
 func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderClaude)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderClaude); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"agent-1","stop_reason":"HTTP 429 rate limited"}`)); err != nil {
@@ -299,7 +291,7 @@ func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 		t.Fatalf("capture did not record the HTTP interruption reason: %q", reason)
 	}
 	// 先绑定再捕获：让 stop 事件直接落到派发记录（含"未知"原因）。
-	if err := BindDispatch(root, "run-1", "dispatch-2", "agent-2"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-2", "agent-2", ProviderClaude); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"agent-2"}`)); err != nil {
@@ -319,11 +311,10 @@ func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 // as an interruption credential (Interrupted), not REJECTED.
 func TestLifecycleInterruptedDispatchVerification(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderClaude)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderClaude); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderClaude, "SubagentStart", []byte(`{"subagent_id":"agent-1"}`)); err != nil {
@@ -348,8 +339,7 @@ func TestLifecycleInterruptedDispatchVerification(t *testing.T) {
 
 func TestLifecycleUninstalledProviderIsUnavailable(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderDefault)
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderDefault); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -368,8 +358,7 @@ func TestLifecycleUninstalledProviderIsUnavailable(t *testing.T) {
 // Cursor.
 func TestLifecycleInstalledCodexRequiresPairedEvents(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCodex)
-	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "agent-1", ProviderCodex); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -378,38 +367,6 @@ func TestLifecycleInstalledCodexRequiresPairedEvents(t *testing.T) {
 	}
 	if verification.Outcome != Rejected || verification.StartObserved || verification.StopObserved {
 		t.Fatalf("expected installed Codex without paired events to reject, got %+v", verification)
-	}
-}
-
-func TestProviderFromExecutable(t *testing.T) {
-	tests := map[string]string{
-		filepath.Join("tmp", ".claude", "skills", "formal-gates", "bin", "formal-gates"): ProviderClaude,
-		filepath.Join("tmp", ".codex", "skills", "formal-gates", "bin", "formal-gates"):  ProviderCodex,
-		filepath.Join("tmp", ".cursor", "formal-gates", "bin", "formal-gates"):           ProviderCursor,
-		filepath.Join("tmp", ".zcode", "skills", "formal-gates", "bin", "formal-gates"):  ProviderDefault,
-		filepath.Join("tmp", "source", "formal-gates"):                                   ProviderDefault,
-	}
-	for path, want := range tests {
-		t.Run(fmt.Sprintf("%s", want), func(t *testing.T) {
-			if got := providerFromExecutable(path); got != want {
-				t.Fatalf("providerFromExecutable(%q)=%q want %q", path, got, want)
-			}
-		})
-	}
-}
-
-func TestProviderFromEnvironmentRecognizesZCode(t *testing.T) {
-	for _, key := range ProviderEnvironmentKeys() {
-		t.Setenv(key, "")
-	}
-	t.Setenv("AI_AGENT", "zcode")
-	if got := providerFromEnvironment(); got != ProviderZCode {
-		t.Fatalf("AI_AGENT=zcode resolved to %q", got)
-	}
-	t.Setenv("AI_AGENT", "")
-	t.Setenv("ZCODE_PLUGIN_ROOT", "/tmp/zcode-plugin")
-	if got := providerFromEnvironment(); got != ProviderZCode {
-		t.Fatalf("ZCODE_PLUGIN_ROOT resolved to %q", got)
 	}
 }
 
@@ -423,14 +380,13 @@ func TestClaudeCaptureResolvesActiveRunAboveSubagentWorkingDirectory(t *testing.
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_PROJECT_DIR", root)
-	useProvider(t, ProviderClaude)
 	for _, event := range []string{"SubagentStart", "SubagentStop"} {
 		payload := []byte(fmt.Sprintf(`{"cwd":%q,"agent_id":"claude-subdirectory-agent"}`, subdirectory))
 		if _, err := Capture("", ProviderClaude, event, payload); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "claude-subdirectory-agent"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "claude-subdirectory-agent", ProviderClaude); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -453,7 +409,6 @@ func TestCursorCaptureStagesForAllActiveWorkspaceRoots(t *testing.T) {
 	if err := BeginRun(runRoot, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	useProvider(t, ProviderCursor)
 	payload := func(includeIdentity bool) []byte {
 		identity := ""
 		if includeIdentity {
@@ -464,7 +419,7 @@ func TestCursorCaptureStagesForAllActiveWorkspaceRoots(t *testing.T) {
 	if _, err := Capture("", ProviderCursor, "subagentStart", payload(true)); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(runRoot, "run-1", "dispatch-1", "cursor-multi-root-agent"); err != nil {
+	if err := BindDispatchWithProvider(runRoot, "run-1", "dispatch-1", "cursor-multi-root-agent", ProviderCursor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture("", ProviderCursor, "subagentStop", payload(false)); err != nil {
@@ -510,37 +465,12 @@ func assertRunOwnedEvents(t *testing.T, root, runID, dispatchID string) {
 	}
 }
 
-func useProvider(t *testing.T, provider string) {
-	t.Helper()
-	prior := executablePath
-	deepseekHome := t.TempDir()
-	path := map[string]string{
-		ProviderClaude:   filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCodex:    filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCursor:   filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
-		ProviderZCode:    filepath.Join(t.TempDir(), ".zcode", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderDeepSeek: filepath.Join(deepseekHome, "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderDefault:  filepath.Join(t.TempDir(), "source", "formal-gates"),
-	}[provider]
-	// Neutralize host environment detection so the stubbed executable path is
-	// the only provider signal in these tests.
-	for _, key := range ProviderEnvironmentKeys() {
-		t.Setenv(key, "")
-	}
-	if provider == ProviderDeepSeek {
-		t.Setenv("DSH_HOME", deepseekHome)
-	}
-	executablePath = func() (string, error) { return path, nil }
-	t.Cleanup(func() { executablePath = prior })
-}
-
 func TestCodexCLIRolloutBinding(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCodex)
 	if err := BeginRun(root, "codex-cli"); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "codex-cli", "dispatch", "real-thread"); err != nil {
+	if err := BindDispatchWithProvider(root, "codex-cli", "dispatch", "real-thread", ProviderCodex); err != nil {
 		t.Fatal(err)
 	}
 	for _, event := range []string{"SubagentStart", "SubagentStop"} {

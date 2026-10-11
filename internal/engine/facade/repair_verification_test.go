@@ -86,7 +86,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid", Module: "command", RootCause: "diagnostic", Consequence: "wrong output", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "command", Severity: "limited output", Causality: "diagnostic", Reproduction: "normal command", Classification: "implementation"}, Reason: "observed command output"}
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.drive()
-			id, in = d.action("engine.repair.v4")
+			id, in = d.action("engine.repair.v5")
 			if in.Development != nil {
 				t.Fatal("small repair unexpectedly requires a batch plan")
 			}

@@ -545,7 +545,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
-	case "engine.repair.v4":
+	case "engine.repair.v5":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}

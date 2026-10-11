@@ -15,7 +15,6 @@ func TestDeepSeekLifecycleCaptureAndVerification(t *testing.T) {
 		}
 	}
 	root := t.TempDir()
-	useProvider(t, ProviderDeepSeek)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +23,7 @@ func TestDeepSeekLifecycleCaptureAndVerification(t *testing.T) {
 	if _, err := Capture(root, ProviderDeepSeek, "SubagentStart", data); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", "dsh-agent-1"); err != nil {
+	if err := BindDispatchWithProvider(root, "run-1", "dispatch-1", "dsh-agent-1", ProviderDeepSeek); err != nil {
 		t.Fatal(err)
 	}
 	payload["stop_reason"] = "HTTP 429 rate limited"
@@ -49,38 +48,4 @@ func TestDeepSeekLifecycleCaptureAndVerification(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".gates", "tmp", "run-1")); err != nil {
 		t.Fatalf("run artifacts missing: %v", err)
 	}
-}
-
-func TestProviderFromExecutableDistinguishesGlobalDshInstall(t *testing.T) {
-	project := filepath.Join(t.TempDir(), "repo", ".dsh", "skills", "formal-gates", "bin", nativeName())
-	if got := providerFromExecutable(project); got != ProviderDefault {
-		t.Fatalf("project-local DSH binary resolved provider %q, want %q (no project hook patch)", got, ProviderDefault)
-	}
-	home := t.TempDir()
-	t.Setenv("DSH_HOME", home)
-	global := filepath.Join(home, "skills", "formal-gates", "bin", nativeName())
-	if got := providerFromExecutable(global); got != ProviderDeepSeek {
-		t.Fatalf("global DSH binary resolved provider %q, want %q", got, ProviderDeepSeek)
-	}
-}
-
-func TestCurrentProviderKeepsProjectDshLenientUnderDshEnvironment(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DSH_HOME", home)
-	t.Setenv("DSH_PROJECT_DIR", "")
-	project := filepath.Join(t.TempDir(), "repo", ".dsh", "skills", "formal-gates", "bin", nativeName())
-	prior := executablePath
-	executablePath = func() (string, error) { return project, nil }
-	t.Cleanup(func() { executablePath = prior })
-	provider, err := currentProvider()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if provider != ProviderDefault {
-		t.Fatalf("project DSH binary under DSH_HOME resolved provider %q, want %q", provider, ProviderDefault)
-	}
-}
-
-func nativeName() string {
-	return "formal-gates"
 }

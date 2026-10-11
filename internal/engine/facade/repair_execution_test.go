@@ -177,7 +177,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	r := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "command", RootCause: "composition", Consequence: "documented result missing", Severity: severity, SeverityRationale: "documented command behavior", Verification: review.FindingVerification{Scope: "command", Severity: "documented severity", Causality: "composition", Reproduction: "normal command invocation", Classification: "implementation"}, Reason: "native output comparison"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: w.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v4")
+	id, in = d.action("engine.repair.v5")
 	return d, in, id
 }
 
@@ -437,7 +437,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		t.Fatal("completed member source problem stayed open")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v4" {
+		if input.Handler == "engine.repair.v5" {
 			t.Fatal("completed source problem created another repair")
 		}
 	}

@@ -2,40 +2,7 @@ package host
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 )
-
-// zcodeGlobalInstallPrefix is the normalized user-level ZCode skill path.
-// ZCode ignores project-level hook configuration, so only this global path
-// has an active lifecycle bridge.
-func zcodeGlobalInstallPrefix() string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return ""
-	}
-	prefix := filepath.ToSlash(filepath.Join(home, ".zcode", "skills", "formal-gates", "bin")) + "/"
-	return strings.ToLower(prefix)
-}
-
-// IsProjectZCodeInstall reports whether path is a project-local ZCode skill
-// binary rather than the global user-level install.
-func IsProjectZCodeInstall(path string) bool {
-	path = strings.TrimSpace(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
-	if !strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") {
-		return false
-	}
-	prefix := zcodeGlobalInstallPrefix()
-	return prefix == "" || !strings.HasPrefix(normalized, prefix)
-}
 
 // zcodeAdapter maps ZCode's Agent/Task tool hooks to the lifecycle journal's
 // existing start/stop event model. PreToolUse is the dispatch attempt, while
@@ -45,12 +12,7 @@ func IsProjectZCodeInstall(path string) bool {
 // any future child-agent identity bridge.
 func zcodeAdapter() *Lifecycle {
 	return &Lifecycle{
-		Name: ZCode,
-		ExecutableMatches: func(path string) bool {
-			normalized := NormalizeExecutablePath(path)
-			return strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") && !IsProjectZCodeInstall(path)
-		},
-		AgentPrefixes:   []string{"zcode", "z-code"},
+		Name:            ZCode,
 		EnvironmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},
 		NormalizeEvent:  normalizeZCodeEvent,
 		Identity:        func(_ string, payload any) string { return zcodeCallID(payload) },

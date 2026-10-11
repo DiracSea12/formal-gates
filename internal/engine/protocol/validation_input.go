@@ -165,7 +165,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Repair = s.repairComparisonInput(context)
 			input.ExecutionFacts = s.repairComparisonFacts(context, cd)
 		}
-	case "engine.repair.v4":
+	case "engine.repair.v5":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)
 		if work := s.repairMember(pending.Task); work != nil {

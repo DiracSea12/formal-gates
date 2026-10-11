@@ -1,4 +1,4 @@
-package facade_test
+package harness
 
 import (
 	"crypto/sha256"
@@ -12,14 +12,18 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
-	"formal-gates/internal/harness"
 	"formal-gates/internal/lifecycle"
 )
 
 func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript string) (facade.WorkerMaterial, string) {
 	t.Helper()
 	stateDir := filepath.Join(root, facade.EngineNamespace, "run")
-	value := worker.Material{ReadOnly: true, Prompt: "Exact issued context " + turn, Input: protocol.WorkerInput{RunID: "run", Provider: provider, Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}}}
+	input := protocol.WorkerInput{Handler: "engine.gate.v2", RunID: "run", Provider: provider, Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := worker.Material{ReadOnly: true, Prompt: "Exact issued context " + turn, Input: input, ResultSchema: schema}
 	body, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +50,7 @@ func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript str
 			t.Fatal(err)
 		}
 	}
-	request := map[string]any{"provider": provider, "engine": map[string]any{"root": root, "runId": "run", "workerMaterial": ref, "resumeActionId": ""}}
+	request := map[string]any{"provider": provider, "workspace": root, "read_only": true, "schema": schema, "engine": map[string]any{"root": root, "runId": "run", "workerMaterial": ref, "resumeActionId": ""}}
 	write(filepath.Join(directory, "native-request.json"), request)
 	if transcript == "" {
 		transcript = filepath.Join(directory, "native-events.jsonl")
@@ -55,19 +59,15 @@ func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript str
 		t.Fatal(err)
 	}
 	write(filepath.Join(directory, "native-source.json"), map[string]any{"sessionId": "session", "turnId": turn})
-	if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), []byte(`{"semantic":"completed"}`), 0600); err != nil {
+	peerSubmitSemantics(directory, map[string]any{"findings": []any{}})
+	if err := writeSubmittedAnswer(directory); err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(directory, "answer.json"), map[string]any{"semantic": "completed"})
-	proofs := map[string]harness.ContentProof{}
-	for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"} {
-		proof, refusal := harness.FileProof(filepath.Join(directory, name))
-		if refusal != "" {
-			t.Fatal(refusal)
-		}
-		proofs[name] = proof
+	source, err := evidenceSource(directory, provider, "session", map[string]any{"native_turn": turn, "transcript": transcript})
+	if err != nil {
+		t.Fatal(err)
 	}
-	write(filepath.Join(directory, "source.json"), map[string]any{"provider": provider, "identity": "session", "native_turn": turn, "transcript": transcript, "files": proofs})
+	write(filepath.Join(directory, "source.json"), source)
 	return ref, directory
 }
 
@@ -84,7 +84,7 @@ func TestManagedCostSourcesUseOriginalVerifiedNativeStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: "zcode", Correlation: "session"}
-	bridge := facade.CostSourceBridge(root, "run", harness.NativeResultEvidence)
+	bridge := facade.CostSourceBridge(root, "run", NativeResultEvidence)
 	for range 2 {
 		resolved := bridge(ref)
 		want := cost.Usage{InputCacheHitTokens: 60, InputCacheMissTokens: 120, OutputTokens: 15}
@@ -170,7 +170,7 @@ func TestManagedCostSourceRejectsForeignBindingsAndMissingVerifier(t *testing.T)
 					t.Fatal(err)
 				}
 			}
-			verifier := harness.NativeResultEvidence
+			verifier := NativeResultEvidence
 			if scenario == "missing-verifier" {
 				verifier = nil
 			}
@@ -206,7 +206,7 @@ func TestManagedCostSourcesRetainKnownUsageAcrossUnavailableInvocations(t *testi
 				if err := lifecycle.ObserveNativeCompletion(root, "run", "action", "zcode", "session"); err != nil {
 					t.Fatal(err)
 				}
-				bridge := facade.CostSourceBridge(root, "run", harness.NativeResultEvidence)
+				bridge := facade.CostSourceBridge(root, "run", NativeResultEvidence)
 				for range 2 {
 					result := bridge(protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: "zcode"})
 					want := cost.Usage{InputCacheHitTokens: 15104, InputCacheMissTokens: 20726, OutputTokens: 10780}

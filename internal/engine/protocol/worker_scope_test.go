@@ -40,7 +40,7 @@ func TestChildWorkerScopePreservesConfirmedResponsibilitiesOnRecovery(t *testing
 
 func TestRepairWorkerChecksUseTheConfirmedProjectOrSlicePlan(t *testing.T) {
 	for _, child := range []bool{false, true} {
-		e, state, pending := unfinishedDevelopmentState(t, "engine.repair.v4")
+		e, state, pending := unfinishedDevelopmentState(t, "engine.repair.v5")
 		plan := plannedReviewEvidence(review.StartReadiness, "readiness", "", "PASS", "Approved project plan", nil).GranularityReview
 		plan.Batches[0].ID = "owned"
 		plan.Batches[0].Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Command: "complete-build"}, {ID: "tests", Purpose: CheckFullTests, Command: "complete-tests"}, {ID: "local", Command: "local-oracle"}}

@@ -14,3 +14,4 @@
 判据比较职责只比较已签发的原生执行事实与批准 oracle，保留真实 FAIL。原生路径、命令运行、检查结果和快照由程序取得，不由报告创作。
 
 结果字段及序号选择以注入的 Result contract/schema 为准。
+返修计划自动继承批准的 FULL 和 EDIT 检查；可选检查使用批准序号 reuse，或用原 workspace read/from/to 行区间选择新的本地命令。command 只用于真正新创作的本地调用，已有批准命令仍用 reuse。

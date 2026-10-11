@@ -195,14 +195,6 @@ func ActiveRunIDs(root string) ([]string, error) {
 	return activeRuns(root)
 }
 
-func BindDispatch(root, runID, dispatchID, identity string) error {
-	provider, err := currentProvider()
-	if err != nil {
-		return err
-	}
-	return BindDispatchWithProvider(root, runID, dispatchID, identity, provider)
-}
-
 // BindDispatchWithProvider is the explicit host-context entrypoint used by a
 // shared stable launcher. Provider identity comes from the claim context,
 // never from a launcher path plus an ambiguous working-directory heuristic.

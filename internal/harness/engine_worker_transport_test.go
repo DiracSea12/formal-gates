@@ -93,7 +93,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 }
 
 func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -118,7 +118,7 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 }
 
 func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 
 func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
+	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			schema, err := worker.ResultSchema(input)
@@ -312,7 +312,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -354,7 +354,7 @@ func TestNativeApprovedPlanDeltaUsesOriginalSubmittedFacts(t *testing.T) {
 	plan := canaryLocalPlan(false)
 	plan.Reason = "original plan rationale"
 	plan.Batches[0].Risk = "original risk"
-	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v3", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
+	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v4", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)

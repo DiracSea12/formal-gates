@@ -49,7 +49,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4", "engine.repair.verify.v2", "engine.qa.design.v3", "engine.readiness.plan.v3"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v3", "engine.readiness.plan.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -58,7 +58,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 			if handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "issued-candidate"}, VerificationCases: []string{"new"}}
 			}
-			if handler == "engine.readiness.plan.v3" {
+			if handler == "engine.readiness.plan.v4" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			}
@@ -83,7 +83,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v4", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v5", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -96,10 +96,10 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 			if handler == "engine.validation.observation.v2" {
 				input.Validation.Observation = &protocol.ObservationInput{}
 			}
-			if handler == "engine.repair.v4" || handler == "engine.repair.verify.v2" {
+			if handler == "engine.repair.v5" || handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{}
 			}
-			if handler == "engine.repair.v4" {
+			if handler == "engine.repair.v5" {
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 			}
@@ -209,7 +209,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 }
 
 func TestReadinessUsesOneOrdinaryGateChoiceOrder(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}, Gates: []prompts.PromptDefinition{{ID: "quality"}}}
 	material, err := Render(input, catalog)
 	if err != nil {
@@ -287,14 +287,14 @@ func TestMaterialKeepsDevelopmentFeedbackWithoutTransportBindings(t *testing.T) 
 		t.Fatal(err)
 	}
 	result := protocol.WorkerResult{SourceResult: "opaque-source", ActionID: "opaque-action", Provider: "opaque-provider", PayloadDigest: "opaque-payload", Digest: "opaque-digest", Outcome: "FAILED", InterruptionReason: "original execution interruption", InvalidReason: "original result rejection", Validation: &protocol.ValidationResult{Binding: protocol.WorkBinding{WaveID: "opaque-wave"}, Status: "CONTINUE", Development: &protocol.DevelopmentEvidence{Summary: "author text contains actionId and opaque-user-body", RemainingWork: "finish the original behavior", Paths: []string{"app.go"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"criterion": "original evidence"}, Handoff: "original handoff"}}}}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "attempt"
 			input.RequirementDocument.Content = "Confirmed requirement"
 			input.Validation.Development = &protocol.DevelopmentInput{Result: &result, Dependencies: map[string]protocol.WorkerResult{"batch": result}}
-			if handler == "engine.repair.v4" {
+			if handler == "engine.repair.v5" {
 				input.Validation.Repair = &protocol.RepairInput{Result: &result, MemberResults: []protocol.WorkerResult{result}}
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
@@ -376,15 +376,15 @@ func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.RequirementDocument.Content = "Confirmed complete requirement"
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v3" {
+			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v4" {
 				input.Validation = nil
 				action := review.ProductReview
-				if handler == "engine.readiness.plan.v3" {
+				if handler == "engine.readiness.plan.v4" {
 					action = review.StartReadiness
 				}
 				input.Review = &protocol.WorkerReviewInput{Action: action}

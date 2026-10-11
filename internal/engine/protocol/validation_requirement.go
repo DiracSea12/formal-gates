@@ -107,7 +107,7 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development.batch.v4", "engine.repair.v4":
+		case "engine.development.batch.v4", "engine.repair.v5":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
 		case "engine.qa.design.v3", "engine.qa.review.rationale.v2":

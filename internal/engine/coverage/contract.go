@@ -182,9 +182,6 @@ func executionEdgeKey(kind ReviewKind, sourceID, pointID, caseID string) string 
 	return string(kind) + "\x00" + sourceID + "\x00" + pointID + "\x00" + caseID
 }
 
-// AcceptanceManifest is one selected kind's source, point, case, and edge
-// declaration.  A source may occur in multiple manifests; every occurrence is
-// independently reviewed and executed.
 // SharedStep holds reusable preparation/operations; cases still own their oracle.
 type SharedStep struct {
 	Artifacts   []string    `json:"artifacts,omitempty"`
@@ -195,6 +192,9 @@ type SharedStep struct {
 	Operations  []Operation `json:"operations,omitempty"`
 }
 
+// AcceptanceManifest is one selected kind's source, point, case, and edge
+// declaration.  A source may occur in multiple manifests; every occurrence is
+// independently reviewed and executed.
 type AcceptanceManifest struct {
 	SharedSteps []SharedStep      `json:"sharedSteps,omitempty"`
 	Binding     ManifestBinding   `json:"binding"`

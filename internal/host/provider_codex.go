@@ -1,30 +1,13 @@
 package host
 
-import "strings"
-
-// codexAdapter adapts the installed Codex CLI. Codex requires paired start and
-// stop lifecycle events, matching Claude Code and Cursor: an unpaired dispatch
-// verification is REJECTED, with no soft fallback. Only an actually installed
-// Codex binary resolves here; uninstalled/test/canary contexts resolve to the
-// lenient default provider instead (see defaultAdapter), so go test, the
-// portable canary and the workflow test suite still observe UNAVAILABLE without
-// lifecycle events.
+// codexAdapter adapts Codex CLI start/stop lifecycle events and identity.
 func codexAdapter() *Lifecycle {
 	adapter := codexShapeAdapter(Codex)
-	adapter.ExecutableMatches = func(path string) bool {
-		return strings.Contains(NormalizeExecutablePath(path), "/.codex/skills/formal-gates/bin/")
-	}
-	adapter.AgentPrefixes = []string{"codex"}
 	adapter.EnvironmentKeys = []string{"CODEX_HOME", "CODEX_CLI_PATH"}
 	return adapter
 }
 
-// defaultAdapter adapts the uninstalled/default provider derived from a binary
-// that is not installed beneath any host skills path (go test, portable canary,
-// local development builds). It is lenient (required=false): verification is
-// always UNAVAILABLE, never rejecting on missing lifecycle events. This keeps
-// the test and canary verification surface lenient even though the installed
-// Codex provider became required.
+// defaultAdapter uses the Codex event shape for the lenient default provider.
 func defaultAdapter() *Lifecycle {
 	return codexShapeAdapter(Default)
 }

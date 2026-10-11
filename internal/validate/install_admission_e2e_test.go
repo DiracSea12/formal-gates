@@ -398,18 +398,14 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, target := range targets {
-		if err := copyInstallRuntime(source, target.targetPath, true); err != nil {
-			t.Fatal(err)
-		}
+		prepareInstalledRuntimeFixture(t, source, target.targetPath)
 	}
 	codexTargets, err := resolveInstallTargets("codex", "project", project)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range codexTargets {
-		if err := copyInstallRuntime(source, target.targetPath, true); err != nil {
-			t.Fatal(err)
-		}
+		prepareInstalledRuntimeFixture(t, source, target.targetPath)
 	}
 	beforeTarget, err := PackageDigest(targets[0].targetPath)
 	if err != nil {
