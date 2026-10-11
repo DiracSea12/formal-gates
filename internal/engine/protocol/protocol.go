@@ -666,7 +666,7 @@ type ConfirmedRevision struct {
 	ResetRequestID string                     `json:"resetRequestId,omitempty"`
 	RequestID      string                     `json:"requestId,omitempty"`
 	// Reason 是用户决定的理由原文（随确认落账持久化）：carry 留痕据此
-	// 携理由（§7.2.2:4 携原 revision、证据和理由）。
+	// 携理由（§7.2 第 4 项 携原 revision、证据和理由）。
 	Reason        string `json:"reason,omitempty"`
 	StateRevision uint64 `json:"stateRevision"`
 }

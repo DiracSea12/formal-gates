@@ -1896,7 +1896,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	}
 	if _, pending := state.PendingActions[actionID]; !pending {
 		// terminal 对账路径：派发簿记已随任务终态收回，准入按结果类别分层
-		// （§7.2.2:4 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
+		// （§7.2 第 4 项 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
 		// terminal 而失效）：
 		//   - 真实结果（PASS 或携审查证据）仍须在途观察事实回执（SPAWNED，
 		//     或经 lifecycle 对账挂接的 ATTACHED）——其入账要完成步骤与候

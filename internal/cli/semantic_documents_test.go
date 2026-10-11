@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -231,5 +232,79 @@ func TestGateDirectoryDocumentsRetainPublishedRequirementAndMaterialPositions(t 
 		if err != nil || string(actual) != content {
 			t.Fatalf("unselected material changed: %q %v", actual, err)
 		}
+	}
+}
+
+func TestProjectDocumentsExcludeRepositoryMetadataAndPreserveUserFiles(t *testing.T) {
+	const document = "# Requirement and solution\n\n## 需求点\n\n### REQ-001：Output\n\n#### 要求\n\nReturn original input.\n\n#### 验收条件\n\n- AC-001：Original bytes are retained.\n\n#### 来源\n\nUser request.\n\n## 方案\n\nUse the existing owner.\n"
+	for _, gitDirectory := range []bool{true, false} {
+		name := "linked worktree"
+		if gitDirectory {
+			name = "git directory"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			originals := map[string]string{
+				".codex/user-notes.md":   "用户笔记\r\n",
+				".gates/requirements.md": document,
+				"gates/user-material.md": "用户材料\x00\r\n",
+				"ordinary.txt":           "ordinary\r\n",
+				"requirements.md":        document,
+				".svn/entries":           "12\n",
+				".svn/wc.db":             "SQLite format 3\x00",
+				".svn/requirements.md":   document,
+			}
+			if gitDirectory {
+				originals[".git/HEAD"] = "ref: refs/heads/main\n"
+				originals[".git/requirements.md"] = document
+			} else {
+				originals[".git"] = "gitdir: /project/.git/worktrees/work\n"
+			}
+			for path, content := range originals {
+				target := filepath.Join(root, path)
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(target, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errout bytes.Buffer
+			streams := IO{Stdout: &out, Stderr: &errout}
+			for i := 0; i < 2; i++ {
+				for _, listing := range []struct {
+					args []string
+					want []requirementDocumentChoice
+				}{
+					{
+						[]string{"workflow", "start", "--root", root, "--precheck", "--materials"},
+						[]requirementDocumentChoice{{1, ".codex/user-notes.md"}, {2, ".gates/requirements.md"}, {3, "gates/user-material.md"}, {4, "ordinary.txt"}, {5, "requirements.md"}},
+					},
+					{
+						[]string{"requirement", "show", "--root", root},
+						[]requirementDocumentChoice{{1, ".gates/requirements.md"}, {2, "requirements.md"}},
+					},
+				} {
+					out.Reset()
+					errout.Reset()
+					if code := Run("formal-gates", listing.args, streams); code != 0 {
+						t.Fatalf("%v: %d %s", listing.args, code, &errout)
+					}
+					var choices []requirementDocumentChoice
+					if err := json.Unmarshal(out.Bytes(), &choices); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(choices, listing.want) {
+						t.Fatalf("%v: want %+v, got %+v", listing.args, listing.want, choices)
+					}
+				}
+			}
+			for path, content := range originals {
+				actual, err := os.ReadFile(filepath.Join(root, path))
+				if err != nil || string(actual) != content {
+					t.Fatalf("source %s changed: %q %v", path, actual, err)
+				}
+			}
+		})
 	}
 }

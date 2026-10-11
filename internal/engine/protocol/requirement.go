@@ -241,7 +241,7 @@ func seriesInRedoStale(series review.Series) bool {
 	return series.FreshOwed
 }
 
-// ---- 修订屏障的单一处置表（§7.2.2 Phase A） ----
+// ---- 修订屏障的单一处置表（§7.2 第 2 项 Phase A） ----
 
 // errPhaseAQuarantine 是处置表对 WORKER_RESULT 的哨兵：区别于 nil（照常
 // 接纳）与拒绝错误，表示进入持久隔离账。
@@ -307,7 +307,7 @@ func (e *Engine) quarantineWorkerResult(state *State, ev Event, nextRevision uin
 }
 
 // replayQuarantinedResults 在需求决定的屏障解除（最后一个未决 Ask 解决）
-// 的同一事务内逐条原子重分类隔离账（§7.2.2 的恢复侧）：每条记录经与
+// 的同一事务内逐条原子重分类隔离账（§7.2 第 4 项的恢复侧）：每条记录经与
 // Submit 完全相同的接纳核心重放——未勾选 series 的审查证据按 carry 语义
 // 携原 revision 接纳并留痕；顺序门未开的记录回暂存挂起（回执已在账，
 // 开门迁移点补配对）；其余失败经快照恢复只落该条的 obsolete＋留痕（零

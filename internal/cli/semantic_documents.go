@@ -207,6 +207,10 @@ type requirementDocumentChoice struct {
 	Path     string `json:"path"`
 }
 
+func repositoryMetadata(entry os.DirEntry) bool {
+	return entry.Name() == ".git" || entry.IsDir() && entry.Name() == ".svn"
+}
+
 func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 	files, err := validate.ProjectRuntimeFiles(root)
 	if err != nil {
@@ -221,8 +225,14 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 		if err != nil {
 			return err
 		}
+		if repositoryMetadata(entry) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || vcs.RuntimePath(relative) {
+			if vcs.RuntimePath(relative) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -257,8 +267,14 @@ func intakeMaterials(root string) ([]requirementDocumentChoice, error) {
 		if err != nil {
 			return err
 		}
+		if repositoryMetadata(entry) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || vcs.RuntimePath(relative) {
+			if vcs.RuntimePath(relative) {
 				return filepath.SkipDir
 			}
 			return nil

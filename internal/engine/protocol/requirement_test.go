@@ -290,7 +290,7 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 		t.Fatalf("phase = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
 
-	// 未勾重走即续用（carry 授权，§7.2.2:4）：作废产品审旧轮把系列置回
+	// 未勾重走即续用（carry 授权，§7.2 第 4 项）：作废产品审旧轮把系列置回
 	// 未结论（欠轮提案随即签出新一轮），绑已确认 rev-1 的证据照常接纳并
 	// 携原 revision 记账——不因新权威 rev-2 而失格，也无强制重审。
 	invalidateRoundOf(t, engine, "req-p2-invalidate", product)
