@@ -206,7 +206,7 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 				t.Fatal(err)
 			}
 			ref := refs[id]
-			request, _, directory, err := d.f.WorkerExecutionRequest(ref, "")
+			request, _, directory, _, err := d.f.WorkerExecutionRequest(ref, "")
 			if err != nil {
 				t.Fatal(err)
 			}

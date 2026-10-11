@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -148,7 +149,23 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		admission = facade.Admission{RegistryPath: report.Registry, Target: record.Target, Root: project, Provider: "codex", PackageDigest: record.PackageDigest, InstalledTargetIdentity: record.ID, Generation: record.Generation, Lease: record.Lease, Token: record.Token}
 	}
 	c := engineCanary{t: t, doc: []byte(canaryRequirementDocument)}
-	f, _, err := facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: "native-execution", Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
+	var f *facade.Facade
+	if len(installed) > 0 && installed[0] {
+		intake := filepath.Join(t.TempDir(), "intake.json")
+		if err := writeAtomicJSON(intake, c.confirmedIntake()); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomicJSON(filepath.Join(project, ".gates", "config.json"), map[string]any{"capacity": 2}); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "workflow", "start", "--root", project, "--run-id", "native-execution", "--route", "regular", "--vcs", "git", "--intake-receipt", intake, "--machine")
+		if body, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("original installed start: %v %s", err, body)
+		}
+		f, err = facade.Open(project, "native-execution")
+	} else {
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: "native-execution", Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +180,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if ref.ActionID == "" {
 		t.Fatal("fixture did not issue its actual worker")
 	}
-	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +400,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	if resume == "" {
 		t.Fatal("original recovery did not sign a resume")
 	}
-	request, _, directory, err := f.WorkerExecutionRequest(ref, resume)
+	request, _, directory, _, err := f.WorkerExecutionRequest(ref, resume)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +554,7 @@ func TestEngineNativeUnknownOwnerNeverStartsTurn(t *testing.T) {
 
 func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 	f, ref, s, binary := engineNativeFixture(t, true)
-	_, request, directory, err := f.WorkerExecutionRequest(ref, "")
+	_, request, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +790,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if observation == nil || len(observation.Findings) != 1 {
 		t.Fatal("original gate did not issue its actual observation duty", run.ValidationInputs)
 	}
-	request, supervised, directory, err := f.WorkerExecutionRequest(ref, "")
+	request, supervised, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -886,7 +903,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	f, _, s, binary := engineNativeFixture(t, true)
 	ref, input := stageNativeDevelopment(t, f, s)
-	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,6 +948,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries = slices.DeleteFunc(entries, func(entry os.DirEntry) bool { return !entry.IsDir() })
 	if len(entries) != 3 {
 		t.Fatalf("wanted two partials and complete in one action: %d", len(entries))
 	}
@@ -993,7 +1011,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	f, _, s, binary := engineNativeFixture(t, true)
 	ref, input := stageNativeDevelopment(t, f, s)
-	request, _, directory, err := f.WorkerExecutionRequest(ref, "")
+	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1102,6 +1120,14 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("carried consumer: %v %s", err, out.Bytes())
 	}
+	// The requirement Ask returns foreground control while the original job
+	// runs. Its confirmed carry is collected by the same public consumer.
+	collected, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine").CombinedOutput()
+	if err != nil {
+		t.Fatalf("collect original carried job: %v %s", err, collected)
+	}
+	out.Reset()
+	out.Write(collected)
 	var response struct {
 		Boundary string            `json:"boundary"`
 		Run      facade.Run        `json:"run"`
@@ -1117,6 +1143,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries = slices.DeleteFunc(entries, func(entry os.DirEntry) bool { return !entry.IsDir() })
 	if len(entries) != 1 {
 		t.Fatalf("carried live logical duty started another invocation: %d", len(entries))
 	}
@@ -1213,7 +1240,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			}
 			if choice == "resume" {
 				ref := run.WorkerMaterials[intent.Resume.WorkerActionID]
-				request, _, directory, err := f.WorkerExecutionRequest(ref, intent.ActionID)
+				request, _, directory, _, err := f.WorkerExecutionRequest(ref, intent.ActionID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1458,10 +1485,70 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	topology.DevelopmentPlan = &preview.Confirmation
 	decide(f, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
-	s.peer.Mode = "workflow-decision"
+	s.peer.Mode = "workflow-held"
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
+	startJob := func(owner *facade.Facade, material facade.WorkerMaterial) string {
+		t.Helper()
+		request, supervised, directory, _, err := owner.WorkerExecutionRequest(material, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		request["binding"], err = NativeBinding("codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.request, s.directory = request, directory
+		s.save(t)
+		if err := writeAtomicJSON(filepath.Join(directory, "request.json"), supervised); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "harness", "supervise", directory)
+		DetachSupervisor(command)
+		journal, err := os.Create(filepath.Join(directory, "supervisor.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		command.Stderr = journal
+		if err := command.Start(); err != nil {
+			journal.Close()
+			t.Fatal(err)
+		}
+		finished := make(chan error, 1)
+		go func() { err := command.Wait(); journal.Close(); finished <- err }()
+		t.Cleanup(func() {
+			if err := os.WriteFile(filepath.Join(s.config, "release-turn"), nil, 0600); err != nil {
+				t.Error(err)
+			}
+			if err := <-finished; err != nil {
+				t.Error("original supervisor", err)
+			}
+		})
+		return directory
+	}
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var merge facade.WorkerMaterial
+	for id, input := range run.ValidationInputs {
+		if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == "MERGE" {
+			merge = run.WorkerMaterials[id]
+		}
+	}
+	if merge.ActionID == "" {
+		t.Fatal("original independent merge duty was not issued")
+	}
+	mergeDirectory := startJob(f, merge)
+	for {
+		if _, err := NativeStartEvidence("codex", mergeDirectory); err == nil {
+			break
+		} else if _, exitErr := os.Stat(filepath.Join(mergeDirectory, "exit.json")); exitErr == nil {
+			t.Fatal("original merge job ended without its acknowledgement", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	call := func() map[string]any {
 		t.Helper()
 		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
@@ -1496,7 +1583,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	response := call()
 	children := objectOrEmpty(response["children"])
-	if response["boundary"] != "ASK" || len(children) != 2 || nativePeerTurns(t, s) != 1 {
+	if response["boundary"] != "ASK" || len(children) != 2 {
 		t.Logf("original turns=%d parent asks=%s", nativePeerTurns(t, s), textOf(getOf(response["run"], "pendingAsks")))
 		t.Fatalf("children lost their own original route decisions: %s", textOf(response))
 	}
@@ -1504,6 +1591,21 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !NativeJobAlive(mergeDirectory) || nativePeerTurns(t, s) != 1 {
+		t.Fatal("child Ask stopped the original independent parent duty")
+	}
+	if err := os.WriteFile(filepath.Join(s.config, "release-turn"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := NativeJobSource("codex", mergeDirectory); err == nil {
+			break
+		} else if _, exitErr := os.Stat(filepath.Join(mergeDirectory, "exit.json")); exitErr == nil {
+			t.Fatal("original merge job ended without its source", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	call()
 	child, err := facade.Open(s.workspace, run.SliceChildren["core"])
 	if err != nil {
 		t.Fatal(err)
@@ -1530,6 +1632,21 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
+	childRun, err = child.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, material := range childRun.WorkerMaterials {
+		directory := startJob(child, material)
+		for {
+			if _, err := NativeJobSource("codex", directory); err == nil {
+				break
+			} else if _, exitErr := os.Stat(filepath.Join(directory, "exit.json")); exitErr == nil {
+				t.Fatal("original child job ended without its source", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	response = call()
 	children = objectOrEmpty(response["children"])
 	core := objectOrEmpty(children[run.SliceChildren["core"]])
@@ -1557,8 +1674,12 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 		material := childRun.WorkerMaterials[id]
 		actionDir := filepath.Dir(facade.WorkerExecutionDirectory(material, ""))
 		jobs, err := os.ReadDir(actionDir)
-		if err != nil || len(jobs) != 1 {
+		if err != nil {
 			t.Fatal("child original invocation evidence differs", err)
+		}
+		jobs = slices.DeleteFunc(jobs, func(entry os.DirEntry) bool { return !entry.IsDir() })
+		if len(jobs) != 1 {
+			t.Fatal("child original invocation count differs", len(jobs))
 		}
 		directory := filepath.Join(actionDir, jobs[0].Name())
 		var request struct {

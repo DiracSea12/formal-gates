@@ -95,7 +95,7 @@ func TestTaskKey(t *testing.T) {
 			t.Errorf("NewTaskKey(%q, %q) accepted empty node/step", tc.node, tc.step)
 		}
 	}
-	// 封板后审计 H4：段内含 "/" 或 "\" 的键可碰撞（{n,a/b} 与 {n/a,b} 同为
+	// 段内含 "/" 或 "\" 的键可碰撞（{n,a/b} 与 {n/a,b} 同为
 	// n/a/b），构造即拒绝；错误消息说明字符约束。
 	for _, tc := range []struct{ name, node, step, scope string }{
 		{"slash in step", "dev", "im/pl", ""},

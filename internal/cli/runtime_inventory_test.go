@@ -95,7 +95,7 @@ func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testin
 		t.Fatal(err)
 	}
 	for _, material := range run.WorkerMaterials {
-		request, _, directory, err := reopened.WorkerExecutionRequest(material, "")
+		request, _, directory, _, err := reopened.WorkerExecutionRequest(material, "")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -24,60 +24,107 @@ import (
 // the provider's acknowledgement validation without workflow state.
 var NativeStartVerifier func(string, string) (string, error)
 
-// workerExecutionBridge reads jobs claimed under AdmitExecution's native
-// window. Prepared requests without an owner cannot execute after retirement:
-// their original admission still requires the current worker input.
-func workerExecutionBridge(root, runID string) func(protocol.PendingAction, protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+type nativeWorkerBinding struct {
+	Root           string          `json:"root"`
+	RunID          string          `json:"runId"`
+	WorkerMaterial *WorkerMaterial `json:"workerMaterial"`
+	ActionID       string          `json:"actionId"`
+	ResumeActionID string          `json:"resumeActionId"`
+}
+
+type nativeWorkerInvocation struct {
+	directory string
+	request   map[string]any
+	binding   nativeWorkerBinding
+	material  worker.Material
+}
+
+func readNativeWorkerInvocation(root, runID, directory string) (nativeWorkerInvocation, error) {
+	invocation := nativeWorkerInvocation{directory: directory}
+	body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		return invocation, err
+	}
+	if err := json.Unmarshal(body, &invocation.request); err != nil {
+		return invocation, err
+	}
+	binding, err := json.Marshal(invocation.request["engine"])
+	if err != nil {
+		return invocation, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(binding))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&invocation.binding); err != nil {
+		return invocation, err
+	}
+	ref := invocation.binding.WorkerMaterial
+	if ref == nil {
+		return invocation, fmt.Errorf("native worker requires its original material reference")
+	}
+	invocation.material, err = readWorkerMaterial(*ref)
+	if err != nil {
+		return invocation, err
+	}
+	provider := invocation.material.Input.Provider
+	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
+		provider = descriptor.InstallName
+	}
 	stateDir := filepath.Join(root, EngineNamespace, runID)
-	return func(pending protocol.PendingAction, attempt protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
-		entries, err := os.ReadDir(workerActionDirectory(stateDir, pending.ActionID))
-		if os.IsNotExist(err) {
-			return nil, nil
+	workspace := root
+	if invocation.material.Input.Validation != nil && invocation.material.Input.Validation.Workspace != nil {
+		workspace = invocation.material.Input.Validation.Workspace.Path
+	}
+	if !sameExecutionPath(invocation.binding.Root, root) || invocation.binding.RunID != runID || invocation.material.Input.RunID != runID || invocation.request["provider"] != provider || !sameExecutionPath(filepath.Dir(filepath.Dir(ref.Path)), stateDir) || !sameExecutionPath(directory, WorkerExecutionDirectory(*ref, invocation.binding.ResumeActionID)) || invocation.request["prompt"] != invocation.material.Prompt || !sameExecutionPath(fmt.Sprint(invocation.request["workspace"]), workspace) || invocation.request["read_only"] != invocation.material.ReadOnly || !jsonValuesEqual(invocation.request["schema"], invocation.material.ResultSchema) {
+		return invocation, fmt.Errorf("native worker invocation differs from its original run/material/request")
+	}
+	return invocation, nil
+}
+
+func claimedWorkerInvocations(root, runID, actionID, attemptID string) ([]nativeWorkerInvocation, error) {
+	actionDir := workerActionDirectory(filepath.Join(root, EngineNamespace, runID), actionID)
+	entries, err := os.ReadDir(actionDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var invocations []nativeWorkerInvocation
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
 		}
+		directory := filepath.Join(actionDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		invocation, err := readNativeWorkerInvocation(root, runID, directory)
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			directory := filepath.Join(workerActionDirectory(stateDir, pending.ActionID), entry.Name())
-			if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				return nil, err
-			}
-			body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
-			if err != nil {
-				return nil, err
-			}
-			var request struct {
-				Provider string `json:"provider"`
-				Engine   struct {
-					Root           string         `json:"root"`
-					RunID          string         `json:"runId"`
-					WorkerMaterial WorkerMaterial `json:"workerMaterial"`
-					ResumeActionID string         `json:"resumeActionId"`
-				} `json:"engine"`
-			}
-			if err := json.Unmarshal(body, &request); err != nil {
-				return nil, err
-			}
-			ref := request.Engine.WorkerMaterial
-			material, err := readWorkerMaterial(ref)
-			if err != nil {
-				return nil, err
-			}
-			provider := material.Input.Provider
-			if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
-				provider = descriptor.InstallName
-			}
-			if !sameExecutionPath(request.Engine.Root, root) || request.Engine.RunID != runID || ref.ActionID != pending.ActionID || ref.AttemptID != attempt.ID || material.Input.RunID != runID || request.Provider != provider || !sameExecutionPath(filepath.Dir(filepath.Dir(ref.Path)), stateDir) || !sameExecutionPath(directory, WorkerExecutionDirectory(ref, request.Engine.ResumeActionID)) {
-				return nil, fmt.Errorf("native worker owner differs from its original run/action/attempt/material")
-			}
-			fact := &protocol.SpawnReceiptPayload{ActionID: pending.ActionID, Provider: material.Input.Provider, Correlation: directory, Status: protocol.SpawnStatusUnknown}
-			if _, err := os.Stat(filepath.Join(directory, "identity.json")); err == nil && NativeStartVerifier != nil {
-				identity, err := NativeStartVerifier(provider, directory)
+		ref := invocation.binding.WorkerMaterial
+		if ref.ActionID != actionID || ref.AttemptID != attemptID {
+			return nil, fmt.Errorf("native worker owner differs from its original action/attempt")
+		}
+		invocations = append(invocations, invocation)
+	}
+	return invocations, nil
+}
+
+// workerExecutionBridge observes only jobs claimed under AdmitExecution's native window.
+func workerExecutionBridge(root, runID string) func(protocol.PendingAction, protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+	return func(pending protocol.PendingAction, attempt protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+		invocations, err := claimedWorkerInvocations(root, runID, pending.ActionID, attempt.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, invocation := range invocations {
+			provider := invocation.request["provider"].(string)
+			fact := &protocol.SpawnReceiptPayload{ActionID: pending.ActionID, Provider: invocation.material.Input.Provider, Correlation: invocation.directory, Status: protocol.SpawnStatusUnknown}
+			if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); err == nil && NativeStartVerifier != nil {
+				identity, err := NativeStartVerifier(provider, invocation.directory)
 				if err != nil {
 					return nil, err
 				}
@@ -91,6 +138,35 @@ func workerExecutionBridge(root, runID string) func(protocol.PendingAction, prot
 	}
 }
 
+func WorkerResultEventID(material WorkerMaterial, resumeActionID string) protocol.EventID {
+	return protocol.EventID("native-result:" + material.Digest + ":" + resumeActionID)
+}
+func WorkerFailureEventID(material WorkerMaterial, resumeActionID string) protocol.EventID {
+	return protocol.EventID("native-failure:" + material.Digest + ":" + resumeActionID)
+}
+func WorkerSpawnFailureEventID(material WorkerMaterial) protocol.EventID {
+	return protocol.EventID("native-failed-spawn:" + material.Digest)
+}
+
+func workerInvocationDelivered(state *protocol.State, invocation nativeWorkerInvocation) bool {
+	ref := *invocation.binding.WorkerMaterial
+	for _, eventID := range []protocol.EventID{WorkerResultEventID(ref, invocation.binding.ResumeActionID), WorkerFailureEventID(ref, invocation.binding.ResumeActionID), WorkerSpawnFailureEventID(ref)} {
+		acceptance := state.Events[string(eventID)].Acceptance
+		if acceptance.ActionID != ref.ActionID {
+			continue
+		}
+		switch acceptance.Status {
+		case "ACCEPTED", "DUPLICATE", "OBSOLETE_RESULT":
+			return true
+		case "STAGED", protocol.StatusCostPending, "QUARANTINED":
+			// Delivered evidence remains in its original holding projection until
+			// the same acceptance path promotes it; it cannot start another host call.
+			return true
+		}
+	}
+	return false
+}
+
 // AdmitExecution is the native/supervisor command's pre-launch integration.
 // A nil release identifies independent harness work, outside an engine run.
 // A non-nil release holds the existing native window through job ownership.
@@ -102,13 +178,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 		}
 		return nil, nil
 	}
-	var binding struct {
-		Root           string          `json:"root"`
-		RunID          string          `json:"runId"`
-		WorkerMaterial *WorkerMaterial `json:"workerMaterial"`
-		ActionID       string          `json:"actionId"`
-		ResumeActionID string          `json:"resumeActionId"`
-	}
+	var binding nativeWorkerBinding
 	body, err := json.Marshal(ref)
 	if err != nil {
 		return nil, err
@@ -172,12 +242,24 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	if err != nil {
 		return release, err
 	}
+	var value worker.Material
 	if expected != material {
-		return release, fmt.Errorf("worker execution material differs from current issuance")
-	}
-	value, err := readWorkerMaterial(material)
-	if err != nil {
-		return release, err
+		if _, err := os.Stat(filepath.Join(directory, "owner")); err != nil {
+			return release, fmt.Errorf("worker execution material differs from current issuance: %w", err)
+		}
+		original, err := readNativeWorkerInvocation(f.root, f.runID, directory)
+		if err != nil {
+			return release, err
+		}
+		if *original.binding.WorkerMaterial != material || original.binding.ResumeActionID != binding.ResumeActionID || !reflect.DeepEqual(original.material.Input.Pending, input.Pending) || workerInvocationDelivered(snap.State, original) {
+			return release, fmt.Errorf("worker execution differs from its claimed original action/attempt")
+		}
+		value = original.material
+	} else {
+		value, err = readWorkerMaterial(material)
+		if err != nil {
+			return release, err
+		}
 	}
 	if !sameExecutionPath(directory, WorkerExecutionDirectory(material, binding.ResumeActionID)) {
 		return release, fmt.Errorf("worker execution must use its original owned job directory")
@@ -246,15 +328,66 @@ func sameExecutionPath(a, b string) bool {
 
 // WorkerExecutionRequest assembles only the original worker payload. Native
 // host configuration is captured separately by its existing transport owner.
-func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID string) (map[string]any, map[string]any, string, error) {
-	directory := WorkerExecutionDirectory(material, resumeActionID)
-	request := map[string]any{"engine": map[string]any{"root": f.root, "runId": f.runID, "workerMaterial": material, "resumeActionId": resumeActionID}}
-	release, err := AdmitExecution(directory, request)
+func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID string) (map[string]any, map[string]any, string, WorkerMaterial, error) {
+	release, err := f.acquireWriteWindow()
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", WorkerMaterial{}, err
+	}
+	snap, err := f.engine.Load()
+	var input protocol.WorkerInput
+	if err == nil {
+		input, _, err = snap.State.WorkerExecutionIdentity(material.ActionID, material.AttemptID, resumeActionID, f.definition)
+	}
+	var selected *nativeWorkerInvocation
+	if err == nil {
+		var invocations []nativeWorkerInvocation
+		invocations, err = claimedWorkerInvocations(f.root, f.runID, material.ActionID, material.AttemptID)
+		for i := range invocations {
+			invocation := &invocations[i]
+			if invocation.binding.ResumeActionID != resumeActionID || workerInvocationDelivered(snap.State, *invocation) {
+				continue
+			}
+			if selected != nil {
+				err = fmt.Errorf("worker has more than one undelivered original invocation")
+				break
+			}
+			selected = invocation
+		}
+		if err == nil && selected != nil && *selected.binding.WorkerMaterial != material {
+			catalog, loadErr := prompts.LoadPromptCatalog(f.admission.Target)
+			if loadErr != nil {
+				err = loadErr
+			} else {
+				current, renderErr := f.workerMaterial(input, catalog, false)
+				if renderErr != nil {
+					err = renderErr
+				} else if current != material {
+					err = fmt.Errorf("worker request is neither the current issuance nor its original claimed invocation")
+				}
+			}
+		}
 	}
 	release()
-	return request, f.workerSupervisorRequest(directory, request["workspace"].(string), request["engine"]), directory, nil
+	if err != nil {
+		return nil, nil, "", WorkerMaterial{}, err
+	}
+	if selected != nil {
+		material = *selected.binding.WorkerMaterial
+		release, err := AdmitExecution(selected.directory, selected.request)
+		if err != nil {
+			return nil, nil, "", WorkerMaterial{}, err
+		}
+		release()
+		return selected.request, f.workerSupervisorRequest(selected.directory, selected.request["workspace"].(string), selected.request["engine"]), selected.directory, material, nil
+	}
+	directory := WorkerExecutionDirectory(material, resumeActionID)
+	request := map[string]any{"engine": map[string]any{"root": f.root, "runId": f.runID, "workerMaterial": material, "resumeActionId": resumeActionID}}
+	release, err = AdmitExecution(directory, request)
+	if err != nil {
+		return nil, nil, "", WorkerMaterial{}, err
+	}
+	release()
+	return request, f.workerSupervisorRequest(directory, request["workspace"].(string), request["engine"]), directory, material, nil
 }
 
 func (f *Facade) workerSupervisorRequest(directory, workspace string, ref any) map[string]any {
@@ -611,44 +744,15 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	if verifyNative == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native source verification is required")
 	}
-	body, err := os.ReadFile(material.Path)
+	invocation, err := readNativeWorkerInvocation(f.root, f.runID, directory)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
-	sum := sha256.Sum256(body)
-	if material.Digest != "sha256:"+hex.EncodeToString(sum[:]) {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("worker material proof differs")
+	if *invocation.binding.WorkerMaterial != material {
+		return protocol.Acceptance{}, Run{}, fmt.Errorf("native result differs from its original material reference")
 	}
-	var value worker.Material
-	if err := json.Unmarshal(body, &value); err != nil {
-		return protocol.Acceptance{}, Run{}, err
-	}
-	if value.Input.Pending.ActionID != material.ActionID || value.Input.Pending.AttemptID != material.AttemptID || value.Input.RunID != f.runID {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("worker material identity differs from its issued reference or run")
-	}
-	provider := value.Input.Provider
-	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
-		provider = descriptor.InstallName
-	}
-	requestBytes, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
-	if err != nil {
-		return protocol.Acceptance{}, Run{}, err
-	}
-	var request struct {
-		Prompt    string `json:"prompt"`
-		Workspace string `json:"workspace"`
-		ReadOnly  bool   `json:"read_only"`
-	}
-	if err := json.Unmarshal(requestBytes, &request); err != nil {
-		return protocol.Acceptance{}, Run{}, err
-	}
-	workspace := f.root
-	if value.Input.Validation != nil && value.Input.Validation.Workspace != nil {
-		workspace = value.Input.Validation.Workspace.Path
-	}
-	if request.Prompt != value.Prompt || filepath.Clean(request.Workspace) != filepath.Clean(workspace) || request.ReadOnly != value.ReadOnly {
-		return protocol.Acceptance{}, Run{}, fmt.Errorf("native invocation differs from issued worker material")
-	}
+	value := invocation.material
+	provider := invocation.request["provider"].(string)
 	evidence, err := verifyNative(provider, directory, source)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
@@ -657,7 +761,7 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("native result session proof is missing")
 	}
 	var paths []string
-	if !request.ReadOnly {
+	if !value.ReadOnly {
 		facts, err := json.Marshal(source["effects"])
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err

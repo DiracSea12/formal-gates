@@ -714,7 +714,11 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 	if len(locationFacts) > 0 {
 		facts = locationFacts[0]
 	}
-	schema, err := completedSchema(input)
+	target, err := semanticRole(input)
+	if err != nil {
+		return decodedResult{}, "", err
+	}
+	schema, err := completedSchema(input, target)
 	if err != nil {
 		return decodedResult{}, "", err
 	}
@@ -743,7 +747,12 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		if strings.TrimSpace(text) == "" {
 			return decodedResult{}, "", fmt.Errorf("interruption requires an actual reason")
 		}
-		if input.Handler == "engine.qa.execution.v3" && input.Validation != nil {
+		if _, comparison := target.(*ExecutionJudgments); comparison {
+			for _, name := range []string{"records", "findings"} {
+				if bytes.Equal(bytes.TrimSpace(fields[name]), []byte("null")) {
+					return decodedResult{}, "", fmt.Errorf("interruption field must be an array: %s", name)
+				}
+			}
 			var partial ExecutionInterruption
 			if err := decodeObject(raw, &partial); err != nil {
 				return decodedResult{}, "", err
@@ -755,10 +764,6 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 			return decodedResult{}, "", fmt.Errorf("interruption cannot contain completed role evidence")
 		}
 		return decodedResult{}, text, nil
-	}
-	target, err := semanticRole(input)
-	if err != nil {
-		return decodedResult{}, "", err
 	}
 	var result decodedResult
 	if input.Review != nil {

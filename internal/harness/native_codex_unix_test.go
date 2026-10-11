@@ -850,7 +850,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	if resume == "" {
 		t.Fatal("original resume was not signed")
 	}
-	request, _, directory, err := f.WorkerExecutionRequest(ref, resume)
+	request, _, directory, _, err := f.WorkerExecutionRequest(ref, resume)
 	if err != nil {
 		t.Fatal(err)
 	}

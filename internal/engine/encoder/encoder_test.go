@@ -222,10 +222,10 @@ func TestDecodeRejectsEnvelopeAndCoherenceTampering(t *testing.T) {
 	}
 }
 
-// TestDecodeSecondLineRejects：decode 二次防线（封板后审计 H3）——durable
+// TestDecodeSecondLineRejects：decode 二次防线：durable
 // payload 缺 retry 键不得静默归一为零值（零值 re-encode 会补写
 // "retry":{"maxAttempts":0} 改写制品字节）；重复 step id、重复 ordinal、
-// 悬空 dependency 的制品一律拒绝。合法制品的 round-trip 不回归由
+// 悬空 dependency 的制品一律拒绝。合法制品的 round-trip 由
 // TestEncodeDecodeRoundTrip/TestCheckedInArtifactRoundTrip 覆盖。
 func TestDecodeSecondLineRejects(t *testing.T) {
 	data := encodeWorkflow(t)

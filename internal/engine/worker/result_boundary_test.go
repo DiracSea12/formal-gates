@@ -105,3 +105,67 @@ func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T
 		t.Fatal("unknown result accepted without native facts", err)
 	}
 }
+
+func TestQAInterruptionFieldsFollowIssuedDuty(t *testing.T) {
+	for _, commandDuty := range []bool{false, true} {
+		input := semanticInput()
+		input.Handler = "engine.qa.execution.v3"
+		if commandDuty {
+			input.Validation.CommandCases = []string{"approved-case"}
+		}
+		for _, restored := range []bool{false, true} {
+			issued := input
+			if restored {
+				raw, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(raw, &issued); err != nil {
+					t.Fatal(err)
+				}
+				issued.Validation.Interruption = &protocol.RecoveryRecord{}
+			}
+			schema, err := ResultSchema(issued)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := schema["anyOf"].([]any)[1].(map[string]any)["properties"].(map[string]any)
+			for _, name := range []string{"records", "findings"} {
+				field, present := fields[name]
+				if present == commandDuty || present && field == nil {
+					t.Fatalf("command duty=%t restored=%t: invalid interruption field %s: %#v", commandDuty, restored, name, field)
+				}
+			}
+			result := decodeSemantic(t, issued, Interruption{InterruptionReason: "The original tool is unavailable"})
+			if result.Outcome != protocol.OutcomeRuntimeError || result.Validation != nil {
+				t.Fatalf("reason-only interruption became completed evidence: %+v", result)
+			}
+			for _, raw := range []string{
+				`{"interruptionReason":"The original tool is unavailable","records":[]}`,
+				`{"interruptionReason":"The original tool is unavailable","findings":[]}`,
+			} {
+				_, _, err := decodeRoleBody(issued, []byte(raw))
+				if commandDuty && err == nil || !commandDuty && err != nil {
+					t.Fatalf("command duty=%t restored=%t: interruption %s: %v", commandDuty, restored, raw, err)
+				}
+			}
+			for _, raw := range []string{
+				`{"interruptionReason":"The original tool is unavailable","records":null}`,
+				`{"interruptionReason":"The original tool is unavailable","findings":null}`,
+			} {
+				if _, _, err := decodeRoleBody(issued, []byte(raw)); err == nil {
+					t.Fatalf("inability accepted a top-level evidence placeholder: %s", raw)
+				}
+			}
+			if !commandDuty {
+				partial, reason, err := decodeRoleBody(issued, []byte(`{"interruptionReason":"The original tool is unavailable","records":[null]}`))
+				if err != nil || reason == "" || partial.Validation == nil || len(partial.Validation.Execution.Records) != 1 || partial.Validation.Execution.Records[0] != nil {
+					t.Fatalf("uncompared record slot changed: %+v %q %v", partial, reason, err)
+				}
+			}
+			if _, _, err := decodeRoleBody(issued, []byte(`{"interruptionReason":"The original tool is unavailable","commands":[]}`)); err == nil {
+				t.Fatal("completed invocation mixed with interruption")
+			}
+		}
+	}
+}

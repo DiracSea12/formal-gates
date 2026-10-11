@@ -124,7 +124,7 @@ func TestGraphRejects(t *testing.T) {
 			mustLocal(header("fan.join", "fan", "fan.s1"), ioWith("fan.s1"), "engine.fan.join"),
 		}
 	}
-	// 封板后审计 H1 复现：join 步 == 并行步自身，且 split 的依赖恰为
+	// join 步 == 并行步自身，且 split 的依赖恰为
 	// children——joinDeps==children 自指使覆盖/封闭检查全部通过（constructor
 	// 已拒该组合，绕过构造的原始结构体由 compiler 二次防线拒绝）。
 	selfJoin := func() []authoring.Step {
@@ -139,7 +139,7 @@ func TestGraphRejects(t *testing.T) {
 			},
 		}
 	}
-	// 封板后审计 H2：两个并行组共享同 children+同 join——每个组各自的
+	// 两个并行组共享同 children+同 join——每个组各自的
 	// 覆盖/封闭检查都通过，唯一缺陷是归属歧义，由归属排他预检拒绝。
 	sharedChildren := func() []authoring.Step {
 		p := authoring.ParallelSpec{
@@ -163,8 +163,7 @@ func TestGraphRejects(t *testing.T) {
 			mustLocal(header("fan.join", "fan", "fan.a", "fan.b"), ioWith("fan.a", "fan.b"), "engine.fan.join"),
 		}
 	}
-	// H2 变体：children 不同但 join 步共享——join 归属歧义（无归属预检时
-	// 只会以误导性的 fan-out 覆盖错误暴露）。
+	// children 不同但 join 步共享时，仍须拒绝归属歧义。
 	sharedJoin := func() []authoring.Step {
 		mk := func(id, dep string) authoring.Step {
 			return mustLocal(header(id, "fan", dep), ioWith(dep), "engine.fan.slice")

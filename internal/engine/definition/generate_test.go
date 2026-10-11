@@ -95,7 +95,7 @@ func TestGenerateDeterministic(t *testing.T) {
 	}
 }
 
-// TestWriteGeneratedAtomic（封板后审计 H5）：writeGenerated 必须以
+// TestWriteGeneratedAtomic：writeGenerated 必须以
 // temp+rename 原子替换——并发读者只能观察到完整的旧字节或完整的新字节，
 // 不存在撕裂中间态；不得残留临时文件，权限保持 0644。字节内容与直写
 // 逐字节相同由 TestGenerateFreshness 对 checked-in 交付物的零 diff 保证。

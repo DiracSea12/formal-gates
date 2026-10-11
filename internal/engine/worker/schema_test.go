@@ -622,7 +622,7 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 		t.Fatal("model owns derived execution summaries")
 	}
 	records := fields["records"].(map[string]any)
-	if len(records["prefixItems"].([]any)) != 0 || records["items"] != false {
+	if _, present := records["prefixItems"]; present || records["items"] != false || records["minItems"] != 0 || records["maxItems"] != 0 {
 		t.Fatal("completed judgments were requested again")
 	}
 	body := decodeSemantic(t, input, ExecutionJudgments{Execution: Execution{Records: []*Observation{}}}).Validation
@@ -635,5 +635,22 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatal("render changed the issued input")
+	}
+}
+
+func TestOrderedSchemaPreservesExactEmptyAndNonemptyDuties(t *testing.T) {
+	for _, items := range [][]any{nil, {}, {map[string]any{"type": "string"}}} {
+		schema := orderedSchema(items)
+		if schema["type"] != "array" || schema["items"] != false || schema["minItems"] != len(items) || schema["maxItems"] != len(items) {
+			t.Fatalf("ordered duty bounds changed: %#v", schema)
+		}
+		prefix, present := schema["prefixItems"]
+		if len(items) == 0 {
+			if present {
+				t.Fatalf("empty duty emitted prefixItems: %#v", prefix)
+			}
+		} else if !present || !reflect.DeepEqual(prefix, items) {
+			t.Fatalf("ordered duty items changed: %#v", prefix)
+		}
 	}
 }

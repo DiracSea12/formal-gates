@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"formal-gates/internal/coordination"
@@ -49,13 +50,12 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
-	defer stop()
 	unlease, err := coordination.AcquirePath(filepath.Join(root, facade.EngineNamespace, runID, "executor.lock"), "workflow consumer")
 	if err != nil {
 		return result, err
 	}
 	defer unlease()
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
 	result.Blocked = map[string]string{}
 	type completion struct {
 		key, action string
@@ -63,13 +63,32 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 		child       *workflowConsumption
 	}
 	done := make(chan completion, 16)
+	var waits sync.WaitGroup
 	active := map[string]bool{}
 	advance := true
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	defer func() {
+		stop()
+		waits.Wait()
 		if latest, showErr := f.Show(); showErr == nil {
 			result.Run = latest
+		}
+		for id, child := range result.Children {
+			owner, showErr := facade.Open(root, id)
+			if showErr == nil {
+				child.Run, showErr = owner.Show()
+			}
+			if showErr != nil {
+				if err == nil {
+					err = showErr
+				}
+				continue
+			}
+			if len(child.Run.PendingAsks) != 0 {
+				child.Boundary = string(decision.KindAsk)
+			}
+			result.Children[id] = child
 		}
 		result.Progress.Issued = len(result.Run.PendingActions)
 		result.Progress.Running = len(active)
@@ -79,10 +98,6 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 		}
 	}()
 	for {
-		if err := ctx.Err(); err != nil {
-			result.Boundary = "INTERRUPTED"
-			return result, err
-		}
 		var run facade.Run
 		var driveErr error
 		if advance {
@@ -107,10 +122,6 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 			}
 			sort.Strings(childIDs)
 			for _, id := range childIDs {
-				key := "child:" + id
-				if active[key] {
-					continue
-				}
 				child, err := facade.Open(root, id)
 				if err != nil {
 					return result, err
@@ -124,16 +135,41 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 				}
 				observed := result.Children[id]
 				observed.Run = current
+				if len(current.PendingAsks) != 0 {
+					observed.Boundary = string(decision.KindAsk)
+				}
 				result.Children[id] = observed
-				if current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 || observed.Boundary == "BLOCKED" {
+			}
+			if len(run.PendingAsks) != 0 || run.Next.Kind == decision.KindAsk {
+				stop()
+			}
+			for _, child := range result.Children {
+				if len(child.Run.PendingAsks) != 0 {
+					stop()
+				}
+			}
+			for _, id := range childIDs {
+				key := "child:" + id
+				observed := result.Children[id]
+				current := observed.Run
+				if active[key] || current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 && len(current.WorkerMaterials) == 0 || observed.Boundary == "BLOCKED" {
 					continue
 				}
 				active[key] = true
+				waits.Add(1)
 				go func() {
+					defer waits.Done()
 					childStreams := streams
 					childStreams.Context = ctx
-					consumed, err := consumeWorkflow(childStreams, child, root, id)
-					done <- completion{key: key, action: id, err: err, child: &consumed}
+					child, err := facade.Open(root, id)
+					var consumed workflowConsumption
+					if err == nil {
+						consumed, err = consumeWorkflow(childStreams, child, root, id)
+					}
+					select {
+					case done <- completion{key: key, action: id, err: err, child: &consumed}:
+					case <-ctx.Done():
+					}
 				}()
 			}
 			resumes := map[string]protocol.HostActionIntent{}
@@ -174,10 +210,25 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 					continue
 				}
 				active[key] = true
+				waits.Add(1)
 				go func() {
+					defer waits.Done()
 					executionErr := executeWorkflowWorker(ctx, f, ref, resume)
-					done <- completion{key: key, action: id, err: executionErr}
+					select {
+					case done <- completion{key: key, action: id, err: executionErr}:
+					case <-ctx.Done():
+					}
 				}()
+			}
+			if len(run.PendingAsks) != 0 || run.Next.Kind == decision.KindAsk {
+				result.Boundary = string(decision.KindAsk)
+				return result, nil
+			}
+			for _, child := range result.Children {
+				if len(child.Run.PendingAsks) != 0 {
+					result.Boundary = string(decision.KindAsk)
+					return result, nil
+				}
 			}
 			if len(active) == 0 {
 				if len(result.Blocked) > 0 {
@@ -185,10 +236,6 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 					return result, nil
 				}
 				for _, child := range result.Children {
-					if len(child.Run.PendingAsks) != 0 {
-						result.Boundary = string(decision.KindAsk)
-						return result, nil
-					}
 					if child.Boundary == "BLOCKED" {
 						result.Boundary = "BLOCKED"
 						return result, nil
@@ -199,10 +246,6 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 				} else if requested {
 					advance = true
 					continue
-				}
-				if run.Next.Kind == decision.KindAsk {
-					result.Boundary = string(run.Next.Kind)
-					return result, nil
 				}
 				if run.Next.Kind == decision.KindOperator && !checksPending {
 					result.Boundary = "BLOCKED"
@@ -216,6 +259,8 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 		}
 		select {
 		case <-ctx.Done():
+			result.Boundary = "INTERRUPTED"
+			return result, ctx.Err()
 		case <-ticker.C:
 			latest, showErr := f.Show()
 			if showErr != nil {
@@ -244,13 +289,17 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 }
 
 func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) error {
-	request, supervised, directory, err := f.WorkerExecutionRequest(ref, resume.ActionID)
+	request, supervised, directory, original, err := f.WorkerExecutionRequest(ref, resume.ActionID)
 	if err != nil {
 		return err
 	}
+	ref = original
 	provider := request["provider"].(string)
 	var finished <-chan error
 	if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		run, err := f.Show()
 		if err != nil {
 			return err
@@ -295,9 +344,6 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 	defer ticker.Stop()
 	started := false
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		source, sourceErr := harness.NativeJobSource(provider, directory)
 		if sourceErr == nil {
 			return acceptWorkflowWorker(f, ref, resume, directory, source)
@@ -322,7 +368,14 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 			return acceptWorkflowFailure(f, ref, resume, directory, request)
 		}
 		if _, err := os.Stat(filepath.Join(directory, "owner")); err == nil && finished == nil && !harness.NativeJobAlive(directory) {
+			// Completion can land between the receipt read and process observation.
+			if err := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt); err == nil {
+				continue
+			}
 			return fmt.Errorf("native invocation is UNKNOWN; original job %s needs observation: %w", directory, sourceErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -372,7 +425,7 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 		return err
 	}
 
-	_, _, err = f.SubmitWorkerResult(protocol.EventID("native-result:"+key), ref, directory, source, harness.NativeWorkerResultEvidence)
+	_, _, err = f.SubmitWorkerResult(facade.WorkerResultEventID(ref, resume.ActionID), ref, directory, source, harness.NativeWorkerResultEvidence)
 	return err
 }
 
@@ -407,7 +460,7 @@ func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume p
 	}
 	provider := original.Input.Provider
 	if nativeIdentity == "" {
-		event, err := protocol.NewSpawnReceiptWithFailureClass(protocol.EventID("native-failed-spawn:"+ref.Digest), ref.ActionID, provider, directory, protocol.SpawnStatusFailed, failure.Class)
+		event, err := protocol.NewSpawnReceiptWithFailureClass(facade.WorkerSpawnFailureEventID(ref), ref.ActionID, provider, directory, protocol.SpawnStatusFailed, failure.Class)
 		if err != nil {
 			return err
 		}
@@ -434,7 +487,7 @@ func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume p
 	if _, _, err := f.Submit(stop); err != nil {
 		return err
 	}
-	event, err := protocol.NewWorkerResultEvent(protocol.EventID("native-failure:"+ref.Digest+":"+resume.ActionID), ref.ActionID, provider, protocol.OutcomeRuntimeError, digest, failure.Class)
+	event, err := protocol.NewWorkerResultEvent(facade.WorkerFailureEventID(ref, resume.ActionID), ref.ActionID, provider, protocol.OutcomeRuntimeError, digest, failure.Class)
 	if err != nil {
 		return err
 	}

@@ -139,10 +139,9 @@ func checkReachable(entry authoring.NodeID, steps []CompiledStep) error {
 
 // checkParallelGroups 校验并行组图不变量：
 //   - join 必须是组外分立步骤：join 步 == 并行步自身时 join 依赖集合与
-//     children 自指重合，fan-out 覆盖与分支封闭检查全部被绕过（封板后审计
-//     H1；constructor 主拦，这里对绕过构造的原始结构体二次防线复核）；
+//     children 自指重合；原始结构体也必须通过组外 join 检查；
 //   - 归属排他：同一 child 或同一 join step 不得被多个并行组声明，否则
-//     调度归属歧义（封板后审计 H2）；
+//     调度归属歧义；
 //   - fan-out 锚点依赖存在（并行组必须挂在已完成步骤后）；
 //   - join 目标不得同时是 children 成员；
 //   - join 依赖集合与 children 集合精确相等——join 覆盖完整 fan-out，

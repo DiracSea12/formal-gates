@@ -55,7 +55,7 @@ func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
 			if err != nil || selected != ref {
 				t.Fatal("selected rendering differs from original material reference", selected, err)
 			}
-			request, _, directory, err := owner.WorkerExecutionRequest(ref, "")
+			request, _, directory, _, err := owner.WorkerExecutionRequest(ref, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -236,7 +236,10 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if _, _, err := f.Submit(spawn); err != nil {
 				t.Fatal(err)
 			}
-			directory := t.TempDir()
+			directory := WorkerExecutionDirectory(ref, "")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
 			session := "native-session-different-from-dispatch"
 			payload := worker.Review{Findings: []worker.Finding{}, Verification: []string{}}
 			for _, key := range review.RequiredVerificationChecks() {
@@ -246,7 +249,6 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw := append([]byte("\n"), parsed...)
 			write := func(name string, value any) {
 				t.Helper()
 				body, err := json.Marshal(value)
@@ -257,19 +259,32 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			write("native-request.json", map[string]any{"prompt": material.Prompt, "workspace": f.root, "read_only": material.ReadOnly})
-			write("native-source.json", map[string]any{"sessionId": session})
-			if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), nil, 0600); err != nil {
+			write("native-request.json", map[string]any{"provider": "zcode", "prompt": material.Prompt, "workspace": f.root, "read_only": material.ReadOnly, "schema": material.ResultSchema, "engine": map[string]any{"root": f.root, "runId": f.runID, "workerMaterial": ref, "resumeActionId": ""}})
+			wire, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "submit_semantics", "arguments": payload}})
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), raw, 0600); err != nil {
+			var reply, toolErrors bytes.Buffer
+			if code := harness.NativeTools(directory, bytes.NewReader(wire), &reply, &toolErrors, harness.ExecutionServices{Admit: AdmitExecution}); code != 0 {
+				t.Fatalf("semantic tool failed %d: %s %s", code, &reply, &toolErrors)
+			}
+			var response struct {
+				Result struct {
+					IsError bool `json:"isError"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(reply.Bytes(), &response); err != nil || response.Result.IsError {
+				t.Fatalf("semantic tool rejected original input: %s %v", &reply, err)
+			}
+			write("native-source.json", map[string]any{"sessionId": session})
+			if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), nil, 0600); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(directory, "answer.json"), parsed, 0600); err != nil {
 				t.Fatal(err)
 			}
 			files := map[string]any{}
-			for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"} {
+			for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.json", "native-tool-calls.jsonl", "native-tool-context.json"} {
 				proof, refusal := harness.FileProof(filepath.Join(directory, name))
 				if refusal != "" {
 					t.Fatal(refusal)
@@ -332,8 +347,11 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			hash := sha256.Sum256(raw)
-			want := "sha256:" + hex.EncodeToString(hash[:])
+			proof, refusal := harness.FileProof(filepath.Join(directory, "native-tool-calls.jsonl"))
+			if refusal != "" {
+				t.Fatal(refusal)
+			}
+			want := "sha256:" + proof.SHA256
 			if boundary == "replaced" {
 				if accepted.Status != "OBSOLETE_RESULT" {
 					t.Fatalf("original attempt result bypassed core obsolete admission: %+v", accepted)

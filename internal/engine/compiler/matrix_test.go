@@ -123,7 +123,7 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Reason: authoring.ReasonSemanticJudgment, Timeout: -time.Second}},
 			"timeout must be >= 0"},
 		// worker result 合同的二次防线：绕过 constructor 的原始结构体缺
-		// postconditions 必拒（constructor 主拦项复核，封板后补漏）。
+		// postconditions 必须拒绝。
 		{"agent without postconditions", []authoring.Step{authoring.AgentStep{
 			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: time.Second}},
@@ -235,8 +235,7 @@ func TestMissingEngineAdapterRouting(t *testing.T) {
 	if !strings.Contains(err.Error(), "MISSING_ENGINE_ADAPTER") {
 		t.Fatalf("error must name the MISSING_ENGINE_ADAPTER marker: %q", err.Error())
 	}
-	// 封板后审计 QA-B13：正常模式的拒绝消息必须携带 diagnostic compile
-	// 提示（resolveID 直返路径可达，不再是死代码拼接）。
+	// 正常模式的拒绝消息必须携带 diagnostic compile 提示。
 	if !strings.Contains(err.Error(), "use diagnostic compile") {
 		t.Fatalf("normal-mode BLOCKED_BUG error must carry the diagnostic-compile hint: %q", err.Error())
 	}

@@ -14,7 +14,7 @@ import (
 // run loading/admission and delegates all allowance and digest work to production
 // guard.Calculate. Success is a non-authoritative preview, not runtime enforcement.
 // runtimeIntegration reports the authoritative engine integration state exported
-// by the engine (stage 4: the issuance funnel enforces guard in-transaction).
+// by the engine; the issuance funnel enforces guard in-transaction.
 func runWorkflowGuardPreview(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow guard-preview", streams)
 	input := fs.String("input", "", "basis JSON file (non-authoritative, read-only calculation)")

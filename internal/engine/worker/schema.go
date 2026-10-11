@@ -15,12 +15,16 @@ import (
 // ResultSchema contains the role's semantic body and a closed inability
 // alternative. Issued identities and completed transport outcome are not model fields.
 func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
-	body, err := completedSchema(input)
+	role, err := semanticRole(input)
+	if err != nil {
+		return nil, err
+	}
+	body, err := completedSchema(input, role)
 	if err != nil {
 		return nil, err
 	}
 	interruption := fixedObject(map[string]any{"interruptionReason": map[string]any{"type": "string", "minLength": 1}}, []string{"interruptionReason"})
-	if input.Handler == "engine.qa.execution.v3" {
+	if _, comparison := role.(*ExecutionJudgments); comparison {
 		fields := interruption["properties"].(map[string]any)
 		fields["records"] = body["properties"].(map[string]any)["records"]
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
@@ -65,11 +69,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 	return map[string]any{"type": "object", "anyOf": alternatives}, nil
 }
 
-func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
-	target, err := semanticRole(input)
-	if err != nil {
-		return nil, err
-	}
+func completedSchema(input protocol.WorkerInput, target any) (map[string]any, error) {
 	body, err := resultTypeSchema(reflect.TypeOf(target))
 	if err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			if name == "suggestions" && len(items) == 0 {
 				continue
 			}
-			fields[name] = map[string]any{"type": "array", "prefixItems": items, "items": false, "minItems": len(items), "maxItems": len(items)}
+			fields[name] = orderedSchema(items)
 		}
 		return body, nil
 	}
@@ -308,7 +308,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				}
 				cases = append(cases, item)
 			}
-			fields["cases"] = map[string]any{"type": "array", "prefixItems": cases, "items": false, "minItems": len(cases), "maxItems": len(cases)}
+			fields["cases"] = orderedSchema(cases)
 			shared := []any{}
 			for _, step := range revisionSharedSteps(input.Validation) {
 				item, err := resultTypeSchema(reflect.TypeOf(SharedStepChange{}))
@@ -323,7 +323,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				}
 				shared = append(shared, item)
 			}
-			fields["sharedSteps"] = map[string]any{"type": "array", "prefixItems": shared, "items": false, "minItems": len(shared), "maxItems": len(shared)}
+			fields["sharedSteps"] = orderedSchema(shared)
 			return body, nil
 		}
 		cases, shared := [][]coverage.Operation{}, [][]coverage.Operation{}
@@ -584,7 +584,11 @@ func decisionSchema(ids []string, inherited []coverage.ReviewDecision, decision 
 	return orderedSchema(items)
 }
 func orderedSchema(items []any) map[string]any {
-	return map[string]any{"type": "array", "prefixItems": items, "items": false, "minItems": len(items), "maxItems": len(items)}
+	schema := map[string]any{"type": "array", "items": false, "minItems": len(items), "maxItems": len(items)}
+	if len(items) > 0 {
+		schema["prefixItems"] = items
+	}
+	return schema
 }
 func comparisonSchema(ids []string, item map[string]any, partial bool) map[string]any {
 	items := []any{}

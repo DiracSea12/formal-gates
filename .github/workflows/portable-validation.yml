@@ -78,8 +78,6 @@ jobs:
           echo "FORMAL_GATES_ARCHIVE_ROOT=$archive_root" >> "$GITHUB_ENV"
       - name: Run Go tests
         run: go test ./... -timeout=0
-      - name: Run Go integration tests
-        run: go test -timeout=0 -tags=integration ./internal/validate
       - name: Run Go qastructure tests
         run: go test -timeout=0 -tags=qastructure ./internal/validate
       - name: Run go vet

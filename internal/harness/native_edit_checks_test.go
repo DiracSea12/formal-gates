@@ -478,7 +478,7 @@ func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	if len(refs) != 2 {
 		t.Fatalf("expected independent original developers: %v", run.ValidationInputs)
 	}
-	request, _, directory, err := f.WorkerExecutionRequest(refs[0], "")
+	request, _, directory, _, err := f.WorkerExecutionRequest(refs[0], "")
 	if err != nil {
 		t.Fatal(err)
 	}
