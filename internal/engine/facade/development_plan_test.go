@@ -219,7 +219,7 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			}
 			d.submit(ev)
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.development.batch.v2" {
+				if input.Handler == "engine.development.batch.v3" {
 					t.Fatal("new contract executed before plan confirmation")
 				}
 			}
@@ -301,13 +301,13 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 				t.Fatal("repair allowance detached from checkpoint obligation")
 			}
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v2" || input.Development != nil {
+				if input.Handler == "engine.repair.v3" || input.Development != nil {
 					t.Fatal("checkpoint bypassed finite repair decision")
 				}
 			}
 			break
 		}
-		repair, ri := d.action("engine.repair.v2")
+		repair, ri := d.action("engine.repair.v3")
 		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
@@ -326,7 +326,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	repair, ri := d.action("engine.repair.v2")
+	repair, ri := d.action("engine.repair.v3")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()
@@ -528,7 +528,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	}
 	d.submit(event)
 	d.drive()
-	id, in := d.action("engine.development.batch.v2")
+	id, in := d.action("engine.development.batch.v3")
 	d.receipt(id)
 	evidence := batchEvidence(in)
 	delete(evidence.Completion.DoD, "input-contract")
@@ -536,7 +536,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	if a.Status != "REJECTED_INVALID_RESULT" {
 		t.Fatal("partial DoD completed batch")
 	}
-	retry, ri := d.action("engine.development.batch.v2")
+	retry, ri := d.action("engine.development.batch.v3")
 	if ri.Binding.Task != in.Binding.Task || d.run.Attempts[in.Binding.Task].Attempts != 1 {
 		t.Fatal("DoD rejection escaped original finite duty")
 	}

@@ -320,7 +320,7 @@ func seriesRevision(set Set, action Action) int {
 func TestFindingCorrectionRequiresTheCurrentRequirementRevision(t *testing.T) {
 	runID := "run-stale-revision"
 	set := NewSet()
-	set, candidate := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-old-revision", RequirementRevision: "old-rev"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	set, candidate := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-old-revision", RequirementRevision: "old-rev"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Category: "acceptance-entry", Message: "readiness concern"}}})
 	input := CorrectionInput{
 		Action: StartReadiness, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision,
 		FindingID: candidate.Findings[0].ID, Decision: "DISMISS", Reason: "late user correction", Source: "user", UserAuthorized: true,
@@ -347,7 +347,7 @@ func TestUpstreamBlockingStalesStartReadinessOneWay(t *testing.T) {
 	runID := "run-cascade"
 	set := NewSet()
 	set, productCandidate := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-product", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory defect"}}})
-	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Category: "acceptance-entry", Message: "readiness concern"}}})
 	// PASS→PASS 的纠正不级联
 	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
 		Action: ProductReview, DispatchID: productCandidate.DispatchID, ResultDigest: productCandidate.ResultDigest, RequirementRevision: productCandidate.RequirementRevision,
@@ -410,7 +410,7 @@ func TestUpstreamVoidHoldsPendingUntilANewRoundRebuildsIt(t *testing.T) {
 	runID := "run-upstream-void"
 	set := NewSet()
 	set, product := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-product", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory defect"}}})
-	set, readiness := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	set, readiness := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Category: "acceptance-entry", Message: "readiness concern"}}})
 	if series := mustSeries(t, set, StartReadiness); series.Effective.Status != "PASS" || series.UpstreamVoid {
 		t.Fatalf("advisory-only readiness must start effective PASS without void: %#v", series.Effective)
 	}

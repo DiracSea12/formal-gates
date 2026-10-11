@@ -48,7 +48,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			approved := approvedReview(m)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 			d.drive()
-			id, in = d.action("engine.development.batch.v2")
+			id, in = d.action("engine.development.batch.v3")
 			app := "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"
 			for name, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": app} {
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, name), []byte(body), 0644); err != nil {
@@ -86,7 +86,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid", Module: "command", RootCause: "diagnostic", Consequence: "wrong output", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "command", Severity: "limited output", Causality: "diagnostic", Reproduction: "normal command", Classification: "implementation"}, Reason: "observed command output"}
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.drive()
-			id, in = d.action("engine.repair.v2")
+			id, in = d.action("engine.repair.v3")
 			if in.Development != nil {
 				t.Fatal("small repair unexpectedly requires a batch plan")
 			}

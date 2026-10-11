@@ -16,7 +16,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality"}))
 	d.drive()
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	if err := os.WriteFile(filepath.Join(di.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) > 1 }\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

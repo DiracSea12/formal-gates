@@ -5,10 +5,7 @@ package harness
 // same machine: spawn one host process, speak line-delimited JSON over its
 // stdio, keep a routing-only trace, answer the host's own client-directed
 // requests and write the original source evidence. Only the launch arguments
-// and the protocol sequence belong to an adapter, supplied as plain hooks. No
-// interface, no registry,
-// no assembly injection: the adapter and the transport live in this one
-// package.
+// and the protocol sequence belong to an adapter, supplied as plain hooks.
 //
 // Every JSON surface this file touches is canonical (sorted keys, compact):
 // everything that lands on disk goes through the single atomic writer, and
@@ -520,10 +517,10 @@ func submittedSemantics(directory string) ([]byte, error) {
 			if err := verifyNativeToolFact(fact, directory, fact.Action, fact.Workspace); err != nil {
 				return nil, err
 			}
-			if err := verifySemanticCall(directory, []byte(fact.Content)); err != nil {
+			if err := verifySemanticCall(directory, fact.Content); err != nil {
 				return nil, err
 			}
-			return []byte(fact.Content), nil
+			return fact.Content, nil
 		}
 	}
 	return nil, &blockedError{message: "NATIVE_RESULT: current invocation has no submitted semantic tool evidence"}

@@ -14,7 +14,7 @@ import (
 func TestSignedRepairDiagnosisSurvivesCorrectionAndReopen(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
-	id, input := d.action("engine.repair.v2")
+	id, input := d.action("engine.repair.v3")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 {
 		t.Fatal("setup must issue the repair with its complete original diagnosis")
 	}
@@ -43,7 +43,7 @@ func TestSignedRepairDiagnosisSurvivesCorrectionAndReopen(t *testing.T) {
 			d.reopen()
 		}
 		d.drive()
-		actualID, actual := d.action("engine.repair.v2")
+		actualID, actual := d.action("engine.repair.v3")
 		actualInput, err := json.Marshal(actual)
 		if err != nil {
 			t.Fatal(err)
@@ -97,7 +97,7 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 		t.Fatal("route change did not create a distinct expected set")
 	}
 	resolveGateFinding(d, finding, wave.ID)
-	id, input = d.action("engine.repair.v2")
+	id, input = d.action("engine.repair.v3")
 	originalTask := input.Binding.Task
 	correction := d.run.Validation.Findings[finding].History[0]
 	correction.Decision, correction.ProblemID, correction.Supersedes = "NEW", "", 1
@@ -125,7 +125,7 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 	for step := 0; step < 6; step++ {
 		d.drive()
 		for _, current := range d.run.ValidationInputs {
-			if current.Handler != "engine.repair.v2" {
+			if current.Handler != "engine.repair.v3" {
 				continue
 			}
 			if current.Binding.Task == originalTask {
@@ -170,7 +170,7 @@ func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
 		t.Run(projection, func(t *testing.T) {
 			d, finding, origin := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, origin)
-			repair, input := d.action("engine.repair.v2")
+			repair, input := d.action("engine.repair.v3")
 			originalPlan := *d.run.Validation.Waves[0].Repair
 			counted := d.run.Validation.Waves[0].Counted
 			old := d.run.Validation.Findings[finding].History[0]

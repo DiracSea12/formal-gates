@@ -386,7 +386,7 @@ func (d *candidateDriver) write(root, path, body string, mode os.FileMode) {
 	}
 }
 func (d *candidateDriver) develop(id string, input protocol.ValidationInput, extraPaths ...string) {
-	if input.Handler != "engine.development.batch.v2" || input.Development == nil {
+	if input.Handler != "engine.development.batch.v3" || input.Development == nil {
 		d.t.Fatal("wrong development method")
 	}
 	body := d.implementation
@@ -498,7 +498,7 @@ func (d *candidateDriver) untilValidation() {
 		for _, id := range ids {
 			input := d.run.ValidationInputs[id]
 			switch input.Handler {
-			case "engine.development.batch.v2":
+			case "engine.development.batch.v3":
 				d.develop(id, input)
 			case "engine.qa.design.v2":
 				d.design(id, input)
@@ -823,7 +823,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 	d := newCandidateDriver(t, "both")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			d.develop(id, input)
 		} else if input.Handler == "engine.qa.design.v2" {
 			d.design(id, input)
@@ -926,7 +926,7 @@ func TestInstalledCandidateRejectsUndeclaredContent(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			d.write(input.Workspace.Path, "notes.txt", "unrelated user content\n", 0644)
 			d.develop(id, input)
 			d.expectNativeError("undeclared change: notes.txt")
@@ -946,7 +946,7 @@ func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
 	d.reviews()
 	for n := 0; n < 6; n++ {
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.development.batch.v2" {
+			if input.Handler == "engine.development.batch.v3" {
 				d.develop(id, input)
 				continue
 			}
@@ -1001,7 +1001,7 @@ func TestInstalledCandidatePreservesUndeclaredIndexEdit(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler != "engine.development.batch.v2" {
+		if input.Handler != "engine.development.batch.v3" {
 			continue
 		}
 		root := input.Workspace.Path
@@ -1028,7 +1028,7 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 	d.reviews()
 	d.implementation = "package main\nimport (\"os\"; _ \"embed\")\n//go:embed old_test.go\nvar content string\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\"}\n"
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			d.write(input.Workspace.Path, "old_test.go", "package main\nimport \"testing\"\nfunc TestOld(t *testing.T) {t.Log(\"production embed\")}\n", 0644)
 			d.develop(id, input, "old_test.go")
 		}
@@ -1055,7 +1055,7 @@ func TestInstalledRequirementBarrierPreventsCandidateWrites(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			d.develop(id, input)
 		}
 	}

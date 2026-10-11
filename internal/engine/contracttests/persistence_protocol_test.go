@@ -133,6 +133,7 @@ func TestEngineEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
 		{"old state schema", "stateSchemaVersion", false, "0"},
 		{"missing workflow definition", "workflowDefinitionVersion", true, ""},
 		{"old workflow definition", "workflowDefinitionVersion", false, "1"},
+		{"zero workflow definition", "workflowDefinitionVersion", false, "0"},
 		{"missing definition digest", "definitionDigest", true, ""},
 		{"wrong definition digest", "definitionDigest", false, "sha256:foreign-definition"},
 		{"missing package digest", "packageDigest", true, ""},
@@ -501,6 +502,7 @@ func TestEngineCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read committed state: %v", err)
 	}
+	store = protocolStore(t, dir, nil)
 	collectCalls := 0
 	_, err = store.Save(persistence.Transaction{
 		ExpectedRevision:    0,
@@ -595,6 +597,7 @@ func TestEngineRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 		t.Fatalf("write foreign staged document: %v", err)
 	}
 
+	store = protocolStore(t, dir, nil)
 	report, err := store.Recover()
 	if err != nil {
 		t.Fatalf("Recover: %v", err)

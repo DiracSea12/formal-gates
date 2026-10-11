@@ -82,7 +82,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 					}
 					d.materialize()
 				}
-				id, in := d.action("engine.development.batch.v2")
+				id, in := d.action("engine.development.batch.v3")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 				materialize()
 				materialize()

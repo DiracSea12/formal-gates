@@ -31,7 +31,7 @@ type nativeToolFact struct {
 	RequestDigest string   `json:"requestDigest"`
 	Kind          string   `json:"kind"`
 	Paths         []string `json:"paths,omitempty"`
-	Content       string   `json:"content,omitempty"`
+	Content       []byte   `json:"content,omitempty"`
 }
 
 type nativeWorkspaceTools struct {
@@ -182,7 +182,30 @@ func nativeToolEvidenceFiles(directory string) ([]string, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	return []string{nativeToolCallsFile, nativeToolContextFile}, nil
+	files := []string{nativeToolCallsFile, nativeToolContextFile}
+	facts, err := nativeToolFacts(directory)
+	if err != nil {
+		return nil, err
+	}
+	for index, fact := range facts {
+		if fact.Kind != "edit" {
+			continue
+		}
+		checks, _, err := editFactChecks(fact)
+		if err != nil {
+			return nil, err
+		}
+		for check := range checks {
+			relative, err := filepath.Rel(directory, editCheckDirectory(fact, index+1, check))
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range []string{"request.json", "exit.json", "stdout.log", "stderr.log"} {
+				files = append(files, filepath.Join(relative, name))
+			}
+		}
+	}
+	return files, nil
 }
 
 func verifyNativeToolEvidence(directory string) error {
@@ -217,7 +240,7 @@ func verifyNativeToolEvidence(directory string) error {
 			return err
 		}
 	}
-	return nil
+	return verifyEditCheckFacts(context.Facts)
 }
 
 func (t *nativeWorkspaceTools) publish(f nativeToolFact) (int, error) {
@@ -247,7 +270,7 @@ func (t *nativeWorkspaceTools) publish(f nativeToolFact) (int, error) {
 }
 
 func (t *nativeWorkspaceTools) publishRead(relative string, body []byte) (map[string]any, error) {
-	number, err := t.publish(nativeToolFact{Kind: "read", Paths: []string{relative}, Content: string(body)})
+	number, err := t.publish(nativeToolFact{Kind: "read", Paths: []string{relative}, Content: body})
 	lines := strings.SplitAfter(string(body), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -365,14 +388,31 @@ func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, er
 	if err := t.refreshFacts(); err != nil {
 		return nil, err
 	}
+	var checks []any
+	for index, fact := range t.facts {
+		if fact.Kind == "edit" {
+			checks, err = t.completeEditChecks(index+1, "")
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	var value any
 	switch name {
 	case nativeWorkspaceTool:
-		return t.workspaceOperation(raw)
+		value, err = t.workspaceOperation(raw)
 	case nativeSemanticTool:
-		return t.submitSemantics(raw)
+		value, err = t.submitSemantics(raw)
 	default:
 		return nil, fmt.Errorf("unknown native tool")
 	}
+	if err == nil && len(checks) > 0 {
+		result := value.(map[string]any)
+		if _, current := result["checks"]; !current {
+			result["checks"] = checks
+		}
+	}
+	return value, err
 }
 
 func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
@@ -445,6 +485,19 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 				continue
 			}
 			value := map[string]any{"path": row.Path, "kind": row.Kind, "baseMode": row.BaseMode, "mode": row.Mode, "before": row.BaseContent, "after": row.Content}
+			for _, side := range []struct {
+				key, mode string
+				body      []byte
+			}{{"beforeRead", row.BaseMode, row.BaseContent}, {"afterRead", row.Mode, row.Content}} {
+				if side.mode == "" || side.mode == "000000" {
+					continue
+				}
+				read, err := t.publishRead(row.Path, side.body)
+				if err != nil {
+					return nil, err
+				}
+				value[side.key] = read["read"]
+			}
 			if utf8.Valid(row.BaseContent) {
 				value["before"] = string(row.BaseContent)
 			}
@@ -602,10 +655,10 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			if err != nil {
 				return nil, err
 			}
-			if string(body) != source.Content {
+			if !bytes.Equal(body, source.Content) {
 				return nil, fmt.Errorf("source changed after the selected read")
 			}
-			lines := strings.SplitAfter(source.Content, "\n")
+			lines := strings.SplitAfter(string(source.Content), "\n")
 			if len(lines) > 0 && lines[len(lines)-1] == "" {
 				lines = lines[:len(lines)-1]
 			}
@@ -632,10 +685,10 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if string(body) != fact.Content {
+		if !bytes.Equal(body, fact.Content) {
 			return nil, fmt.Errorf("file changed after the selected read; read its current contents")
 		}
-		lines := strings.SplitAfter(fact.Content, "\n")
+		lines := strings.SplitAfter(string(fact.Content), "\n")
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
@@ -651,10 +704,9 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(path, []byte(result), info.Mode().Perm()); err != nil {
-			return nil, err
-		}
-		return map[string]any{"written": true}, nil
+		return t.edit(raw, func() (any, error) {
+			return map[string]any{"written": true}, os.WriteFile(path, []byte(result), info.Mode().Perm())
+		})
 	case "create", "mkdir":
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
@@ -678,18 +730,22 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			return nil, err
 		}
 		if a.Action == "mkdir" {
-			return map[string]any{"created": true}, os.Mkdir(path, 0755)
+			return t.edit(raw, func() (any, error) {
+				return map[string]any{"created": true}, os.Mkdir(path, 0755)
+			})
 		}
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil, err
-		}
-		_, err = file.WriteString(a.Content)
-		closeErr := file.Close()
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"written": true}, closeErr
+		return t.edit(raw, func() (any, error) {
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+			if err != nil {
+				return nil, err
+			}
+			_, err = file.WriteString(a.Content)
+			closeErr := file.Close()
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"written": true}, closeErr
+		})
 	case "copy", "move":
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
@@ -752,22 +808,26 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			if err := t.writable(source); err != nil {
 				return nil, err
 			}
-			return map[string]any{"moved": true}, os.Rename(source, target)
+			return t.edit(raw, func() (any, error) {
+				return map[string]any{"moved": true}, os.Rename(source, target)
+			})
 		}
 		body, err := os.ReadFile(source)
 		if err != nil {
 			return nil, err
 		}
-		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
-		if err != nil {
-			return nil, err
-		}
-		_, err = file.Write(body)
-		closeErr := file.Close()
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"copied": true}, closeErr
+		return t.edit(raw, func() (any, error) {
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+			if err != nil {
+				return nil, err
+			}
+			_, err = file.Write(body)
+			closeErr := file.Close()
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"copied": true}, closeErr
+		})
 	case "remove":
 		if t.readOnly || a.Listing == 0 {
 			return nil, fmt.Errorf("removal requires a writable action and published entry")
@@ -779,7 +839,9 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err := t.writable(path); err != nil {
 			return nil, err
 		}
-		return map[string]any{"removed": true}, os.Remove(path)
+		return t.edit(raw, func() (any, error) {
+			return map[string]any{"removed": true}, os.Remove(path)
+		})
 	default:
 		return nil, fmt.Errorf("unknown workspace action")
 	}
@@ -805,13 +867,13 @@ func (t *nativeWorkspaceTools) submitSemantics(raw json.RawMessage) (any, error)
 	}
 	for i, fact := range t.facts {
 		if fact.Kind == "semantics" && fact.Job == t.directory && fact.RequestDigest == t.requestDigest {
-			if fact.Content != string(body) {
+			if !bytes.Equal(fact.Content, body) {
 				return nil, fmt.Errorf("current invocation already submitted different semantics")
 			}
 			return map[string]any{"submitted": true, "fact": i + 1}, nil
 		}
 	}
-	number, err := t.publish(nativeToolFact{Kind: "semantics", Content: string(body)})
+	number, err := t.publish(nativeToolFact{Kind: "semantics", Content: body})
 	return map[string]any{"submitted": true, "fact": number}, err
 }
 

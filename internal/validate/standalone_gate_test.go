@@ -114,7 +114,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v2", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v2", "", false}, {"engine.qa.execution.v2", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v2", "", false},
+		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v3", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v3", "", false}, {"engine.qa.execution.v2", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v2", "", false},
 	}
 	for _, role := range roles {
 		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
@@ -294,7 +294,7 @@ func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
 		if fact.Kind == "listing" {
 			selector = worker.Location{Listing: i + 1, Entry: 1}
 		}
-		if fact.Kind == "read" && fact.Content == "" {
+		if fact.Kind == "read" && len(fact.Content) == 0 {
 			selector.Line = 0
 		}
 		wire, err := json.Marshal(map[string]any{"findings": []worker.Finding{{Severity: "P2", Message: "captured source", Locations: []worker.Location{selector}}}})

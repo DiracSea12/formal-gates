@@ -354,7 +354,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			verification[0] = " "
 			domain = map[string]any{"findings": []any{}, "verification": verification}
 		}
-		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v2" {
+		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v3" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
@@ -367,7 +367,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			domain = map[string]any{"summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
 		}
 
-		if input.Handler == "engine.development.batch.v2" && peer.Mode == "workflow-progress" {
+		if input.Handler == "engine.development.batch.v3" && peer.Mode == "workflow-progress" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if len(history) > 1 && (input.Validation.Development.Result == nil || input.Validation.Development.Result.Validation == nil || input.Validation.Development.Result.Validation.Development == nil || input.Validation.Development.Result.Validation.Development.RemainingWork == "") {

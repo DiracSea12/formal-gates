@@ -32,7 +32,7 @@ func richLedger(t *testing.T) (Set, string) {
 		t.Fatal(err)
 	}
 	authorizationID := mustSeries(t, set, StartReadiness).Authorizations[0].ID
-	set, readinessSecond := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s2", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	set, readinessSecond := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s2", RequirementRevision: "rev-2", AuthorizationID: authorizationID}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Category: "acceptance-entry", Message: "readiness concern"}}})
 	set = mustApply(t, set, runID, "rev-2", CorrectionInput{
 		Action: StartReadiness, DispatchID: readinessSecond.DispatchID, ResultDigest: readinessSecond.ResultDigest, RequirementRevision: readinessSecond.RequirementRevision,
 		FindingID: readinessSecond.Findings[0].ID, Decision: "RESEVERITIZE", Severity: "P1", SeverityRationale: "the concern blocks the documented start path",
@@ -279,7 +279,7 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 		Reason: "upgrade to blocking", Source: "user", UserAuthorized: true,
 	})
 	assertRecomputed(t, set)
-	set, readiness := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s1", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "readiness concern"}}})
+	set, readiness := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s1", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Category: "acceptance-entry", Message: "readiness concern"}}})
 	assertRecomputed(t, set)
 	set = mustApply(t, set, runID, "rev-1", CorrectionInput{
 		Action: StartReadiness, DispatchID: readiness.DispatchID, ResultDigest: readiness.ResultDigest, RequirementRevision: readiness.RequirementRevision,

@@ -10,7 +10,7 @@ import (
 
 func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch.v2")
+	action, _ := d.action("engine.development.batch.v3")
 	d.receipt(action)
 	before, err := d.f.engine.Load()
 	if err != nil {

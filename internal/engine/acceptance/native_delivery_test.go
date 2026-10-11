@@ -82,7 +82,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 				for _, id := range ids {
 					in := d.run.ValidationInputs[id]
 					switch in.Handler {
-					case "engine.development.batch.v2":
+					case "engine.development.batch.v3":
 						if in.Workspace == nil || in.Workspace.Source != head || in.Binding.WorkspaceID != in.Workspace.ID {
 							t.Fatalf("wrong development source: %+v", in)
 						}

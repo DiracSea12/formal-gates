@@ -173,8 +173,8 @@ func TestCaseFileSelectionsPreserveReferencesAndSelectPublishedSymbols(t *testin
 	input.Validation.AffectedCases = []string{"new"}
 	facts := []LocationFact{
 		{Kind: "listing", Paths: []string{"case_test.go", "support.data", "replacement_test.go"}},
-		{Kind: "read", Paths: []string{"case_test.go"}, Content: "package sample\nimport \"testing\"\nfunc TestOriginal(t *testing.T) {}\nfunc TestOther(t *testing.T) {}\n"},
-		{Kind: "read", Paths: []string{"replacement_test.go"}, Content: "package sample\nimport check \"testing\"\nfunc TestCreated(t *check.T) {}\n"},
+		{Kind: "read", Paths: []string{"case_test.go"}, Content: []byte("package sample\nimport \"testing\"\nfunc TestOriginal(t *testing.T) {}\nfunc TestOther(t *testing.T) {}\n")},
+		{Kind: "read", Paths: []string{"replacement_test.go"}, Content: []byte("package sample\nimport check \"testing\"\nfunc TestCreated(t *check.T) {}\n")},
 	}
 	for _, sample := range []struct{ raw, ref string }{
 		{`{"cases":[{}]}`, "case_test.go::TestOriginal"},

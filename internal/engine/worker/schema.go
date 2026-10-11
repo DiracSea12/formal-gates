@@ -26,7 +26,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
 	alternatives := []any{body, interruption}
-	if input.Validation != nil && (input.Handler == "engine.development.batch.v2" || input.Handler == "engine.repair.v2") {
+	if input.Validation != nil && (input.Handler == "engine.development.batch.v3" || input.Handler == "engine.repair.v3") {
 		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
 		if err != nil {
 			return nil, err
@@ -36,7 +36,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		alternatives = append(alternatives, partial)
 	}
-	if input.Handler == "engine.repair.v2" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+	if input.Handler == "engine.repair.v3" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
 		fields := body["properties"].(map[string]any)
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
@@ -75,7 +75,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
-	if input.Handler == "engine.repair.v2" {
+	if input.Handler == "engine.repair.v3" {
 		if cases := repairCaseIDs(input.Validation); len(cases) > 0 {
 			fields["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
 		} else {
@@ -99,7 +99,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
 			command["not"] = map[string]any{"enum": commands}
-			if input.Handler == "engine.repair.v2" {
+			if input.Handler == "engine.repair.v3" {
 				purpose["enum"] = []string{""}
 			}
 		}
@@ -147,6 +147,20 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
 			delete(fields, "granularityReview")
+		} else {
+			finding := fields["findings"].(map[string]any)["items"].(map[string]any)
+			finding["required"] = append(finding["required"].([]any), "category")
+			choices := []any{}
+			for _, category := range review.TechnicalCategories() {
+				severities := []string{}
+				for _, severity := range []string{"P0", "P1", "P2", "P3"} {
+					if review.ValidateFindingClassification(input.Review.Action, category, severity) == nil {
+						severities = append(severities, severity)
+					}
+				}
+				choices = append(choices, map[string]any{"properties": map[string]any{"category": map[string]any{"const": category}, "severity": map[string]any{"enum": severities}}})
+			}
+			finding["anyOf"] = choices
 		}
 		verification := []any{}
 		for _, key := range review.RequiredVerificationChecks() {
@@ -250,7 +264,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 	}
 
 	if batch := completionBatch(input); batch != nil {
-		if input.Handler == "engine.repair.v2" {
+		if input.Handler == "engine.repair.v3" {
 			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
 			body["required"] = append(body["required"].([]any), "summary")
 		}
@@ -260,7 +274,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			items = append(items, map[string]any{"type": "string", "minLength": 1, "description": criterion.Description})
 		}
 		completion["dod"] = orderedSchema(items)
-	} else if !(input.Handler == "engine.repair.v2" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+	} else if !(input.Handler == "engine.repair.v3" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
 	if input.Handler == "engine.repair.verify.v2" {
@@ -528,7 +542,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 // Completion keys come only from the issued member batch. Final-candidate
 // verification and repair planning have different evidence duties.
 func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
-	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v2" && input.Handler != "engine.repair.v2") {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v3" && input.Handler != "engine.repair.v3") {
 		return nil
 	}
 	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {

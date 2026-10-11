@@ -32,7 +32,7 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native QA inputs"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch.v2")
+	development, di := d.action("engine.development.batch.v3")
 	design, qi := d.action("engine.qa.design.v2")
 	manifest := simpleManifest(qi)
 	configure(&manifest)

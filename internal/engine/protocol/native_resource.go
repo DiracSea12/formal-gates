@@ -149,7 +149,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	source := s.BaseSnapshot
 	scope := s.Validation.RequirementRevision
 	switch role {
-	case "engine.development.batch.v2":
+	case "engine.development.batch.v3":
 		source = s.AcceptedNativeSnapshot()
 		request, _, _ := s.confirmedDevelopmentPlan()
 		scope = request + ":" + s.Validation.RequirementRevision + ":" + strconv.FormatUint(s.Validation.Generation, 10)
@@ -177,7 +177,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair.v2":
+	case "engine.repair.v3":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity

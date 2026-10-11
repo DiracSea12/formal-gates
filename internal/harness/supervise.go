@@ -98,6 +98,15 @@ func Supervise(directory string, services ...ExecutionServices) int {
 		release = nil
 	}
 
+	if _, err := executeRequest(dir, request); err != nil {
+		fmt.Fprintf(os.Stderr, "supervise: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// executeRequest uses the native runner and writes its request-bound exit facts.
+func executeRequest(dir string, request map[string]any) (map[string]any, error) {
 	started := float64(time.Now().UnixNano()) / 1e9
 	code := 127
 	errorMsg := ""
@@ -118,8 +127,7 @@ func Supervise(directory string, services ...ExecutionServices) int {
 
 	digest, err := CanonicalDigest(request)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "supervise: cannot digest request: %v\n", err)
-		return 1
+		return nil, err
 	}
 	stdoutProof, _ := FileProof(filepath.Join(dir, "stdout.log"))
 	stderrProof, _ := FileProof(filepath.Join(dir, "stderr.log"))
@@ -138,10 +146,9 @@ func Supervise(directory string, services ...ExecutionServices) int {
 		receipt["tool_identity"], receipt["environment_identity"] = executionFacts["tool"], executionFacts["environment"]
 	}
 	if err := writeAtomicJSON(filepath.Join(dir, "exit.json"), receipt); err != nil {
-		fmt.Fprintf(os.Stderr, "supervise: cannot write exit.json: %v\n", err)
-		return 1
+		return nil, err
 	}
-	return 0
+	return receipt, nil
 }
 
 // claimJob is shared by supervisors and direct native jobs. The original owner
@@ -277,12 +284,8 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 		if ran {
 			if facts != nil {
 				facts["tool"] = toolPath + " sha256:" + toolProof.SHA256
-				environment := map[string]any{}
-				for key, value := range mergedEnvMap(request) {
-					environment[key] = value
-				}
 				var err error
-				facts["environment"], err = CanonicalDigest(environment)
+				facts["environment"], err = executionEnvironmentDigest(request)
 				if err != nil {
 					return 127, err.Error()
 				}
@@ -298,6 +301,14 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 		return 127, firstErr
 	}
 	return 127, spawnErr("FileNotFoundError", 2, argv[0])
+}
+
+func executionEnvironmentDigest(request map[string]any) (string, error) {
+	environment := map[string]any{}
+	for key, value := range mergedEnvMap(request) {
+		environment[key] = value
+	}
+	return CanonicalDigest(environment)
 }
 
 // tryExec attempts to start one PATH candidate. It returns ran=false when the

@@ -209,7 +209,7 @@ func nativeIncompleteState(t *testing.T, d *validationDriver, operation string) 
 
 func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	t.Helper()
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	design, qi := d.action("engine.qa.design.v2")
 	if len(d.run.PendingActions) != 2 {
 		t.Fatal("development and blackbox design are not concurrent")
@@ -531,7 +531,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command removal"}})
 			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 			d.drive()
-			action, input := d.action("engine.development.batch.v2")
+			action, input := d.action("engine.development.batch.v3")
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
 				t.Fatal(err)
 			}

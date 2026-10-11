@@ -136,7 +136,7 @@ func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"decision":"ACCEPT","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"scope":"FULL","sourceDecisions":[],"pointDecisions":[],"caseDecisions":[]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[{"id":"wrong","status":"PASS","reason":"actual"}],"pointDecisions":[],"caseDecisions":[]}`},
-		{"engine.repair.v2", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
+		{"engine.repair.v3", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
 		{"engine.qa.execution.v2", `{"binding":{"candidate":{"identity":"wrong"}},"records":{}}`},
 		{"engine.qa.execution.v2", `{"records":[{"sourceId":"wrong","result":"EXECUTED_PASS"}]}`},
 	} {
@@ -189,7 +189,7 @@ func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.
 		t.Fatal(err)
 	}
 	paths := []string{"analytics_test.go", "frob_test.go", "fixture.data", "unrelated.go", "helper.data"}
-	facts := []LocationFact{{Kind: "listing", Paths: paths}, {Kind: "read", Paths: paths[:1], Content: "package analytics\nimport \"testing\"\nfunc TestUsage(t *testing.T) {}\n"}}
+	facts := []LocationFact{{Kind: "listing", Paths: paths}, {Kind: "read", Paths: paths[:1], Content: []byte("package analytics\nimport \"testing\"\nfunc TestUsage(t *testing.T) {}\n")}}
 	event, err := DecodeResultWithFacts(input, "result", raw, "original-raw-digest", paths, facts)
 	if err != nil {
 		t.Fatal(err)

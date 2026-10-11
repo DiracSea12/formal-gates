@@ -119,7 +119,7 @@ func TestProposalArtifactsReuseOriginalLocationsAndAuthorOnlyNewNames(t *testing
 }
 
 func TestDevelopmentPathsComeOnlyFromTerminalFacts(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.development.batch.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "issued"}}}}
+	input := protocol.WorkerInput{Handler: "engine.development.batch.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "issued"}}}}
 	raw := []byte(`{"summary":"Created the authorized behavior","remainingWork":"Finish the oracle"}`)
 	event, err := DecodeResultWithPaths(input, "result", raw, "native-source", []string{"arbitrary-language/source.ext"})
 	if err != nil || !reflect.DeepEqual(event.Result.Validation.Development.Paths, []string{"arbitrary-language/source.ext"}) || event.Result.Validation.Status != "CONTINUE" {

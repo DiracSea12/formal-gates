@@ -37,7 +37,7 @@ func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			facts := []LocationFact{{Kind: "listing", Paths: []string{"source.go", "other.go"}}, {Kind: "read", Paths: []string{"source.go"}, Content: "package app\nfunc Main() {}\n"}}
+			facts := []LocationFact{{Kind: "listing", Paths: []string{"source.go", "other.go"}}, {Kind: "read", Paths: []string{"source.go"}, Content: []byte("package app\nfunc Main() {}\n")}}
 			event, err := DecodeResultWithFacts(input, "result", raw, "original-output", nil, facts)
 			if err != nil {
 				t.Fatal(err)

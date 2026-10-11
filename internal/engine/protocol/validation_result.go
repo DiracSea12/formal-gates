@@ -294,10 +294,10 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
-	if p.Status == "CONTINUE" && role != "engine.development.batch.v2" && role != "engine.repair.v2" {
+	if p.Status == "CONTINUE" && role != "engine.development.batch.v3" && role != "engine.repair.v3" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair.v2" {
+	if p.GranularityReview != nil && role != "engine.repair.v3" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
 	if p.DesignChange != nil && role != "engine.qa.design.v2" {
@@ -345,13 +345,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		}
 	case "engine.repair.verify.v2":
 		return s.acceptRepairComparison(record, e.cfg.Definition)
-	case "engine.repair.v2":
+	case "engine.repair.v3":
 		return s.acceptRepairResult(record)
-	case "engine.development.batch.v2":
+	case "engine.development.batch.v3":
 		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {
 			return validationError("development requires declared paths and summary")
 		}
-		if role == "engine.development.batch.v2" {
+		if role == "engine.development.batch.v3" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
 			if !ok {
 				return validationError("development task is not a confirmed batch")

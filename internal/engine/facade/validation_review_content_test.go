@@ -41,7 +41,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 					t.Fatal("fixture did not establish the original negative-test behavior")
 				}
 			}
-			id, input := d.action("engine.development.batch.v2")
+			id, input := d.action("engine.development.batch.v3")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\nfunc Validate(input string) bool { return input != \"\" }\n"), 0600); err != nil {
 				t.Fatal(err)
 			}

@@ -34,7 +34,7 @@ func TestStandaloneResultArgumentsConstructSemanticFindings(t *testing.T) {
 		t.Fatal(provided, err)
 	}
 	context := validate.StandaloneGateContext{LocationFacts: []worker.LocationFact{
-		{Kind: "read", Paths: []string{"original.go"}, Content: "first\nsecond\n"},
+		{Kind: "read", Paths: []string{"original.go"}, Content: []byte("first\nsecond\n")},
 		{Kind: "listing", Paths: []string{"removed.go"}},
 	}}
 	result, err := validate.ValidateStandaloneGateResult(body, context)

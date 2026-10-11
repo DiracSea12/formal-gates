@@ -775,7 +775,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			}
 			if role == "engine.gate.v2" {
 				for _, fact := range resumed.facts {
-					if strings.Contains(fact.Content, "QA case body") {
+					if bytes.Contains(fact.Content, []byte("QA case body")) {
 						t.Fatal("gate location facts contain QA body")
 					}
 				}
@@ -891,7 +891,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
 	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	for _, handler := range []string{"engine.development.batch.v2", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v2", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v3", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v3", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			material.Input.Handler = handler
 			if err := writeAtomicJSON(path, material); err != nil {

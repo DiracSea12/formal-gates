@@ -16,7 +16,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch.v2": {"summary"}, "engine.repair.v2": {"summary", "granularityReview"}, "engine.merge.resolve.v2": {"summary"}, "engine.qa.design.v2": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v2": {"records", "findings"}, "engine.gate.v2": {"findings"},
+		"engine.development.batch.v3": {"summary"}, "engine.repair.v3": {"summary", "granularityReview"}, "engine.merge.resolve.v2": {"summary"}, "engine.qa.design.v2": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v2": {"records", "findings"}, "engine.gate.v2": {"findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -111,7 +111,7 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		handler := "engine.review.worker.v2"
 		if action == review.StartReadiness {
-			handler = "engine.readiness.plan.v2"
+			handler = "engine.readiness.plan.v3"
 		}
 		input := protocol.WorkerInput{RunID: "run", Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: action, RequirementRevision: "revision"}}
 		material, err := Render(input, catalog)
@@ -159,8 +159,8 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 		kind    coverage.ReviewKind
 		author  bool
 	}{
-		{"engine.development.batch.v2", "", true},
-		{"engine.repair.v2", "", true},
+		{"engine.development.batch.v3", "", true},
+		{"engine.repair.v3", "", true},
 		{"engine.merge.resolve.v2", "", true},
 		{"engine.qa.design.v2", coverage.ReviewWhitebox, true},
 		{"engine.qa.design.v2", coverage.ReviewBlackbox, false},
@@ -251,7 +251,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}, {ID: "interface", Description: "declared interface"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop the issued duty"}}}
-	for _, role := range []string{"engine.development.batch.v2", "engine.repair.v2"} {
+	for _, role := range []string{"engine.development.batch.v3", "engine.repair.v3"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			before, _ := json.Marshal(input)
@@ -282,7 +282,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	}
 	for _, name := range []string{"no-batch", "empty-batch", "unfrozen-repair", "final-verification", "other-role"} {
 		t.Run(name, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{Handler: "engine.repair.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			switch name {
 			case "empty-batch":
 				input.Validation.Development = &protocol.DevelopmentInput{}
@@ -334,7 +334,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 }
 
 func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 }
 
 func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v2", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v3", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -427,10 +427,10 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 }
 
 func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
-	for _, handler := range []string{"engine.readiness.plan.v2", "engine.repair.v2"} {
+	for _, handler := range []string{"engine.readiness.plan.v3", "engine.repair.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
-			if handler == "engine.readiness.plan.v2" {
+			if handler == "engine.readiness.plan.v3" {
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			} else {
 				input.Validation = &protocol.ValidationInput{Repair: &protocol.RepairInput{}}
@@ -484,7 +484,7 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 }
 
 func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v2", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v3", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	for _, scenario := range []string{"proposed", "issued"} {
 		t.Run(scenario, func(t *testing.T) {
 			if scenario == "issued" {
@@ -540,7 +540,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch.v2", nil}, {"engine.repair.v2", nil}, {"engine.merge.resolve.v2", nil}, {"engine.qa.design.v2", nil}, {"engine.gate.v2", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v2", nil}} {
+	}{{"engine.development.batch.v3", nil}, {"engine.repair.v3", nil}, {"engine.merge.resolve.v2", nil}, {"engine.qa.design.v2", nil}, {"engine.gate.v2", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v2", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)

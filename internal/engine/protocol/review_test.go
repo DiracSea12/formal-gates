@@ -1400,7 +1400,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	}))
 	readiness := pendingActionID(t, engine)
 	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, readiness, "", "FAIL", "advisory only", []review.Finding{
-		{Severity: "P2", Message: "advisory defect on the readiness path"},
+		{Severity: "P2", Category: "acceptance-entry", Message: "advisory defect on the readiness path"},
 	}))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "建议不拆：模块边界清晰，单人可并行推进",

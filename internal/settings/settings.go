@@ -57,8 +57,16 @@ func Load(root, home string) (Effective, error) {
 		var value struct {
 			Cap *int64 `json:"engineDispatchMaxTotalTokens"`
 		}
-		if err := json.Unmarshal(data, &value); err != nil || value.Cap == nil || *value.Cap < 0 {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&value); err != nil {
+			return e, fmt.Errorf("token cap config %s is invalid: %w", legacy, err)
+		}
+		if value.Cap == nil || *value.Cap < 0 {
 			return e, fmt.Errorf("token cap config %s is invalid: engineDispatchMaxTotalTokens must be non-negative", legacy)
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return e, fmt.Errorf("token cap config %s has trailing JSON data", legacy)
 		}
 		e.Values.TokenCap, e.Sources["tokenCap"] = value.Cap, legacy
 	} else if !os.IsNotExist(err) {

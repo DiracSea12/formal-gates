@@ -343,7 +343,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			return err
 		}
 		if run.Status == "COMPLETE" {
-			for _, role := range []string{"engine.development.batch.v2", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
+			for _, role := range []string{"engine.development.batch.v3", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
 				if !checked[role] {
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
@@ -495,7 +495,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		workspace = in.Workspace.Path
 	}
 	switch in.Handler {
-	case "engine.development.batch.v2":
+	case "engine.development.batch.v3":
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -525,7 +525,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 			if err != nil {
 				return payload, err
 			}
-			*facts = append(*facts, worker.LocationFact{Kind: "read", Paths: []string{"whitebox_delivered_test.go"}, Content: string(body)})
+			*facts = append(*facts, worker.LocationFact{Kind: "read", Paths: []string{"whitebox_delivered_test.go"}, Content: body})
 			files := []worker.Location{{Read: len(*facts)}}
 			c.Files, missing.Files = &files, &files
 		}

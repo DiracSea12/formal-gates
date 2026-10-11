@@ -26,7 +26,7 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native operations"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
-	development, di := d.action("engine.development.batch.v2")
+	development, di := d.action("engine.development.batch.v3")
 	design, qi := d.action("engine.qa.design.v2")
 	manifest := simpleManifest(qi)
 	original := []coverage.Operation{

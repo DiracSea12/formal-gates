@@ -9,7 +9,7 @@ import (
 )
 
 func TestChildWorkerScopePreservesConfirmedResponsibilitiesOnRecovery(t *testing.T) {
-	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v2")
+	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v3")
 	state.SliceChild = &SliceChildBinding{SliceID: "slice-2"}
 	state.Topology = &TopologyBinding{Decision: "split", ACOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge", "AC-004": "master-merge"}}
 	want := &WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge", "AC-004": "master-merge"}}
@@ -40,7 +40,7 @@ func TestChildWorkerScopePreservesConfirmedResponsibilitiesOnRecovery(t *testing
 
 func TestRepairWorkerChecksUseTheConfirmedProjectOrSlicePlan(t *testing.T) {
 	for _, child := range []bool{false, true} {
-		e, state, pending := unfinishedDevelopmentState(t, "engine.repair.v2")
+		e, state, pending := unfinishedDevelopmentState(t, "engine.repair.v3")
 		plan := plannedReviewEvidence(review.StartReadiness, "readiness", "", "PASS", "Approved project plan", nil).GranularityReview
 		plan.Batches[0].ID = "owned"
 		plan.Batches[0].Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Command: "complete-build"}, {ID: "tests", Purpose: CheckFullTests, Command: "complete-tests"}, {ID: "local", Command: "local-oracle"}}

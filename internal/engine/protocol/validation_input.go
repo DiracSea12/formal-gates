@@ -150,7 +150,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	if role == "engine.gate.v2" {
 		input.Gate = s.gateInput(binding, pending.Task)
 	}
-	if role == "engine.development.batch.v2" {
+	if role == "engine.development.batch.v3" {
 		input.Development = s.developmentInput(pending.Task, cd)
 	}
 	c := s.coverageContract(s.Validation.Candidate)
@@ -165,7 +165,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Repair = s.repairComparisonInput(context)
 			input.ExecutionFacts = s.repairComparisonFacts(context, cd)
 		}
-	case "engine.repair.v2":
+	case "engine.repair.v3":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)
 		if work := s.repairMember(pending.Task); work != nil {

@@ -85,7 +85,7 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(read.Paths, []string{path}) || read.Content != sources[path] || listing.Paths[int(row["entry"].(float64))-1] != path {
+		if !reflect.DeepEqual(read.Paths, []string{path}) || !bytes.Equal(read.Content, []byte(sources[path])) || listing.Paths[int(row["entry"].(float64))-1] != path {
 			t.Fatalf("original search evidence: %+v %+v", read, listing)
 		}
 		published := call(`{"action":"read","listing":` + workspaceNumber(row["listing"]) + `,"entry":` + workspaceNumber(row["entry"]) + `}`)

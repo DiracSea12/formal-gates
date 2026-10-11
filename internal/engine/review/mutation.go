@@ -123,6 +123,9 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 		if raw.Message == "" || !validSeverity(raw.Severity) {
 			return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s result finding %q is malformed: severity must be P0-P3 and message non-empty", action, raw.Message)
 		}
+		if err := ValidateFindingClassification(action, raw.Category, raw.Severity); err != nil {
+			return Set{}, EffectiveStatus{}, err
+		}
 		finding := raw
 		finding.Digest = findingDigest(finding)
 		finding.ID = "finding-" + shortDigest(finding.Digest)
@@ -301,6 +304,11 @@ func correctFinding(series *Series, runID, requirementRevision string, candidate
 	}
 	if input.Decision != decisionReseveritize && input.Severity != "" {
 		return fmt.Errorf("review: severity is accepted only for RESEVERITIZE")
+	}
+	if input.Decision == decisionReseveritize {
+		if err := ValidateFindingClassification(input.Action, finding.Category, input.Severity); err != nil {
+			return err
+		}
 	}
 	if input.Decision == decisionReseveritize && blockingSeverity(input.Severity) && placeholderRationale(input.SeverityRationale) {
 		return fmt.Errorf("review: re-severity to %s requires an independent non-placeholder severity rationale", input.Severity)

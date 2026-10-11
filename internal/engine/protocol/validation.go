@@ -352,7 +352,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch.v2", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v2", "engine.repair.verify.v2":
+	case "engine.development.batch.v3", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v3", "engine.repair.verify.v2":
 		return string(p.Handler)
 	}
 	return ""
@@ -366,7 +366,7 @@ func pipelineStep(cd *compiler.CompiledDefinition, handler string) (compiler.Com
 	return compiler.CompiledStep{}, false
 }
 func pipelineEnabled(s *State, cd *compiler.CompiledDefinition) bool {
-	_, ok := pipelineStep(cd, "engine.development.batch.v2")
+	_, ok := pipelineStep(cd, "engine.development.batch.v3")
 	return ok && s.Route != "lightweight"
 }
 func pipelineTask(cd *compiler.CompiledDefinition, handler, scope string) runtime.TaskKey {
@@ -511,7 +511,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
 		}
 	}
-	if role == "engine.development.batch.v2" {
+	if role == "engine.development.batch.v3" {
 		if request, _, batch, ok := s.developmentBatch(key, cd); ok {
 			b.PlanRequest, b.BatchID = request, batch.ID
 			_, _, revision := s.confirmedDevelopmentPlan()
@@ -525,7 +525,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if set := v.Sets[mode]; set != nil {
 		b.CaseVersion = set.Version
 	}
-	if role != "engine.development.batch.v2" && role != "engine.merge.resolve.v2" && !(role == "engine.qa.design.v2" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
+	if role != "engine.development.batch.v3" && role != "engine.merge.resolve.v2" && !(role == "engine.qa.design.v2" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
 		b.Candidate = v.DevelopmentSnapshot
 		if v.Candidate != nil {
 			b.Candidate = v.Candidate.Identity
@@ -536,7 +536,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			b.Candidate = set.Candidate
 		}
 	}
-	if role == "engine.repair.v2" {
+	if role == "engine.repair.v3" {
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				b.PureP2 = work.wave.Repair.PureP2 || work.pureP2

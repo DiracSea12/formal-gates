@@ -22,7 +22,7 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	return key
 }
 func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave, cd *compiler.CompiledDefinition) runtime.TaskKey {
-	if s.validationRole(key, cd) == "engine.development.batch.v2" {
+	if s.validationRole(key, cd) == "engine.development.batch.v3" {
 		return key
 	}
 	for action, pending := range s.PendingActions {
@@ -106,7 +106,7 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development.batch.v2", "engine.repair.v2":
+		case "engine.development.batch.v3", "engine.repair.v3":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
 		case "engine.qa.design.v2", "engine.qa.review.rationale.v2":

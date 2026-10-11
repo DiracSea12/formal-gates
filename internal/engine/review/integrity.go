@@ -88,6 +88,9 @@ func (s Series) validate(runID string, action Action) error {
 		}
 		findingIDs := map[string]bool{}
 		for _, finding := range candidate.Findings {
+			if err := ValidateFindingClassification(action, finding.Category, finding.Severity); err != nil {
+				return fail("candidate %s: %v", candidate.ID, err)
+			}
 			if finding.ID == "" || finding.Digest != findingDigest(finding) || finding.ID != "finding-"+shortDigest(finding.Digest) || finding.Message == "" || !validSeverity(finding.Severity) {
 				return fail("finding identity in candidate %s is invalid", candidate.ID)
 			}
@@ -134,6 +137,11 @@ func (s Series) validate(runID string, action Action) error {
 		if adjudication.Decision == decisionReseveritize && !validSeverity(adjudication.Severity) {
 			return fail("adjudication %s re-severity target is invalid", adjudication.ID)
 		}
+		if adjudication.Decision == decisionReseveritize {
+			if err := ValidateFindingClassification(action, finding.Category, adjudication.Severity); err != nil {
+				return fail("adjudication %s: %v", adjudication.ID, err)
+			}
+		}
 		if adjudication.Decision == decisionReseveritize && blockingSeverity(adjudication.Severity) && placeholderRationale(adjudication.SeverityRationale) {
 			return fail("adjudication %s raises a blocking severity without an independent rationale", adjudication.ID)
 		}
@@ -164,7 +172,8 @@ func (s Series) validate(runID string, action Action) error {
 			return fail("correction %s decision %q is invalid", correction.ID, correction.Decision)
 		}
 		if correction.Decision != decisionInvalidateResult {
-			if _, ok := findingByID(candidate, correction.FindingID); !ok {
+			finding, ok := findingByID(candidate, correction.FindingID)
+			if !ok {
 				return fail("correction %s finding target is invalid", correction.ID)
 			}
 			if correction.Supersedes == "" || decisionTargets[correction.Supersedes] != correction.ResultDigest+":"+correction.FindingID {
@@ -175,6 +184,11 @@ func (s Series) validate(runID string, action Action) error {
 			}
 			if correction.Decision == decisionReseveritize && !validSeverity(correction.Severity) {
 				return fail("correction %s re-severity target is invalid", correction.ID)
+			}
+			if correction.Decision == decisionReseveritize {
+				if err := ValidateFindingClassification(action, finding.Category, correction.Severity); err != nil {
+					return fail("correction %s: %v", correction.ID, err)
+				}
 			}
 			if correction.Decision == decisionReseveritize && blockingSeverity(correction.Severity) && placeholderRationale(correction.SeverityRationale) {
 				return fail("correction %s raises a blocking severity without an independent rationale", correction.ID)

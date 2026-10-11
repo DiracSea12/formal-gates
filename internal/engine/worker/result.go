@@ -282,7 +282,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	} else if value.Validation != nil {
 		proposed = value.Validation.GranularityReview
 	}
-	completed := input.Handler == "engine.repair.v2" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	completed := input.Handler == "engine.repair.v3" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
 	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
 	if err != nil {
 		return protocol.Event{}, err
@@ -648,9 +648,9 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
 	switch input.Handler {
-	case "engine.development.batch.v2":
+	case "engine.development.batch.v3":
 		return &Development{}, nil
-	case "engine.repair.v2":
+	case "engine.repair.v3":
 		return &Repair{}, nil
 	case "engine.merge.resolve.v2":
 		return &ConflictResolution{}, nil
@@ -687,7 +687,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		return decodedResult{}, "", err
 	}
 	if _, present := fields["remainingWork"]; present {
-		if input.Validation == nil || input.Handler != "engine.development.batch.v2" && input.Handler != "engine.repair.v2" {
+		if input.Validation == nil || input.Handler != "engine.development.batch.v3" && input.Handler != "engine.repair.v3" {
 			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
 		}
 		var partial DevelopmentContinuation
@@ -732,6 +732,11 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		}
 		if input.Review.Action != review.StartReadiness && result.Review.GranularityReview != nil {
 			return result, "", fmt.Errorf("product review cannot propose development granularity")
+		}
+		for _, finding := range result.Review.Findings {
+			if err := review.ValidateFindingClassification(input.Review.Action, finding.Category, finding.Severity); err != nil {
+				return result, "", err
+			}
 		}
 	} else if input.Validation != nil {
 		v := &decodedValidation{Status: protocol.OutcomePass}
@@ -796,7 +801,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	if input.Handler == "engine.repair.v2" && fields["completion"] != nil && fields["granularityReview"] != nil {
+	if input.Handler == "engine.repair.v3" && fields["completion"] != nil && fields["granularityReview"] != nil {
 		var plan struct {
 			Batches []map[string]json.RawMessage `json:"batches"`
 		}
@@ -900,10 +905,10 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 	if input.Validation == nil {
 		return nil
 	}
-	if input.Handler == "engine.development.batch.v2" && input.Validation.Development != nil {
+	if input.Handler == "engine.development.batch.v3" && input.Validation.Development != nil {
 		return input.Validation.Development.Result
 	}
-	if input.Handler == "engine.repair.v2" && input.Validation.Repair != nil {
+	if input.Handler == "engine.repair.v3" && input.Validation.Repair != nil {
 		return input.Validation.Repair.Result
 	}
 	return nil

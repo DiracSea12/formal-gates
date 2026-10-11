@@ -9,11 +9,33 @@
 // 调用方输入不共享可变底层数组——输入 Set 在变换后保持逐字节不变。
 package review
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Action 是开发前审查动作的封闭枚举，恰两值；Controller 按 run 与动作各自
 // 持有一条独立 series。
 type Action string
+
+// TechnicalCategories lists the classifications accepted by start-readiness.
+func TechnicalCategories() []string {
+	return []string{"requirement-conflict", "responsibility-dependency", "acceptance-entry", "implementation-detail"}
+}
+
+// ValidateFindingClassification binds technical severity to its classification.
+func ValidateFindingClassification(action Action, category, severity string) error {
+	if action != StartReadiness {
+		return nil
+	}
+	if !slices.Contains(TechnicalCategories(), category) {
+		return fmt.Errorf("review: technical category is required and must be one of %v", TechnicalCategories())
+	}
+	if category == "implementation-detail" && blockingSeverity(severity) {
+		return fmt.Errorf("review: implementation-detail is at most P2")
+	}
+	return nil
+}
 
 const (
 	// ProductReview 是整体产品语义审查动作。

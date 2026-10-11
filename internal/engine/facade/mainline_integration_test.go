@@ -473,7 +473,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{item}}}})
 	}
 	master.drive()
-	repair, input := master.action("engine.repair.v2")
+	repair, input := master.action("engine.repair.v3")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 || len(input.Repair.ExecutionFailures) != 1 {
 		t.Fatal("simultaneous merge failures did not join one repair")
 	}

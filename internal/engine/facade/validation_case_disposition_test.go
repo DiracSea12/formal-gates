@@ -75,7 +75,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 			if problem == "" {
 				t.Fatal("valid-input defect lacks its canonical problem")
 			}
-			repairAction, repairInput := d.action("engine.repair.v2")
+			repairAction, repairInput := d.action("engine.repair.v3")
 			d.chooseValidation(protocol.ValidationRequest{Kind: "VALIDATION_DETAIL_DISPOSITION", Target: wave.ID, Obligations: []string{problem}, Remedies: []string{"REPAIR", "DISMISS"}}, "DISMISS")
 			d.reopen()
 			d.drive()
@@ -144,7 +144,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: initialWave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 			}
 			d.drive()
-			repair, ri := d.action("engine.repair.v2")
+			repair, ri := d.action("engine.repair.v3")
 			completion := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct whitespace validation", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app with the representative valid input", Observation: "exit zero", Comparison: "normal input succeeds as required"}}}}
 			d.business(repair, completion)
 			d.verifyRepair(completion)

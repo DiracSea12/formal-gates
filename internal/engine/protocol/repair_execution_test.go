@@ -76,7 +76,7 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			}
 			s := &State{RunID: "run", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
-			task := pipelineTask(cd, "engine.repair.v2", "candidate")
+			task := pipelineTask(cd, "engine.repair.v3", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{"original": {ID: "original"}, "source": {ID: "source"}, "later": {ID: "later"}}, Waves: []ValidationWave{{ID: "source-wave", Generation: 1, Status: "REPAIR", Candidate: coverage.ValidationCandidate{Identity: "base"}, Targets: map[string]*ValidationTarget{}, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
 			w := &s.Validation.Waves[0]
 			plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser", Checks: []DevelopmentCheck{{ID: "parse", Command: "printf parsed"}}}, {ID: "logging", Checks: []DevelopmentCheck{{ID: "log", Command: "printf logged"}}}}}
@@ -260,7 +260,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			}
 			s := &State{RunID: "run", Route: "regular", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
-			task := pipelineTask(cd, "engine.repair.v2", "candidate")
+			task := pipelineTask(cd, "engine.repair.v3", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}, Waves: []ValidationWave{{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Counted: true, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
 			w := &s.Validation.Waves[0]
 			base := DevelopmentBatch{ID: "parser", Subtasks: []DevelopmentSubtask{{ID: "parse", Description: "parse"}}, Artifacts: []string{"parser.go"}, Deliverable: "parser", PublicEntry: "app", Interfaces: "input", StateBoundary: "none", Risk: "normal input", DoD: []DevelopmentCriterion{{ID: "normal", Description: "normal input"}}, Checks: []DevelopmentCheck{{ID: "build", Command: "go build ./..."}}, Rollback: "revert", Recovery: "retry", Handoff: "parser output", ContextCost: "one file"}

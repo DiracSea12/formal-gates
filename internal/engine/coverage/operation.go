@@ -2,10 +2,24 @@ package coverage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 )
+
+// ShellCommand preserves approved shell text in the platform's command shell.
+func ShellCommand(command string) []string {
+	if runtime.GOOS == "windows" {
+		shell := os.Getenv("COMSPEC")
+		if shell == "" {
+			shell = "cmd.exe"
+		}
+		return []string{shell, "/D", "/S", "/C", command}
+	}
+	return []string{"/bin/sh", "-c", command}
+}
 
 // OperationKind is the closed invocation domain authored in a QA manifest.
 type OperationKind string

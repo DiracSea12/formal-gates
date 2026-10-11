@@ -263,7 +263,7 @@ func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionInten
 	if workspace.Status != "READY" || workspace.Owner != s.RunID || p.QA != nil && p.QA.WorkspaceRoot != workspace.Path {
 		return nil, fmt.Errorf("check has no registered ready workspace")
 	}
-	argv := []string{"/bin/sh", "-c", p.Check.Command}
+	argv := coverage.ShellCommand(p.Check.Command)
 	cwd, stdin, kind := workspace.Path, "", "approved-development-check"
 	if p.QA != nil {
 		kind = "approved-qa-check"
@@ -282,7 +282,7 @@ func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionInten
 		case coverage.OperationArgv:
 			argv = operation.Argv
 		case coverage.OperationShell:
-			argv = []string{"/bin/sh", "-c", operation.Command}
+			argv = coverage.ShellCommand(operation.Command)
 		default:
 			return nil, fmt.Errorf("QA operation has no approved invocation")
 		}

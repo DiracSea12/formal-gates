@@ -16,7 +16,7 @@ import (
 func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.HostActionIntent) {
 	t.Helper()
 	d := newValidationDriver(t, "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	if stage != "DEVELOPMENT" {
 		d.materialize()
@@ -312,12 +312,12 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 		for _, firstWorker := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/worker-first=%t", held, firstWorker), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.development.batch.v2")
+				id, input := d.action("engine.development.batch.v3")
 				key := input.Binding.Task
 				if firstWorker {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-environment-unavailable"}})
-					id, input = d.action("engine.development.batch.v2")
+					id, input = d.action("engine.development.batch.v3")
 					if input.Binding.Task != key {
 						t.Fatal("worker retry replaced logical task")
 					}
@@ -369,7 +369,7 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 				}
 				ask := d.validationAsk("RETRY")
 				decideValidation(d, ask, "approve")
-				next, ni := d.action("engine.development.batch.v2")
+				next, ni := d.action("engine.development.batch.v3")
 				if next == id || ni.Binding.Task != key {
 					t.Fatal("extra execution did not retain original task")
 				}

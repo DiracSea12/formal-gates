@@ -106,7 +106,7 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	}
 	d.submit(ev)
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			t.Fatal("new contract executed before plan confirmation")
 		}
 	}
@@ -260,7 +260,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v2")
+	id, in := d.action("engine.repair.v3")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"

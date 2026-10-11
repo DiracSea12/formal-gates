@@ -12,7 +12,7 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 	}
 	started := false
 	for _, binding := range s.DispatchBindings {
-		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v2" {
+		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v3" {
 			started = true
 		}
 	}

@@ -1348,7 +1348,7 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 	submitReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
 	readiness := pendingActionID(t, engine)
 	submitReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "FAIL", "advisory", []review.Finding{
-		{Severity: "P2", Message: "advisory concern on the carried conclusion"},
+		{Severity: "P2", Category: "acceptance-entry", Message: "advisory concern on the carried conclusion"},
 	}))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "建议不拆",

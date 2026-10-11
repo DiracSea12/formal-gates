@@ -72,7 +72,7 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	original := d.run.Validation.Findings[finding].History[0]
-	id, in := d.action("engine.repair.v2")
+	id, in := d.action("engine.repair.v3")
 	repair := gateRepairResult(in)
 	d.business(id, repair)
 	d.verifyRepair(repair)
@@ -156,7 +156,7 @@ func gateImpactBoundary(t *testing.T) *validationDriver {
 	resolution := protocol.FindingResolution{FindingID: fid, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run invalid authorization input", Module: "authorization", RootCause: "authorization rejection diagnostic formatting", Consequence: "incorrect rejection diagnostic", Severity: "P2", SeverityRationale: "authorization still rejects input; diagnostic is inaccurate", Verification: review.FindingVerification{Scope: "documented command validation", Severity: "limited diagnostic defect", Causality: "authorization rejection branch", Reproduction: "run invalid authorization input and compare diagnostic", Classification: "implementation"}, Reason: "observed documented rejection but wrong diagnostic"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v2")
+	id, in = d.action("engine.repair.v3")
 	repair := gateRepairResult(in)
 	repair.Development.Paths = []string{"authorization.go"}
 	repair.Development.Summary = "correct authorization rejection logic and diagnostic"

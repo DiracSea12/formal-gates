@@ -194,7 +194,7 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 
 func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.development.batch.v2")
+	id, in := d.action("engine.development.batch.v3")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
 	d.materialize()

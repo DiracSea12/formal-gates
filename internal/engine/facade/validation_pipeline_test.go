@@ -597,7 +597,7 @@ func (d *validationDriver) reviewReady() {
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	design, qi := d.action("engine.qa.design.v2")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
@@ -740,7 +740,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
 	design, qi := d.action("engine.qa.design.v2")
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	m := simpleManifest(qi)
 	m.Edges = nil
 	for _, link := range qi.SourcePoints {
@@ -831,7 +831,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	id, input = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
-	id, input = d.action("engine.development.batch.v2")
+	id, input = d.action("engine.development.batch.v3")
 	trees := map[string]map[string]string{base: candidateSourceTree(t, d, base)}
 	observe := func(intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 		t.Helper()
@@ -1082,7 +1082,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			}
 			d.drive()
-			_, repair := d.action("engine.repair.v2")
+			_, repair := d.action("engine.repair.v3")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}

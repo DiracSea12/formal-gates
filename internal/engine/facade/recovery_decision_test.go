@@ -23,7 +23,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 		for _, reopen := range []bool{false, true} {
 			t.Run(choice+map[bool]string{false: "/normal", true: "/reopen"}[reopen], func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.development.batch.v2")
+				id, input := d.action("engine.development.batch.v3")
 				d.receipt(id)
 				original := d.run.Attempts[input.Binding.Task]
 				started, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
@@ -163,7 +163,7 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.development.batch.v2")
+			id, in := d.action("engine.development.batch.v3")
 			d.receipt(id)
 			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 			d.submit(start)
@@ -392,7 +392,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	events := []protocol.Event{}
-	for _, role := range []string{"engine.development.batch.v2", "engine.qa.design.v2"} {
+	for _, role := range []string{"engine.development.batch.v3", "engine.qa.design.v2"} {
 		id, _ := d.action(role)
 		d.receipt(id)
 		events = append(events, protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native failure:" + id, InterruptionReason: "native configuration requires attention"}})
@@ -444,7 +444,7 @@ func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 
 func TestWorkerRecoveryCarryKeepsOriginalAskAndWork(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.development.batch.v2")
+	id, in := d.action("engine.development.batch.v3")
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native unavailable configuration", InterruptionReason: "native configuration requires attention"}})
 	var request string

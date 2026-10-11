@@ -43,7 +43,7 @@ func nativePathsFixture(t *testing.T) (string, func(string, string) string) {
 		if err := os.Mkdir(job, 0700); err != nil {
 			t.Fatal(err)
 		}
-		material := worker.Material{Input: protocol.WorkerInput{VCS: "git", Handler: "engine.development.batch.v2", Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{Artifacts: []string{artifact}}}}}}
+		material := worker.Material{Input: protocol.WorkerInput{VCS: "git", Handler: "engine.development.batch.v3", Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{Artifacts: []string{artifact}}}}}}
 		materialPath := filepath.Join(job, "material.json")
 		body, _ := json.Marshal(material)
 		if err := os.WriteFile(materialPath, body, 0600); err != nil {

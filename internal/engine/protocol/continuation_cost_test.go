@@ -11,7 +11,7 @@ import (
 )
 
 func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v2")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v3")
 	probe := &costSourceProbe{state: CostSourceReady}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	partial := WorkerResultPayload{ActionID: pending.ActionID, Provider: s.RunProvider, Outcome: OutcomePass, PayloadDigest: "actual-first", Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Read the actual contract", RemainingWork: "Deliver app.txt"}}}
@@ -82,7 +82,7 @@ func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) 
 func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 	for _, location := range []string{"current", "ended-awaiting-result"} {
 		t.Run(location, func(t *testing.T) {
-			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v2")
+			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v3")
 			attempt := s.Attempts[pending.Task]
 			attempt.Attempts = 0
 			s.Attempts[pending.Task] = attempt
@@ -129,7 +129,7 @@ func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 }
 
 func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v2")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v3")
 	probe := &costSourceProbe{state: CostSourceReady, usage: cost.Usage{InputCacheHitTokens: 10, InputCacheMissTokens: 20, OutputTokens: 5}}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	cap := int64(35)
@@ -156,7 +156,7 @@ func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
 }
 
 func TestResumedUnavailableDispatchRecordsKnownNativeUsage(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v2")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v3")
 	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "original invocation has no provider usage"}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	e.dispatchCostHeld(s, pending.ActionID)

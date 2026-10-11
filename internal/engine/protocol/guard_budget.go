@@ -474,7 +474,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.development.batch.v2":
+	case "engine.development.batch.v3":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
 			return guard.Provenance{}, 0, false
@@ -545,7 +545,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
-	case "engine.repair.v2":
+	case "engine.repair.v3":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}

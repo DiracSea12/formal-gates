@@ -30,7 +30,7 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 		t.Fatal(err)
 	}
 	var original validate.StandaloneGateContext
-	if err := json.Unmarshal(data, &original); err != nil || len(original.LocationFacts) != 1 || original.LocationFacts[0].Paths[0] != "example.txt" || original.LocationFacts[0].Content != "first line\nsecond line\n" {
+	if err := json.Unmarshal(data, &original); err != nil || len(original.LocationFacts) != 1 || original.LocationFacts[0].Paths[0] != "example.txt" || !bytes.Equal(original.LocationFacts[0].Content, []byte("first line\nsecond line\n")) {
 		t.Fatal("gate run did not persist its exact original source context", err)
 	}
 	if err := os.Remove(filepath.Join(root, "example.txt")); err != nil {

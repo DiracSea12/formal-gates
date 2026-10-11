@@ -50,7 +50,7 @@ func CaptureStandaloneGateContext(root, provider, scope string) (StandaloneGateC
 			content, mode = row.BaseContent, row.BaseMode
 		}
 		if mode != "040000" && utf8.Valid(content) {
-			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "read", Paths: []string{row.Path}, Content: string(content)})
+			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "read", Paths: []string{row.Path}, Content: content})
 		} else {
 			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "listing", Paths: []string{row.Path}})
 		}

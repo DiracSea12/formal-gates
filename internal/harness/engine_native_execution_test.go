@@ -679,7 +679,7 @@ func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (f
 		t.Fatal(err)
 	}
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v2" {
+		if input.Handler == "engine.development.batch.v3" {
 			ref := run.WorkerMaterials[id]
 			body, err := os.ReadFile(ref.Path)
 			if err != nil {

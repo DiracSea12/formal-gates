@@ -7,7 +7,7 @@ import (
 )
 
 func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v2", "engine.repair.v2", "engine.validation.observation.v2"} {
+	for _, role := range []string{"engine.development.batch.v3", "engine.repair.v3", "engine.validation.observation.v2"} {
 		t.Run(role, func(t *testing.T) {
 			e, state, pending := unfinishedDevelopmentState(t, role)
 			if role == "engine.validation.observation.v2" {

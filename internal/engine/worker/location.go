@@ -20,7 +20,7 @@ type Location struct {
 type LocationFact struct {
 	Kind    string   `json:"kind"`
 	Paths   []string `json:"paths,omitempty"`
-	Content string   `json:"content,omitempty"`
+	Content []byte   `json:"content,omitempty"`
 }
 
 // ResultSource carries the native verifier's answer and source-bound facts.
@@ -69,7 +69,7 @@ func LocationPaths(locations []Location, facts []LocationFact, document requirem
 			if entry < 1 || entry > len(fact.Paths) {
 				return nil, fmt.Errorf("location selects an original published entry")
 			}
-			path, content = fact.Paths[entry-1], fact.Content
+			path, content = fact.Paths[entry-1], string(fact.Content)
 		}
 		if line != 0 {
 			if line < 1 || content == "" || line > len(strings.Split(strings.TrimSuffix(content, "\n"), "\n")) {

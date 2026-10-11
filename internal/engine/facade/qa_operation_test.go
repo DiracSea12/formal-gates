@@ -49,7 +49,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved operation contract"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "whitebox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch.v2")
+	development, di := d.action("engine.development.batch.v3")
 	cases := []struct {
 		name                string
 		operation           coverage.Operation
@@ -234,7 +234,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved command case"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
-	dev, di := d.action("engine.development.batch.v2")
+	dev, di := d.action("engine.development.batch.v3")
 	design, qi := d.action("engine.qa.design.v2")
 	manifest := simpleManifest(qi)
 	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '%s' "$1"; cat; printf x >> qa-executions`, "fixture", "quoted words"}, Stdin: " actual-input"}}
@@ -391,7 +391,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Frozen precise Go cases"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))
 	d.drive()
-	dev, input := d.action("engine.development.batch.v2")
+	dev, input := d.action("engine.development.batch.v3")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // delivered source\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

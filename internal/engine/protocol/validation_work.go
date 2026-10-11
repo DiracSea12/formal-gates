@@ -223,7 +223,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		context, current := s.repairComparisonContext(b.Task, cd)
 		return current && context.binding == b && s.repairComparisonResult(b.Task) == nil
 	}
-	if s.validationRole(b.Task, cd) == "engine.development.batch.v2" {
+	if s.validationRole(b.Task, cd) == "engine.development.batch.v3" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil
 	}
@@ -234,7 +234,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
-	if s.validationRole(b.Task, cd) == "engine.repair.v2" {
+	if s.validationRole(b.Task, cd) == "engine.repair.v3" {
 		for _, work := range s.repairWork() {
 			if work.task == b.Task && work.wave.ID == b.WaveID {
 				return work.result == nil

@@ -50,11 +50,14 @@ type DevelopmentCriterion struct {
 }
 
 const (
+	CheckEdit      = "EDIT"
 	CheckFullBuild = "FULL_BUILD"
 	CheckFullTests = "FULL_TESTS"
 )
 
-func DevelopmentCheckPurposes() []string { return []string{"", CheckFullBuild, CheckFullTests} }
+func DevelopmentCheckPurposes() []string {
+	return []string{"", CheckEdit, CheckFullBuild, CheckFullTests}
+}
 
 type DevelopmentCheck struct {
 	Purpose string `json:"purpose,omitempty"`
@@ -277,7 +280,7 @@ func (s *State) ReadinessProposal() *GranularityReview {
 	return proposal
 }
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return pipelineTask(cd, "engine.development.batch.v2", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
+	return pipelineTask(cd, "engine.development.batch.v3", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
 }
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
 	id, p := s.readinessProposal()
