@@ -896,17 +896,7 @@ func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directo
 	c.stdin = stdinWrite
 	c.cmd = exec.Command(argv[0], argv[1:]...)
 	c.cmd.Dir = workspace
-	childEnv := os.Environ()
-	for key, value := range environment {
-		filtered := childEnv[:0]
-		for _, entry := range childEnv {
-			if !strings.HasPrefix(entry, key+"=") {
-				filtered = append(filtered, entry)
-			}
-		}
-		childEnv = append(filtered, key+"="+value)
-	}
-	c.cmd.Env = childEnv
+	c.cmd.Env = nativeChildEnvironment(environment)
 	c.cmd.Stdin = stdinRead
 	c.cmd.Stdout = stdoutWrite
 	c.cmd.Stderr = c.errorsFile
@@ -1736,4 +1726,19 @@ func floatOf(value any) float64 {
 		}
 	}
 	return 0
+}
+
+// Native subprocesses share the issued launch environment.
+func nativeChildEnvironment(environment map[string]string) []string {
+	childEnv := os.Environ()
+	for key, value := range environment {
+		filtered := childEnv[:0]
+		for _, entry := range childEnv {
+			if !strings.HasPrefix(entry, key+"=") {
+				filtered = append(filtered, entry)
+			}
+		}
+		childEnv = append(filtered, key+"="+value)
+	}
+	return childEnv
 }

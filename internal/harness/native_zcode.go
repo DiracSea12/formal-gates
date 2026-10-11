@@ -306,7 +306,7 @@ func zcodeCredentialHelperPath() (string, error) {
 // user decision are involved. The value is never returned into evidence --
 // answers go through the reply loop, which records the method and the status
 // only -- and is never logged, written or reported by this transport.
-func zcodeRequestAuth(provider string, home ...string) string {
+func zcodeRequestAuth(provider string, environment map[string]string) string {
 	if provider == "" {
 		return ""
 	}
@@ -319,7 +319,8 @@ func zcodeRequestAuth(provider string, home ...string) string {
 		return ""
 	}
 	var stdout bytes.Buffer
-	cmd := exec.Command(node, helper, provider, zcodeCredentialStore(home...))
+	cmd := exec.Command(node, helper, provider, zcodeCredentialStore(environment["ZCODE_DATA_BASE_DIR"]))
+	cmd.Env = nativeChildEnvironment(environment)
 	cmd.Stdout = &stdout
 	// stderr is captured and dropped by the reference; it never carries the
 	// secret and is never recorded here either.
@@ -346,11 +347,12 @@ func zcodeRequestAuth(provider string, home ...string) string {
 // the event and resets the drained buffer before waiting for more, and
 // native-events.jsonl is the only durable record of the whole turn.
 type zcodeClient struct {
-	hostData  string
-	client    *nativeClient
-	directory string
-	identity  string
-	events    []map[string]any
+	environment map[string]string
+	hostData    string
+	client      *nativeClient
+	directory   string
+	identity    string
+	events      []map[string]any
 }
 
 // zcodePermissionMethod and zcodeUserInputMethod are the two client-directed
@@ -580,7 +582,7 @@ func newZcodeClient(launch map[string]any, workspace, directory string, environm
 	if err != nil {
 		return nil, err
 	}
-	z := &zcodeClient{hostData: environment["ZCODE_DATA_BASE_DIR"], directory: directory}
+	z := &zcodeClient{hostData: environment["ZCODE_DATA_BASE_DIR"], environment: environment, directory: directory}
 	z.client, err = newNativeClientWithEnv(nativeHooks{
 		transportPrefix: "ZCODE_TRANSPORT",
 		requestPrefix:   "ZCODE_NATIVE",
@@ -633,7 +635,7 @@ func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 		// credential the reply says so and the host reports the failure itself,
 		// so a missing credential is never laundered into a denied turn.
 		provider, _ := getOf(params, "providerId").(string)
-		secret := zcodeRequestAuth(provider, z.hostData)
+		secret := zcodeRequestAuth(provider, z.environment)
 		if secret == "" {
 			return &nativeReply{
 				payload: map[string]any{"result": map[string]any{
