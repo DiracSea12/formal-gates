@@ -11,6 +11,7 @@ import (
 // ValidationInput is a read-only projection of the exact issued obligation.
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
+	CommandCases        []string               `json:"commandCases,omitempty"`
 	RevisionInstruction *QARevisionInstruction `json:"revisionInstruction,omitempty"`
 	Observation         *ObservationInput      `json:"observation,omitempty"`
 	ReviewBase          string                 `json:"reviewBase,omitempty"`
@@ -231,6 +232,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			if target := wave.Targets[pending.Task.String()]; target != nil {
 				input.RequiredCases = slices.Clone(requiredExecutionCases(wave, target, whitelist))
 				input.ExecutionFacts = s.qaExecutionFacts(target, cd)
+				input.CommandCases = s.qaCommandCases(target, cd)
 				input.Inherited, _ = s.executionInheritance(wave, mode, whitelist, input.RequiredCases, target.ScopeReason)
 				if target.Execution != nil {
 					input.Completed = target.Execution.Records

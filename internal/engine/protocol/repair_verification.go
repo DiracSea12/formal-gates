@@ -237,7 +237,7 @@ func (s *State) repairPlanReceipt(plan CheckParameters) (ExecutionOperationFact,
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || digestOfCanonical(p) != expectedDigest || !s.nativeActionAllowed(intent) || validateCheckReceipt(intent, receipt) != nil {
+		if err != nil || digestOfCanonical(p) != expectedDigest || !s.nativeActionAllowed(intent) || s.validateNativeCheckReceipt(intent, receipt) != nil {
 			continue
 		}
 		var evidence CheckEvidence

@@ -34,7 +34,7 @@ func decodeSemantic(t *testing.T, input protocol.WorkerInput, result any) protoc
 func TestDesignAssemblesAllSourcePointRelations(t *testing.T) {
 	input := semanticInput()
 	before, _ := json.Marshal(input)
-	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "MISUSE", Oracle: "actual oracle", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", ""}, Stdin: "input"}, {Kind: coverage.OperationShell, Command: "./app --error"}}}, {Scenario: "SUCCESS", Oracle: "other oracle"}}, Coverage: [][]int{{1, 2}, {1}}}, Checkpoint: true}
+	value := Design{DesignManifest: DesignManifest{Replace: true, Cases: []DesignedCase{{Scenario: "MISUSE", Oracle: "actual oracle", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", ""}, Stdin: "input"}, {Kind: coverage.OperationShell, Command: "./app --error"}}}, {Scenario: "SUCCESS", Oracle: "other oracle"}}, Coverage: [][]int{{1, 2}, {1}}}, Checkpoint: true}
 	payload := decodeSemantic(t, input, value)
 	manifest := payload.Validation.Manifest
 	if payload.Validation.Binding != input.Validation.Binding || manifest.Binding != input.Validation.Manifest.Binding || !reflect.DeepEqual(manifest.Sources, input.Validation.Manifest.Sources) || !reflect.DeepEqual(manifest.Points, input.Validation.Manifest.Points) {

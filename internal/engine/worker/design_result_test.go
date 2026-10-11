@@ -30,7 +30,7 @@ func retainedDesignInput() protocol.WorkerInput {
 func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 	input := retainedDesignInput()
 	before, _ := json.Marshal(input)
-	raw := []byte(`{"retainCases":[1],"retainSharedSteps":[1],"cases":[{"scenario":"SUCCESS","oracle":"rewritten oracle"}],"coverage":[null,[2]]}`)
+	raw := []byte(`{"removeCases":[3],"removeSharedSteps":[2],"cases":[{"case":2,"scenario":"SUCCESS","oracle":"rewritten oracle"}],"coverage":[null,[2]]}`)
 	original := bytes.Clone(raw)
 	result, err := DecodeResultWithPaths(input, "result", raw, "verified-original-output", []string{})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 	if !reflect.DeepEqual(manifest.Cases[0], input.Validation.Manifest.Cases[0]) || !reflect.DeepEqual(manifest.SharedSteps, input.Validation.Manifest.SharedSteps[:1]) {
 		t.Fatal("retention changed issued narrative, operations, argv/stdin or files")
 	}
-	if len(manifest.Cases) != 2 || manifest.Cases[1].Oracle != "rewritten oracle" || len(manifest.Edges) != 3 || manifest.Edges[2].CaseID != manifest.Cases[1].CaseID {
+	if len(manifest.Cases) != 2 || manifest.Cases[1].CaseID != input.Validation.Manifest.Cases[1].CaseID || manifest.Cases[1].Oracle != "rewritten oracle" || len(manifest.Edges) != 3 || manifest.Edges[2].CaseID != manifest.Cases[1].CaseID {
 		t.Fatal("rewriting or deleting a case changed retained relations")
 	}
 	input.Validation.Interruption = &protocol.RecoveryRecord{}
@@ -57,13 +57,13 @@ func TestDesignRetentionPreservesIssuedContentAndCoverage(t *testing.T) {
 
 func TestDesignCoverageReplacesAndClearsExplicitPointMappings(t *testing.T) {
 	input := retainedDesignInput()
-	value := Design{DesignManifest: DesignManifest{RetainCases: []int{1, 2}, RetainSharedSteps: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{{}, {1}}}}
+	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{}, Coverage: [][]int{{}, {1}}}}
 	manifest := decodeSemantic(t, input, value).Validation.Manifest
 	want := []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "two", CaseID: "keep"}}
 	if !reflect.DeepEqual(manifest.Edges, want) {
 		t.Fatalf("changed mapping mixed with original relations: %+v", manifest.Edges)
 	}
-	value.DesignManifest.RetainCases, value.DesignManifest.RetainSharedSteps = nil, nil
+	value.DesignManifest.RemoveCases, value.DesignManifest.RemoveSharedSteps = []int{1, 2, 3}, []int{1, 2}
 	value.DesignManifest.Coverage = [][]int{nil, nil}
 	manifest = decodeSemantic(t, input, value).Validation.Manifest
 	if len(manifest.Cases) != 0 || len(manifest.SharedSteps) != 0 || len(manifest.Edges) != 0 {
@@ -71,13 +71,13 @@ func TestDesignCoverageReplacesAndClearsExplicitPointMappings(t *testing.T) {
 	}
 }
 
-func TestDesignRetentionRejectsUnknownDuplicateAndAuthoredIDs(t *testing.T) {
+func TestDesignChangeRejectsUnknownDuplicateAndAuthoredIDs(t *testing.T) {
 	for _, raw := range []string{
-		`{"retainCases":["unknown"],"cases":[],"coverage":{}}`,
-		`{"retainCases":["keep","keep"],"cases":[],"coverage":{}}`,
+		`{"removeCases":[99],"cases":[],"coverage":[null,null]}`,
+		`{"removeCases":[1,1],"cases":[],"coverage":[null,null]}`,
 		`{"retainCases":["keep"],"cases":[{"caseId":"keep","scenario":"MISUSE","oracle":"conflicting body"}],"coverage":{}}`,
-		`{"retainSharedSteps":["unknown"],"cases":[],"coverage":{}}`,
-		`{"retainSharedSteps":["setup","setup"],"cases":[],"coverage":{}}`,
+		`{"removeSharedSteps":[99],"cases":[],"coverage":[null,null]}`,
+		`{"removeSharedSteps":[1,1],"cases":[],"coverage":[null,null]}`,
 		`{"retainSharedSteps":["setup"],"sharedSteps":[{"id":"setup","procedure":"conflicting instructions"}],"cases":[],"coverage":{}}`,
 	} {
 		if _, err := DecodeResultWithPaths(retainedDesignInput(), "result", []byte(raw), "original-output", []string{}); err == nil {
@@ -88,7 +88,7 @@ func TestDesignRetentionRejectsUnknownDuplicateAndAuthoredIDs(t *testing.T) {
 
 func TestDesignRetentionPreservesSharedReferenceForCoreValidation(t *testing.T) {
 	input := retainedDesignInput()
-	manifest := decodeSemantic(t, input, Design{DesignManifest: DesignManifest{RetainCases: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{nil, nil}}}).Validation.Manifest
+	manifest := decodeSemantic(t, input, Design{DesignManifest: DesignManifest{RemoveSharedSteps: []int{1, 2}, Cases: []DesignedCase{}, Coverage: [][]int{nil, nil}}}).Validation.Manifest
 	if len(manifest.SharedSteps) != 0 || !reflect.DeepEqual(manifest.Cases[0].SharedSteps, []string{"setup"}) {
 		t.Fatal("assembly invented a shared step or erased a real invalid reference")
 	}
@@ -136,7 +136,7 @@ func TestDesignCoverageKeepsOriginalRelationValuesAndOrder(t *testing.T) {
 	input.Validation.Manifest.Edges[0], input.Validation.Manifest.Edges[1] = input.Validation.Manifest.Edges[1], input.Validation.Manifest.Edges[0]
 	input.Validation.Manifest.Edges[0].ReviewKind = ""
 	original := append([]coverage.CoverageEdge(nil), input.Validation.Manifest.Edges[:2]...)
-	value := Design{DesignManifest: DesignManifest{RetainCases: []int{1}, RetainSharedSteps: []int{1}, Cases: []DesignedCase{}, Coverage: [][]int{{1}, nil}}}
+	value := Design{DesignManifest: DesignManifest{RemoveCases: []int{2, 3}, RemoveSharedSteps: []int{2}, Cases: []DesignedCase{}, Coverage: [][]int{{1}, nil}}}
 	manifest := decodeSemantic(t, input, value).Validation.Manifest
 	if !reflect.DeepEqual(manifest.Edges, original) || !reflect.DeepEqual(manifest.Cases[0], input.Validation.Manifest.Cases[0]) {
 		t.Fatal("unchanged selected coverage relations or case were rewritten by model choice order")
@@ -147,7 +147,7 @@ func TestWhiteboxDesignKeepsCompleteNativeDeliveryPaths(t *testing.T) {
 	input := retainedDesignInput()
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
 	paths := []string{"keep.fixture", "support.data", "removed.fixture"}
-	raw := []byte(`{"retainCases":[1],"retainSharedSteps":[1],"cases":[],"coverage":[null,[]]}`)
+	raw := []byte(`{"removeCases":[2,3],"removeSharedSteps":[2],"cases":[],"coverage":[null,[]]}`)
 	event, err := DecodeResultWithPaths(input, "result", raw, "original-source", paths)
 	if err != nil {
 		t.Fatal(err)

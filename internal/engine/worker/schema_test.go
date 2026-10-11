@@ -16,7 +16,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"summary"}, "engine.repair": {"summary", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "retainCases", "retainSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"findings"},
+		"engine.development.batch": {"summary"}, "engine.repair": {"summary", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}

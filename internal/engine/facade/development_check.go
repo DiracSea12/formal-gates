@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
@@ -48,12 +49,15 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 		testName = resolved.GoTestName
 	}
 
+	var recorded map[string]any
+	requestErr := readCheckDocument(filepath.Join(directory, "request.json"), &recorded)
+	if requestErr == nil && p.QA != nil && p.QA.Preparation != nil {
+		request["qaPreparationInput"] = recorded["qaPreparationInput"]
+	}
 	digest, err := f.checkRequestDigest(request)
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	var recorded map[string]any
-	requestErr := readCheckDocument(filepath.Join(directory, "request.json"), &recorded)
 	if requestErr == nil {
 		actual, err := f.checkRequestDigest(recorded)
 		if err != nil || actual != digest {
@@ -154,6 +158,13 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 				evidence.GoResult = coverage.GoTestExecutionResult(stdout, testName)
 			}
 		}
+		if p.QA != nil && p.QA.Preparation != nil {
+			evidence.PreparationInput, _ = request["qaPreparationInput"].(string)
+			evidence.PreparationArtifacts, err = preparationArtifacts(p)
+			if err != nil {
+				evidence.Error = err.Error()
+			}
+		}
 		return nativeResult{Check: evidence}, true, nil
 	}
 	if !os.IsNotExist(receiptErr) {
@@ -192,6 +203,21 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 	if !mayWrite {
 		return nativeResult{}, false, nil
 	}
+	if p.QA != nil && p.QA.Preparation != nil && !p.QA.Preparation.Independent {
+		input, _ := request["qaPreparationInput"].(string)
+		unlock, err := coordination.AcquirePath(filepath.Join(f.stateDir, "checks", "preparation-"+strings.TrimPrefix(input, "sha256:")+".lock"), "QA preparation")
+		if err != nil {
+			var held *coordination.LockHeldError
+			if errors.As(err, &held) {
+				return nativeResult{}, false, nil
+			}
+			return nativeResult{}, false, err
+		}
+		defer unlock()
+		if result, done, found, err := f.reusePreparation(s, intent, p, input); err != nil || found {
+			return result, done, err
+		}
+	}
 	if p.QA != nil && p.QA.GoTestRef != "" {
 		if _, err := coverage.ResolveCaseOperations(workspace.Path, coverage.AcceptanceCase{CaseID: p.QA.CaseID, TestRef: p.QA.GoTestRef}); err != nil {
 			*invoked = true
@@ -200,6 +226,15 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 	}
 	err = f.admission.write(func() error {
 		*invoked = true
+		if p.QA != nil {
+			for name, value := range request["environment"].(map[string]any) {
+				if strings.HasPrefix(name, "FORMAL_GATES_QA_") || name == "TMPDIR" {
+					if err := os.MkdirAll(value.(string), 0700); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		if err := os.MkdirAll(directory, 0755); err != nil {
 			return err
 		}
@@ -252,7 +287,22 @@ func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionInten
 			return nil, fmt.Errorf("QA operation has no approved invocation")
 		}
 	}
-	return map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": map[string]any{"FORMAL_GATES_WORKSPACE": workspace.Path}, "parameters_digest": intent.PayloadDigest, "engine": map[string]any{"root": f.root, "runId": f.runID, "actionId": intent.ActionID}}, nil
+	environment := map[string]any{"FORMAL_GATES_WORKSPACE": workspace.Path}
+	if p.QA != nil && (p.QA.Preparation == nil || p.QA.Preparation.Independent) {
+		base := filepath.Join(workspace.Path, ".gates", "tmp", "qa-cases", strings.TrimPrefix(preparationDigest(p.QA.CaseID), "sha256:"))
+		for _, item := range []struct{ Name, Directory string }{{"FORMAL_GATES_QA_INPUT_DIR", "input"}, {"FORMAL_GATES_QA_WORK_DIR", "work"}, {"FORMAL_GATES_QA_OUTPUT_DIR", "output"}, {"TMPDIR", "temp"}, {"TMP", "temp"}, {"TEMP", "temp"}} {
+			environment[item.Name] = filepath.Join(base, item.Directory)
+		}
+	}
+	request := map[string]any{"kind": kind, "argv": argv, "cwd": cwd, "stdin": stdin, "environment": environment, "parameters_digest": intent.PayloadDigest, "engine": map[string]any{"root": f.root, "runId": f.runID, "actionId": intent.ActionID}}
+	if p.QA != nil && p.QA.Preparation != nil {
+		input, err := f.qaPreparationInput(s, p, request)
+		if err != nil {
+			return nil, err
+		}
+		request["qaPreparationInput"] = input
+	}
+	return request, nil
 }
 
 func (f *Facade) checkBridge(operation string, payload any, result any) error {

@@ -39,25 +39,28 @@ type CheckStreamProof struct {
 }
 
 type CheckEvidence struct {
-	ParametersDigest string           `json:"parametersDigest"`
-	SourceActionID   string           `json:"sourceActionId"`
-	SourceIdentity   string           `json:"sourceIdentity"`
-	SourceDigest     string           `json:"sourceDigest"`
-	WorkspaceID      string           `json:"workspaceId"`
-	RequestDigest    string           `json:"requestDigest"`
-	Directory        string           `json:"directory"`
-	ExitCode         int              `json:"exitCode"`
-	Error            string           `json:"error"`
-	Stdout           CheckStreamProof `json:"stdout"`
-	Stderr           CheckStreamProof `json:"stderr"`
-	StdoutText       string           `json:"stdoutText,omitempty"`
-	StderrText       string           `json:"stderrText,omitempty"`
-	Tool             string           `json:"tool,omitempty"`
-	Environment      string           `json:"environment,omitempty"`
-	Invocation       string           `json:"invocation,omitempty"`
-	WorkingDirectory string           `json:"workingDirectory,omitempty"`
-	GoTestName       string           `json:"goTestName,omitempty"`
-	GoResult         string           `json:"goResult,omitempty"`
+	PreparationInput        string            `json:"preparationInput,omitempty"`
+	PreparationArtifacts    map[string]string `json:"preparationArtifacts,omitempty"`
+	PreparationSourceAction string            `json:"preparationSourceAction,omitempty"`
+	ParametersDigest        string            `json:"parametersDigest"`
+	SourceActionID          string            `json:"sourceActionId"`
+	SourceIdentity          string            `json:"sourceIdentity"`
+	SourceDigest            string            `json:"sourceDigest"`
+	WorkspaceID             string            `json:"workspaceId"`
+	RequestDigest           string            `json:"requestDigest"`
+	Directory               string            `json:"directory"`
+	ExitCode                int               `json:"exitCode"`
+	Error                   string            `json:"error"`
+	Stdout                  CheckStreamProof  `json:"stdout"`
+	Stderr                  CheckStreamProof  `json:"stderr"`
+	StdoutText              string            `json:"stdoutText,omitempty"`
+	StderrText              string            `json:"stderrText,omitempty"`
+	Tool                    string            `json:"tool,omitempty"`
+	Environment             string            `json:"environment,omitempty"`
+	Invocation              string            `json:"invocation,omitempty"`
+	WorkingDirectory        string            `json:"workingDirectory,omitempty"`
+	GoTestName              string            `json:"goTestName,omitempty"`
+	GoResult                string            `json:"goResult,omitempty"`
 }
 
 func checkParameters(intent HostActionIntent) (CheckParameters, error) {
@@ -283,7 +286,7 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || p.SourceActionID != action || p.Check.ID != check || validateCheckReceipt(intent, receipt) != nil {
+		if err != nil || p.SourceActionID != action || p.Check.ID != check || s.validateNativeCheckReceipt(intent, receipt) != nil {
 			continue
 		}
 		if source, ok := s.editSourceProof(action); ok && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
@@ -490,4 +493,55 @@ func (s *State) editChecks(r WorkerResult) []DevelopmentCheck {
 		}
 	}
 	return checks
+}
+
+// Reused preparation retains the original execution values. The new receipt
+// names that original action; it never rewrites its request or stream identity.
+func (s *State) validateNativeCheckReceipt(intent HostActionIntent, receipt HostActionReceipt) error {
+	var evidence CheckEvidence
+	if err := decodeAdapterValues(receipt, &evidence); err != nil {
+		return err
+	}
+	if evidence.PreparationSourceAction == "" {
+		return validateCheckReceipt(intent, receipt)
+	}
+	original, ok := s.hostIntent(evidence.PreparationSourceAction)
+	if !ok || original.ActionID == intent.ActionID {
+		return validationError("shared preparation has no distinct original execution")
+	}
+	recorded, ok := s.HostActionReceipts[original.ActionID]
+	if !ok || recorded.Status != HostActionStatusExecuted {
+		return validationError("shared preparation original action has no execution receipt")
+	}
+	var actual CheckEvidence
+	if err := decodeAdapterValues(recorded, &actual); err != nil {
+		return err
+	}
+	if actual.PreparationSourceAction != "" || actual.PreparationInput == "" || actual.Error != "" {
+		return validationError("shared preparation source is not an original complete execution")
+	}
+	if err := validateCheckReceipt(original, recorded); err != nil {
+		return err
+	}
+	p, err := checkParameters(intent)
+	if err != nil {
+		return err
+	}
+	prior, err := checkParameters(original)
+	if err != nil || p.QA == nil || prior.QA == nil || p.QA.Preparation == nil || prior.QA.Preparation == nil || p.QA.Preparation.Independent || prior.QA.Preparation.Independent {
+		return validationError("only approved common preparation can reuse an execution")
+	}
+	currentStep, priorStep := *p.QA.Preparation, *prior.QA.Preparation
+	currentStep.ID, priorStep.ID = "", ""
+	if p.SourceIdentity != prior.SourceIdentity || p.SourceDigest != prior.SourceDigest || p.WorkspaceID != prior.WorkspaceID || p.QA.Directory != prior.QA.Directory || p.QA.PreparationOrdinal != prior.QA.PreparationOrdinal || digestOfCanonical(p.QA.Operation) != digestOfCanonical(prior.QA.Operation) || digestOfCanonical(currentStep) != digestOfCanonical(priorStep) {
+		return validationError("shared preparation original inputs differ")
+	}
+	evidence.PreparationSourceAction = ""
+	if digestOfCanonical(evidence) != digestOfCanonical(actual) {
+		return validationError("shared preparation altered original execution or stream facts")
+	}
+	if _, obsolete := s.ObsoleteActions[original.ActionID]; obsolete {
+		return validationError("shared preparation original action is obsolete")
+	}
+	return nil
 }

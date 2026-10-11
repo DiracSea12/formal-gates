@@ -301,12 +301,6 @@ func (s *State) validateFinalCoverage() error {
 		if set == nil || set.Review == nil {
 			return fmt.Errorf("QA %s has no complete review", mode)
 		}
-		for _, item := range set.Manifest.Cases {
-			_, referenceErr := coverage.GoTestOperation(item.TestRef)
-			if len(item.Operations) == 0 && referenceErr != nil {
-				return fmt.Errorf("QA %s case %s lacks approved operations or an exact Go test reference; revise its design and review before freezing", mode, item.CaseID)
-			}
-		}
 		c := modeCoverageContract(s.coverageContract(s.Validation.Candidate), mode)
 		if _, err := c.ValidateReviews([]coverage.ReviewResult{*set.Review}); err != nil {
 			return err

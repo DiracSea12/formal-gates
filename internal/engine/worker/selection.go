@@ -196,35 +196,57 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 	for _, item := range issued.SharedSteps {
 		stepIDs = append(stepIDs, item.ID)
 	}
-	retainedCases, err := selectIDs(value.RetainCases, caseIDs)
+	removedCases, err := selectIDs(value.RemoveCases, caseIDs)
 	if err != nil {
 		return nil, err
 	}
-	retainedSteps, err := selectIDs(value.RetainSharedSteps, stepIDs)
+	removedSteps, err := selectIDs(value.RemoveSharedSteps, stepIDs)
 	if err != nil {
 		return nil, err
 	}
-	result := &Manifest{RetainCases: retainedCases, RetainSharedSteps: retainedSteps, Coverage: map[string][]string{}}
+	if value.Replace && (len(removedCases) > 0 || len(removedSteps) > 0) {
+		return nil, fmt.Errorf("replacement cannot also remove individual items")
+	}
+	result := &Manifest{Replace: value.Replace, RemoveCases: removedCases, RemoveSharedSteps: removedSteps, Coverage: map[string][]string{}}
 	for index, item := range value.SharedSteps {
 		id := contentID("shared", struct {
 			Binding any
 			Item    any
 		}{issued.Binding, item}, index)
-		result.SharedSteps = append(result.SharedSteps, SharedStep{ID: id, Procedure: item.Procedure, Operations: item.Operations, Files: item.Files})
+		if item.Step != 0 {
+			selected, err := selectIDs([]int{item.Step}, stepIDs[:len(issued.SharedSteps)])
+			if err != nil {
+				return nil, err
+			}
+			id = selected[0]
+		}
+		result.SharedSteps = append(result.SharedSteps, SharedStep{Artifacts: item.Artifacts, Independent: item.Independent, ID: id, Procedure: item.Procedure, Operations: item.Operations, Files: item.Files})
 		stepIDs = append(stepIDs, id)
 	}
-	selectedCaseIDs := slices.Clone(retainedCases)
+	selectedCaseIDs := slices.Clone(caseIDs)
+	if value.Replace {
+		selectedCaseIDs = nil
+	}
 	for index, item := range value.Cases {
 		id := contentID("case", struct {
 			Binding any
 			Item    any
 		}{issued.Binding, item}, index)
+		if item.Case != 0 {
+			selected, err := selectIDs([]int{item.Case}, caseIDs)
+			if err != nil {
+				return nil, err
+			}
+			id = selected[0]
+		}
 		steps, err := selectIDs(item.SharedSteps, stepIDs)
 		if err != nil {
 			return nil, err
 		}
 		result.Cases = append(result.Cases, Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestFile: item.TestFile, TestSymbol: item.TestSymbol})
-		selectedCaseIDs = append(selectedCaseIDs, id)
+		if !slices.Contains(selectedCaseIDs, id) {
+			selectedCaseIDs = append(selectedCaseIDs, id)
+		}
 	}
 	if len(value.Coverage) != len(issued.Points) {
 		return nil, fmt.Errorf("coverage must follow issued acceptance-point order")

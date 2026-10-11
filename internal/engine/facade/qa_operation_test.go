@@ -207,7 +207,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				t.Fatalf("Go exact event/name missing: %+v", first)
 			}
 			second := observeDevelopmentCheck(t, f, s, intent, true)
-			if first != second {
+			if !reflect.DeepEqual(first, second) {
 				t.Fatalf("original receipt changed across recovery: first %+v second %+v", first, second)
 			}
 		})
@@ -465,7 +465,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	restored := driverState(t, d)
 	var before, after protocol.CheckEvidence
 	before = issued.ExecutionFacts[0].Operations[0].Evidence
-	if err := decodeReceiptEvidence(restored.HostActionReceipts[issued.ExecutionFacts[0].Operations[0].ActionID], &after); err != nil || before != after {
+	if err := decodeReceiptEvidence(restored.HostActionReceipts[issued.ExecutionFacts[0].Operations[0].ActionID], &after); err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatalf("reopen repeated or changed the actual Go execution: %+v %v", after, err)
 	}
 }

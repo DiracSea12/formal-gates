@@ -123,6 +123,12 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	} else {
 		return WorkerInput{}, false
 	}
+	if input.Handler == "engine.qa.execution" {
+		wave := s.validationWave(input.Validation.Binding.WaveID)
+		if wave == nil || !s.qaComparisonReady(wave.Targets[pending.Task.String()], cd) {
+			return WorkerInput{}, false
+		}
+	}
 	if input.Handler == "engine.repair" {
 		input.ApprovedChecks = s.fullProjectChecks()
 		_, plan, _ := s.confirmedDevelopmentPlan()

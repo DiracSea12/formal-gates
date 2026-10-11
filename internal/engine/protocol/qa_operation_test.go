@@ -38,7 +38,12 @@ func addQAOperationReceipt(t *testing.T, s *State, p CheckParameters, stdout str
 	t.Helper()
 	params, _ := normalizeHostActionParams(p)
 	id := "qa-operation:" + digestOfCanonical(p)
-	intent := HostActionIntent{ActionID: id, PayloadDigest: digestOfCanonical(p), Adapter: &AdapterHostAction{Operation: "op.check", Params: params}, Correlation: "check:" + digestOfCanonical(p)}
+	intent := s.latestNativeIntent("check:" + digestOfCanonical(p))
+	if intent.ActionID != "" {
+		id = intent.ActionID
+	} else {
+		intent = HostActionIntent{ActionID: id, PayloadDigest: digestOfCanonical(p), Adapter: &AdapterHostAction{Operation: "op.check", Params: params}, Correlation: "check:" + digestOfCanonical(p)}
+	}
 	proof := func(value string) CheckStreamProof {
 		sum := sha256.Sum256([]byte(value))
 		return CheckStreamProof{SHA256: hex.EncodeToString(sum[:]), Size: len(value)}

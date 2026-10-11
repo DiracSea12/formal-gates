@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -224,7 +225,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	// A reopened caller observes the same owned receipt, without repeating effects.
 	reopened := *f
 	second := observeDevelopmentCheck(t, &reopened, s, intent, true)
-	if second != first {
+	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("recovered execution differs: %#v %#v", first, second)
 	}
 	count, err := os.ReadFile(filepath.Join(first.WorkingDirectory, "executions"))

@@ -300,6 +300,12 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	if p.GranularityReview != nil && role != "engine.repair" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
+	if p.DesignChange != nil && role != "engine.qa.design" {
+		return validationError("only QA design can change its manifest")
+	}
+	if len(p.QACommands) > 0 && role != "engine.qa.execution" {
+		return validationError("only QA execution can bind a missing invocation")
+	}
 	if p.Checkpoint && role != "engine.qa.design" && role != "engine.qa.execution" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
@@ -308,7 +314,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
-	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil, p.Resolution != nil, len(p.Observations) > 0} {
+	for _, present := range []bool{p.Development != nil, p.Manifest != nil, p.Review != nil, p.Execution != nil, len(p.QACommands) > 0, p.Resolution != nil, len(p.Observations) > 0} {
 		if present {
 			count++
 		}
@@ -370,11 +376,26 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}
-		if err := s.validateDesignManifest(mode, *p.Manifest, !p.Checkpoint); err != nil {
+		old := s.Validation.Sets[mode]
+		var prior coverage.AcceptanceManifest
+		if old != nil {
+			prior = old.Manifest
+		}
+		change := QADesignChange{}
+		if p.DesignChange != nil {
+			change = *p.DesignChange
+		}
+		manifest, err := MergeQADesign(prior, *p.Manifest, change)
+		if err != nil {
+			return validationError(err.Error())
+		}
+		if old != nil && qaDesignContent(prior) == qaDesignContent(manifest) && (p.Checkpoint || len(old.ReviewHistory) > 0 && old.ReviewHistory[len(old.ReviewHistory)-1].Manifest.Binding == manifest.Binding && (p.Development == nil || len(p.Development.Paths) == 0)) {
+			return validationError("QA increment has no substantive additions, modifications or removals")
+		}
+		if err := s.validateDesignManifest(mode, manifest, !p.Checkpoint); err != nil {
 			return err
 		}
-		old := s.Validation.Sets[mode]
-		set := &CaseSet{DesignTask: b.Task, Manifest: *p.Manifest, Status: "REVIEW", Version: digestOfCanonical(p.Manifest)}
+		set := &CaseSet{DesignTask: b.Task, Manifest: manifest, Status: "REVIEW", Version: digestOfCanonical(manifest)}
 		if p.Checkpoint {
 			set.Status = "DRAFT"
 		}
@@ -382,16 +403,12 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			set.Paths = slices.Clone(p.Development.Paths)
 		}
 		if old != nil {
-			for _, prior := range old.ReviewHistory {
-				for _, approved := range prior.Review.CaseDecisions {
-					if p.Checkpoint && approved.Status == coverage.StatusPass && slices.ContainsFunc(old.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == approved.ID }) && !slices.ContainsFunc(set.Manifest.Cases, func(c coverage.AcceptanceCase) bool { return c.CaseID == approved.ID }) {
-						return validationError("design must retain previously approved case responsibility: " + approved.ID)
-					}
-				}
-			}
 			if p.Checkpoint && old.Status == "THAWED" {
 				set.Status = "THAWED"
 			}
+			set.Paths = append(set.Paths, old.Paths...)
+			slices.Sort(set.Paths)
+			set.Paths = slices.Compact(set.Paths)
 			set.AffectedCases = old.AffectedCases
 			set.Suggestions = old.Suggestions
 			set.ReviewHistory = old.ReviewHistory
@@ -442,6 +459,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			return validationError("validation target is already settled or unknown")
 		}
 		if role == "engine.qa.execution" {
+			if len(p.QACommands) > 0 {
+				if count != 1 || !p.Checkpoint || p.Status != "PASS" || len(p.Findings) != 0 {
+					return validationError("QA command binding records only a checkpoint, not a verdict")
+				}
+				_, err := e.qaCommandIntents(s, *p, nextRevision)
+				return err
+			}
 			if count != 1 || p.Execution == nil {
 				return validationError("QA execution requires per-case records")
 			}

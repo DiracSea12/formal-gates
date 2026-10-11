@@ -303,6 +303,18 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
 		fields["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
 	}
+	if input.Handler == "engine.qa.execution" && len(input.Validation.CommandCases) > 0 {
+		item := fields["commands"].(map[string]any)["items"]
+		items := []any{}
+		for _, id := range input.Validation.CommandCases {
+			entry := maps.Clone(item.(map[string]any))
+			entry["description"] = "Supply only the invocation for approved case " + id
+			entry["minItems"] = 1
+			items = append(items, entry)
+		}
+		fields["commands"] = orderedSchema(items)
+		return body, nil
+	}
 	if input.Handler == "engine.qa.execution" {
 		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 		if err != nil {

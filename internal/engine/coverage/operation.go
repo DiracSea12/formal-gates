@@ -28,6 +28,11 @@ type Operation struct {
 	Stdin   string        `json:"stdin,omitempty"`
 }
 
+// ValidateOperations checks authored invocation values without executing them.
+func ValidateOperations(operations []Operation) error {
+	return validateOperations(operations, "operations")
+}
+
 func validateOperations(operations []Operation, path string) error {
 	for i, operation := range operations {
 		valid := false

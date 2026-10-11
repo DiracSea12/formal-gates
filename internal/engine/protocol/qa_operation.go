@@ -14,14 +14,18 @@ import (
 // QACheckParameters selects one operation from the frozen reviewed case. The
 // execution binding and full recipe travel with the original host intent.
 type QACheckParameters struct {
-	Execution     coverage.ExecutionBinding `json:"execution"`
-	CaseID        string                    `json:"caseId"`
-	Ordinal       int                       `json:"ordinal"`
-	Source        string                    `json:"source"`
-	Operation     coverage.Operation        `json:"operation"`
-	Directory     string                    `json:"directory"`
-	WorkspaceRoot string                    `json:"workspaceRoot"`
-	GoTestRef     string                    `json:"goTestRef,omitempty"`
+	OutputArtifacts    []string                  `json:"outputArtifacts,omitempty"`
+	Preparation        *coverage.SharedStep      `json:"preparation,omitempty"`
+	PreparationOrdinal int                       `json:"preparationOrdinal,omitempty"`
+	Recipe             []coverage.Operation      `json:"recipe,omitempty"`
+	Execution          coverage.ExecutionBinding `json:"execution"`
+	CaseID             string                    `json:"caseId"`
+	Ordinal            int                       `json:"ordinal"`
+	Source             string                    `json:"source"`
+	Operation          coverage.Operation        `json:"operation"`
+	Directory          string                    `json:"directory"`
+	WorkspaceRoot      string                    `json:"workspaceRoot"`
+	GoTestRef          string                    `json:"goTestRef,omitempty"`
 }
 
 // ExecutionFact is a read-only projection of complete native receipts. It is
@@ -123,12 +127,19 @@ func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding) 
 			return nil, validationError("approved QA case is missing: " + id)
 		}
 		item := manifest.Cases[index]
+		bound := s.qaBoundRecipe(binding, id)
+		if len(item.Operations) == 0 && len(bound) > 0 {
+			item.Operations = bound
+		}
 		operations, err := caseOperationPlans(manifest, item)
 		if err != nil {
 			return nil, err
 		}
 		for ordinal, op := range operations {
 			op.Execution, op.CaseID, op.Ordinal, op.WorkspaceRoot = execution, id, ordinal, workspace.Path
+			if strings.HasPrefix(op.Source, "case:") && len(bound) > 0 {
+				op.Recipe = bound
+			}
 			plans = append(plans, CheckParameters{QA: &op, Binding: binding, SourceIdentity: wave.Candidate.Identity, SourceDigest: wave.Candidate.Digest, WorkspaceID: workspace.ID})
 		}
 	}
@@ -145,7 +156,7 @@ func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool)
 			continue
 		}
 		issued, err := checkParameters(intent)
-		if err != nil || issued.QA == nil || digestOfCanonical(issued) != digestOfCanonical(p) || validateCheckReceipt(intent, receipt) != nil {
+		if err != nil || issued.QA == nil || digestOfCanonical(issued) != digestOfCanonical(p) || s.validateNativeCheckReceipt(intent, receipt) != nil {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {
@@ -154,6 +165,17 @@ func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool)
 		var evidence CheckEvidence
 		if decodeAdapterValues(receipt, &evidence) != nil {
 			continue
+		}
+		if evidence.PreparationSourceAction != "" {
+			original, ok := s.hostIntent(evidence.PreparationSourceAction)
+			if !ok {
+				continue
+			}
+			issued, err = checkParameters(original)
+			if err != nil {
+				continue
+			}
+			return ExecutionOperationFact{ActionID: original.ActionID, Parameters: issued, Evidence: evidence}, true
 		}
 		return ExecutionOperationFact{ActionID: intent.ActionID, Parameters: issued, Evidence: evidence}, true
 	}
@@ -207,9 +229,9 @@ func (s *State) nextQACheckParameters(task runtime.TaskKey, cd *compiler.Compile
 	if err != nil {
 		return CheckParameters{}, false
 	}
-	failedCase := ""
+	failedCase, waitingCase := "", ""
 	for _, p := range plans {
-		if p.QA.CaseID == failedCase {
+		if p.QA.CaseID == failedCase || p.QA.CaseID == waitingCase {
 			continue
 		}
 		if target.Execution != nil && slices.ContainsFunc(target.Execution.Records, func(row coverage.ExecutionRecord) bool { return row.CaseID == p.QA.CaseID }) {
@@ -219,6 +241,13 @@ func (s *State) nextQACheckParameters(task runtime.TaskKey, cd *compiler.Compile
 			if !qaOperationExecuted(fact) {
 				failedCase = p.QA.CaseID
 			}
+			continue
+		}
+		if p.QA.Operation.Kind == "" && p.QA.GoTestRef == "" {
+			continue
+		}
+		if s.latestNativeIntent("check:"+digestOfCanonical(p)).ActionID != "" {
+			waitingCase = p.QA.CaseID
 			continue
 		}
 		return p, true
@@ -269,6 +298,9 @@ func (e *Engine) advanceQAOperations(s *State, revision uint64) (bool, error) {
 }
 
 func (s *State) qaComparisonReady(target *ValidationTarget, cd *compiler.CompiledDefinition) bool {
+	if len(s.qaCommandCases(target, cd)) > 0 {
+		return true
+	}
 	for _, intent := range s.PendingHostActions {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
 			continue
@@ -338,8 +370,18 @@ func caseOperationPlans(manifest coverage.AcceptanceManifest, item coverage.Acce
 		if index < 0 {
 			return nil, validationError("approved shared step is missing: " + sharedID)
 		}
-		for _, op := range manifest.SharedSteps[index].Operations {
-			operations = append(operations, QACheckParameters{Source: "shared:" + sharedID, Operation: op, Directory: "."})
+		step := manifest.SharedSteps[index]
+		outputs := []string{}
+		remaining := item.SharedSteps[slices.Index(item.SharedSteps, sharedID):]
+		for _, possible := range manifest.SharedSteps {
+			if slices.Contains(remaining, possible.ID) {
+				outputs = append(outputs, possible.Artifacts...)
+			}
+		}
+		slices.Sort(outputs)
+		outputs = slices.Compact(outputs)
+		for ordinal, op := range step.Operations {
+			operations = append(operations, QACheckParameters{OutputArtifacts: outputs, Preparation: &step, PreparationOrdinal: ordinal, Source: "shared:" + sharedID, Operation: op, Directory: "."})
 		}
 	}
 	if len(item.Operations) > 0 {
@@ -349,7 +391,181 @@ func caseOperationPlans(manifest coverage.AcceptanceManifest, item coverage.Acce
 	} else if goOperation, err := coverage.GoTestOperation(item.TestRef); err == nil {
 		operations = append(operations, QACheckParameters{Source: "case:" + item.CaseID, GoTestRef: item.TestRef, Directory: goOperation.Directory})
 	} else {
-		return nil, fmt.Errorf("case %s lacks approved operations or an exact Go test reference", item.CaseID)
+		operations = append(operations, QACheckParameters{Source: "case:" + item.CaseID, Directory: "."})
 	}
 	return operations, nil
+}
+
+// QACaseOperations binds only missing invocation values to an approved case.
+type QACaseOperations struct {
+	CaseID     string               `json:"caseId"`
+	Operations []coverage.Operation `json:"operations"`
+}
+
+func (s *State) qaBoundRecipe(binding WorkBinding, caseID string) []coverage.Operation {
+	for _, intent := range s.qaCheckIntents() {
+		p, err := checkParameters(intent)
+		if err == nil && p.QA != nil && p.Binding == binding && p.QA.CaseID == caseID && len(p.QA.Recipe) > 0 {
+			return slices.Clone(p.QA.Recipe)
+		}
+	}
+	return nil
+}
+
+func (s *State) qaCheckIntents() []HostActionIntent {
+	intents := []HostActionIntent{}
+	for _, intent := range s.PendingHostActions {
+		if intent.Adapter != nil && intent.Adapter.Operation == "op.check" {
+			intents = append(intents, intent)
+		}
+	}
+	for _, effect := range s.ReconciledEffects {
+		if effect.Intent != nil && effect.Intent.Adapter != nil && effect.Intent.Adapter.Operation == "op.check" {
+			intents = append(intents, *effect.Intent)
+		}
+	}
+	slices.SortFunc(intents, func(a, b HostActionIntent) int { return strings.Compare(a.ActionID, b.ActionID) })
+	return intents
+}
+
+func (s *State) qaCommandCases(target *ValidationTarget, cd *compiler.CompiledDefinition) []string {
+	plans, err := s.qaCheckPlans(target, cd)
+	if err != nil {
+		return nil
+	}
+	cases := []string{}
+	for _, p := range plans {
+		if p.QA.Operation.Kind == "" && p.QA.GoTestRef == "" && !slices.Contains(cases, p.QA.CaseID) {
+			cases = append(cases, p.QA.CaseID)
+		}
+	}
+	return cases
+}
+
+func (e *Engine) qaCommandIntents(s *State, result ValidationResult, revision uint64) ([]HostActionIntent, error) {
+	wave := s.validationWave(result.Binding.WaveID)
+	if wave == nil {
+		return nil, validationError("QA command has no frozen wave")
+	}
+	target := wave.Targets[result.Binding.Task.String()]
+	if target == nil {
+		return nil, validationError("QA command has no original target")
+	}
+	cases := s.qaCommandCases(target, e.cfg.Definition)
+	if len(cases) == 0 || len(result.QACommands) != len(cases) {
+		return nil, validationError("QA commands must cover exactly the issued cases missing invocation")
+	}
+	plans, err := s.qaCheckPlans(target, e.cfg.Definition)
+	if err != nil {
+		return nil, err
+	}
+	if len(plans) == 0 || plans[0].Binding != result.Binding {
+		return nil, validationError("QA command binding differs from its original issued work")
+	}
+	intents := []HostActionIntent{}
+	for index, command := range result.QACommands {
+		if command.CaseID != cases[index] || len(command.Operations) == 0 {
+			return nil, validationError("QA command differs from its issued case order")
+		}
+		if err := coverage.ValidateOperations(command.Operations); err != nil {
+			return nil, err
+		}
+		for _, p := range plans {
+			if p.QA.CaseID != command.CaseID || p.QA.Operation.Kind != "" || p.QA.GoTestRef != "" {
+				continue
+			}
+			qa := *p.QA
+			qa.Recipe, qa.Operation = slices.Clone(command.Operations), command.Operations[0]
+			p.QA = &qa
+			intent, err := e.prepareAdapterIntent(s, revision, "op.check", p, "")
+			if err != nil {
+				return nil, err
+			}
+			intents = append(intents, intent)
+		}
+	}
+	return intents, nil
+}
+
+func (s *State) qaCheckExecutionReady(intent HostActionIntent) bool {
+	p, err := checkParameters(intent)
+	if err != nil || p.QA == nil {
+		return true
+	}
+	wave := s.validationWave(p.Binding.WaveID)
+	if wave == nil {
+		return false
+	}
+	target := wave.Targets[p.Binding.Task.String()]
+	if target == nil {
+		return false
+	}
+	plans, err := s.qaOperationPlans(target, p.Binding)
+	if err != nil {
+		return false
+	}
+	for _, prior := range plans {
+		if prior.QA.CaseID == p.QA.CaseID && prior.QA.Ordinal < p.QA.Ordinal {
+			fact, done := s.qaCheckReceipt(prior)
+			if !done || !qaOperationExecuted(fact) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// CommonPreparationIntents selects original native jobs by their approved
+// content and registered source. Actual byte/environment equality is observed
+// by the native adapter before reuse.
+func (s *State) CommonPreparationIntents(p CheckParameters) []HostActionIntent {
+	if p.QA == nil || p.QA.Preparation == nil || p.QA.Preparation.Independent {
+		return nil
+	}
+	step := *p.QA.Preparation
+	step.ID = ""
+	intents := []HostActionIntent{}
+	for _, intent := range s.qaCheckIntents() {
+		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {
+			continue
+		}
+		prior, err := checkParameters(intent)
+		if err != nil || prior.QA == nil || prior.QA.Preparation == nil || prior.QA.Preparation.Independent {
+			continue
+		}
+		old := *prior.QA.Preparation
+		old.ID = ""
+		if prior.SourceIdentity == p.SourceIdentity && prior.SourceDigest == p.SourceDigest && prior.WorkspaceID == p.WorkspaceID && prior.QA.Directory == p.QA.Directory && prior.QA.PreparationOrdinal == p.QA.PreparationOrdinal && digestOfCanonical(old) == digestOfCanonical(step) {
+			intents = append(intents, intent)
+		}
+	}
+	return intents
+}
+
+func (s *State) qaInvocationBindingCurrent(p CheckParameters, cd *compiler.CompiledDefinition) bool {
+	if p.QA == nil || len(p.QA.Recipe) == 0 || p.QA.GoTestRef != "" || p.QA.Preparation != nil || coverage.ValidateOperations(p.QA.Recipe) != nil {
+		return false
+	}
+	wave := s.validationWave(p.Binding.WaveID)
+	if wave == nil {
+		return false
+	}
+	target := wave.Targets[p.Binding.Task.String()]
+	if target == nil {
+		return false
+	}
+	plans, err := s.qaOperationPlans(target, p.Binding)
+	if err != nil {
+		return false
+	}
+	for _, missing := range plans {
+		if missing.QA.CaseID != p.QA.CaseID || missing.QA.Operation.Kind != "" || missing.QA.GoTestRef != "" {
+			continue
+		}
+		qa := *missing.QA
+		qa.Recipe, qa.Operation = p.QA.Recipe, p.QA.Recipe[0]
+		missing.QA = &qa
+		return digestOfCanonical(missing) == digestOfCanonical(p)
+	}
+	return false
 }

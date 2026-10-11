@@ -34,6 +34,10 @@ type Design struct {
 	DesignManifest
 	Checkpoint bool `json:"checkpoint,omitempty"`
 }
+type CommandBindings struct {
+	Commands [][]coverage.Operation `json:"commands"`
+}
+
 type ExecutionJudgments struct {
 	Execution
 	Findings []Finding `json:"findings,omitempty"`
@@ -142,6 +146,7 @@ type decodedValidation struct {
 	Resolution          *protocol.ConflictResolution
 	Development         *Development
 	RepairAffectedCases []int
+	QACommands          []protocol.QACaseOperations
 	Manifest            *Manifest
 	Review              *CaseReview
 	Suggestions         []Suggestion
@@ -155,18 +160,23 @@ type Suggestion struct {
 	Reason   string `json:"reason,omitempty"`
 }
 type DesignManifest struct {
-	RetainCases       []int                `json:"retainCases,omitempty"`
-	RetainSharedSteps []int                `json:"retainSharedSteps,omitempty"`
+	Replace           bool                 `json:"replace,omitempty"`
+	RemoveCases       []int                `json:"removeCases,omitempty"`
+	RemoveSharedSteps []int                `json:"removeSharedSteps,omitempty"`
 	SharedSteps       []DesignedSharedStep `json:"sharedSteps,omitempty"`
 	Cases             []DesignedCase       `json:"cases"`
 	Coverage          [][]int              `json:"coverage"`
 }
 type DesignedSharedStep struct {
-	Procedure  string               `json:"procedure"`
-	Operations []coverage.Operation `json:"operations,omitempty"`
-	Files      *[]Location          `json:"files,omitempty"`
+	Artifacts   []string             `json:"artifacts,omitempty"`
+	Independent bool                 `json:"independent,omitempty"`
+	Step        int                  `json:"step,omitempty"`
+	Procedure   string               `json:"procedure"`
+	Operations  []coverage.Operation `json:"operations,omitempty"`
+	Files       *[]Location          `json:"files,omitempty"`
 }
 type DesignedCase struct {
+	Case          int                  `json:"case,omitempty"`
 	Files         *[]Location          `json:"files,omitempty"`
 	Operations    []coverage.Operation `json:"operations,omitempty"`
 	Scenario      string               `json:"scenario"`
@@ -179,17 +189,20 @@ type DesignedCase struct {
 	TestSymbol    int                  `json:"testSymbol,omitempty"`
 }
 type Manifest struct {
-	RetainCases       []string            `json:"retainCases,omitempty"`
-	RetainSharedSteps []string            `json:"retainSharedSteps,omitempty"`
+	Replace           bool                `json:"replace,omitempty"`
+	RemoveCases       []string            `json:"removeCases,omitempty"`
+	RemoveSharedSteps []string            `json:"removeSharedSteps,omitempty"`
 	SharedSteps       []SharedStep        `json:"sharedSteps,omitempty"`
 	Cases             []Case              `json:"cases"`
 	Coverage          map[string][]string `json:"coverage"`
 }
 type SharedStep struct {
-	ID         string               `json:"id"`
-	Procedure  string               `json:"procedure"`
-	Operations []coverage.Operation `json:"operations,omitempty"`
-	Files      *[]Location          `json:"files,omitempty"`
+	Artifacts   []string             `json:"artifacts,omitempty"`
+	Independent bool                 `json:"independent,omitempty"`
+	ID          string               `json:"id"`
+	Procedure   string               `json:"procedure"`
+	Operations  []coverage.Operation `json:"operations,omitempty"`
+	Files       *[]Location          `json:"files,omitempty"`
 }
 type Case struct {
 	Files         *[]Location          `json:"files,omitempty"`
@@ -320,6 +333,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		}
 		body := protocol.ValidationResult{Status: v.Status, GranularityReview: value.Granularity, Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: items}
 		body.Binding = issued.Binding
+		body.QACommands = v.QACommands
 		if body.Development != nil {
 			batch := completionBatch(input)
 			if batch == nil && body.GranularityReview != nil && len(body.GranularityReview.Batches) == 1 {
@@ -353,15 +367,8 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		}
 		if value.Validation.Manifest != nil {
 			manifest := coverage.AcceptanceManifest{}
-			for _, id := range v.Manifest.RetainSharedSteps {
-				index := slices.IndexFunc(issued.Manifest.SharedSteps, func(item coverage.SharedStep) bool { return item.ID == id })
-				if index < 0 || slices.ContainsFunc(manifest.SharedSteps, func(item coverage.SharedStep) bool { return item.ID == id }) || slices.ContainsFunc(v.Manifest.SharedSteps, func(item SharedStep) bool { return item.ID == id }) {
-					return protocol.Event{}, fmt.Errorf("retained shared step must be issued, unique and not authored: %s", id)
-				}
-				manifest.SharedSteps = append(manifest.SharedSteps, issued.Manifest.SharedSteps[index])
-			}
 			for _, item := range v.Manifest.SharedSteps {
-				step := coverage.SharedStep{ID: item.ID, Procedure: item.Procedure, Operations: slices.Clone(item.Operations)}
+				step := coverage.SharedStep{Artifacts: item.Artifacts, Independent: item.Independent, ID: item.ID, Procedure: item.Procedure, Operations: slices.Clone(item.Operations)}
 				if item.Files != nil {
 					step.Files, err = selectedTestFiles(*item.Files, locationFacts)
 					if err != nil {
@@ -375,13 +382,6 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 					}
 				}
 				manifest.SharedSteps = append(manifest.SharedSteps, step)
-			}
-			for _, id := range v.Manifest.RetainCases {
-				index := slices.IndexFunc(issued.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == id })
-				if index < 0 || slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == id }) || slices.ContainsFunc(v.Manifest.Cases, func(item Case) bool { return item.CaseID == id }) {
-					return protocol.Event{}, fmt.Errorf("retained case must be issued, unique and not authored: %s", id)
-				}
-				manifest.Cases = append(manifest.Cases, issued.Manifest.Cases[index])
 			}
 			for _, item := range v.Manifest.Cases {
 				c := coverage.AcceptanceCase{Operations: slices.Clone(item.Operations), Scenario: item.Scenario, SharedSteps: slices.Clone(item.SharedSteps), CaseID: item.CaseID, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle}
@@ -421,7 +421,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			// representation and order so unchanged approval evidence stays exact.
 			for _, edge := range issued.Manifest.Edges {
 				selected, replaced := v.Manifest.Coverage[edge.PointID]
-				if (!replaced || slices.Contains(selected, edge.CaseID)) && slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == edge.CaseID }) {
+				if (!replaced || slices.Contains(selected, edge.CaseID)) && ((!v.Manifest.Replace && !slices.Contains(v.Manifest.RemoveCases, edge.CaseID)) || slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == edge.CaseID })) {
 					manifest.Edges = append(manifest.Edges, edge)
 				}
 			}
@@ -440,7 +440,16 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 					}
 				}
 			}
-			body.Manifest = &manifest
+			change := protocol.QADesignChange{Replace: v.Manifest.Replace, RemoveCases: v.Manifest.RemoveCases, RemoveSharedSteps: v.Manifest.RemoveSharedSteps}
+			for point := range v.Manifest.Coverage {
+				change.CoveragePoints = append(change.CoveragePoints, point)
+			}
+			slices.Sort(change.CoveragePoints)
+			manifest, err = protocol.MergeQADesign(issued.Manifest, manifest, change)
+			if err != nil {
+				return protocol.Event{}, err
+			}
+			body.Manifest, body.DesignChange = &manifest, &change
 			if input.Handler == "engine.qa.design" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				if paths == nil {
 					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
@@ -643,6 +652,9 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 	case "engine.qa.review.rationale":
 		return &CaseReview{}, nil
 	case "engine.qa.execution":
+		if len(input.Validation.CommandCases) > 0 {
+			return &CommandBindings{}, nil
+		}
 		return &ExecutionJudgments{}, nil
 	case "engine.validation.observation":
 		return &ObservationJudgments{}, nil
@@ -750,6 +762,20 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			v.Review, v.Suggestions = body, body.Suggestions
 		case *ObservationJudgments:
 			v.Observations = body
+		case *CommandBindings:
+			if len(body.Commands) != len(input.Validation.CommandCases) {
+				return result, "", fmt.Errorf("commands must follow exactly the issued missing-command cases")
+			}
+			for index, operations := range body.Commands {
+				if len(operations) == 0 {
+					return result, "", fmt.Errorf("a missing invocation requires actual operations")
+				}
+				if err := coverage.ValidateOperations(operations); err != nil {
+					return result, "", err
+				}
+				v.QACommands = append(v.QACommands, protocol.QACaseOperations{CaseID: input.Validation.CommandCases[index], Operations: operations})
+			}
+			v.Checkpoint = true
 		case *ExecutionJudgments:
 			v.Execution, v.Findings = &body.Execution, body.Findings
 		case *Execution:

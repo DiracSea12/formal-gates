@@ -84,6 +84,8 @@ type DevelopmentEvidence struct {
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
 // transport; Status and per-item results describe the business verdict.
 type ValidationResult struct {
+	QACommands        []QACaseOperations           `json:"qaCommands,omitempty"`
+	DesignChange      *QADesignChange              `json:"designChange,omitempty"`
 	Observations      []OperatorObservationPayload `json:"observations,omitempty"`
 	GranularityReview *GranularityReview           `json:"granularityReview,omitempty"`
 	Resolution        *ConflictResolution          `json:"resolution,omitempty"`

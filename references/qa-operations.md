@@ -2,7 +2,11 @@
 
 `coverage.AcceptanceCase.operations` 与 `coverage.SharedStep.operations` 是 QA 设计
 创作的有序操作载荷。它们随完整 case/shared-step 内容进入既有审查身份、manifest digest
-和冻结；不是执行阶段从自然语言临时提取的命令。步骤、前置说明与 oracle 仍表达语义。
+和冻结。步骤、前置说明与 oracle 表达固定语义；完整可照做的批准用例也可暂不声明命令。
+此时 `ValidationInput.commandCases` 列出缺 invocation 的用例，执行者只按注入顺序返回
+`commands` 操作数组。程序把首次填入的原值绑定到当前候选、用例和原 native intent，
+经 execution checkpoint 继续受管执行；绑定后不能重填，不改变批准步骤或 oracle。
+程序不从自然语言猜命令，执行者也不自行运行 shell。
 
 每个操作只允许一种形态，可附带原样发送的 `stdin`：
 
@@ -18,8 +22,17 @@
 提供。程序同时从这个 registered workspace 注入 `FORMAL_GATES_WORKSPACE` 环境变量；
 需要根目录的 shell 操作用 `"$FORMAL_GATES_WORKSPACE"` 引用，其他文件使用仓库相对路径。
 模型不填写物理工作区路径；已批准的 `command`、`argv` 与 `stdin` 保持原文。固定物理
-目录的原操作必须经原设计/审查责任修订，程序不会把它改成另一工作区。shared-step 的操作由引用它的 case
-使用，载荷本身不表示全局只执行一次。
+目录的原操作必须经原设计/审查责任修订，程序不会把它改成另一工作区。
+每例实际注入独立的 `FORMAL_GATES_QA_INPUT_DIR`、`FORMAL_GATES_QA_WORK_DIR`、
+`FORMAL_GATES_QA_OUTPUT_DIR` 和 `TMPDIR`/`TMP`/`TEMP`。可变输入、工作、输出与临时
+文件使用这些路径；默认 cwd 保留注册候选源目录，源码、依赖和工具不逐例复制。
+
+共享步骤可声明仓库相对 `artifacts`（文件或目录）与 `independent`。普通准备在共用
+源环境运行：相同批准步骤、实际源码及未提交输入、参数、有效环境和工具内容复用
+原已完成准备。声明的非跟踪产物与源码输入区分；跟踪源码仍受原 immutable 检查，
+不得以产物声明免检。产物缺失或变化不复用；环境仅持有摘要，私有临时路径不导致
+无谓重建。`independent: true` 的准备在该例私有环境真实执行，适用于独立安装、构建
+或隔离本身为目标的场景。相同准备在并行等待期间沿原 job/锁协调，不盲重派。
 
 设计结果用 `files` 原 read、`testFile` 本用例文件序号和该 read 的 `testSymbol` 序号选择 Go 测试，程序按声明顺序从原全文解析并装配精确引用。已有和新写函数共用该选择；新名称只在写代码时创作，读取后不再抄写。省略选择保留原已签发引用。
 
@@ -35,12 +48,13 @@ go test -timeout=0 -count=1 -json -run ^<精确测试名>$ .
 测试名经 `regexp.QuoteMeta` 转义。该协议只接受完整包级测试，不接受裸函数名、`#`
 分隔符、子测试路径或其他语言的引用，也不搜索其他文件来猜测目标。Go 精确引用不能
 同时声明 case operations；共享准备操作仍由 shared-step 单独持有。已签发的其他不透明 testRef
-保留原引用，其执行需要已批准 operations；新设计使用 operations，不把其他语言伪装成 Go 引用。
+保留原引用，其执行需要已声明或首次执行期绑定的 operations；新设计使用 operations，
+不把其他语言伪装成 Go 引用。
 
 `coverage.ResolveCaseOperations` 只返回 `ResolvedOperation`（原操作、派生目录与 Go
 精确测试名），不启动进程或判断 oracle。缺文件、缺测试、同名函数歧义、错误签名、
 不支持的引用且没有操作配方，都会返回明确错误。设计合同允许尚未具备配方的部分设计，
-这种设计不能由 resolver 推断操作来执行。
+这种设计不能由 resolver 推断操作来执行；批准后由 execution checkpoint 填实际 invocation。
 
 执行与接纳方须保留真实 exit、stdout/stderr 原始证据。对 Go invocation，须核到
 `GoTestName` 对应的实际 run 和 pass/fail 事件；无匹配或 skip 不能当作执行 PASS。
@@ -59,12 +73,16 @@ Go 源文件解析由原生 adapter 在实际启动前完成，核心计划只�
 进程结束与工作区清理由原 HostAction/资源入口处理。
 
 `ValidationInput.executionFacts` 是原 receipts 的只读投影，并随原 worker material
-冻结。只有全部动作完整执行的 case 可以签发语义比较；Go 的无匹配/skip、进程中断或
+冻结。缺 invocation 时只签发命令填写职责；全部动作完整执行的 case 才能签发语义比较。
+Go 的无匹配/skip、进程中断或
 未完成动作保留具体原始事实与未完成责任，不能产生 EXECUTED_PASS/FAIL 行。模型只
 按原签发比较顺序返回 result 和 comparison 数组，不填写 case ID 或 ID 键。程序填充
 原 case 身份、procedure、observation、tool、environment 并展开批准 edges；core 逐值
 核原事实、当前候选和批准配方，沿原入口合并 Completed。
-缺少配方的设计允许暂存，冻结前须指出具体 case 并回到原设计/审查补齐。
+共享复用回执的 `preparationSourceAction` 显式引用原执行 action；`preparationInput`
+与 `preparationArtifacts` 持有原输入/产物身份。原 request、Directory、参数摘要、双流、
+tool/environment 和执行身份不重绑为本例，executionFacts 也引用该原 action。
+复用不产生第二次进程执行，不自动赋予语义 PASS。
 
 Case 与 shared-step 的可选 `files` 精确列出该测试材料的仓库相对文件路径；它与正文、
 操作及关联一同参与原 manifest 的审查和摘要。只有 case 自身及其实际引用的 shared-step
@@ -83,17 +101,22 @@ identity 和完整 raw diff 供这次审查，不提前声称 test-only 或生�
 这份证据是绑定的独立判断加机械身份核验，不是完整原生依赖图证明；未审/FAIL 材料不能
 提升、排除质量门或获得这些旗标。删除与 rename 每个实际存在端点仍逐值核验。
 
-无指定修订集合的设计续作，`retainCases` / `retainSharedSteps` 选择原列表的一基序号，
-不填写原 ID。程序搬运所选条目的原正文、操作和文件关联；`cases` / `sharedSteps`
-只承载新创作条目，身份由程序分配。两类列表均不含的条目删除，其 case 的覆盖关系
-不再保留。用例的 `sharedSteps` 选择原共享说明列表加新创作说明列表的序号。
+无指定修订集合的设计续作只提交必要增量：省略的 case/shared-step 及原覆盖保留。
+`cases` 条目的 `case`、`sharedSteps` 条目的 `step` 选择原列表的一基序号以修改该项；
+不选择时是新增，稳定 ID 由程序分配。`removeCases` / `removeSharedSteps` 明确选择
+原序号删除，`replace: true` 明确替换整个集合，不能同时逐项删除。删除 case 同时移除
+其覆盖边；悬空共享引用仍拒绝。用例的 `sharedSteps` 选择原共享说明加新增说明的序号。
 
-`coverage` 按原签发验收点顺序返回数组，每项选择用例序号（保留用例在前、新用例在后）。
-`[]` 清除该点关系；`null` 由程序保留仍在当前集合中的原关系，不重写点键或原 case ID。
+`coverage` 按原签发验收点顺序返回，每项选择原用例加新用例的序号。`[]` 清除该点
+关系；`null` 保留原关系。合并后的完整 Manifest/Version 给独立审查、恢复和覆盖校验
+消费，不建立第二份草稿或审批账。已审返修没有实质新增、修改、删除或真实测试材料
+改动时拒收；重复摘要或重列原缺口不是修复。未受影响的原批准仍按完整内容与候选
+视图继承，初次设计与未完草稿登记不等于覆盖 PASS。
 
 输入含 `affectedCases` 时，按该原顺序仅返回指定用例的语义改动字段。程序保留原身份、
 未改字段、未受影响用例及原覆盖；不填写 `caseId`、保留列表或覆盖映射。共同说明有变化时，
-按原 manifest 中这些用例引用的说明顺序返回改动字段，未改时省略。改动省略 `files`
+按原 manifest 中这些用例引用的说明顺序返回改动字段，未改时省略。该指定项可只返回
+`remove: true` 明确删除，不能同时修改其语义字段；悬空引用和覆盖缺口仍须修正。改动省略 `files`
 保留原文件关联，明确提交 `[]` 清除它。受影响部分仍由原独立审查验收。
 
 ## 冻结验证职责的语义判断

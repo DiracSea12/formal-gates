@@ -62,15 +62,18 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
 		case "engine.qa.design":
-			instructions = "Return coverage in issued point order, selecting 1-based case positions: retained cases first, then new cases. [] clears relations; null preserves original relations for remaining cases. retainCases/retainSharedSteps select original list positions; cases/sharedSteps contain only new authored entries, and absent entries are deleted. Case sharedSteps selects original shared instructions followed by new ones. BLACKBOX/MERGE require publicEntry/preconditions/steps and use operations. WHITEBOX associates test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
+			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones. BLACKBOX/MERGE require publicEntry/preconditions/steps. WHITEBOX associates test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
 			if len(input.Validation.AffectedCases) > 0 {
-				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
+				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields, or remove:true to explicitly remove that issued item. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
 			}
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale":
 			instructions = "Return real status and reason in issued source/point order and non-inherited case/shared order, without inherited placeholders. Suggestions contain only P2/P3, message and reason."
 		case "engine.qa.execution":
 			instructions = "Compare the issued complete native execution facts with each approved case oracle. Return records in issued pending required fact order, with comparison and EXECUTED_PASS/EXECUTED_FAIL, or null for unfinished comparison. The program derives checkpoint and overall status. Completed FAIL judgments are complete; when no new judgments remain, return records []. Missing native facts never establish PASS."
+			if len(input.Validation.CommandCases) > 0 {
+				instructions = "Return commands in commandCases order, each an ordered nonempty ARGV/SHELL operation list. Supply invocation only for these approved cases; preserve their fixed steps and oracle. The program binds the candidate and workspace, executes the operations and collects real stdout/stderr/exit. Do not run shell yourself or judge PASS before the original facts return."
+			}
 			value.ReadOnly = true
 		case "engine.validation.observation":
 			instructions = "Return findings/scopes/gateImpacts/suggestions arrays exactly their issued input order; preserve real P0/P1. sameAs selects input.validation.observation.problems first, then findings, numbered continuously from 1. A selected finding must be another pending item judged NEW; existing problem history is context. Scope cases select approvedCases; the program includes mustExecute. Accepted suggestion impact selects manifest case numbers, otherwise affectedCases is empty."
@@ -184,7 +187,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.qa.review.rationale":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
 		case "engine.qa.execution":
-			names = []string{"manifest", "executionFacts", "requiredCases", "pendingCases", "completed", "inherited"}
+			names = []string{"manifest", "commandCases", "executionFacts", "requiredCases", "pendingCases", "completed", "inherited"}
 		case "engine.repair.verify":
 			names = []string{"repair", "contract", "executionFacts"}
 		case "engine.validation.observation":

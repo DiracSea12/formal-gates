@@ -2171,6 +2171,15 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 			return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", err.Error(), record, nextRevision)
 		}
 		state.Validation = next
+		if record.Validation != nil && len(record.Validation.QACommands) > 0 {
+			intents, err := e.qaCommandIntents(state, *record.Validation, nextRevision)
+			if err != nil {
+				return nil, err
+			}
+			for _, intent := range intents {
+				state.PendingHostActions[intent.ActionID] = intent
+			}
+		}
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
@@ -2836,7 +2845,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 			} else if p.QA != nil {
 				expected, ready = state.nextQACheckParameters(p.Binding.Task, e.cfg.Definition)
 			}
-			if !ready || digestOfCanonical(expected) != digestOfCanonical(p) {
+			if (!ready || digestOfCanonical(expected) != digestOfCanonical(p)) && !state.qaInvocationBindingCurrent(p, e.cfg.Definition) {
 				return HostActionIntent{}, validationError("check parameters differ from approved execution inputs")
 			}
 			correlation = "check:" + digestOfCanonical(p)

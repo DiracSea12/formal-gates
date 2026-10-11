@@ -33,9 +33,9 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	for index, point := range in.Manifest.Points {
 		for _, edge := range m.Edges {
 			if edge.PointID == point.PointID {
-				selected := 2
+				selected := 1
 				if edge.CaseID == m.Cases[1].CaseID {
-					selected = 1
+					selected = 2
 				}
 				if !slices.Contains(coverageChoices[index], selected) {
 					coverageChoices[index] = append(coverageChoices[index], selected)
@@ -43,9 +43,9 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 			}
 		}
 	}
-	value := worker.Design{DesignManifest: worker.DesignManifest{RetainCases: []int{slices.IndexFunc(in.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == m.Cases[1].CaseID }) + 1}, RetainSharedSteps: []int{1}, Cases: []worker.DesignedCase{{Scenario: changed.Scenario, PublicEntry: changed.PublicEntry, Preconditions: changed.Preconditions, Steps: changed.Steps, Oracle: changed.Oracle, Operations: changed.Operations}}, Coverage: coverageChoices}}
+	value := worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Case: 1, Scenario: changed.Scenario, PublicEntry: changed.PublicEntry, Preconditions: changed.Preconditions, Steps: changed.Steps, Oracle: changed.Oracle, Operations: changed.Operations}}, Coverage: coverageChoices}}
 	missingShared := value
-	missingShared.RetainSharedSteps = nil
+	missingShared.RemoveSharedSteps = []int{1}
 	invalidRaw, err := json.Marshal(missingShared)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 		t.Fatal("retained issued content failed original admission")
 	}
 	_, current := d.action("engine.qa.review.rationale")
-	if len(current.Manifest.Cases) != 2 || !reflect.DeepEqual(current.Manifest.Cases[0], m.Cases[1]) || len(current.InheritableReviews) != 1 || current.InheritableReviews[0].ID != m.Cases[1].CaseID || len(current.Manifest.Edges) != len(m.Edges) {
+	if len(current.Manifest.Cases) != 2 || !reflect.DeepEqual(current.Manifest.Cases[1], m.Cases[1]) || len(current.InheritableReviews) != 1 || current.InheritableReviews[0].ID != m.Cases[1].CaseID || len(current.Manifest.Edges) != len(m.Edges) {
 		t.Fatalf("continued design lost retained responsibility or its unchanged review: cases=%#v original=%#v inherited=%#v edges=%#v originalEdges=%#v", current.Manifest.Cases, m.Cases[1], current.InheritableReviews, current.Manifest.Edges, m.Edges)
 	}
 }
@@ -176,9 +176,9 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 		}
 	}
 	d.receipt(id)
-	a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "omit approved negative case", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &part, Checkpoint: true}}})
+	a := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "repeat original failed case with no actual repair", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &part, Checkpoint: true}}})
 	if a.Status != "REJECTED_INVALID_RESULT" {
-		t.Fatal("checkpoint dropped approved case")
+		t.Fatal("no-op checkpoint repair was accepted")
 	}
 	retry, ri := d.action("engine.qa.design")
 	if ri.Binding.Task != in.Binding.Task {
@@ -235,7 +235,7 @@ func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 			replacement.Edges = append(replacement.Edges, edge)
 		}
 	}
-	d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &replacement})
+	d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &replacement, DesignChange: &protocol.QADesignChange{Replace: true}})
 	review, reviewInput = qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewBlackbox)
 	if len(reviewInput.Manifest.Cases) != 1 {
 		t.Fatal("explicit final replacement could not remove obsolete case")
@@ -278,5 +278,45 @@ func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
 	_, ri := d.action("engine.qa.review.rationale")
 	if !reflect.DeepEqual(ri.Manifest, m) {
 		t.Fatal("replacement did not prepare actual complete design")
+	}
+}
+
+func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	design, input := d.action("engine.qa.design")
+	manifest := simpleManifest(input)
+	obsolete := manifest.Cases[0]
+	obsolete.CaseID, obsolete.Steps = "obsolete", "repeat the superseded public example"
+	manifest.Cases = append(manifest.Cases, obsolete)
+	for _, link := range input.SourcePoints {
+		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: link.SourceID, PointID: link.PointID, CaseID: obsolete.CaseID})
+	}
+	d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+	review, ri := d.action("engine.qa.review.rationale")
+	judgment := approvedReview(manifest)
+	judgment.CaseDecisions[2].Status = coverage.StatusFail
+	judgment.PointDecisions[0].Status, judgment.SourceDecisions[0].Status, judgment.SetStatus = coverage.StatusFail, coverage.StatusFail, coverage.StatusFail
+	d.business(review, protocol.ValidationResult{Binding: ri.Binding, Status: "FAIL", Review: &judgment})
+	design, input = d.action("engine.qa.design")
+	value := worker.Design{DesignManifest: worker.DesignManifest{RemoveCases: []int{3}, Cases: []worker.DesignedCase{}, Coverage: make([][]int, len(input.Manifest.Points))}}
+	raw, _ := json.Marshal(value)
+	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &input}, d.eventID(), raw, "original-explicit-removal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.receipt(design)
+	if accepted := d.submit(event); accepted.Status != "ACCEPTED" {
+		t.Fatalf("explicit removal rejected: %+v", accepted)
+	}
+	before, _ := d.f.engine.Load()
+	d.submit(event)
+	after, _ := d.f.engine.Load()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("removal replay changed the retained projection")
+	}
+	d.reopen()
+	_, current := d.action("engine.qa.review.rationale")
+	if !reflect.DeepEqual(current.Manifest.Cases, manifest.Cases[:2]) || len(current.InheritableReviews) != 2 || slices.ContainsFunc(current.Manifest.Edges, func(edge coverage.CoverageEdge) bool { return edge.CaseID == "obsolete" }) {
+		t.Fatal("explicit removal lost retained IDs, approval or coverage after recovery")
 	}
 }

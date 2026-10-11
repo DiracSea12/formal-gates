@@ -9,7 +9,7 @@
 白盒在开发后独立读实现：先列行为、分支与 oracle，再核已有测试输入、断言和覆盖，有效则复用，缺口或错误才补测。测试名、全绿、覆盖率和开发者声明不证明充分。优先在直接归属该行为的最低层验证，跨层重复须有不同目标。
 
 步骤写明真实入口/调用、参数/输入、前提与构造方法、操作顺序及取证；oracle 写精确可观察输出、消息、列表顺序、数值/边界与失败信号，不能只有“符合预期”。每个声明的范围必须由步骤和判据实际覆盖。
-机械明确的准备/动作创作为有序 ARGV/SHELL operations，保留参数空串、引号、shell 和 stdin 原值；共同准备放共享步骤。白盒测试文件先通过原 read 读取全文；testFile 选择本用例关联的原 read，testSymbol 选择该 read 发布的测试符号短编号。新测试名在写代码时创作，写后仍先读取再选序号，不在结果抄写 testRef。省略引用续用原已签发测试；其他语言的执行动作使用 operations。固定操作协议见 `references/qa-operations.md`。
+机械明确的准备/动作创作为有序 ARGV/SHELL operations，保留参数空串、引号、shell 和 stdin 原值；共同准备放共享步骤。白盒测试文件先通过原 read 读取全文；testFile 选择本用例关联的原 read，testSymbol 选择该 read 发布的测试符号短编号。新测试名在写代码时创作，写后仍先读取再选序号，不在结果抄写 testRef。省略引用续用原已签发测试。完整步骤、前置与 oracle 可先不声明 command，批准后由执行职责填实际 invocation；不能用缺 command 代替用例可执行性。共享步骤的 artifacts 声明产物，independent 表示独立准备本身须实跑。固定操作协议见 `references/qa-operations.md`。
 脚本只做准备、真实调用、取证和断言；缺陷回归能报原错误，关键失败判据用已知错误样例核验。未改且仍有效的脚本不重复完整审批。
 
 ## 测试准备可构造
@@ -20,5 +20,5 @@
 
 ## 修订与材料
 
-有 revisionInstruction 时按原接受理由、category 和范围修订，旧 acceptedSuggestions 仅作背景。未变内容沿原输入保留，语义改动按注入 schema 返回。
+有 revisionInstruction 时按原接受理由、category 和范围修订，旧 acceptedSuggestions 仅作背景。未提及的用例与共享准备沿原输入保留；修改选择原序号，新增 ID 由程序给出。删除或整体替换必须明确提出，返修须有实质改动。语义改动按注入 schema 返回。
 白盒 case/shared-step 关联实际测试材料，独立审查还须核它们未改变生产代码、运行配置、依赖或构建输入。共同说明只持有一份，逐例仍有独立前提、差异、oracle 与覆盖。用例充分性由独立 QA Review 判断，不设机械用例数量下限。
