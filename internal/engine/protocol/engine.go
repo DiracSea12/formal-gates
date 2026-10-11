@@ -594,7 +594,7 @@ func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	view := state.decisionView(e.cfg.Definition)
 	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
 	if err == nil {
-		state.abortPlan(plan)
+		state.abortPlan(plan, e.cfg.Definition)
 	}
 	return plan, err
 }

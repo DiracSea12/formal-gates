@@ -28,7 +28,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		for _, intent := range s.PendingHostActions {
 			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation {
 				task := decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}}
-				if _, executable := s.ExecutableHostActions()[intent.ActionID]; !executable || !s.NativeActionCurrent(intent, cd) {
+				if _, executable := s.ExecutableHostActions(cd)[intent.ActionID]; !executable || !s.NativeActionCurrent(intent, cd) {
 					task.BlockedBy = decision.WaitDependencies
 				}
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], task)

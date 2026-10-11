@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
 )
@@ -142,7 +143,7 @@ func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
 	return changed, nil
 }
 
-func (s *State) abortPlan(plan *decision.Plan) {
+func (s *State) abortPlan(plan *decision.Plan, cd *compiler.CompiledDefinition) {
 	if !s.abortRequested() || s.Phase == runtime.PhaseTerminal {
 		return
 	}
@@ -151,7 +152,7 @@ func (s *State) abortPlan(plan *decision.Plan) {
 		return
 	}
 	plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitTasksInFlight}}
-	if len(s.ExecutableHostActions()) > 0 {
+	if len(s.ExecutableHostActions(cd)) > 0 {
 		plan.Next = decision.NextResult{Kind: decision.KindHostAction, HostAction: &decision.HostActionPayload{}}
 	}
 }

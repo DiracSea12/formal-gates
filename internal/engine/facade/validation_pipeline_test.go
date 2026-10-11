@@ -320,7 +320,11 @@ func (d *validationDriver) completeWorkerTerminations() {
 			}
 			d.submit(event)
 		}
-		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("termination-receipt:"+id), id, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		correlation := intent.Correlation
+		if correlation == "" {
+			correlation = intent.ActionID
+		}
+		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("termination-receipt:"+id), id, intent.Operation, d.host(), correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 		if err != nil {
 			d.t.Fatal(err)
 		}

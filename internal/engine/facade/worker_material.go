@@ -376,7 +376,7 @@ func (f *Facade) AgentExecution(intent protocol.HostActionIntent) (provider stri
 	if err != nil {
 		return "", nil, release, err
 	}
-	if current, known := snap.State.ExecutableHostActions()[intent.ActionID]; !known || !reflect.DeepEqual(current, intent) {
+	if current, known := snap.State.ExecutableHostActions(f.definition)[intent.ActionID]; !known || !reflect.DeepEqual(current, intent) {
 		return "", nil, release, fmt.Errorf("native agent effect has no current signed intent")
 	}
 	target := intent.Terminate

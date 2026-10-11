@@ -75,7 +75,7 @@ func (s *State) latestNativeIntent(correlation string) HostActionIntent {
 // nativeExecutionAllowed combines qualification with the original finite
 // allowance. Observing completion does not consume another execution slot.
 func (s *State) nativeExecutionAllowed(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
-	if !s.NativeActionCurrent(intent, cd) || intent.Adapter != nil && intent.Adapter.Operation == "op.check" && !s.qaCheckExecutionReady(intent) || s.latestNativeIntent(intent.Correlation).ActionID != intent.ActionID {
+	if !s.NativeActionCurrent(intent, cd) || intent.Adapter != nil && intent.Adapter.Operation == "op.check" && !s.qaCheckExecutionReady(intent, cd) || s.latestNativeIntent(intent.Correlation).ActionID != intent.ActionID {
 		return false
 	}
 	if receipt, ok := s.HostActionReceipts[intent.ActionID]; ok && receipt.Status == HostActionStatusUnknown {
@@ -441,11 +441,11 @@ func (e *Engine) advanceCandidateFailures(s *State, nextRevision uint64) (bool, 
 
 // ExecutableHostActions exposes only operations whose original effect has not
 // failed or become unknown. Pending reconciliation remains in State.
-func (s *State) ExecutableHostActions() map[string]HostActionIntent {
+func (s *State) ExecutableHostActions(cd *compiler.CompiledDefinition) map[string]HostActionIntent {
 	result := map[string]HostActionIntent{}
 	for id, intent := range s.PendingHostActions {
 		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
-			if intent.Adapter.Operation == "op.check" && !s.qaCheckExecutionReady(intent) {
+			if intent.Adapter.Operation == "op.check" && !s.qaCheckExecutionReady(intent, cd) {
 				continue
 			}
 			if params, err := candidateParameters(intent); err == nil && params.Promotion != nil {

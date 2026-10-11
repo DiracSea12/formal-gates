@@ -198,7 +198,7 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 			}
 		}
 	}
-	for id, intent := range state.ExecutableHostActions() {
+	for id, intent := range state.ExecutableHostActions(f.definition) {
 		if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
 			continue
 		}

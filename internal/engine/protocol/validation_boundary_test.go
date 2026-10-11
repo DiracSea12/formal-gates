@@ -72,7 +72,7 @@ func TestAbortKeepsNativeCleanupDispositionBoundary(t *testing.T) {
 			}
 			for _, kind := range []decision.Kind{decision.KindOperator, decision.KindAsk} {
 				plan := &decision.Plan{Next: decision.NextResult{Kind: kind}, Frontier: []decision.FrontierEntry{{Step: "ordinary"}}}
-				s.abortPlan(plan)
+				s.abortPlan(plan, cd)
 				if plan.Next.Kind != kind || len(plan.Frontier) != 0 {
 					t.Fatal("abort changed native disposition precedence")
 				}

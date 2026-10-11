@@ -94,7 +94,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 			}
 			// The same result completion first releases the approved native recipe.
 			released := false
-			for _, intent := range after.State.ExecutableHostActions() {
+			for _, intent := range after.State.ExecutableHostActions(d.f.definition) {
 				if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
 					continue
 				}

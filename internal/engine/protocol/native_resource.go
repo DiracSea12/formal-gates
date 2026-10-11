@@ -853,7 +853,7 @@ func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.Compi
 			continue
 		}
 		view.RequiredTasks[step.Header.ID] = nil
-		for _, intent := range s.ExecutableHostActions() {
+		for _, intent := range s.ExecutableHostActions(cd) {
 			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && intent.Step == step.Header.ID && s.nativeActionCurrent(intent, cd, validationTasks) {
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}})
 			}

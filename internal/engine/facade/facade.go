@@ -1559,7 +1559,7 @@ func (f *Facade) project() (Run, error) {
 		RecoveryRecords:  snap.State.RecoveryRecords,
 		Validation:       snap.State.Validation,
 		DispatchBindings: snap.State.DispatchBindings,
-		AdapterIntents:   snap.State.ExecutableHostActions(),
+		AdapterIntents:   snap.State.ExecutableHostActions(f.definition),
 		EndedAttempts:    snap.State.EndedAttempts,
 		RunID:            f.runID,
 		Runtime:          RuntimeEngine,

@@ -492,26 +492,37 @@ func (e *Engine) qaCommandIntents(s *State, result ValidationResult, revision ui
 	return intents, nil
 }
 
-func (s *State) qaCheckExecutionReady(intent HostActionIntent) bool {
+func (s *State) qaCheckExecutionReady(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
 	p, err := checkParameters(intent)
 	if err != nil || p.QA == nil {
 		return true
 	}
-	wave := s.validationWave(p.Binding.WaveID)
-	if wave == nil {
-		return false
+	var plans []CheckParameters
+	receipt := s.qaCheckReceipt
+	if p.Repair != nil {
+		context, found := s.repairComparisonContext(p.Binding.Task, cd)
+		if !found {
+			return false
+		}
+		plans, err = s.repairComparisonPlans(context, cd)
+		receipt = s.repairPlanReceipt
+	} else {
+		wave := s.validationWave(p.Binding.WaveID)
+		if wave == nil {
+			return false
+		}
+		target := wave.Targets[p.Binding.Task.String()]
+		if target == nil {
+			return false
+		}
+		plans, err = s.qaOperationPlans(target, p.Binding)
 	}
-	target := wave.Targets[p.Binding.Task.String()]
-	if target == nil {
-		return false
-	}
-	plans, err := s.qaOperationPlans(target, p.Binding)
 	if err != nil {
 		return false
 	}
 	for _, prior := range plans {
-		if prior.QA.CaseID == p.QA.CaseID && prior.QA.Ordinal < p.QA.Ordinal {
-			fact, done := s.qaCheckReceipt(prior)
+		if prior.QA != nil && prior.QA.CaseID == p.QA.CaseID && prior.QA.Ordinal < p.QA.Ordinal {
+			fact, done := receipt(prior)
 			if !done || !qaOperationExecuted(fact) {
 				return false
 			}
@@ -573,4 +584,33 @@ func (s *State) qaInvocationBindingCurrent(p CheckParameters, cd *compiler.Compi
 		return digestOfCanonical(missing) == digestOfCanonical(p)
 	}
 	return false
+}
+
+// An execution-bound recipe supplies invocation values for the same approved
+// manifest. The repair still signs fresh checks against its current source.
+func (s *State) qaApprovedRecipe(wave *ValidationWave, mode coverage.ReviewKind, caseID string) []coverage.Operation {
+	_, approved, err := s.executionContract(mode, wave)
+	if err != nil {
+		return nil
+	}
+	for _, intent := range s.qaCheckIntents() {
+		p, err := checkParameters(intent)
+		if err != nil || p.QA == nil || p.Repair != nil || len(p.QA.Recipe) == 0 || p.QA.CaseID != caseID || p.Binding.WaveID != wave.ID || p.Binding.Generation != wave.Generation || p.SourceIdentity != wave.Candidate.Identity || p.SourceDigest != wave.Candidate.Digest {
+			continue
+		}
+		binding := p.QA.Execution
+		if binding.RequiredSourcesDigest != approved.RequiredSourcesDigest || binding.ManifestDigest != approved.ManifestDigest || binding.MapDigest != approved.MapDigest || binding.WhitelistDigest != approved.Digest || binding.Candidate != wave.Candidate {
+			continue
+		}
+		receipt, found := s.HostActionReceipts[intent.ActionID]
+		if !found || receipt.Status != HostActionStatusExecuted || s.validateNativeCheckReceipt(intent, receipt) != nil {
+			continue
+		}
+		var evidence CheckEvidence
+		if decodeAdapterValues(receipt, &evidence) != nil || evidence.Error != "" {
+			continue
+		}
+		return s.qaBoundRecipe(p.Binding, caseID)
+	}
+	return nil
 }

@@ -984,7 +984,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				for _, child := range children {
 					state := driverState(t, child)
 					record, ok := state.AbortEvent()
-					if state.SliceChild.ParentAbort == nil || !ok || !reflect.DeepEqual(record, parentAuthority) || len(state.ExecutableHostActions()) == 0 {
+					if state.SliceChild.ParentAbort == nil || !ok || !reflect.DeepEqual(record, parentAuthority) || len(state.ExecutableHostActions(child.f.definition)) == 0 {
 						t.Fatal("waiting sibling blocked parent cancellation propagation")
 					}
 					for _, resource := range state.NativeResources {

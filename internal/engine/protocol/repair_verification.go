@@ -206,6 +206,9 @@ func (s *State) repairComparisonPlans(context repairComparison, cd *compiler.Com
 		if !found {
 			return nil, validationError("repair case is outside the frozen approved set: " + id)
 		}
+		if len(qaCase.Operations) == 0 {
+			qaCase.Operations = s.qaApprovedRecipe(context.wave, manifest.Binding.ReviewKind, id)
+		}
 		operations, err := caseOperationPlans(manifest, qaCase)
 		if err != nil {
 			return nil, err
