@@ -2,9 +2,7 @@ package facade
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,7 +61,7 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 	end := time.Now().UTC()
 	if err == nil {
 		state = snap.State
-	} else if errors.Is(err, fs.ErrNotExist) {
+	} else if isMissingEngineState(err) {
 		summary, e := f.readSummary()
 		if e != nil {
 			return Progress{}, e

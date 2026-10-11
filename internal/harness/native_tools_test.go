@@ -995,23 +995,33 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.RequirementDocument.Path = "requirements.md"
 	material.Input.RequirementDocument.ContentDigest = "bound-original"
 	material.Input.RequirementDocument.Content = "# Original\n完整确认正文。\n尾行。\n"
-	if err := writeAtomicJSON(path, material); err != nil {
-		t.Fatal(err)
-	}
+	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
+	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
-	if err != nil {
-		t.Fatal(err)
-	}
-	full := callWorkspace(t, tools, `{"action":"requirement"}`)
-	if full["contentDigest"] != "bound-original" || strings.Join(full["lines"].([]string), "") != material.Input.RequirementDocument.Content {
-		t.Fatalf("original material missing: %v", full)
-	}
-	partial := callWorkspace(t, tools, `{"action":"requirement","from":2,"to":2}`)
-	if !reflect.DeepEqual(partial["lines"], []string{"完整确认正文。\n"}) {
-		t.Fatalf("wrong original line range: %v", partial)
-	}
-	if _, err := tools.call(json.RawMessage(`{"action":"requirement","from":2,"to":9}`)); err == nil {
-		t.Fatal("out-of-range original read accepted")
+	for _, handler := range []string{"engine.development.batch", "engine.gate", "engine.validation.observation", "engine.repair", "engine.repair.verify"} {
+		t.Run(handler, func(t *testing.T) {
+			material.Input.Handler = handler
+			if err := writeAtomicJSON(path, material); err != nil {
+				t.Fatal(err)
+			}
+			tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(tools.material.Input.Scope, originalScope) {
+				t.Fatal("bound child owner/sibling/merge responsibilities changed")
+			}
+			full := callWorkspace(t, tools, `{"action":"requirement"}`)
+			if full["contentDigest"] != "bound-original" || strings.Join(full["lines"].([]string), "") != material.Input.RequirementDocument.Content {
+				t.Fatalf("original material missing: %v", full)
+			}
+			partial := callWorkspace(t, tools, `{"action":"requirement","from":2,"to":2}`)
+			if !reflect.DeepEqual(partial["lines"], []string{"完整确认正文。\n"}) {
+				t.Fatalf("wrong original line range: %v", partial)
+			}
+			if _, err := tools.call(json.RawMessage(`{"action":"requirement","from":2,"to":9}`)); err == nil {
+				t.Fatal("out-of-range original read accepted")
+			}
+		})
 	}
 }

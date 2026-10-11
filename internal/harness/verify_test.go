@@ -76,9 +76,8 @@ func TestVerifyProcessAcceptsAnIntactJob(t *testing.T) {
 
 func TestVerifyProcessNumbersCompareByValue(t *testing.T) {
 	directory, process, receipt, request, proofs := fixture(t, json.Number("0"))
-	// Genuinely different spellings of the same number: the process record
-	// carries exit_code 0 while the receipt carries 0.0. The old test set both
-	// sides to 0.0 and therefore never exercised the value comparison.
+	// Different numeric spellings retain the same exit value: the process
+	// carries exit_code 0 while the receipt carries 0.0.
 	process["exit_code"] = json.Number("0")
 	receipt["exit_code"] = json.Number("0.0")
 	if kind, refusal := VerifyProcess(directory, process, receipt, request, proofs); refusal != "" {

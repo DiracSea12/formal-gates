@@ -107,7 +107,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(material.Prompt, input.RequirementDocument.Content) != 1 || !strings.Contains(material.Prompt, "another owner's unfinished work is not a defect of this child") {
+			if strings.Contains(material.Prompt, input.RequirementDocument.Content) || !strings.Contains(material.Prompt, "workspace requirement operation reads the complete original confirmed document") || !strings.Contains(material.Prompt, "another owner's unfinished work is not a defect of this child") {
 				t.Fatal("child lost the whole requirement or its review boundary")
 			}
 			actionInput := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
@@ -115,7 +115,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 			if err := json.Unmarshal([]byte(actionInput), &projection); err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(projection.Scope, input.Scope) || !reflect.DeepEqual(material.Input, input) {
+			if !reflect.DeepEqual(projection.Scope, input.Scope) || projection.RequirementDocument.Content != "" || projection.RequirementDocument.Path != input.RequirementDocument.Path || projection.RequirementDocument.ContentDigest != input.RequirementDocument.ContentDigest || !reflect.DeepEqual(material.Input, input) {
 				t.Fatal("material changed responsibility facts or issued input")
 			}
 			stored, err := json.Marshal(input)
@@ -172,6 +172,37 @@ func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *tes
 				if err != nil || !bytes.Equal(body, original) {
 					t.Fatalf("render changed original issued input: %s %v", body, err)
 				}
+			}
+		})
+	}
+}
+
+func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+		t.Run(string(mode), func(t *testing.T) {
+			input := semanticInput()
+			input.Pending.AttemptID = "attempt"
+			input.RequirementDocument.Content = "Confirmed scope"
+			input.Validation.Manifest.Binding.ReviewKind = mode
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == coverage.ReviewBlackbox {
+				for _, absent := range []string{"testFile", "testSymbol", "白盒测试文件", "Omit public-entry fields"} {
+					if strings.Contains(material.Prompt, absent) {
+						t.Fatal("blackbox received unrelated whitebox instructions", absent)
+					}
+				}
+				if !strings.Contains(material.Prompt, "Supply publicEntry/preconditions/steps") {
+					t.Fatal("blackbox public operation duty was lost")
+				}
+			} else if !strings.Contains(material.Prompt, "testFile") || !strings.Contains(material.Prompt, "testSymbol") || !strings.Contains(material.Prompt, "Omit public-entry fields") {
+				t.Fatal("whitebox original file/symbol selection duty was lost")
 			}
 		})
 	}

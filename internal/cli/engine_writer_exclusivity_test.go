@@ -314,6 +314,17 @@ func TestAlternatingLegacyAndEngineEntriesKeepBindingLocked(t *testing.T) {
 func engineWriterAdmission(t *testing.T, root string) *facade.Admission {
 	t.Helper()
 	registryPath, target, generation, lease, token := testkit.Installation(t, root, "target-1", "sha256:package", "engine")
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(target, "prompts", "reviewer-base.md"), catalog.Base)
+	for _, action := range catalog.Actions {
+		mustWriteCLI(t, filepath.Join(target, "prompts", "actions", action.ID+".md"), action.Content)
+	}
+	for _, gate := range catalog.Gates {
+		mustWriteCLI(t, filepath.Join(target, "gates", gate.ID+".md"), gate.Content)
+	}
 	a := &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: "engine",
 		PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: generation, Lease: lease, Token: token}
 	return a

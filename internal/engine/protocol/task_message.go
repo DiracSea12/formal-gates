@@ -51,7 +51,14 @@ func (e *Engine) ClaimTaskMessage(action, attempt, identity, fingerprint string,
 	if state == nil {
 		return nil, fmt.Errorf("MESSAGE_BINDING: run unavailable")
 	}
-	if identity == "" {
+	needed := false
+	for _, message := range state.TaskMessages {
+		if message.ActionID == action && message.AttemptID == attempt && (message.Status == "PENDING" || message.Status == "SENDING") {
+			needed = true
+			break
+		}
+	}
+	if !needed {
 		return nil, nil
 	}
 	spawn, known := state.SpawnReceipts[action]

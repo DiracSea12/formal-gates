@@ -82,7 +82,7 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	if adapter.cleanup != nil {
 		defer adapter.cleanup(nativeWorkspace)
 	}
-	// The prompt is an argv value. Closing stdin lets print mode start without
+	// Closing stdin after the prompt input lets print mode start without
 	// waiting for additional piped text; no SDK control input is used.
 	if adapter.stdinPrompt {
 		if _, err := client.stdin.Write([]byte(prompt)); err != nil {

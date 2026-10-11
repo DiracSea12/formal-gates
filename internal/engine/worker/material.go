@@ -62,9 +62,14 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
 		case "engine.qa.design":
-			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones. BLACKBOX/MERGE require publicEntry/preconditions/steps. WHITEBOX associates test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
+			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones."
 			if len(input.Validation.AffectedCases) > 0 {
 				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields, or remove:true to explicitly remove that issued item. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
+			}
+			if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+				instructions += " Associate test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
+			} else {
+				instructions += " Supply publicEntry/preconditions/steps for the public behavior, without test file or symbol selections."
 			}
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale":

@@ -24,7 +24,7 @@ func roleRules(content string, input protocol.WorkerInput) string {
 			if strings.HasPrefix(line, "黑盒在从基线") && whitebox {
 				continue
 			}
-			if strings.HasPrefix(line, "白盒在开发后") && !whitebox {
+			if (strings.HasPrefix(line, "白盒在开发后") || strings.HasPrefix(line, "白盒测试文件")) && !whitebox {
 				continue
 			}
 			if strings.HasPrefix(line, "黑盒在基线隔离区审") {

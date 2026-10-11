@@ -183,7 +183,7 @@ func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.
 	files := []Location{{Read: 2}, {Listing: 1, Entry: 2}}
 	sharedFiles := []Location{{Listing: 1, Entry: 3}}
 	unused := []Location{{Listing: 1, Entry: 4}}
-	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestSymbol: 1, Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{1}, nil}}}
+	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestSymbol: 1, Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{len(input.Validation.Manifest.Cases) + 1}, nil}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,8 @@ func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.
 	if result.Development == nil || !reflect.DeepEqual(result.Development.Paths, paths) || result.Development.Summary != "" {
 		t.Fatalf("captured native delivery paths lost: %+v", result.Development)
 	}
-	if !reflect.DeepEqual(result.Manifest.Cases[0].Files, paths[:2]) || result.Manifest.Cases[0].TestRef != "analytics_test.go::TestUsage" || !reflect.DeepEqual(result.Manifest.TestFiles(), []string{"analytics_test.go", "fixture.data", "frob_test.go"}) || result.Binding != input.Validation.Binding {
+	created := result.Manifest.Cases[len(input.Validation.Manifest.Cases)]
+	if !reflect.DeepEqual(result.Manifest.Cases[:len(input.Validation.Manifest.Cases)], input.Validation.Manifest.Cases) || !reflect.DeepEqual(created.Files, paths[:2]) || created.TestRef != "analytics_test.go::TestUsage" || !reflect.DeepEqual(result.Manifest.TestFiles(), []string{"analytics_test.go", "fixture.data", "frob_test.go"}) || result.Binding != input.Validation.Binding {
 		t.Fatal("file semantics or original binding changed")
 	}
 	raw = append(raw[:len(raw)-1], []byte(`,"development":{"paths":["analytics_test.go"],"summary":"duplicate path declaration"}}`)...)
