@@ -10,19 +10,6 @@ import (
 	"formal-gates/internal/host"
 )
 
-type transcriptParser func(io.Reader) (Usage, error)
-
-// transcriptParsers is the cost capability registry. Providers that do not
-// expose a supported transcript format simply omit an entry and remain
-// UNAVAILABLE instead of fabricating usage.
-var transcriptParsers = map[string]transcriptParser{
-	host.Claude:    parseClaudeTranscript,
-	host.WorkBuddy: parseWorkBuddyTranscript,
-	host.Codex:     parseCodexTranscript,
-	host.DeepSeek:  parseDSHTranscript,
-	host.ZCode:     parseZCodeTranscript,
-}
-
 // ParseTranscript parses exact token usage from a host transcript file,
 // selecting the provider adapter by host name. Unsupported providers,
 // unreadable files, and transcripts with no parseable usage return an error
@@ -70,9 +57,11 @@ func parseTranscript(provider string, reader io.Reader) (Usage, error) {
 	if err != nil {
 		return Usage{}, fmt.Errorf("unsupported transcript provider %q", provider)
 	}
-	parser, ok := transcriptParsers[descriptor.CostProvider]
-	if !ok {
+	parser := descriptor.ReadUsage
+	if parser == nil {
 		return Usage{}, fmt.Errorf("unsupported transcript provider %q", provider)
 	}
 	return parser(reader)
 }
+
+func CodexTaskTiming(path string) (TaskTiming, error) { return host.CodexTaskTiming(path) }

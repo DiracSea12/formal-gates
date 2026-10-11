@@ -2,7 +2,9 @@ package harness
 
 import (
 	"encoding/json"
+	"formal-gates/internal/host"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -10,29 +12,40 @@ import (
 
 func TestNativeAdapterEntriesImplementWholeBoundary(t *testing.T) {
 	seen := make(map[string]bool)
-	for _, entry := range nativeImplementations {
-		if seen[entry.provider] {
-			t.Fatalf("duplicate provider %s", entry.provider)
+	for _, entry := range host.RegisteredAdapters() {
+		capability, ok := entry.(nativeCapability)
+		if !ok {
+			continue
 		}
-		seen[entry.provider] = true
-		adapter := entry.nativeImplementation
-		if adapter.capture == nil || adapter.validateBinding == nil || adapter.verifySource == nil || adapter.verifyStart == nil || adapter.reconcile == nil || adapter.execute == nil {
-			t.Fatalf("incomplete provider %s", entry.provider)
+		provider := capability.HostDescriptor().InstallName
+		if seen[provider] {
+			t.Fatalf("duplicate provider %s", provider)
+		}
+		seen[provider] = true
+		adapter := capability.nativeBoundary()
+		if adapter.capture == nil || adapter.captureConfigured == nil || adapter.validateBinding == nil || adapter.verifySource == nil || adapter.verifyStart == nil || adapter.reconcile == nil || adapter.execute == nil {
+			t.Fatalf("incomplete provider %s", provider)
 		}
 	}
+
 }
 
 func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
-	original := nativeImplementations
-	t.Cleanup(func() { nativeImplementations = original })
+	if os.Getenv("FORMAL_GATES_NATIVE_PEER") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNativeAdapterRegistrationRoutesExecutionAndRecovery$", "-test.timeout=0", "-test.v")
+		cmd.Env = append(os.Environ(), "FORMAL_GATES_NATIVE_PEER=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("registered platform: %s %v", out, err)
+		}
+		return
+	}
 	directory := t.TempDir()
 	calls := []string{}
-	entry := nativeImplementations[0]
-	entry.provider = "native-peer"
+	entry := nativePlatform{Descriptor: &host.Descriptor{ID: "native-peer", InstallName: "native-peer", Aliases: []string{"native-peer-alias"}}}
 	binding := map[string]any{"identity": "binary-identity"}
 	source := map[string]any{"session": "session-identity"}
 	process := map[string]any{"attempt": "attempt-identity"}
-	entry.nativeImplementation = nativeImplementation{
+	entry.implementation = nativeImplementation{
 		capture: func() (map[string]any, error) { calls = append(calls, "capture"); return binding, nil },
 		validateBinding: func(got any) error {
 			if !reflect.DeepEqual(got, binding) {
@@ -70,7 +83,9 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 			return source, nil
 		},
 	}
-	nativeImplementations = append(append(original[:0:0], original...), entry)
+	if err := registerNativePlatform(entry.Descriptor, entry.implementation); err != nil {
+		t.Fatal(err)
+	}
 	adapter, err := nativeImplementationFor("native-peer")
 	if err != nil {
 		t.Fatal(err)

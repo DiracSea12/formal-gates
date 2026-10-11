@@ -45,7 +45,7 @@ func observeNativeEvents(root, runID, dispatchID, provider, identity string, eve
 	if err != nil {
 		return err
 	}
-	provider = adapter.name
+	provider = adapter.Name
 	binding, found, err := readBinding(root, runID, dispatchID)
 	if err != nil {
 		return err

@@ -149,13 +149,13 @@ func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(hooks) != len(adapter.hookEvents) {
-				t.Fatalf("HookDefinitions(%q) produced %d definitions, want one per adapter event (%d)", host, len(hooks), len(adapter.hookEvents))
+			if len(hooks) != len(adapter.HookEvents) {
+				t.Fatalf("HookDefinitions(%q) produced %d definitions, want one per adapter event (%d)", host, len(hooks), len(adapter.HookEvents))
 			}
 			gotEvents := make([]string, 0, len(hooks))
 			for index, hook := range hooks {
-				if hook.Event != adapter.hookEvents[index] {
-					t.Fatalf("HookDefinitions(%q)[%d].Event=%q want %q", host, index, hook.Event, adapter.hookEvents[index])
+				if hook.Event != adapter.HookEvents[index] {
+					t.Fatalf("HookDefinitions(%q)[%d].Event=%q want %q", host, index, hook.Event, adapter.HookEvents[index])
 				}
 				gotEvents = append(gotEvents, hook.Event)
 				// 命令形状为独立期望：capture 子命令携带宿主与事件，命令尾参即定义事件。
@@ -184,8 +184,8 @@ func TestLifecycleFactoryRegistryCoversEveryInstallableHost(t *testing.T) {
 		if err != nil {
 			t.Fatalf("installable host %q has no lifecycle adapter: %v", descriptor.ID, err)
 		}
-		if adapter.name != descriptor.ID {
-			t.Fatalf("adapter for %q reports name %q", descriptor.ID, adapter.name)
+		if adapter.Name != descriptor.ID {
+			t.Fatalf("adapter for %q reports name %q", descriptor.ID, adapter.Name)
 		}
 	}
 }
@@ -311,31 +311,6 @@ func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 	}
 	if unknown != "未知" {
 		t.Fatalf("host without a reason was not recorded as 未知: %q", unknown)
-	}
-}
-
-// TestPayloadHTTPErrorCodeStandaloneToken covers payloadHTTPErrorCode
-// only classifies a code when it appears as a standalone numeric token or in a
-// dedicated error-code field — a substring inside a longer number or word must
-// not be misclassified as an objective API interruption reason.
-func TestPayloadHTTPErrorCodeStandaloneToken(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value any
-		want  string
-	}{
-		{"standalone code in prose", map[string]any{"detail": "request throttled with 429 errors"}, "HTTP 429"},
-		{"dedicated error code field", map[string]any{"status_code": "the http 503 code"}, "HTTP 503"},
-		{"code at string edge", "429", "HTTP 429"},
-		{"substring inside longer number ignored", map[string]any{"detail": "model id 4290 rejected"}, ""},
-		{"substring inside word ignored", map[string]any{"detail": "http429proxy"}, ""},
-		{"code as part of decimal ignored", map[string]any{"detail": "value 3.429 in logs"}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := payloadHTTPErrorCode(tc.value); got != tc.want {
-				t.Fatalf("payloadHTTPErrorCode(%v)=%q want %q", tc.value, got, tc.want)
-			}
-		})
 	}
 }
 

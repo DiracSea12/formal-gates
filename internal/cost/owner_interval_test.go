@@ -111,11 +111,11 @@ func TestCostLegacyAndChildMerge(t *testing.T) {
 
 func TestDispatchParserStillDeduplicates(t *testing.T) {
 	line := ownerUsageEvent("one", 100, 40, 20)
-	got, err := parseCodexTranscript(strings.NewReader("{}\n" + line + line))
+	got, err := parseTranscript("codex", strings.NewReader("{}\n"+line+line))
 	if err != nil || got != (Usage{40, 60, 20}) {
 		t.Fatalf("got %+v %v", got, err)
 	}
-	if _, err = parseCodexTranscript(strings.NewReader("{}\n")); err == nil || !strings.Contains(err.Error(), "no parseable token usage") {
+	if _, err = parseTranscript("codex", strings.NewReader("{}\n")); err == nil || !strings.Contains(err.Error(), "no parseable token usage") {
 		t.Fatalf("missing usage: %v", err)
 	}
 }

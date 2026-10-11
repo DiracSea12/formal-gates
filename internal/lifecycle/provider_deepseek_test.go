@@ -10,7 +10,7 @@ import (
 
 func TestDeepSeekLifecycleCaptureAndVerification(t *testing.T) {
 	for _, alias := range []string{ProviderDeepSeek, "dsh", "deepseek-harness"} {
-		if adapter, err := adapterFor(alias); err != nil || adapter.name != ProviderDeepSeek {
+		if adapter, err := adapterFor(alias); err != nil || adapter.Name != ProviderDeepSeek {
 			t.Fatalf("adapterFor(%q)=%+v,%v", alias, adapter, err)
 		}
 	}

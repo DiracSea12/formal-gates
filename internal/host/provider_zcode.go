@@ -1,4 +1,4 @@
-package lifecycle
+package host
 
 import (
 	"fmt"
@@ -19,9 +19,9 @@ func zcodeGlobalInstallPrefix() string {
 	return strings.ToLower(prefix)
 }
 
-// isProjectZCodeInstall reports whether path is a project-local ZCode skill
+// IsProjectZCodeInstall reports whether path is a project-local ZCode skill
 // binary rather than the global user-level install.
-func isProjectZCodeInstall(path string) bool {
+func IsProjectZCodeInstall(path string) bool {
 	path = strings.TrimSpace(path)
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
@@ -43,26 +43,26 @@ func isProjectZCodeInstall(path string) bool {
 // call id is the only stable identity documented by ZCode, so it is used as
 // the correlation key and raw host payloads remain the source of truth for
 // any future child-agent identity bridge.
-func zcodeAdapter() providerAdapter {
-	return providerAdapter{
-		name: ProviderZCode,
-		executableMatches: func(path string) bool {
-			normalized := normalizeProviderExecutablePath(path)
-			return strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") && !isProjectZCodeInstall(path)
+func zcodeAdapter() *Lifecycle {
+	return &Lifecycle{
+		Name: ZCode,
+		ExecutableMatches: func(path string) bool {
+			normalized := NormalizeExecutablePath(path)
+			return strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") && !IsProjectZCodeInstall(path)
 		},
-		agentPrefixes:   []string{"zcode", "z-code"},
-		environmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},
-		normalizeEvent:  normalizeZCodeEvent,
-		identity:        func(_ string, payload any) string { return zcodeCallID(payload) },
-		correlation:     func(_ string, payload any) string { return zcodeCallID(payload) },
-		projectRoots: func(payload any) []string {
+		AgentPrefixes:   []string{"zcode", "z-code"},
+		EnvironmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},
+		NormalizeEvent:  normalizeZCodeEvent,
+		Identity:        func(_ string, payload any) string { return zcodeCallID(payload) },
+		Correlation:     func(_ string, payload any) string { return zcodeCallID(payload) },
+		ProjectRoots: func(payload any) []string {
 			roots := payloadProjectRoots(payload)
-			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
+			return AppendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
 		},
-		transcriptPath: func(payload any) string {
+		TranscriptPath: func(payload any) string {
 			return payloadScalar(payload, []string{"transcript_path", "transcriptPath"}, 0)
 		},
-		reason: payloadReason,
+		Reason: payloadReason,
 	}
 }
 
@@ -82,5 +82,5 @@ func normalizeZCodeEvent(eventName string) (string, error) {
 }
 
 func unsupportedZCodeEventError(eventName string) error {
-	return fmt.Errorf("unsupported %s lifecycle event %q (want PreToolUse, PostToolUse, or PostToolUseFailure)", ProviderZCode, eventName)
+	return fmt.Errorf("unsupported %s lifecycle event %q (want PreToolUse, PostToolUse, or PostToolUseFailure)", ZCode, eventName)
 }

@@ -1,14 +1,12 @@
-// Package host owns the finite, host-facing capability registry.
-//
-// The workflow engine deliberately does not import this package. Host-specific
-// installation paths, hook protocols, lifecycle event names and transcript
-// adapters live at the maintenance/integration boundary instead of being
-// encoded in workflow definitions.
+// Package host owns platform descriptions and native evidence interpretation.
+// It has no dependency on the engine, settings loader or execution transport.
 package host
 
 import (
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 )
 
 const (
@@ -59,6 +57,8 @@ type HookSpec struct {
 }
 
 type Descriptor struct {
+	Lifecycle         *Lifecycle                     `json:"-"`
+	ReadUsage         func(io.Reader) (Usage, error) `json:"-"`
 	Configuration     []ConfigField
 	ID                string
 	InstallName       string
@@ -72,9 +72,9 @@ type Descriptor struct {
 	CostProvider      string
 }
 
-var descriptors = []Descriptor{
+var descriptors = []*Descriptor{
 	{
-		ID:            Claude,
+		ID: Claude, ReadUsage: parseClaudeTranscript, Lifecycle: claudeAdapter(),
 		Configuration: []ConfigField{StringConfig("claudeExecutable", "claude"), StringConfig("claudeHome", "")},
 		InstallName:   "claude",
 		ManifestName:  "Claude Code",
@@ -88,7 +88,7 @@ var descriptors = []Descriptor{
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Claude,
 	},
 	{
-		ID:            Codex,
+		ID: Codex, ReadUsage: parseCodexTranscript, Lifecycle: codexAdapter(),
 		Configuration: []ConfigField{StringConfig("codexExecutable", "codex"), StringConfig("codexHome", "")},
 		InstallName:   "codex",
 		ManifestName:  "Codex",
@@ -102,7 +102,7 @@ var descriptors = []Descriptor{
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Codex,
 	},
 	{
-		ID:            Cursor,
+		ID: Cursor, Lifecycle: cursorAdapter(),
 		Configuration: []ConfigField{StringConfig("cursorExecutable", "cursor-agent"), StringConfig("cursorHome", "")},
 		InstallName:   "cursor",
 		ManifestName:  "Cursor",
@@ -116,7 +116,7 @@ var descriptors = []Descriptor{
 		LifecycleEvents: []string{"subagentStart", "subagentStop"}, LifecycleRequired: true,
 	},
 	{
-		ID:              DeepSeek,
+		ID: DeepSeek, ReadUsage: parseDSHTranscript, Lifecycle: deepseekAdapter(),
 		Configuration:   []ConfigField{StringConfig("dshExecutable", "dsh")},
 		InstallName:     "dsh",
 		ManifestName:    "DeepSeek Harness",
@@ -128,7 +128,7 @@ var descriptors = []Descriptor{
 		CostProvider: DeepSeek,
 	},
 	{
-		ID:            ZCode,
+		ID: ZCode, ReadUsage: parseZCodeTranscript, Lifecycle: zcodeAdapter(),
 		Configuration: []ConfigField{StringConfig("zcodeExecutable", "node"), StringConfig("zcodeScript", ""), StringConfig("zcodeHome", "")},
 		InstallName:   "zcode",
 		ManifestName:  "ZCode",
@@ -143,14 +143,14 @@ var descriptors = []Descriptor{
 		CostProvider: ZCode,
 	},
 	{
-		ID: WorkBuddy, InstallName: "workbuddy", ManifestName: "WorkBuddy",
+		ID: WorkBuddy, ReadUsage: parseWorkBuddyTranscript, Lifecycle: workbuddyAdapter(), InstallName: "workbuddy", ManifestName: "WorkBuddy",
 		Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
 		Paths:        PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
 		CostProvider: WorkBuddy, LifecycleRequired: true,
 		Configuration: []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
 	},
 	{
-		ID:              Default,
+		ID: Default, Lifecycle: defaultAdapter(),
 		InstallName:     "",
 		ManifestName:    "",
 		Aliases:         []string{"default"},
@@ -160,12 +160,87 @@ var descriptors = []Descriptor{
 	},
 }
 
+type Adapter interface{ HostDescriptor() *Descriptor }
+
+func (d *Descriptor) HostDescriptor() *Descriptor { return d }
+
+var registryMu sync.RWMutex
+var adapters []Adapter
+
+// Register binds runtime capability to its original descriptor or adds one
+// complete platform object. Configuration and evidence share that object.
+func Register(adapter Adapter) error {
+	if adapter == nil || adapter.HostDescriptor() == nil || strings.TrimSpace(adapter.HostDescriptor().ID) == "" {
+		return fmt.Errorf("platform descriptor requires an ID")
+	}
+	d := adapter.HostDescriptor()
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, existing := range adapters {
+		if existing.HostDescriptor().ID == d.ID {
+			return fmt.Errorf("platform %q is already registered", d.ID)
+		}
+	}
+	for _, existing := range descriptors {
+		if existing == d {
+			adapters = append(adapters, adapter)
+			return nil
+		}
+		for _, a := range append([]string{existing.ID}, existing.Aliases...) {
+			for _, b := range append([]string{d.ID}, d.Aliases...) {
+				if strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) {
+					return fmt.Errorf("platform alias %q is already registered", b)
+				}
+			}
+		}
+		for _, a := range existing.Configuration {
+			for _, b := range d.Configuration {
+				if a.Name == b.Name {
+					return fmt.Errorf("platform configuration field %q is already registered", b.Name)
+				}
+			}
+		}
+	}
+	descriptors = append(descriptors, d)
+	adapters = append(adapters, adapter)
+	return nil
+}
+
+func LookupAdapter(value string) (Adapter, error) {
+	d, err := Lookup(value)
+	if err != nil {
+		return nil, err
+	}
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	for _, a := range adapters {
+		if a.HostDescriptor().ID == d.ID {
+			return a, nil
+		}
+	}
+	for _, known := range descriptors {
+		if known.ID == d.ID {
+			return known, nil
+		}
+	}
+	return nil, fmt.Errorf("unsupported host %q", value)
+}
+
+// RegisteredAdapters preserves capability registration order.
+func RegisteredAdapters() []Adapter {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return append([]Adapter(nil), adapters...)
+}
+
 // All returns a copy of the finite registry. Consumers that need to enumerate
 // supported installable hosts should derive their view from this source rather
 // than maintaining a second host list.
 func All() []Descriptor {
 	result := make([]Descriptor, len(descriptors))
-	copy(result, descriptors)
+	for i, d := range descriptors {
+		result[i] = *d
+	}
 	return result
 }
 
@@ -197,11 +272,11 @@ func Lookup(value string) (Descriptor, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	for _, descriptor := range descriptors {
 		if descriptor.ID == normalized {
-			return descriptor, nil
+			return *descriptor, nil
 		}
 		for _, alias := range descriptor.Aliases {
 			if strings.ToLower(strings.TrimSpace(alias)) == normalized {
-				return descriptor, nil
+				return *descriptor, nil
 			}
 		}
 	}

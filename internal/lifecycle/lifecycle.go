@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	event, err := adapter.normalizeEvent(eventName)
+	event, err := adapter.NormalizeEvent(eventName)
 	if err != nil {
 		return CaptureResult{}, err
 	}
@@ -92,34 +93,34 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	// payload has been normalized and no active run was found, discard it before
 	// applying provider identity requirements or creating any event files.
 	if len(roots) == 0 {
-		return CaptureResult{Provider: adapter.name, Event: event}, nil
+		return CaptureResult{Provider: adapter.Name, Event: event}, nil
 	}
-	identity := adapter.identity(event, decoded)
-	correlation := adapter.correlation(event, decoded)
-	if event == eventStart && identity == "" && adapter.required {
-		return CaptureResult{}, fmt.Errorf("%s %s payload is missing a host agent identity", adapter.name, eventName)
+	identity := adapter.Identity(event, decoded)
+	correlation := adapter.Correlation(event, decoded)
+	if event == eventStart && identity == "" && adapter.Required {
+		return CaptureResult{}, fmt.Errorf("%s %s payload is missing a host agent identity", adapter.Name, eventName)
 	}
-	if event == eventStop && identity == "" && correlation == "" && adapter.required {
-		return CaptureResult{}, fmt.Errorf("%s %s payload cannot be correlated to a host agent", adapter.name, eventName)
+	if event == eventStop && identity == "" && correlation == "" && adapter.Required {
+		return CaptureResult{}, fmt.Errorf("%s %s payload cannot be correlated to a host agent", adapter.Name, eventName)
 	}
-	result := CaptureResult{Provider: adapter.name, Event: event, Identity: identity, Roots: roots}
+	result := CaptureResult{Provider: adapter.Name, Event: event, Identity: identity, Roots: roots}
 	if identity == "" && correlation == "" {
 		return result, nil
 	}
 	transcriptPath := ""
-	if adapter.transcriptPath != nil {
-		transcriptPath = adapter.transcriptPath(decoded)
+	if adapter.TranscriptPath != nil {
+		transcriptPath = adapter.TranscriptPath(decoded)
 	}
 	// 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码）写入事件记录；宿主
 	// 未提供原因时记录"未知"。仅 stop/error 事件承载原因，start 事件不记录。
 	reason := ""
-	if event == eventStop && adapter.reason != nil {
-		reason = adapter.reason(decoded)
+	if event == eventStop && adapter.Reason != nil {
+		reason = adapter.Reason(decoded)
 		if reason == "" {
 			reason = "未知"
 		}
 	}
-	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath, Reason: reason}
+	record := eventRecord{Provider: adapter.Name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath, Reason: reason}
 	duplicate := true
 	for _, root := range roots {
 		alreadyExists, err := recordEvent(root, record)
@@ -143,7 +144,7 @@ func captureRoots(root string, adapter providerAdapter, payload any) ([]string, 
 		}
 		return []string{activeRoot}, nil
 	}
-	candidates := adapter.projectRoots(payload)
+	candidates := adapter.ProjectRoots(payload)
 	if len(candidates) == 0 {
 		candidates = []string{"."}
 	}
@@ -154,7 +155,7 @@ func captureRoots(root string, adapter providerAdapter, payload any) ([]string, 
 			return nil, err
 		}
 		if found {
-			activeRoots = appendUniqueStrings(activeRoots, activeRoot)
+			activeRoots = host.AppendUniqueStrings(activeRoots, activeRoot)
 		}
 	}
 	if len(activeRoots) > 0 {
@@ -225,7 +226,7 @@ func BindDispatchWithProvider(root, runID, dispatchID, identity, provider string
 	if err := BeginRun(root, runID); err != nil {
 		return err
 	}
-	return writeBinding(root, bindingRecord{RunID: runID, DispatchID: dispatchID, Provider: adapter.name, Identity: identity})
+	return writeBinding(root, bindingRecord{RunID: runID, DispatchID: dispatchID, Provider: adapter.Name, Identity: identity})
 }
 
 // ResolveClaimIdentity returns the effective identity to bind for a dispatch
@@ -262,7 +263,7 @@ func ResolveClaimIdentityWithProvider(root, runID, preferred, provider string) (
 	starts := []string{}
 	for _, record := range records {
 		if record.Event == eventStart && record.Identity != "" {
-			starts = appendUniqueStrings(starts, record.Identity)
+			starts = host.AppendUniqueStrings(starts, record.Identity)
 		}
 	}
 	for _, identity := range starts {
@@ -300,7 +301,7 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 		return Verification{}, err
 	}
 	result := Verification{Provider: binding.Provider, DispatchID: dispatchID, Identity: binding.Identity}
-	if !adapter.required {
+	if !adapter.Required {
 		result.Outcome = Unavailable
 		result.Diagnostic = "provider does not expose usable lifecycle events; dispatch identity checks remain authoritative"
 		return result, nil
