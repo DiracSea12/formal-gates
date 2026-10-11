@@ -143,19 +143,19 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 			return nativeResult{}, false, err
 		}
 		evidence.Invocation, evidence.WorkingDirectory = string(invocation), cwd
+		stdoutBody, err := os.ReadFile(filepath.Join(directory, "stdout.log"))
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		stderrBody, err := os.ReadFile(filepath.Join(directory, "stderr.log"))
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		evidence.StdoutText, evidence.StderrText = string(stdoutBody), string(stderrBody)
 		if p.QA != nil {
-			stdout, err := os.ReadFile(filepath.Join(directory, "stdout.log"))
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			stderr, err := os.ReadFile(filepath.Join(directory, "stderr.log"))
-			if err != nil {
-				return nativeResult{}, false, err
-			}
-			evidence.StdoutText, evidence.StderrText = string(stdout), string(stderr)
 			evidence.GoTestName = testName
 			if testName != "" {
-				evidence.GoResult = coverage.GoTestExecutionResult(stdout, testName)
+				evidence.GoResult = coverage.GoTestExecutionResult(stdoutBody, testName)
 			}
 		}
 		if p.QA != nil && p.QA.Preparation != nil {

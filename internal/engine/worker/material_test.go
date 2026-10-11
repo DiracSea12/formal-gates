@@ -49,7 +49,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v3", "engine.repair.v3", "engine.repair.verify.v2", "engine.qa.design.v2", "engine.readiness.plan.v3"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4", "engine.repair.verify.v2", "engine.qa.design.v3", "engine.readiness.plan.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -83,7 +83,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v3", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v3", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v4", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -96,10 +96,10 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 			if handler == "engine.validation.observation.v2" {
 				input.Validation.Observation = &protocol.ObservationInput{}
 			}
-			if handler == "engine.repair.v3" || handler == "engine.repair.verify.v2" {
+			if handler == "engine.repair.v4" || handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{}
 			}
-			if handler == "engine.repair.v3" {
+			if handler == "engine.repair.v4" {
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 			}
@@ -137,7 +137,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *testing.T) {
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", ContentDigest: "confirmed-digest", Content: "Complete confirmed requirement body.", Requirements: []requirement.FrozenRequirement{{ID: "REQ-001", Title: "behavior", Requirement: "required behavior"}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "qa-design"}}}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
 			if handler == "engine.review.worker.v2" {
@@ -287,14 +287,14 @@ func TestMaterialKeepsDevelopmentFeedbackWithoutTransportBindings(t *testing.T) 
 		t.Fatal(err)
 	}
 	result := protocol.WorkerResult{SourceResult: "opaque-source", ActionID: "opaque-action", Provider: "opaque-provider", PayloadDigest: "opaque-payload", Digest: "opaque-digest", Outcome: "FAILED", InterruptionReason: "original execution interruption", InvalidReason: "original result rejection", Validation: &protocol.ValidationResult{Binding: protocol.WorkBinding{WaveID: "opaque-wave"}, Status: "CONTINUE", Development: &protocol.DevelopmentEvidence{Summary: "author text contains actionId and opaque-user-body", RemainingWork: "finish the original behavior", Paths: []string{"app.go"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"criterion": "original evidence"}, Handoff: "original handoff"}}}}
-	for _, handler := range []string{"engine.development.batch.v3", "engine.repair.v3"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "attempt"
 			input.RequirementDocument.Content = "Confirmed requirement"
 			input.Validation.Development = &protocol.DevelopmentInput{Result: &result, Dependencies: map[string]protocol.WorkerResult{"batch": result}}
-			if handler == "engine.repair.v3" {
+			if handler == "engine.repair.v4" {
 				input.Validation.Repair = &protocol.RepairInput{Result: &result, MemberResults: []protocol.WorkerResult{result}}
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
@@ -335,7 +335,7 @@ func TestMaterialRestrictsComparisonAndConflictResponsibilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.repair.verify.v2", "engine.merge.resolve.v2"} {
+	for _, handler := range []string{"engine.repair.verify.v2", "engine.merge.resolve.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -360,7 +360,7 @@ func TestMaterialRestrictsComparisonAndConflictResponsibilities(t *testing.T) {
 			if handler == "engine.repair.verify.v2" && (!material.ReadOnly || !strings.Contains(material.Prompt, "# QA 判据比较")) {
 				t.Fatal("repair comparison lost its existing comparison contract")
 			}
-			if handler == "engine.merge.resolve.v2" && (material.ReadOnly || !strings.Contains(material.Prompt, "Report only the semantic resolution summary")) {
+			if handler == "engine.merge.resolve.v3" && (material.ReadOnly || !strings.Contains(material.Prompt, "Report only the semantic resolution summary")) {
 				t.Fatal("conflict resolver lost its exact current duty")
 			}
 			after, _ := json.Marshal(material.Input)
@@ -409,6 +409,44 @@ func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
 			}
 			if strings.Contains(material.Prompt, "门审必填") || strings.Contains(material.Prompt, "产品审、技术审只审确认文档；QA") {
 				t.Fatal("other-role instructions remained")
+			}
+		})
+	}
+}
+
+func TestQAExecutionMaterialSelectsCurrentModeAndKeepsSharedEvidenceRules(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+		t.Run(string(mode), func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = "engine.qa.execution.v2"
+			input.Pending.AttemptID = "attempt"
+			input.RequirementDocument.Content = "Confirmed scope"
+			input.Validation.Manifest.Binding.ReviewKind = mode
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, other := "黑盒依据真实公开入口观察。", "白盒依据本轮指定结构测试。"
+			if mode == coverage.ReviewWhitebox {
+				current, other = other, current
+			}
+			if !strings.Contains(material.Prompt, current) || strings.Contains(material.Prompt, other) {
+				t.Fatalf("execution mode duties differ from issued mode %s", mode)
+			}
+			for _, rule := range []string{
+				"自测主张、模拟输出或代码检视不能代替执行事实。",
+				"逐条保留真实缺陷；一个失败不覆盖其他完整结果，授权/skip 也不能改写为执行 PASS。",
+				"读取原命令、输入、退出码、stdout/stderr 和证据引用",
+				"普通操作非零退出可能是负例预期，零退出不等于 oracle 通过。",
+				"无法完成说明原因，不把缺证据写成 PASS",
+			} {
+				if !strings.Contains(material.Prompt, rule) {
+					t.Fatal("common execution rule lost", rule)
+				}
 			}
 		})
 	}

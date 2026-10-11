@@ -42,6 +42,7 @@ type nativeWorkspaceTools struct {
 	services                                              []ExecutionServices
 	material                                              *worker.Material
 	semanticSchema                                        map[string]any
+	release                                               func()
 }
 
 type nativeToolContext struct {
@@ -369,26 +370,42 @@ type nativeWorkspaceArguments struct {
 	To            int    `json:"to,omitempty"`
 	Name          string `json:"name,omitempty"`
 	Content       string `json:"content,omitempty"`
+	Executable    *bool  `json:"executable,omitempty"`
 	TargetListing int    `json:"targetListing,omitempty"`
 	TargetEntry   int    `json:"targetEntry,omitempty"`
 }
 
-func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, error) {
+// Execution admission covers qualification and local mutation. Owned commands
+// and their observation run after releasing the original write window.
+func (t *nativeWorkspaceTools) enterExecutionWindow() error {
+	if t.release != nil {
+		return nil
+	}
 	request, err := readJSONFile(filepath.Join(t.directory, "native-request.json"))
 	if err != nil {
+		return err
+	}
+	t.release, err = admitExecution(t.directory, objectOrEmpty(request), t.services)
+	return err
+}
+
+func (t *nativeWorkspaceTools) leaveExecutionWindow() {
+	if t.release != nil {
+		t.release()
+		t.release = nil
+	}
+}
+
+func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, error) {
+	if err := t.enterExecutionWindow(); err != nil {
 		return nil, err
 	}
-	release, err := admitExecution(t.directory, objectOrEmpty(request), t.services)
-	if err != nil {
-		return nil, err
-	}
-	if release != nil {
-		defer release()
-	}
+	defer t.leaveExecutionWindow()
 	if err := t.refreshFacts(); err != nil {
 		return nil, err
 	}
 	var checks []any
+	var err error
 	for index, fact := range t.facts {
 		if fact.Kind == "edit" {
 			checks, err = t.completeEditChecks(index+1, "")
@@ -396,6 +413,9 @@ func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, er
 				return nil, err
 			}
 		}
+	}
+	if err := t.enterExecutionWindow(); err != nil {
+		return nil, err
 	}
 	var value any
 	switch name {
@@ -425,6 +445,9 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&a); err != nil {
 		return nil, err
+	}
+	if a.Executable != nil && a.Action != "create" && a.Action != "executable" {
+		return nil, fmt.Errorf("executable applies to create or an original selected file")
 	}
 	relative := "."
 	if a.Listing != 0 {
@@ -707,6 +730,36 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		return t.edit(raw, func() (any, error) {
 			return map[string]any{"written": true}, os.WriteFile(path, []byte(result), info.Mode().Perm())
 		})
+	case "executable":
+		if a.Executable == nil || (a.Listing == 0 && a.Read == 0) || a.Content != "" || a.Name != "" {
+			return nil, fmt.Errorf("executable selects an original file and a boolean")
+		}
+		if a.Read != 0 {
+			fact, err := t.fact(a.Read, "read")
+			if err != nil {
+				return nil, err
+			}
+			relative = fact.Paths[0]
+		}
+		path, err := t.path(relative, true)
+		if err != nil {
+			return nil, err
+		}
+		if err := t.writable(path); err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("executable selects a regular file")
+		}
+		mode := info.Mode() &^ 0111
+		if *a.Executable {
+			mode |= 0111
+		}
+		return t.edit(raw, func() (any, error) { return map[string]any{"executable": *a.Executable}, os.Chmod(path, mode) })
 	case "create", "mkdir":
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
@@ -734,8 +787,12 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 				return map[string]any{"created": true}, os.Mkdir(path, 0755)
 			})
 		}
+		mode := os.FileMode(0644)
+		if a.Executable != nil && *a.Executable {
+			mode |= 0111
+		}
 		return t.edit(raw, func() (any, error) {
-			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				return nil, err
 			}
@@ -907,7 +964,7 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 		description += " Comparison reads the issued native versions."
 	}
 	if !readOnly {
-		actions = append(actions, "replace", "copy-range", "create", "mkdir", "remove", "copy", "move")
+		actions = append(actions, "replace", "copy-range", "create", "mkdir", "remove", "copy", "move", "executable")
 		description += " Replace uses an original read and from/to line range (empty: 1/0). Copy-range takes sourceRead/sourceFrom/sourceTo and target read/from/to; to=from-1 inserts original bytes. Copy/move use source listing/entry and targetListing/targetEntry (omit for root); omit name to retain the original basename."
 		for _, key := range []string{"read", "from", "sourceRead", "sourceFrom", "sourceTo", "targetListing", "targetEntry"} {
 			properties[key] = map[string]any{"type": "integer", "minimum": 1}
@@ -915,6 +972,8 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
 		properties["name"] = map[string]any{"type": "string"}
 		properties["content"] = map[string]any{"type": "string"}
+		properties["executable"] = map[string]any{"type": "boolean"}
+		description += " Create optionally declares executable. The executable action selects an original read or listing/entry and changes only execution bits with its executable boolean; original bytes and other mode bits are preserved."
 	}
 	description += " Read publishes Go testSymbols from the original full source for result selection."
 	properties["action"] = map[string]any{"type": "string", "enum": actions}

@@ -448,9 +448,9 @@ func hookDispatchTarget(statePath, dispatchID string) string {
 			return ""
 		}
 		switch string(agent.Handler) {
-		case "engine.development.batch.v3", "engine.repair.v3", "engine.merge.resolve.v2":
+		case "engine.development.batch.v4", "engine.repair.v4", "engine.merge.resolve.v3":
 			return "development-worker"
-		case "engine.qa.design.v2":
+		case "engine.qa.design.v3":
 			return "qa-design"
 		default:
 			return "gate-review"

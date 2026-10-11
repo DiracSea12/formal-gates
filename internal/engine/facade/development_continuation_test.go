@@ -29,7 +29,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one declared artifact"}})
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 	d.drive()
-	id, input := d.action("engine.development.batch.v3")
+	id, input := d.action("engine.development.batch.v4")
 	issued := driverState(t, d).Attempts[input.Binding.Task]
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// unfinished\n"), 0600); err != nil {
 		t.Fatal(err)

@@ -97,7 +97,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if _, rejected := s.RejectedResults[id]; rejected {
 		return WorkerInput{}, false
 	}
-	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v3" || s.validationRole(pending.Task, cd) == "engine.repair.v3") && !s.developmentContinuation(id, cd) {
+	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v4" || s.validationRole(pending.Task, cd) == "engine.repair.v4") && !s.developmentContinuation(id, cd) {
 		return WorkerInput{}, false
 	}
 	input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
@@ -130,7 +130,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair.v3" {
+	if input.Handler == "engine.repair.v4" {
 		input.ApprovedChecks = s.fullProjectChecks()
 		_, plan, _ := s.confirmedDevelopmentPlan()
 		if plan != nil {
@@ -144,7 +144,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			}
 		}
 	}
-	if input.Handler == "engine.repair.v3" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v4" || input.Review != nil && input.Review.Action == review.StartReadiness {
 		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
 	}
 	return input, true

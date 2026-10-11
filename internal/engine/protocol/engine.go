@@ -1832,7 +1832,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v3" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v3") {
+			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v4" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v4") {
 				for _, prior := range state.RecoverableResults[actionID] {
 					if prior.Digest == payloadDigest {
 						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
@@ -2189,7 +2189,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
-		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch.v3" || record.Validation != nil && record.Validation.Status == "CONTINUE" {
+		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch.v4" || record.Validation != nil && record.Validation.Status == "CONTINUE" {
 			if previous, ok := state.Results[record.ActionID]; ok {
 				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
 			}

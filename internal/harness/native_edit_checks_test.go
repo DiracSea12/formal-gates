@@ -13,8 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/lifecycle"
 )
 
 func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
@@ -47,7 +50,7 @@ func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
 	material.Input.VCS = "git"
 	material.Input.Validation.Workspace.Source = git("rev-parse", "HEAD")
-	material.Input.Handler = "engine.development.batch.v3"
+	material.Input.Handler = "engine.development.batch.v4"
 	material.Input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "approved", Checks: []protocol.DevelopmentCheck{{ID: "edit", Purpose: protocol.CheckEdit, Command: "printf edit; printf diagnostic >&2; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\""}, {ID: "full", Purpose: protocol.CheckFullTests, Command: "touch full-ran"}, {ID: "ordinary", Command: "touch ordinary-ran"}}}}
 	if err := os.MkdirAll(filepath.Join(workspace, ".gates", "tmp"), 0700); err != nil {
 		t.Fatal(err)
@@ -267,7 +270,7 @@ func TestNativeEditCheckObservesInterruptedOriginalProcess(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), request); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeEditCheckProcess$", "-test.v")
+	cmd := exec.Command(os.Args[0], "-test.timeout=0", "-test.run=^TestNativeEditCheckProcess$", "-test.v")
 	var output strings.Builder
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
@@ -442,5 +445,200 @@ func TestNativeEditCheckFailureDiagnosticsReachTheWorker(t *testing.T) {
 	}
 	if !valuesEqual(first["checks"], recovered["checks"]) {
 		t.Fatal("recovery changed original diagnostics")
+	}
+}
+
+func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
+	f, _, scenario, _ := engineNativeFixture(t)
+	command := `printf started > "$FORMAL_GATES_WORKSPACE/.gates/tmp/started"; while test ! -e "$FORMAL_GATES_WORKSPACE/.gates/tmp/release"; do sleep 0.02; done; printf original-check`
+	stageNativeReviewsWithEdit(t, f, scenario, command, "left", "right")
+	stageNativeDevelopmentReady(t, f, scenario)
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := []facade.WorkerMaterial{}
+	inputs := []protocol.WorkerInput{}
+	for id, input := range run.ValidationInputs {
+		if input.Handler != "engine.development.batch.v4" {
+			continue
+		}
+		ref := run.WorkerMaterials[id]
+		body, err := os.ReadFile(ref.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var material worker.Material
+		if err := json.Unmarshal(body, &material); err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, ref)
+		inputs = append(inputs, material.Input)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("expected independent original developers: %v", run.ValidationInputs)
+	}
+	request, _, directory, err := f.WorkerExecutionRequest(refs[0], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: facade.AdmitExecution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := inputs[0].Validation.Workspace.Path
+	if err := os.MkdirAll(filepath.Join(workspace, ".gates", "tmp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := tools.call(json.RawMessage(`{"action":"create","name":"new-source.txt","content":"actual source"}`))
+		done <- err
+	}()
+	completed := false
+	t.Cleanup(func() {
+		if !completed {
+			if err := os.WriteFile(filepath.Join(workspace, ".gates", "tmp", "release"), nil, 0600); err != nil {
+				t.Error(err)
+			}
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	for {
+		if _, err := os.Stat(filepath.Join(workspace, ".gates", "tmp", "started")); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			completed = true
+			t.Fatalf("original check did not start: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	spawn, err := protocol.NewSpawnReceiptEvent("sibling-start", refs[1].ActionID, "codex", "sibling-original", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(spawn); err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResultWithPaths(inputs[1], "sibling-progress", []byte(`{"summary":"Mapped this independent artifact","remainingWork":"Implement its next source edit"}`), "fixture-original-sibling-progress", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeCompletion(scenario.workspace, "native-execution", refs[1].ActionID, "codex", "sibling-original"); err != nil {
+		t.Fatal(err)
+	}
+	accepted, _, err := f.Submit(event)
+	if err != nil || accepted.Status != "ACCEPTED" {
+		t.Fatalf("independent result while original check runs: %+v %v", accepted, err)
+	}
+	control, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlRequestRequirementChange})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.SubmitControl(control); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		completed = true
+		t.Fatalf("check ended before its original release: %v", err)
+	default:
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".gates", "tmp", "release"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = <-done
+	completed = true
+	if err != nil {
+		t.Fatal(err)
+	}
+	factNumber := 0
+	for number, fact := range tools.facts {
+		if fact.Kind == "edit" {
+			factNumber = number + 1
+			break
+		}
+	}
+	if factNumber == 0 {
+		t.Fatal("original mutation fact missing")
+	}
+	fact := tools.facts[factNumber-1]
+	value, err := readJSONFile(filepath.Join(editCheckDirectory(fact, factNumber, 0), "request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := editCheckReceipt(editCheckDirectory(fact, factNumber, 0), objectOrEmpty(value))
+	if err != nil || !valuesEqual(receipt["exit_code"], 0) {
+		t.Fatal(receipt, err)
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"forbidden.txt","content":"after control"}`)); err == nil {
+		t.Fatal("held original action continued writing")
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "forbidden.txt")); !os.IsNotExist(err) {
+		t.Fatal("unissued write after control", err)
+	}
+	t.Log("real admission released before original check completed; sibling result and Phase A control accepted")
+}
+
+func TestNativeWorkspaceAuthorsExecutableFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Unix execution mode")
+	}
+	tools, workspace := nativeEditCheckFixture(t)
+	original := []byte("#!/bin/sh\nprintf 'hello\\n'\n")
+	args, _ := json.Marshal(map[string]any{"action": "create", "name": "hello.sh", "content": string(original), "executable": true})
+	if _, err := tools.call(args); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, "hello.sh")
+	out, err := exec.Command(path).Output()
+	if err != nil || string(out) != "hello\n" {
+		t.Fatalf("actual public script %q %v", out, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0755 {
+		t.Fatal(info, err)
+	}
+	changes, err := vcs.NewNative(workspace, "git", nil).CompareWorkingTree(tools.material.Input.Validation.Workspace.Source)
+	if err != nil || len(changes) != 1 || changes[0].Path != "hello.sh" || changes[0].Mode != "100755" || !bytes.Equal(changes[0].Content, original) {
+		t.Fatalf("native executable candidate facts: %+v %v", changes, err)
+	}
+	list := callWorkspace(t, tools, `{"action":"list"}`)
+	entry := 0
+	for _, value := range list["entries"].([]any) {
+		if getOf(value, "name") == "hello.sh" {
+			entry = getOf(value, "entry").(int)
+		}
+	}
+	if entry == 0 {
+		t.Fatal("new original script missing from listing")
+	}
+	read := callWorkspace(t, tools, fmt.Sprintf(`{"action":"read","listing":%d,"entry":%d}`, list["listing"], entry))
+	callWorkspace(t, tools, fmt.Sprintf(`{"action":"executable","read":%d,"executable":false}`, read["read"]))
+	info, _ = os.Stat(path)
+	current, _ := os.ReadFile(path)
+	if info.Mode().Perm() != 0644 || !bytes.Equal(current, original) {
+		t.Fatal("mode change altered original non-execution bits/bytes", info.Mode(), current)
+	}
+	callWorkspace(t, tools, fmt.Sprintf(`{"action":"executable","read":%d,"executable":true}`, read["read"]))
+	callWorkspace(t, tools, fmt.Sprintf(`{"action":"replace","read":%d,"from":2,"to":2,"content":"printf 'changed\\n'\n"}`, read["read"]))
+	info, _ = os.Stat(path)
+	if info.Mode().Perm() != 0755 {
+		t.Fatal("replace lost execution bits")
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"executable","listing":1,"entry":1}`)); err == nil {
+		t.Fatal("missing semantic executable value accepted")
+	}
+	tools.readOnly = true
+	if _, err := tools.call(json.RawMessage(`{"action":"executable","listing":1,"entry":1,"executable":false}`)); err == nil {
+		t.Fatal("readonly mode mutation accepted")
 	}
 }

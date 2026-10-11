@@ -238,12 +238,12 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	}
 	for id := range s.Results {
 		binding := s.DispatchBindings[id]
-		if id != planSource && s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch.v3" {
+		if id != planSource && s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch.v4" {
 			s.archiveDispatchResults(id)
 		}
 	}
 	for id, receipt := range s.SpawnReceipts {
-		if s.validationRole(receipt.Task, e.cfg.Definition) != "engine.development.batch.v3" {
+		if s.validationRole(receipt.Task, e.cfg.Definition) != "engine.development.batch.v4" {
 			s.retireAction(id, "", "Reset authorized by "+d.RequestID)
 		}
 	}
@@ -287,7 +287,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	pkg := &RequirementDecisionPackage{Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
 	for _, work := range e.requirementWork(s) {
 		disposition := RequirementWorkRedo
-		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v3" {
+		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v4" {
 			disposition = RequirementWorkCarry
 		}
 		pkg.WorkDecisions = append(pkg.WorkDecisions, RequirementWorkDecision{Work: work, Disposition: disposition, Reason: d.Reset.Reason})

@@ -837,7 +837,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	for _, fact := range resumed.facts {
 		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","files":[{"read":%d}],"testFile":1,"testSymbol":2}],"coverage":[]}`, originalRead))
 	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
 	if err != nil {
@@ -891,7 +891,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
 	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	for _, handler := range []string{"engine.development.batch.v3", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v3", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v4", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			material.Input.Handler = handler
 			if err := writeAtomicJSON(path, material); err != nil {

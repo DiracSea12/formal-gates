@@ -343,7 +343,7 @@ func (s *State) validateCurrentPromotion(p CandidateParameters, cd *compiler.Com
 		return validationError("promotion differs from current validation qualification")
 	}
 	target := p.Promotion
-	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" && target.TargetStart.PendingFingerprint == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly {
+	if target.Source != w.Candidate.Identity || target.SourceDigest != w.Candidate.Digest || target.TargetBase != s.BaseSnapshot || target.TargetRoot == "" || s.NativeRoot != "" && target.TargetRoot != s.NativeRoot || target.TargetStart.Head == "" || target.TargetStart.Tree == "" || target.TargetStart.IndexTree == "" && target.TargetStart.PendingFingerprint == "" || !target.TargetStart.Clean && !target.TargetStart.StagedOnly && !s.confirmedRequirementPromotionPrefix(target) {
 		return validationError("promotion differs from current source and exact target prefix")
 	}
 	if s.NativeRoot != "" {
@@ -501,6 +501,19 @@ func (s *State) nativeReplacementAuthorized(old, current HostActionIntent, cd *c
 			}
 		}
 		return true
+	}
+	return false
+}
+
+func (s *State) confirmedRequirementPromotionPrefix(p *PromotionParameters) bool {
+	if p.TargetStart.Head != s.AcceptedNativeSnapshot() || len(p.TargetStart.Changes) != 1 || p.TargetStart.Changes[0].Path != s.RequirementArtifactPath() || p.TargetStart.Changes[0].Kind != "M" {
+		return false
+	}
+	current := s.currentValidationWave()
+	for i := range s.Validation.Waves {
+		if s.RequirementAssemblyReceipt(&s.Validation.Waves[i], current) != "" {
+			return true
+		}
 	}
 	return false
 }

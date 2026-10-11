@@ -274,7 +274,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err := initializeCanaryGit(root); err != nil {
 		return err
 	}
-	base, err := (execNativeCommandRunner{}).Run(root, "git", "rev-parse", "HEAD")
+	base, err := (vcs.ExecRunner{}).Run(root, "git", "rev-parse", "HEAD")
 	if err != nil {
 		return err
 	}
@@ -343,7 +343,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			return err
 		}
 		if run.Status == "COMPLETE" {
-			for _, role := range []string{"engine.development.batch.v3", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
+			for _, role := range []string{"engine.development.batch.v4", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
 				if !checked[role] {
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
@@ -495,7 +495,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		workspace = in.Workspace.Path
 	}
 	switch in.Handler {
-	case "engine.development.batch.v3":
+	case "engine.development.batch.v4":
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -505,7 +505,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
-	case "engine.qa.design.v2":
+	case "engine.qa.design.v3":
 		mode := in.Manifest.Binding.ReviewKind
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
@@ -608,7 +608,7 @@ func portableComparison(c coverage.AcceptanceCase, fact protocol.ExecutionFact) 
 }
 
 func initializeCanaryGit(root string) error {
-	runner := execNativeCommandRunner{}
+	runner := vcs.ExecRunner{}
 	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}} {
 		if _, err := runner.Run(root, "git", args...); err != nil {
 			return err
@@ -622,7 +622,7 @@ func initializeCanaryGit(root string) error {
 }
 
 func commitCanaryGit(root, message string) error {
-	runner := execNativeCommandRunner{}
+	runner := vcs.ExecRunner{}
 	if _, err := runner.Run(root, "git", "add", "--all"); err != nil {
 		return err
 	}

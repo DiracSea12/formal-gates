@@ -244,7 +244,6 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 
 ## 12. 非目标
 
-1. 修复缺陷交接单 #2。
 2. headless adapter、随机 chaos、大规模 benchmark。
 3. 事件溯源、SQLite、watchdog、OS 定时器、repo 级集成队列/分片合流 CAS。
 4. 本次承诺 Windows/macOS/Linux 适配矩阵，或把不支持平台升级成阻塞项。

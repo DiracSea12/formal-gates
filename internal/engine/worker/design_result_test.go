@@ -96,7 +96,7 @@ func TestDesignRetentionPreservesSharedReferenceForCoreValidation(t *testing.T) 
 
 func TestConflictResolutionUsesExactIssuedPaths(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.merge.resolve.v2"
+	input.Handler = "engine.merge.resolve.v3"
 	input.Validation.Conflict = &protocol.ConflictInput{Evidence: protocol.IntegrationEvidence{Conflicts: []protocol.MergeConflict{{Path: "z.go"}, {Path: "a.go"}}}}
 	raw := []byte(`{"summary":"Resolved the conflicting behavior while preserving both approved interfaces"}`)
 	before, _ := json.Marshal(input)

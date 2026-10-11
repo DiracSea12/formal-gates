@@ -28,7 +28,7 @@ func TestAcceptedAdjudicationRemainsCorrectable(t *testing.T) {
 // C REQ-001 allows unchanged shared instructions to retain their approval.
 func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v2")
+	id, in := d.action("engine.qa.design.v3")
 	m := simpleManifest(in)
 	m.SharedSteps = []coverage.SharedStep{{ID: "setup", Procedure: "initialize a clean project once"}}
 	for i := range m.Cases {
@@ -44,7 +44,7 @@ func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	sg := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "case clarification", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: sg.ID, Decision: "ACCEPT", Reason: "clarify this case only", AffectedCases: []string{"invalid"}}}})
 	d.drive()
-	id, in = d.action("engine.qa.design.v2")
+	id, in = d.action("engine.qa.design.v3")
 	m = in.Manifest
 	m.Cases[1].Oracle = "rejects invalid input with the documented diagnostic"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -72,7 +72,7 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	original := d.run.Validation.Findings[finding].History[0]
-	id, in := d.action("engine.repair.v3")
+	id, in := d.action("engine.repair.v4")
 	repair := gateRepairResult(in)
 	d.business(id, repair)
 	d.verifyRepair(repair)
@@ -156,7 +156,7 @@ func gateImpactBoundary(t *testing.T) *validationDriver {
 	resolution := protocol.FindingResolution{FindingID: fid, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run invalid authorization input", Module: "authorization", RootCause: "authorization rejection diagnostic formatting", Consequence: "incorrect rejection diagnostic", Severity: "P2", SeverityRationale: "authorization still rejects input; diagnostic is inaccurate", Verification: review.FindingVerification{Scope: "documented command validation", Severity: "limited diagnostic defect", Causality: "authorization rejection branch", Reproduction: "run invalid authorization input and compare diagnostic", Classification: "implementation"}, Reason: "observed documented rejection but wrong diagnostic"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v3")
+	id, in = d.action("engine.repair.v4")
 	repair := gateRepairResult(in)
 	repair.Development.Paths = []string{"authorization.go"}
 	repair.Development.Summary = "correct authorization rejection logic and diagnostic"

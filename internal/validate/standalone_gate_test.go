@@ -14,6 +14,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/prompts"
 )
@@ -114,7 +115,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v3", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v3", "", false}, {"engine.qa.execution.v2", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v2", "", false},
+		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v3", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v4", "", false}, {"engine.qa.execution.v2", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v3", "", false},
 	}
 	for _, role := range roles {
 		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
@@ -156,7 +157,7 @@ func standaloneGateHead(t *testing.T, root string) string {
 
 func runGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	value, err := (execNativeCommandRunner{}).Run(root, "git", args...)
+	value, err := (vcs.ExecRunner{}).Run(root, "git", args...)
 	if err != nil {
 		t.Fatal(err)
 	}

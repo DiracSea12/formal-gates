@@ -294,19 +294,19 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
-	if p.Status == "CONTINUE" && role != "engine.development.batch.v3" && role != "engine.repair.v3" {
+	if p.Status == "CONTINUE" && role != "engine.development.batch.v4" && role != "engine.repair.v4" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair.v3" {
+	if p.GranularityReview != nil && role != "engine.repair.v4" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
-	if p.DesignChange != nil && role != "engine.qa.design.v2" {
+	if p.DesignChange != nil && role != "engine.qa.design.v3" {
 		return validationError("only QA design can change its manifest")
 	}
 	if len(p.QACommands) > 0 && role != "engine.qa.execution.v2" {
 		return validationError("only QA execution can bind a missing invocation")
 	}
-	if p.Checkpoint && role != "engine.qa.design.v2" && role != "engine.qa.execution.v2" {
+	if p.Checkpoint && role != "engine.qa.design.v3" && role != "engine.qa.execution.v2" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
 	mode := s.validationMode(b.Task)
@@ -328,7 +328,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			return validationError("semantic observation requires only its complete issued judgments")
 		}
 		return e.acceptWorkerObservations(s, record, nextRevision)
-	case "engine.merge.resolve.v2":
+	case "engine.merge.resolve.v3":
 		input := s.conflictInput(b.Task.Scope)
 		if count != 1 || p.Status != "PASS" || p.Resolution == nil || input == nil || p.Resolution.Summary == "" {
 			return validationError("conflict resolution requires the original conflict input and complete manifest")
@@ -345,13 +345,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		}
 	case "engine.repair.verify.v2":
 		return s.acceptRepairComparison(record, e.cfg.Definition)
-	case "engine.repair.v3":
+	case "engine.repair.v4":
 		return s.acceptRepairResult(record)
-	case "engine.development.batch.v3":
+	case "engine.development.batch.v4":
 		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {
 			return validationError("development requires declared paths and summary")
 		}
-		if role == "engine.development.batch.v3" {
+		if role == "engine.development.batch.v4" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
 			if !ok {
 				return validationError("development task is not a confirmed batch")
@@ -372,7 +372,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 
 		}
-	case "engine.qa.design.v2":
+	case "engine.qa.design.v3":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}

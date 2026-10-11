@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -106,7 +108,7 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	}
 	d.submit(ev)
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v3" {
+		if input.Handler == "engine.development.batch.v4" {
 			t.Fatal("new contract executed before plan confirmation")
 		}
 	}
@@ -260,7 +262,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v3")
+	id, in := d.action("engine.repair.v4")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"
@@ -345,8 +347,8 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	}
 }
 
-// Explicit carry creates a current FULL obligation without changing the
-// original worker results, native delivery proof or completed-wave history.
+// Explicit carry retains original delivery facts while the confirmed document
+// is assembled into its own candidate through the native receipt owner.
 func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "implementation", "review input")
@@ -355,36 +357,84 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := d.f.Show()
+	d.run, err = d.f.Show()
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.run = run
 	old, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	original := old.State.CandidatePromotion
-	waves := len(old.State.Validation.Waves)
 	confirmValidationWork(d, "")
-	// Inspect the requalified projection before terminal resource cleanup.
-	if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
-		t.Fatal(err)
+	d.reopen()
+	for i := 0; i < 12; i++ {
+		if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.f.driveNative(); err != nil {
+			t.Fatal(err)
+		}
+		current, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.State.FinalValidationComplete(d.f.definition) {
+			break
+		}
 	}
 	current, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(current.State.Validation.Waves) != waves+1 || current.State.Validation.Waves[0].Status != "COMPLETE" || !current.State.FinalValidationComplete(d.f.definition) {
-		t.Fatalf("current FULL/history lost after carry: %+v", current.State.Validation)
+	if !reflect.DeepEqual(current.State.Validation.Waves[0], old.State.Validation.Waves[0]) || !reflect.DeepEqual(current.State.Results, old.State.Results) || !reflect.DeepEqual(current.State.DispatchBindings, old.State.DispatchBindings) {
+		t.Fatal("original wave or raw worker identity changed")
+	}
+	for action, receipt := range old.State.HostActionReceipts {
+		if !reflect.DeepEqual(current.State.HostActionReceipts[action], receipt) {
+			t.Fatal("original native receipt changed")
+		}
 	}
 	if !reflect.DeepEqual(current.State.CandidatePromotion, original) || current.State.PromotedSnapshot != final {
-		t.Fatal("carry changed an executed native delivery fact")
+		t.Fatal("assembly changed an executed native delivery fact")
 	}
 	if count, err := d.f.vcs.CommitCount(identities[0], final); err != nil || count != 1 {
-		t.Fatalf("carry reorganized delivery: %d %v", count, err)
+		t.Fatalf("original delivery interval = %d %v", count, err)
 	}
-	if current.State.Validation.Waves[waves].Generation == old.State.Validation.Waves[0].Generation {
-		t.Fatal("carry reused the historical wave identity")
+	wave := current.State.Validation.Waves[len(current.State.Validation.Waves)-1]
+	if !current.State.FinalValidationComplete(d.f.definition) || wave.Candidate == old.State.Validation.Waves[0].Candidate || wave.Scope != coverage.ScopeAffected || wave.Generation == old.State.Validation.Waves[0].Generation || current.State.RequirementAssemblyReceipt(&current.State.Validation.Waves[0], &wave) == "" {
+		t.Fatal("new confirmed document lacks exact authorized candidate inheritance")
+	}
+	for _, target := range wave.Targets {
+		if target.Execution != nil {
+			for _, row := range target.Execution.Records {
+				if row.Provenance != coverage.ProvenanceInherited {
+					t.Fatal("assembly claims a new execution")
+				}
+			}
+		}
+	}
+	delivered, err := d.f.PrepareCandidate("confirmed requirement delivery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered == final {
+		t.Fatal("confirmed document did not produce a new delivery")
+	}
+	if count, err := d.f.vcs.CommitCount(identities[0], delivered); err != nil || count != 1 {
+		t.Fatalf("new delivery interval = %d %v", count, err)
+	}
+	current, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for action, receipt := range old.State.HostActionReceipts {
+		if !reflect.DeepEqual(current.State.HostActionReceipts[action], receipt) {
+			t.Fatal("new promotion rewrote old receipt")
+		}
+	}
+	body, err := os.ReadFile(filepath.Join(root, "requirements.md"))
+	if err != nil || string(body) != validationDocument+"\n" {
+		t.Fatalf("confirmed document was not delivered: %v", err)
 	}
 }

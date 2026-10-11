@@ -135,7 +135,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 	decideValidation(d, offers[0], "approve")
 	d.reopen()
 	d.drive()
-	id, input = d.action("engine.repair.v3")
+	id, input = d.action("engine.repair.v4")
 	if input.Binding.WaveID != current.ID || input.Repair == nil || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
 		t.Fatal("approved repair lost its actual wave or retained problem input")
 	}
@@ -155,7 +155,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 func failCaseReviews(d *validationDriver, count int) {
 	d.t.Helper()
 	for i := 0; i < count; i++ {
-		id, in := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
+		id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
 		manifest := in.Manifest
 		if len(manifest.Cases) == 0 {
 			manifest = simpleManifest(in)
@@ -197,7 +197,7 @@ func decideValidation(d *validationDriver, ask PendingAskFace, choice string, ob
 
 func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	dev, di := d.action("engine.development.batch.v3")
+	dev, di := d.action("engine.development.batch.v4")
 	failCaseReviews(d, 3)
 	ask := d.validationAsk("QA_REVIEW")
 	for _, option := range ask.Options {
@@ -206,7 +206,7 @@ func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 		}
 	}
 	for _, in := range d.run.ValidationInputs {
-		if in.Handler != "engine.development.batch.v3" {
+		if in.Handler != "engine.development.batch.v4" {
 			t.Fatalf("unapproved work after third failure: %s", in.Handler)
 		}
 	}
@@ -319,7 +319,7 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 				if delivery == "receipt-first" {
 					d.receipt(id)
 				}
-				if in.Handler == "engine.development.batch.v3" {
+				if in.Handler == "engine.development.batch.v4" {
 					staged = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "delivered-development", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "completed development"}}}}
 				}
 			}
@@ -468,7 +468,7 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: resolutions}}})
 		d.drive()
 		if index < 2 {
-			id, in := d.action("engine.repair.v3")
+			id, in := d.action("engine.repair.v4")
 			if !d.mockNative {
 				body := fmt.Sprintf("package main\nimport \"os\"\nfunc main() { if len(os.Args) < 3 || os.Args[1] != \"run\" || os.Args[2] != \"valid\" { os.Exit(%d) } }\n", index+1)
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte(body), 0600); err != nil {
@@ -564,10 +564,10 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 	for _, remedy := range []string{"redesign", "waive"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			dev, di := d.action("engine.development.batch.v3")
+			dev, di := d.action("engine.development.batch.v4")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			d.materialize()
-			id, in := d.action("engine.qa.design.v2")
+			id, in := d.action("engine.qa.design.v3")
 			manifest := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 			var reviewTask string
@@ -584,7 +584,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			d.reopen()
 			d.drive()
 			if remedy == "redesign" {
-				id, in = d.action("engine.qa.design.v2")
+				id, in = d.action("engine.qa.design.v3")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 				id, in = d.action("engine.qa.review.rationale.v2")
 				if in.Binding.Task.String() == reviewTask {
@@ -813,8 +813,8 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-			dev, di := d.action("engine.development.batch.v3")
-			design, qi := d.action("engine.qa.design.v2")
+			dev, di := d.action("engine.development.batch.v4")
+			design, qi := d.action("engine.qa.design.v3")
 			manifest := simpleManifest(qi)
 			d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 			id, ri := d.action("engine.qa.review.rationale.v2")
@@ -911,7 +911,7 @@ func qaModeAction(d *validationDriver, handler string, mode coverage.ReviewKind)
 
 func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v3")
+	dev, di := d.action("engine.development.batch.v4")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
@@ -922,7 +922,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	if d.run.Validation.Candidate != nil || len(d.run.Validation.Waves) != 0 {
 		t.Fatal("one mode waiver bypassed another mode's review")
 	}
-	id, in := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewWhitebox)
+	id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
 	manifest := in.Manifest
 	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -949,7 +949,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.reopen()
 	d.drive()
-	id, in = qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
+	id, in = qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
 	m := in.Manifest
 	m.Cases[0].Preconditions += "; initialize current command input"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -1012,7 +1012,7 @@ func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.repair.v3")
+	id, in = d.action("engine.repair.v4")
 	if in.Binding.WaveID != issuedWave || in.Repair == nil || !reflect.DeepEqual(in.Repair.Obligation.Problems, []string{second}) {
 		t.Fatalf("newly issued repair changed its current obligation: binding=%+v intendedWave=%s input=%+v", in.Binding, issuedWave, in.Repair)
 	}
@@ -1169,7 +1169,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 					}
 					decideValidation(d, current, "approve")
 				}
-				_, input := d.action("engine.repair.v3")
+				_, input := d.action("engine.repair.v4")
 				if input.Binding.WaveID != ask.Validation.Binding.WaveID || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
 					t.Fatal("actual signed repair input differs from current displayed obligations")
 				}
@@ -1377,7 +1377,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 						t.Fatal("repair authorization omits remaining or fresh obligations")
 					}
 					decideValidation(d, offer, "approve")
-					repair, repairInput := d.action("engine.repair.v3")
+					repair, repairInput := d.action("engine.repair.v4")
 					if repairInput.Binding.Task != ask.Validation.Binding.Task || repairInput.Binding.WaveID != current.ID || !reflect.DeepEqual(repairInput.Repair.Obligation.Problems, remaining) {
 						t.Fatal("actual repair input differs from unique current plan")
 					}
@@ -1414,7 +1414,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.receipt(qa)
 	ask := d.validationAsk("REPAIR")
 	event := decideValidation(d, ask, "approve")
-	repair, input := d.action("engine.repair.v3")
+	repair, input := d.action("engine.repair.v4")
 	d.receipt(repair)
 	before := authorizationSnapshot(d)
 	report := executionFor(qaInput)
@@ -1422,7 +1422,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.reopen()
 	d.drive()
 	after := authorizationSnapshot(d)
-	actual, actualInput := d.action("engine.repair.v3")
+	actual, actualInput := d.action("engine.repair.v4")
 	if actual != repair || !reflect.DeepEqual(actualInput, input) || after.State.DispatchBindings[repair] != before.State.DispatchBindings[repair] || after.State.DispatchIssueRevisions[repair] != before.State.DispatchIssueRevisions[repair] || !reflect.DeepEqual(after.State.PendingAsks[ask.RequestID], before.State.PendingAsks[ask.RequestID]) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
 		t.Fatal("fresh QA result moved an already signed repair, request or decision")
 	}
@@ -1486,7 +1486,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 					t.Fatal("control choice fabricated repair completion or rewrote results")
 				}
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.repair.v3" {
+					if in.Handler == "engine.repair.v4" {
 						t.Fatal("decline or requirement granted repair authorization")
 					}
 				}
@@ -1561,7 +1561,7 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 	before := authorizationSnapshot(d)
 	ask := d.validationAsk("REPAIR")
 	decideValidation(d, ask, "approve")
-	d.action("engine.repair.v3")
+	d.action("engine.repair.v4")
 	after := authorizationSnapshot(d)
 	retired := after.State.PendingAsks[prior.RequestID]
 	if !retired.Resolved {
@@ -1592,17 +1592,17 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 
 func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	dev, devInput := d.action("engine.development.batch.v3")
+	dev, devInput := d.action("engine.development.batch.v4")
 	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
-	black, blackInput := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
+	black, blackInput := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
 	blackManifest := simpleManifest(blackInput)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Manifest: &blackManifest})
 	black, blackInput = qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
 	blackReview := approvedReview(blackManifest)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Review: &blackReview})
-	white, whiteInput := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewWhitebox)
+	white, whiteInput := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
 	whiteManifest := whiteInput.Manifest
 	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	whiteManifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -1654,8 +1654,8 @@ func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-	dev, di := d.action("engine.development.batch.v3")
-	design, qi := d.action("engine.qa.design.v2")
+	dev, di := d.action("engine.development.batch.v4")
+	design, qi := d.action("engine.qa.design.v3")
 	manifest := simpleManifest(qi)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	id, ri := d.action("engine.qa.review.rationale.v2")

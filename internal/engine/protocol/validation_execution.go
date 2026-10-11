@@ -112,7 +112,7 @@ func (s *State) executionReuseAllowed(current, baseline *ValidationWave, mode co
 		if !sameWaveCases(old, current, mode) {
 			return false
 		}
-		if old.Candidate != next.Candidate {
+		if old.Candidate != next.Candidate && s.RequirementAssemblyReceipt(old, next) == "" {
 			repairs, repairOnly := s.candidateRepairChanges(old, next)
 			if !repairOnly || len(repairs) == 0 {
 				return false
@@ -246,7 +246,10 @@ func (s *State) validationEvidenceComplete(wave *ValidationWave) bool {
 		}
 		required := requiredExecutionCases(wave, target, whitelist)
 		if len(required) == 0 {
-			return false
+			prior, _ := s.targetResponsibility(wave, target)
+			if s.RequirementAssemblyReceipt(prior, wave) == "" {
+				return false
+			}
 		}
 		if target.Status == "PASS" && coverage.ExecutionVerdict(target.Execution.Records) != coverage.StatusPass {
 			return false

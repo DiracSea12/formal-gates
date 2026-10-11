@@ -49,7 +49,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved operation contract"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "whitebox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch.v3")
+	development, di := d.action("engine.development.batch.v4")
 	cases := []struct {
 		name                string
 		operation           coverage.Operation
@@ -79,7 +79,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				d.drive()
 				ready := false
 				for _, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.qa.design.v2" && input.Manifest.Binding.ReviewKind == mode {
+					if input.Handler == "engine.qa.design.v3" && input.Manifest.Binding.ReviewKind == mode {
 						ready = true
 						break
 					}
@@ -93,7 +93,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		design, qi := qaModeAction(d, "engine.qa.design.v2", mode)
+		design, qi := qaModeAction(d, "engine.qa.design.v3", mode)
 		manifest := qi.Manifest
 		manifest.Cases = nil
 		manifest.Edges = nil
@@ -234,8 +234,8 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved command case"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
-	dev, di := d.action("engine.development.batch.v3")
-	design, qi := d.action("engine.qa.design.v2")
+	dev, di := d.action("engine.development.batch.v4")
+	design, qi := d.action("engine.qa.design.v3")
 	manifest := simpleManifest(qi)
 	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '%s' "$1"; cat; printf x >> qa-executions`, "fixture", "quoted words"}, Stdin: " actual-input"}}
 	manifest.Cases[0].Oracle = "stdout is quoted words actual-input"
@@ -391,7 +391,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Frozen precise Go cases"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))
 	d.drive()
-	dev, input := d.action("engine.development.batch.v3")
+	dev, input := d.action("engine.development.batch.v4")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // delivered source\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	design, authored := waitAction("engine.qa.design.v2")
+	design, authored := waitAction("engine.qa.design.v3")
 	if err := os.WriteFile(filepath.Join(authored.Workspace.Path, "app_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFailure(t *testing.T){t.Fatal(\"observed failure\")}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

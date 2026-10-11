@@ -592,13 +592,13 @@ func approvedReview(m coverage.AcceptanceManifest) coverage.ReviewResult {
 }
 func (d *validationDriver) reviewReady() {
 	d.t.Helper()
-	_, input := d.action("engine.qa.design.v2")
+	_, input := d.action("engine.qa.design.v3")
 	d.reviewReadyWithManifest(simpleManifest(input))
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
-	dev, di := d.action("engine.development.batch.v3")
-	design, qi := d.action("engine.qa.design.v2")
+	dev, di := d.action("engine.development.batch.v4")
+	design, qi := d.action("engine.qa.design.v3")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
 	}
@@ -739,8 +739,8 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 		Alternatives: []coverage.AlternativeVerification{{SourceID: "SOL-002", Reason: "release policy is document verification", Method: "inspect release policy", Status: coverage.StatusPass, Evidence: "policy contains required supported platform statement"}},
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
-	design, qi := d.action("engine.qa.design.v2")
-	dev, di := d.action("engine.development.batch.v3")
+	design, qi := d.action("engine.qa.design.v3")
+	dev, di := d.action("engine.development.batch.v4")
 	m := simpleManifest(qi)
 	m.Edges = nil
 	for _, link := range qi.SourcePoints {
@@ -809,7 +809,7 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 		}
 	}
 	// Carried source bindings are projected after verifying the original result's dispatch.
-	id, input := d.action("engine.qa.design.v2")
+	id, input := d.action("engine.qa.design.v3")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	if d.run.Validation.Sets[coverage.ReviewBlackbox].Manifest.Binding.RequirementRevision != revision {
@@ -824,14 +824,14 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := request.BaseSnapshot
-	id, input := d.action("engine.qa.design.v2")
+	id, input := d.action("engine.qa.design.v3")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
 	id, input = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
-	id, input = d.action("engine.development.batch.v3")
+	id, input = d.action("engine.development.batch.v4")
 	trees := map[string]map[string]string{base: candidateSourceTree(t, d, base)}
 	observe := func(intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 		t.Helper()
@@ -907,7 +907,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
 	materialize()
 	materialize()
-	id, input = d.action("engine.qa.design.v2")
+	id, input = d.action("engine.qa.design.v3")
 	m = input.Manifest
 	for _, row := range []struct{ id, scenario, test string }{{"white-success", "SUCCESS", "TestSuccess"}, {"white-misuse", "MISUSE", "TestMisuse"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.test, Oracle: "specified input outcome"})
@@ -945,7 +945,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 			var input protocol.ValidationInput
 			var result protocol.ValidationResult
 			if handler == "engine.qa.review.rationale.v2" {
-				design, designed := d.action("engine.qa.design.v2")
+				design, designed := d.action("engine.qa.design.v3")
 				manifest := simpleManifest(designed)
 				d.business(design, protocol.ValidationResult{Binding: designed.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
@@ -1082,7 +1082,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			}
 			d.drive()
-			_, repair := d.action("engine.repair.v3")
+			_, repair := d.action("engine.repair.v4")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}

@@ -12,7 +12,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 	for _, decision := range []string{"ACCEPT", "DEFER"} {
 		t.Run(decision, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design.v2")
+			id, in := d.action("engine.qa.design.v3")
 			m := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			d.drive()
@@ -56,7 +56,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 				if next.Status != "DRAFT" || next.Review != nil {
 					t.Fatalf("affected suggestion did not reopen after barrier %+v", next)
 				}
-				id, in = d.action("engine.qa.design.v2")
+				id, in = d.action("engine.qa.design.v3")
 				m = in.Manifest
 				m.Cases[0].Preconditions += "; use an empty directory"
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -100,7 +100,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 			t.Fatal("adjudication fact was lost or duplicated")
 		}
 		for _, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.repair.v3" {
+			if input.Handler == "engine.repair.v4" {
 				t.Fatal("requirement barrier issued repair")
 			}
 		}
@@ -115,7 +115,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 	}
 	count := 0
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v3" {
+		if input.Handler == "engine.repair.v4" {
 			count++
 		}
 	}
@@ -132,7 +132,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 
 func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.qa.design.v2")
+	id, input := d.action("engine.qa.design.v3")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -225,7 +225,7 @@ func TestRequirementRedoDiscardsPendingWaveSettlement(t *testing.T) {
 		t.Fatal("requirement redo erased original observation evidence")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v3" {
+		if input.Handler == "engine.repair.v4" {
 			t.Fatal("held finding issued repair after its gate was redone")
 		}
 	}

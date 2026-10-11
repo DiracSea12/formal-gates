@@ -32,7 +32,7 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 }
 
 func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v3", "engine.development.batch.v3", "engine.repair.v3", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v3", "engine.development.batch.v4", "engine.repair.v4", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler

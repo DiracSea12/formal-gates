@@ -17,7 +17,7 @@ func (e *Engine) RequestDevelopmentHandoff(action, reason string, revision uint6
 	}
 	pending, active := state.PendingActions[action]
 	spawn, started := state.SpawnReceipts[action]
-	if _, issued := state.WorkerInput(action, e.cfg.Definition); !issued || !active || !started || spawn.Status != SpawnStatusSpawned || spawn.agentIdentity() == "" || strings.TrimSpace(reason) == "" || state.validationRole(pending.Task, e.cfg.Definition) != "engine.development.batch.v3" {
+	if _, issued := state.WorkerInput(action, e.cfg.Definition); !issued || !active || !started || spawn.Status != SpawnStatusSpawned || spawn.agentIdentity() == "" || strings.TrimSpace(reason) == "" || state.validationRole(pending.Task, e.cfg.Definition) != "engine.development.batch.v4" {
 		return "", fmt.Errorf("HANDOFF_BINDING: current unfinished developer and actual user reason required")
 	}
 	if recovery, exists := state.pendingAttemptRecovery(action, pending.AttemptID); exists {

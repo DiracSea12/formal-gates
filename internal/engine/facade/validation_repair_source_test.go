@@ -29,7 +29,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid", Module: "command", RootCause: "valid input rejected", Consequence: "public success path unusable", Severity: "P1", SeverityRationale: "Supported command cannot complete", Verification: review.FindingVerification{Scope: "confirmed command contract", Severity: "main path unusable", Causality: "input dispatch branch", Reproduction: "valid input rejected", Classification: "implementation"}, Reason: "Reproduced public input rejection"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	repair, ri := d.action("engine.repair.v3")
+	repair, ri := d.action("engine.repair.v4")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct dispatch"}})
 	d.materialize()
 	d.materialize()
@@ -82,7 +82,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 		d.materialize()
 		d.drive()
 	}
-	next, nextInput := d.action("engine.repair.v3")
+	next, nextInput := d.action("engine.repair.v4")
 	if nextInput.Binding.Task == ri.Binding.Task {
 		t.Fatal("replacement reused retired repair task")
 	}
@@ -190,7 +190,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 					resolveGateFinding(d, finding, wave.ID)
 				}
 				d.drive()
-				repair, ri := d.action("engine.repair.v3")
+				repair, ri := d.action("engine.repair.v4")
 				actions = append(actions, repair)
 				oldInputs = append(oldInputs, ri)
 				if n == 1 && inflight {
@@ -245,7 +245,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				d.reopen()
 			}
 			if inflight {
-				id, in := d.action("engine.repair.v3")
+				id, in := d.action("engine.repair.v4")
 				if in.Binding != oldInputs[1].Binding {
 					t.Fatal("pending carried repair lost signed input")
 				}
@@ -262,7 +262,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				countRedos = 1
 			}
 			for n := 0; n < countRedos; n++ {
-				repair, ri := d.action("engine.repair.v3")
+				repair, ri := d.action("engine.repair.v4")
 				if ri.Binding.Task == oldInputs[n].Binding.Task || ri.Binding.WaveID != oldInputs[n].Binding.WaveID || ri.Binding.Candidate != d.run.Validation.DevelopmentSnapshot {
 					t.Fatal("repair lost original order or actual materialized base")
 				}
@@ -271,7 +271,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				}
 				count := 0
 				for _, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.repair.v3" {
+					if input.Handler == "engine.repair.v4" {
 						count++
 					}
 				}

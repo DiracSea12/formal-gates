@@ -157,12 +157,14 @@ func TestOperationRevisionSchemaBindsSelectionsToCurrentItem(t *testing.T) {
 			}
 			return
 		}
-		if len(branches) != 2 {
-			t.Fatal("original operations lack authored and reuse alternatives")
+		if len(branches) != len(want)+1 {
+			t.Fatal("original operations lack separately bound reuse alternatives")
 		}
-		change := branches[1].(map[string]any)
-		if !reflect.DeepEqual(change["required"], []any{"reuse"}) || !reflect.DeepEqual(change["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) || operations["description"] == "" {
-			t.Fatal("schema lost current item positions or field inheritance contract", change)
+		for index, position := range want {
+			change := branches[index+1].(map[string]any)
+			if !reflect.DeepEqual(change["required"], []any{"reuse"}) || !reflect.DeepEqual(change["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], []int{position}) || operations["description"] == "" {
+				t.Fatal("schema lost current operation position or field inheritance contract", change)
+			}
 		}
 	}
 	for _, affected := range []bool{false, true} {

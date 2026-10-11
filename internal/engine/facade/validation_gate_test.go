@@ -68,7 +68,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				resolution := protocol.FindingResolution{FindingID: findingID, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run", Module: "output", RootCause: "ordering", Consequence: "limited output order mismatch", Severity: "P2", SeverityRationale: "input validation remains usable", Verification: review.FindingVerification{Scope: "confirmed requirement", Severity: "limited", Causality: "ordering logic", Reproduction: "app run", Classification: "implementation"}, Reason: "Verified the specific ordering defect"}
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.run.Validation.Waves[0].ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 				d.drive()
-				id, input = d.action("engine.repair.v3")
+				id, input = d.action("engine.repair.v4")
 				repairAction := id
 				repairResult := protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "ran valid input", Observation: "ordered output returned", Comparison: "all output lines match specified ordering"}}}}
 				d.business(id, repairResult)
@@ -128,7 +128,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 					t.Fatal("completed repair did not close final validation")
 				}
 				for _, pending := range d.run.ValidationInputs {
-					if pending.Handler == "engine.repair.v3" || pending.Handler == "engine.gate.v2" {
+					if pending.Handler == "engine.repair.v4" || pending.Handler == "engine.gate.v2" {
 						t.Fatal("completed gate obligation was issued again")
 					}
 				}

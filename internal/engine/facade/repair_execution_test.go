@@ -132,7 +132,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one public command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 	d.drive()
-	id, in := d.action("engine.qa.design.v2")
+	id, in := d.action("engine.qa.design.v3")
 	manifest := simpleManifest(in)
 	for i := range manifest.Cases {
 		argument := "valid"
@@ -147,7 +147,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	approved := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.drive()
-	id, in = d.action("engine.development.batch.v3")
+	id, in = d.action("engine.development.batch.v4")
 	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"} {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, path), []byte(body), 0644); err != nil {
 			t.Fatal(err)
@@ -177,7 +177,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	r := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "command", RootCause: "composition", Consequence: "documented result missing", Severity: severity, SeverityRationale: "documented command behavior", Verification: review.FindingVerification{Scope: "command", Severity: "documented severity", Causality: "composition", Reproduction: "normal command invocation", Classification: "implementation"}, Reason: "native output comparison"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: w.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v3")
+	id, in = d.action("engine.repair.v4")
 	return d, in, id
 }
 
@@ -437,7 +437,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		t.Fatal("completed member source problem stayed open")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v3" {
+		if input.Handler == "engine.repair.v4" {
 			t.Fatal("completed source problem created another repair")
 		}
 	}

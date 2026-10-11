@@ -164,6 +164,10 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 	}
 	v := s.Validation
 	changed = s.carryCaseBindings() || changed
+	if s.RequirementAssemblySource() != "" && v.Candidate != nil {
+		v.Candidate = nil
+		changed = true
+	}
 	if prior := s.currentValidationWave(); v.Candidate != nil && prior != nil && prior.Generation != v.Generation {
 		sources, _, _, complete := s.developmentSources(e.cfg.Definition)
 		if complete && s.validateFinalCoverage() == nil {
@@ -474,6 +478,8 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 		if prior := s.currentValidationWave(); prior != nil {
 			if prior.Status == "REPAIRED" {
 				scope = coverage.ScopeAffected
+			} else if s.RequirementAssemblyReceipt(prior, &ValidationWave{Candidate: *v.Candidate, RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteDigest: s.validationRouteDigest(), SourceTasks: params.SourceTasks, Versions: params.CaseVersions, Coverage: s.coverageContract(v.Candidate)}) != "" {
+				scope = coverage.ScopeAffected
 			} else if prior.Generation != v.Generation && prior.Candidate == *v.Candidate {
 				scope = prior.Scope
 			}
@@ -516,7 +522,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 	}{w.Candidate, versions, w.RouteDigest, scope, v.Generation, authorization, w.CheckpointTasks, w.SourceTasks})
 	w.ID = strings.TrimPrefix(w.ID, "sha256:")
 	prior := s.currentValidationWave()
-	if prior != nil && prior.Generation != w.Generation && prior.Candidate != w.Candidate {
+	if prior != nil && prior.Generation != w.Generation && prior.Candidate != w.Candidate && s.RequirementAssemblyReceipt(prior, &w) == "" {
 		e.retireValidationWave(s, prior.ID, "candidate changed after requirement confirmation")
 	}
 	if prior != nil {
@@ -547,7 +553,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		}
 		target.Task = s.validationRequiredTask(pipelineTask(e.cfg.Definition, handler, w.ID+":"+part), &w, e.cfg.Definition)
 		if prior != nil {
-			if prior.Generation != w.Generation {
+			if prior.Generation != w.Generation || s.RequirementAssemblyReceipt(prior, &w) != "" {
 				s.carryRequirementTarget(target, prior, &w)
 			} else if prior.Candidate == w.Candidate && prior.RouteDigest != w.RouteDigest {
 				s.carryRouteTarget(target, prior, &w)
@@ -785,7 +791,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 		return false, nil
 	}
 
-	task := pipelineTask(e.cfg.Definition, "engine.repair.v3", w.Candidate.Identity)
+	task := pipelineTask(e.cfg.Definition, "engine.repair.v4", w.Candidate.Identity)
 	// Native identities may contain separators; the logical snapshot key uses
 	// its content digest, never a platform path embedded in TaskKey syntax.
 	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")

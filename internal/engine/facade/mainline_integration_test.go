@@ -52,7 +52,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.drive()
-	design, input := master.action("engine.qa.design.v2")
+	design, input := master.action("engine.qa.design.v3")
 	if input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
 		t.Fatal("retained master did not start merge QA design")
 	}
@@ -354,7 +354,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 
 func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 	master, _ := mainlineChildren(t, "text")
-	id, input := master.action("engine.merge.resolve.v2")
+	id, input := master.action("engine.merge.resolve.v3")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "app.go" {
 		t.Fatal("conflict did not carry exact native stages")
 	}
@@ -473,7 +473,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{item}}}})
 	}
 	master.drive()
-	repair, input := master.action("engine.repair.v3")
+	repair, input := master.action("engine.repair.v4")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 || len(input.Repair.ExecutionFailures) != 1 {
 		t.Fatal("simultaneous merge failures did not join one repair")
 	}
@@ -617,7 +617,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 	for _, kind := range []string{"binary", "delete"} {
 		t.Run(kind, func(t *testing.T) {
 			master, _ := mainlineChildren(t, kind)
-			id, input := master.action("engine.merge.resolve.v2")
+			id, input := master.action("engine.merge.resolve.v3")
 			if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 {
 				t.Fatal("native conflict inventory is incomplete")
 			}
@@ -708,7 +708,7 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 				releaseRequirement(t, master, request)
 			} else {
 				master.drive()
-				id, in := master.action("engine.merge.resolve.v2")
+				id, in := master.action("engine.merge.resolve.v3")
 				master.receipt(id)
 				workerWorkspace = in.Workspace.Path
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\n// resolution in flight\nfunc main() {}\n"), 0644); err != nil {
@@ -926,7 +926,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 
 func TestMainlineTextSeparatorsResolveAndReopen(t *testing.T) {
 	master, _ := mainlineChildren(t, "markdown")
-	id, input := master.action("engine.merge.resolve.v2")
+	id, input := master.action("engine.merge.resolve.v3")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "README.md" {
 		t.Fatal("native Markdown conflict is absent")
 	}

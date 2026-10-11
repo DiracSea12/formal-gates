@@ -10,7 +10,7 @@ import (
 func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	assertValidationInputModes(t, d)
-	id, in := d.action("engine.qa.design.v2")
+	id, in := d.action("engine.qa.design.v3")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -18,12 +18,12 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-	id, in = d.action("engine.development.batch.v3")
+	id, in = d.action("engine.development.batch.v4")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input validation"}})
 	d.materialize()
 	d.materialize()
 	assertValidationInputModes(t, d)
-	id, in = d.action("engine.qa.design.v2")
+	id, in = d.action("engine.qa.design.v3")
 	m = in.Manifest
 	m.Cases = []coverage.AcceptanceCase{{CaseID: "white-ok", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestPrivateCacheBranch", Oracle: "private cache branch yields the accepted value"}, {CaseID: "white-error", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestPrivateCacheError", Oracle: "cache error branch returns rejection"}}
 	for _, c := range m.Cases {
@@ -39,7 +39,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	assertValidationInputModes(t, d)
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.drive()
-	_, in = d.action("engine.qa.design.v2")
+	_, in = d.action("engine.qa.design.v3")
 	for _, manifest := range in.Contract.Manifests {
 		for _, c := range manifest.Cases {
 			if manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
@@ -49,7 +49,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	}
 	d.reopen()
 	assertValidationInputModes(t, d)
-	id, in = d.action("engine.qa.design.v2")
+	id, in = d.action("engine.qa.design.v3")
 	m = in.Manifest
 	m.Cases[0].Preconditions += "; initialize a clean input history"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -68,7 +68,7 @@ func assertValidationInputModes(t *testing.T, d *validationDriver) {
 	for _, input := range d.run.ValidationInputs {
 		assertConfirmedMaterial(t, d, input, driverState(t, d).Validation.Document.Content)
 		switch input.Handler {
-		case "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2":
+		case "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2":
 			mode := input.Manifest.Binding.ReviewKind
 			if input.Contract == nil || len(input.Contract.SelectedKinds) != 1 || input.Contract.SelectedKinds[0] != mode || len(input.Contract.RequiredSources.Sources) != 1 || len(input.Manifest.Points) != 1 || input.Manifest.Points[0].PointID != "AC-001" {
 				t.Fatalf("QA lost its mode/source/point contract: %+v", input)
@@ -84,7 +84,7 @@ func assertValidationInputModes(t *testing.T, d *validationDriver) {
 			if input.Handler == "engine.qa.execution.v2" && (input.Execution == nil || input.Whitelist == nil || len(input.Execution.ExpectedCaseIDs) != 2) {
 				t.Fatal("execution lost approved cases")
 			}
-		case "engine.gate.v2", "engine.development.batch.v3":
+		case "engine.gate.v2", "engine.development.batch.v4":
 			if input.Contract != nil || len(input.Manifest.Cases) != 0 || len(input.Completed) != 0 || input.Execution != nil {
 				t.Fatal("non-QA role received QA materials")
 			}

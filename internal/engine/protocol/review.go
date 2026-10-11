@@ -128,9 +128,7 @@ func validateTopologyDecision(topology *TopologyDecision) error {
 }
 
 // reservedRouteGates 是路线候选的保留字全集：合并验证（merge）与其保留总任务
-// 实例（merge-gate/merge-qa）只在拆分运行中自动附加，不进正常选择列表。命名权威
-// internal/validate/catalog.go:28-31；references/formal-flow.md「合并门/合并 QA
-// 不进正常选择列表」。
+// 实例（merge-gate/merge-qa）只在拆分运行中自动附加，不进正常选择列表。
 var reservedRouteGates = []string{"merge", "merge-gate", "merge-qa"}
 
 // validateRouteGateCandidates 校验候选门全集的形状：非空、逐项非空、无重

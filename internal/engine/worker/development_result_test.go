@@ -11,7 +11,7 @@ import (
 )
 
 func TestDevelopmentResultOwnsOnlyIssuedBatchEvidence(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.development.batch.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}}}}}
+	input := protocol.WorkerInput{Handler: "engine.development.batch.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}}}}}
 	raw := []byte(`{"summary":"Implemented public behavior","completion":{"dod":["Public behavior implemented"],"handoff":"Ready for program checks"}}`)
 	for _, resumed := range []bool{false, true} {
 		if resumed {
@@ -49,7 +49,7 @@ func TestDevelopmentResultOwnsOnlyIssuedBatchEvidence(t *testing.T) {
 }
 
 func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "second"}}}, {Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "third"}}}}}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "second"}}}, {Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "third"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
 }
 
 func TestCompletedRepairPlanUsesNativeArtifactsAndApprovedChecks(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests"}, {ID: "local", Command: "local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests"}, {ID: "local", Command: "local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	value := Repair{Summary: "Repaired the original behavior", Completion: &Completion{DoD: []string{"Behavior restored"}, Handoff: "Ready for program checks"}, GranularityReview: &Granularity{Reason: "One cohesive repair", VerificationTier: "FINAL", Batches: []Batch{{DoD: []Criterion{{Description: "Behavior restored"}}, Checks: []Check{{Reuse: 3}, {Command: "new-oracle"}}}}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestCompletedRepairPlanUsesNativeArtifactsAndApprovedChecks(t *testing.T) {
 
 func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "actual", Command: "false"}}}
-	for _, role := range []string{"engine.development.batch.v3", "engine.repair.v3"} {
+	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v4"} {
 		input := protocol.WorkerInput{Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 		schema, err := ResultSchema(input)
 		if err != nil {

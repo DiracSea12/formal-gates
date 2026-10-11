@@ -57,7 +57,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			find := func(batchID string) (string, protocol.ValidationInput) {
 				t.Helper()
 				for id, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.development.batch.v3" && input.Development != nil && input.Development.Batch.ID == batchID {
+					if input.Handler == "engine.development.batch.v4" && input.Development != nil && input.Development.Batch.ID == batchID {
 						return id, input
 					}
 				}
@@ -225,7 +225,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 			var action string
 			var input protocol.ValidationInput
 			for id, in := range d.run.ValidationInputs {
-				if in.Handler == "engine.development.batch.v3" && in.Development != nil && in.Development.Batch.ID == "extension" {
+				if in.Handler == "engine.development.batch.v4" && in.Development != nil && in.Development.Batch.ID == "extension" {
 					action, input = id, in
 				}
 			}
@@ -390,7 +390,7 @@ func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
 			} else {
 				d.reviews()
 				for id, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.development.batch.v3" {
+					if in.Handler == "engine.development.batch.v4" {
 						d.develop(id, in)
 					}
 				}

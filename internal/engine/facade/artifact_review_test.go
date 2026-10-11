@@ -58,14 +58,14 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m compileall -q ."
 			plan.Batches[0].Checks[1].Command = strconv.Quote(python) + " -m unittest discover -v"
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, plan, "whitebox", "quality")
-			dev, di := d.action("engine.development.batch.v3")
+			dev, di := d.action("engine.development.batch.v4")
 			if di.Workspace == nil {
 				t.Fatal("development lacks signed workspace")
 			}
 			write(di.Workspace.Path, "app.py", "def valid(value):\n    return isinstance(value, str) and bool(value)\n")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.py"}, Summary: "validate strings"}})
 			d.drive()
-			design, in := d.action("engine.qa.design.v2")
+			design, in := d.action("engine.qa.design.v3")
 			if in.Workspace == nil || in.Workspace.Role != "whitebox-authoring" {
 				t.Fatalf("wrong authoring input: %+v", in.Workspace)
 			}

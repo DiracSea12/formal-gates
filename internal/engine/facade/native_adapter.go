@@ -565,7 +565,7 @@ func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParam
 		if err == nil && requirementContentRevision(existing) == revision {
 			continue
 		}
-		if err == nil {
+		if err == nil && !(isRequirement && p.Resource.Role == "candidate" && p.Resource.Source == s.RequirementAssemblySource()) {
 			// Committed candidate content remains authoritative when development also
 			// owns an intake artifact such as a source file.
 			entry, entryErr := f.vcs.At(p.Resource.Path, p.Resource.Handle).Entry("HEAD", artifact.Path)
@@ -623,6 +623,16 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, fmt.Errorf("candidate has no admitted native workspace")
 	}
 	native := f.vcs.At(r.Path, r.Handle)
+	if p.Stage == "REVIEW_READY" && p.Base == s.RequirementAssemblySource() {
+		path := s.RequirementArtifactPath()
+		body, err := os.ReadFile(filepath.Join(r.Path, filepath.FromSlash(path)))
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if requirementContentRevision(body) != strings.TrimPrefix(p.RequirementRevision, "sha256:") {
+			return nativeResult{}, false, fmt.Errorf("requirement assembly differs from its confirmed document")
+		}
+	}
 	head, err := native.Resolve()
 	if err != nil {
 		return nativeResult{}, false, err
@@ -949,7 +959,10 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 				view.TestOwnedPaths = append(view.TestOwnedPaths, change.Path)
 			}
 		}
-		evidence.Changes, evidence.GateView = changes, view
+		evidence.GateView = view
+		if p.Base != s.RequirementAssemblySource() {
+			evidence.Changes = changes
+		}
 		if p.Stage == "REVIEW_READY" && s.RouteMode == "merge" {
 			evidence.ChildViews, err = f.childValidationViews(s, head, owned)
 			if err != nil {
@@ -1152,6 +1165,9 @@ func reviewedArtifact(s *protocol.State, p protocol.CandidateParameters) error {
 
 func (f *Facade) reviewedArtifactOwnership(s *protocol.State, p protocol.CandidateParameters, identity string, before, after map[string]bool) error {
 	paths := []string{}
+	if p.Base == s.RequirementAssemblySource() {
+		paths = append(paths, s.RequirementArtifactPath())
+	}
 	for _, artifact := range p.QAArtifacts {
 		paths = append(paths, artifact.Paths...)
 	}

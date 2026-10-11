@@ -186,7 +186,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 		t.Fatalf("actual first check: %#v", first)
 	}
 	body, err := os.ReadFile(filepath.Join(first.Directory, "stdout.log"))
-	if err != nil || string(body) != "a b" {
+	if err != nil || string(body) != "a b" || first.StdoutText != string(body) {
 		t.Fatalf("exact stdout %q %v", body, err)
 	}
 	var request struct {

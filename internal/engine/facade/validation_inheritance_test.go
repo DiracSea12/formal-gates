@@ -72,7 +72,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 					}
 				}
 				d.drive()
-				id, in = d.action("engine.repair.v3")
+				id, in = d.action("engine.repair.v4")
 				edit := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}}
 				d.business(id, edit)
 				if edit.Binding.PureP2 {

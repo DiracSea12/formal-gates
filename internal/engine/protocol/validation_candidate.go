@@ -262,6 +262,10 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 		}
 		return complete && sameTaskSet(p.SourceTasks, sources) && slices.Equal(p.Paths, paths) && p.Base == base
 	}
+	if p.Stage == "REVIEW_READY" && s.RequirementAssemblySource() != "" {
+		current, ready, err := s.currentCandidateParameters(cd)
+		return ready && err == nil && digestOfCanonical(current) == digestOfCanonical(p)
+	}
 	if p.Base != v.DevelopmentSnapshot {
 		return false
 	}
@@ -525,6 +529,9 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 	}
 	params := CandidateParameters{RouteScope: s.validationRouteDigest(), RequirementRevision: v.RequirementRevision, Generation: v.Generation, Paths: paths, SourceTasks: sources}
 	switch {
+	case s.RequirementAssemblySource() != "":
+		params.Stage, params.Base, params.ReviewBase = "REVIEW_READY", s.RequirementAssemblySource(), s.BaseSnapshot
+		params.Paths, params.Finalize = []string{s.RequirementArtifactPath()}, true
 	case v.DevelopmentSnapshot == "":
 		if s.mergeMaster() {
 			if !s.caseSetReady(coverage.ReviewMerge) || s.validateFinalCoverage() != nil {

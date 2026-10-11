@@ -25,7 +25,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}
-	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v3" {
+	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v4" {
 		input.AvailableRouteCandidates = catalog.RouteCandidates()
 		input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
@@ -47,22 +47,22 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 
 	} else if input.Validation != nil {
 		switch input.Handler {
-		case "engine.development.batch.v3":
+		case "engine.development.batch.v4":
 			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. If work remains, return summary and actual remainingWork instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
 			value.ReadOnly = false
 		case "engine.repair.verify.v2":
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
 			value.ReadOnly = true
-		case "engine.repair.v3":
+		case "engine.repair.v4":
 			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report summary. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
 			if len(repairCaseIDs(input.Validation)) > 0 {
 				instructions += " affectedCases selects the affected cases from contract manifests in their original order, with duplicates removed; use 1-based positions."
 			}
 			value.ReadOnly = false
-		case "engine.merge.resolve.v2":
+		case "engine.merge.resolve.v3":
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
-		case "engine.qa.design.v2":
+		case "engine.qa.design.v3":
 			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones."
 			if len(input.Validation.AffectedCases) > 0 {
 				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields, or remove:true to explicitly remove that issued item. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
@@ -91,13 +91,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
-	if !value.ReadOnly && input.Handler != "engine.qa.execution.v2" && input.Handler != "engine.qa.design.v2" && input.Handler != "engine.merge.resolve.v2" {
+	if !value.ReadOnly && input.Handler != "engine.qa.execution.v2" && input.Handler != "engine.qa.design.v3" && input.Handler != "engine.merge.resolve.v3" {
 		instructions += " Deliver only actual authorized artifacts; the program captures registered VCS differences. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
 	}
-	if input.Handler == "engine.merge.resolve.v2" {
+	if input.Handler == "engine.merge.resolve.v3" {
 		instructions += " Remove your temporary build and test outputs before reporting completion, or produce them outside the workspace."
 	}
-	if input.Handler == "engine.qa.design.v2" && !value.ReadOnly {
+	if input.Handler == "engine.qa.design.v3" && !value.ReadOnly {
 		instructions += " Associate only actual test material files with cases or their referenced shared steps. Remove temporary build and test outputs from the workspace before reporting completion, or produce them outside the workspace. Do not return a separate development path declaration."
 	}
 	if completionBatch(input) != nil {
@@ -114,11 +114,11 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "product-review"
 	case "engine.readiness.plan.v3":
 		actionID = "start-readiness"
-	case "engine.development.batch.v3", "engine.repair.v3":
+	case "engine.development.batch.v4", "engine.repair.v4":
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
 		actionID = "qa-execution"
-	case "engine.qa.design.v2":
+	case "engine.qa.design.v3":
 		actionID = "qa-design"
 	case "engine.qa.review.rationale.v2":
 		actionID = "qa-review"
@@ -165,7 +165,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
 	}
-	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v3" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
+	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v4" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		if input.ApprovedPlan != nil {
 			contextValue["approvedPlan"] = input.ApprovedPlan
@@ -187,13 +187,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		var names []string
 		switch input.Handler {
-		case "engine.development.batch.v3":
+		case "engine.development.batch.v4":
 			names = []string{"development"}
-		case "engine.repair.v3":
+		case "engine.repair.v4":
 			names = []string{"repair", "development", "contract"}
-		case "engine.merge.resolve.v2":
+		case "engine.merge.resolve.v3":
 			names = []string{"conflict"}
-		case "engine.qa.design.v2":
+		case "engine.qa.design.v3":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases"}
 		case "engine.qa.review.rationale.v2":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
@@ -339,7 +339,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
-	if planRole || input.Handler == "engine.development.batch.v3" || input.Handler == "engine.repair.v3" || input.Handler == "engine.qa.design.v2" {
+	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v4" || input.Handler == "engine.qa.design.v3" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {

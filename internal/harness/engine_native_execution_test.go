@@ -571,8 +571,15 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 // Setup accepts explicit review/control fixtures without claiming native calls.
 // Only the subsequent developer and gate execute against the actual RPC peer.
 func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario, owners ...string) *protocol.GranularityReview {
+	return stageNativeReviewsWithEdit(t, f, s, "", owners...)
+}
+
+func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario, command string, owners ...string) *protocol.GranularityReview {
 	t.Helper()
 	plan := &protocol.GranularityReview{Reason: "One complete command delivery", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "implementation", Description: "Deliver app.go"}}, Deliverable: "app.go delivery", PublicEntry: "go run app.go", Artifacts: []string{"app.go"}, Interfaces: "Existing command", StateBoundary: "No persistent state", Risk: "Retain command behavior", DoD: []protocol.DevelopmentCriterion{{ID: "delivery", Description: "Deliver the original app.go task"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build -o " + filepath.Join(t.TempDir(), "app") + " app.go"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -count=1 app.go"}}, Rollback: "Restore original app.go", Recovery: "Continue original task", Handoff: "Report original delivery", ContextCost: "One file and its behavior"}}}
+	if command != "" {
+		plan.Batches[0].Checks = append(plan.Batches[0].Checks, protocol.DevelopmentCheck{ID: "edit", Purpose: protocol.CheckEdit, Command: command})
+	}
 	if len(owners) > 0 {
 		original := plan.Batches[0]
 		plan.Batches = nil
@@ -632,6 +639,11 @@ func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario, owners
 func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (facade.WorkerMaterial, protocol.WorkerInput) {
 	t.Helper()
 	stageNativeReviews(t, f, s)
+	return stageNativeDevelopmentReady(t, f, s)
+}
+
+func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenario) (facade.WorkerMaterial, protocol.WorkerInput) {
+	t.Helper()
 	request, err := protocol.NewRequestEvent("setup-topology", protocol.ControlConfirmTopology, protocol.AskOption{ID: "no-split", Label: "one command"})
 	if err != nil {
 		t.Fatal(err)
@@ -679,7 +691,7 @@ func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (f
 		t.Fatal(err)
 	}
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v3" {
+		if input.Handler == "engine.development.batch.v4" {
 			ref := run.WorkerMaterials[id]
 			body, err := os.ReadFile(ref.Path)
 			if err != nil {

@@ -19,13 +19,13 @@ func materialEditChecks(material *worker.Material) []protocol.DevelopmentCheck {
 		return nil
 	}
 	input := material.Input
-	if input.Handler != "engine.development.batch.v3" && input.Handler != "engine.repair.v3" {
+	if input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v4" {
 		return nil
 	}
 	var checks []protocol.DevelopmentCheck
 	if input.Validation != nil && input.Validation.Development != nil {
 		checks = input.Validation.Development.Batch.Checks
-	} else if input.Handler == "engine.repair.v3" {
+	} else if input.Handler == "engine.repair.v4" {
 		checks = input.ApprovedChecks
 	}
 	var edits []protocol.DevelopmentCheck
@@ -134,6 +134,9 @@ func (t *nativeWorkspaceTools) completeEditChecks(number int, mutationError stri
 	}
 	results := []any{}
 	for index, check := range checks {
+		if err := t.enterExecutionWindow(); err != nil {
+			return nil, err
+		}
 		directory := editCheckDirectory(fact, number, index)
 		if err := os.MkdirAll(directory, 0700); err != nil {
 			return nil, err
@@ -178,6 +181,7 @@ func (t *nativeWorkspaceTools) completeEditChecks(number int, mutationError stri
 		receipt, err := editCheckReceipt(directory, request)
 		if os.IsNotExist(err) {
 			if _, ownerErr := os.Stat(filepath.Join(directory, "owner")); ownerErr == nil {
+				t.leaveExecutionWindow()
 				for supervisorAlive(directory) {
 					receipt, err = editCheckReceipt(directory, request)
 					if !os.IsNotExist(err) {
@@ -228,6 +232,7 @@ func (t *nativeWorkspaceTools) completeEditChecks(number int, mutationError stri
 				if err := claimJob(directory, request); err != nil {
 					return nil, err
 				}
+				t.leaveExecutionWindow()
 				receipt, err = executeRequest(directory, request)
 				if err != nil {
 					return nil, err

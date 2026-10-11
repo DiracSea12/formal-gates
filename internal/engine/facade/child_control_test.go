@@ -343,7 +343,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				if !slices.Contains(gates, "blackbox") {
 					return
 				}
-				id, input := d.action("engine.qa.design.v2")
+				id, input := d.action("engine.qa.design.v3")
 				manifest := simpleManifest(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()

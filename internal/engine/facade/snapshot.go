@@ -127,11 +127,6 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		}
 	}
 	if !pending {
-		if intent.ActionID == "" {
-			if err := f.vcs.VerifyReady(); err != nil {
-				return "", err
-			}
-		}
 		observed, err := f.observePromotion()
 		if err != nil {
 			return "", err
@@ -158,7 +153,18 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 				return "", fmt.Errorf("promotion target drifted from its accepted delivery %s to %s", expected, observed.Head)
 			}
 			if !observed.Clean {
-				return "", fmt.Errorf("promotion target has unsubmitted native changes")
+				allowed, checkErr := f.confirmedRequirementTarget(s, source.Identity)
+				if checkErr != nil {
+					return "", checkErr
+				}
+				if !allowed {
+					return "", f.vcs.VerifyReady()
+				}
+				observed.Changes, err = f.vcs.Changes(observed.Head, "")
+				if err != nil {
+					return "", err
+				}
+				p.TargetStart = observed
 			}
 		}
 		for _, r := range s.NativeResources {
@@ -291,7 +297,17 @@ func (f *Facade) promotionPrefix(p protocol.PromotionParameters) (protocol.Promo
 		return o, err
 	}
 	if !o.Clean && !o.StagedOnly {
-		return o, fmt.Errorf("candidate promotion cannot resume over changes it did not stage (unstaged or untracked)")
+		snap, loadErr := f.engine.Load()
+		if loadErr != nil {
+			return o, loadErr
+		}
+		allowed, checkErr := f.confirmedRequirementTarget(snap.State, p.Source)
+		if checkErr != nil {
+			return o, checkErr
+		}
+		if !allowed || o.Head != p.TargetStart.Head || o.IndexTree != p.TargetStart.IndexTree {
+			return o, fmt.Errorf("candidate promotion cannot resume over changes it did not stage (unstaged or untracked)")
+		}
 	}
 	if o.Head == p.TargetStart.Head {
 		expected, err := f.vcs.Changes(p.TargetStart.IndexTree, p.Source)
@@ -629,4 +645,48 @@ func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.Host
 	}
 	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
 	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
+}
+
+// confirmedRequirementTarget admits only the user's exact pending document
+// whose first native assembly already has a current candidate receipt.
+func (f *Facade) confirmedRequirementTarget(s *protocol.State, source string) (bool, error) {
+	current := s.Validation
+	if current == nil || current.Candidate == nil || current.Candidate.Identity != source || len(current.Waves) == 0 {
+		return false, nil
+	}
+	wave := &current.Waves[len(current.Waves)-1]
+	confirmed := false
+	for i := range current.Waves {
+		if s.RequirementAssemblyReceipt(&current.Waves[i], wave) != "" {
+			confirmed = true
+			break
+		}
+	}
+	if !confirmed {
+		return false, nil
+	}
+	path := s.RequirementArtifactPath()
+	changes, err := f.vcs.ChangedPaths()
+	if err != nil {
+		return false, err
+	}
+	if len(changes) != 1 || changes[0] != path {
+		return false, nil
+	}
+	head, err := f.vcs.Resolve()
+	if err != nil {
+		return false, err
+	}
+	entry, err := f.vcs.Entry(head, path)
+	if err != nil {
+		return false, err
+	}
+	if entry == "" {
+		return false, nil
+	}
+	body, err := os.ReadFile(filepath.Join(f.root, filepath.FromSlash(path)))
+	if err != nil {
+		return false, err
+	}
+	return requirementContentRevision(body) == strings.TrimPrefix(current.RequirementRevision, "sha256:"), nil
 }

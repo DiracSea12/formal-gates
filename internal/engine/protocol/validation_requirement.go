@@ -4,6 +4,7 @@ import (
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -22,7 +23,7 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	return key
 }
 func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave, cd *compiler.CompiledDefinition) runtime.TaskKey {
-	if s.validationRole(key, cd) == "engine.development.batch.v3" {
+	if s.validationRole(key, cd) == "engine.development.batch.v4" {
 		return key
 	}
 	for action, pending := range s.PendingActions {
@@ -85,7 +86,7 @@ func sameRequiredDuty(role string, source, current runtime.TaskKey) bool {
 		_, sourceScope, _ := strings.Cut(source.Scope, ":")
 		_, currentScope, _ := strings.Cut(current.Scope, ":")
 		return sourceScope == currentScope
-	case "engine.merge.resolve.v2":
+	case "engine.merge.resolve.v3":
 		return source.Scope == current.Scope
 	}
 	return true
@@ -106,10 +107,10 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development.batch.v3", "engine.repair.v3":
+		case "engine.development.batch.v4", "engine.repair.v4":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
-		case "engine.qa.design.v2", "engine.qa.review.rationale.v2":
+		case "engine.qa.design.v3", "engine.qa.review.rationale.v2":
 			if set := v.Sets[s.validationMode(key)]; set != nil {
 				var affected []string
 				for _, c := range set.Manifest.Cases {
@@ -177,7 +178,8 @@ func (s *State) validationWorkCarryAuthorized(action string, task runtime.TaskKe
 // Cross-revision reuse follows the confirmed per-dispatch decisions. Candidate
 // equality cannot discharge a replacement task explicitly authorized as REDO.
 func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current *ValidationWave) bool {
-	if prior.Candidate != current.Candidate || slices.Contains(s.requiredWorkTasks(), target.Task) {
+	assembly := s.RequirementAssemblyReceipt(prior, current)
+	if prior.Candidate != current.Candidate && assembly == "" || slices.Contains(s.requiredWorkTasks(), target.Task) {
 		return false
 	}
 	for _, previous := range prior.Targets {
@@ -188,8 +190,32 @@ func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current 
 		if !s.validationWorkCarryAuthorized(responsibility.ResultAction, responsibility.Task) {
 			continue
 		}
-		if target.Kind == "QA" && (prior.Scope != current.Scope || !sameWaveCases(prior, current, target.Mode)) {
+		if target.Kind == "QA" && (prior.Scope != current.Scope && assembly == "" || !sameWaveCases(prior, current, target.Mode)) {
 			return false
+		}
+		if assembly != "" {
+			if previous.Status != "PASS" {
+				return false
+			}
+			carried := *previous
+			if previous.Execution != nil {
+				report := *previous.Execution
+				report.Binding.Candidate, report.Binding.Scope = current.Candidate, current.Scope
+				report.Records = slices.Clone(previous.Execution.Records)
+				for i := range report.Records {
+					row := &report.Records[i]
+					if row.Result != coverage.ExecutedPass {
+						return false
+					}
+					if row.Provenance != coverage.ProvenanceInherited {
+						row.InheritedFromCandidate = prior.Candidate.Identity
+					}
+					row.Provenance, row.ReuseEvidence = coverage.ProvenanceInherited, assembly
+				}
+				carried.Execution = &report
+			}
+			carried.RequiredCases, carried.ScopeReason = nil, assembly
+			return s.carryValidationTarget(target, &carried, current)
 		}
 		return s.carryValidationTarget(target, previous, current)
 	}
@@ -213,4 +239,123 @@ func (s *State) carryRequirementTargets(current *ValidationWave) bool {
 		}
 	}
 	return changed
+}
+
+// RequirementArtifactPath is the confirmed intake artifact, never a guessed
+// documentation path or a production file selected by its name.
+func (s *State) RequirementArtifactPath() string {
+	if s.IntakeConfirmationReceipt == nil {
+		return ""
+	}
+	source := filepath.Clean(s.IntakeConfirmationReceipt.RequirementSource)
+	if filepath.IsAbs(source) {
+		source, _ = filepath.Rel(s.NativeRoot, source)
+	}
+	for _, artifact := range s.IntakeConfirmationReceipt.Artifacts {
+		if filepath.Clean(filepath.FromSlash(artifact.Path)) == source {
+			return artifact.Path
+		}
+	}
+	return ""
+}
+
+func (s *State) confirmedRequirementCarry() bool {
+	if s.Validation == nil || len(s.RequirementRevisions) == 0 {
+		return false
+	}
+	revision := s.RequirementRevisions[len(s.RequirementRevisions)-1]
+	if revision.Source != RequirementSourceUserInitiated || revision.Revision != s.Validation.RequirementRevision || revision.RequestID == "" || len(revision.WorkDecisions) == 0 || len(revision.DecidedScope) != 0 {
+		return false
+	}
+	for _, choice := range revision.WorkDecisions {
+		if choice.Disposition != RequirementWorkCarry {
+			return false
+		}
+	}
+	return true
+}
+
+// RequirementAssemblySource identifies only the first artifact assembly after
+// this exact user confirmation. An already assembled or repaired candidate is
+// owned by its own receipt and cannot borrow that authorization.
+func (s *State) RequirementAssemblySource() string {
+	if s.NativeRoot == "" || !s.confirmedRequirementCarry() || s.RequirementArtifactPath() == "" {
+		return ""
+	}
+	prior := s.currentValidationWave()
+	if prior == nil || prior.Status != "COMPLETE" || s.Validation.Candidate != nil && *s.Validation.Candidate != prior.Candidate {
+		return ""
+	}
+	current := &ValidationWave{Coverage: s.coverageContract(s.Validation.Candidate), Versions: map[coverage.ReviewKind]string{}}
+	for _, mode := range s.validationKinds() {
+		if !s.caseSetReady(mode) {
+			return ""
+		}
+		current.Versions[mode] = s.Validation.Sets[mode].Version
+		if !sameWaveCases(prior, current, mode) {
+			return ""
+		}
+	}
+	for action, receipt := range s.HostActionReceipts {
+		if receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+			continue
+		}
+		intent, exists := s.hostIntent(action)
+		params, err := candidateParameters(intent)
+		if !exists || err != nil || params.Stage != "REVIEW_READY" {
+			continue
+		}
+		proof, err := decodeCandidateEvidence(receipt)
+		if err == nil && proof.Identity == prior.Candidate.Identity && proof.Digest == prior.Candidate.Digest && proof.ParametersDigest == intent.PayloadDigest && params.RequirementRevision != s.Validation.RequirementRevision {
+			return prior.Candidate.Identity
+		}
+	}
+	return ""
+}
+
+// RequirementAssemblyReceipt derives the exact source-to-candidate mapping from
+// the existing candidate receipt and the user's current per-work decisions.
+func (s *State) RequirementAssemblyReceipt(prior, current *ValidationWave) string {
+	if prior == nil || current == nil || prior.Candidate == current.Candidate || !s.confirmedRequirementCarry() || prior.RouteDigest != current.RouteDigest || !sameTaskSet(prior.SourceTasks, current.SourceTasks) {
+		return ""
+	}
+	path := s.RequirementArtifactPath()
+	if path == "" {
+		return ""
+	}
+	for _, mode := range s.validationKinds() {
+		if !sameWaveCases(prior, current, mode) {
+			return ""
+		}
+	}
+	for action, receipt := range s.HostActionReceipts {
+		if receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+			continue
+		}
+		intent, exists := s.hostIntent(action)
+		params, err := candidateParameters(intent)
+		if !exists || err != nil || params.Stage != "REVIEW_READY" || params.Base != prior.Candidate.Identity || params.RequirementRevision != current.RequirementRevision || params.Generation != current.Generation || !params.Finalize {
+			continue
+		}
+		proof, err := decodeCandidateEvidence(receipt)
+		if err != nil || proof.ParametersDigest != intent.PayloadDigest || proof.Identity != current.Candidate.Identity || proof.Digest != current.Candidate.Digest {
+			continue
+		}
+		document := false
+		valid := true
+		for _, change := range proof.Changes {
+			if change.Path == path {
+				document = true
+				continue
+			}
+			if params.BlackboxManifest != nil && change.Path == ".gates/results/"+s.RunID+".blackbox-cases.md" || params.MergeManifest != nil && change.Path == ".gates/results/"+s.RunID+".merge-cases.md" {
+				continue
+			}
+			valid = false
+		}
+		if valid && document {
+			return action
+		}
+	}
+	return ""
 }

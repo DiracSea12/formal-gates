@@ -149,7 +149,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	source := s.BaseSnapshot
 	scope := s.Validation.RequirementRevision
 	switch role {
-	case "engine.development.batch.v3":
+	case "engine.development.batch.v4":
 		source = s.AcceptedNativeSnapshot()
 		request, _, _ := s.confirmedDevelopmentPlan()
 		scope = request + ":" + s.Validation.RequirementRevision + ":" + strconv.FormatUint(s.Validation.Generation, 10)
@@ -165,7 +165,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			source = w.Candidate.Identity
 		}
 		role = "development"
-	case "engine.merge.resolve.v2":
+	case "engine.merge.resolve.v3":
 		if intent, ok := s.hostIntent(key.Scope); ok {
 			if p, err := candidateParameters(intent); err == nil {
 				return s.NativeResources[p.WorkspaceID]
@@ -177,7 +177,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair.v3":
+	case "engine.repair.v4":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity
@@ -194,7 +194,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			}
 		}
 		role = "development"
-	case "engine.qa.design.v2":
+	case "engine.qa.design.v3":
 		if s.validationMode(key) == coverage.ReviewMerge {
 			source = s.AcceptedNativeSnapshot()
 		}
@@ -316,7 +316,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return chosen
 	case "AUTHORING":
-		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v2", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
+		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v3", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
 		return s.taskResource(task, cd)
 	case "QA_ARTIFACT":
 		return s.taskResource(p.DesignTasks[coverage.ReviewWhitebox], cd)

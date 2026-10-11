@@ -1864,7 +1864,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	}
 	confirmValidationDocument(d, development, nil, validationDocument+strings.Repeat("\n", revision))
 	advance()
-	id, input := d.action("engine.development.batch.v3")
+	id, input := d.action("engine.development.batch.v4")
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)

@@ -18,6 +18,12 @@ func roleRules(content string, input protocol.WorkerInput) string {
 			continue
 		}
 		if qa {
+			if strings.HasPrefix(line, "黑盒依据真实公开入口观察") && whitebox {
+				continue
+			}
+			if strings.HasPrefix(line, "白盒依据本轮指定结构测试") && !whitebox {
+				continue
+			}
 			if strings.HasPrefix(line, "白盒逐项读 reviewBase") && !whitebox {
 				continue
 			}

@@ -190,11 +190,11 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 					return observe(intent)
 				}
 				materialize := func() { t.Helper(); d.submit(observe(currentIntent())); d.drive() }
-				id, in := d.action("engine.development.batch.v3")
+				id, in := d.action("engine.development.batch.v4")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
 				materialize()
 				materialize()
-				id, in = d.action("engine.qa.design.v2")
+				id, in = d.action("engine.qa.design.v3")
 				manifest := in.Manifest
 				manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "accept valid input"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "reject invalid input"}}
 				for _, c := range manifest.Cases {
@@ -217,7 +217,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				oldIdentity := oldReceipt.HostAction.AdapterEvidence.Values["identity"].(string)
 				d.chooseValidation(protocol.ValidationRequest{Kind: "QA_ARTIFACT_REPAIR", Mode: coverage.ReviewWhitebox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal", "invalid"}}, "")
 				testBytes = "func fixture() string { return initializedInput() }"
-				id, in = d.action("engine.qa.design.v2")
+				id, in = d.action("engine.qa.design.v3")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "initialize shared fixture without changing TestRef or oracle"}})
 				current := d.run.Validation.Sets[coverage.ReviewWhitebox]
 				if current.DesignTask == originalDesign || !reflect.DeepEqual(current.Manifest, manifest) {

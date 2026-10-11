@@ -257,7 +257,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		}
 		if !reused || item.changes.Checks != nil {
 			batch.Checks = nil
-			if input.Handler == "engine.repair.v3" {
+			if input.Handler == "engine.repair.v4" {
 				for _, check := range input.ApprovedChecks {
 					if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests || check.Purpose == protocol.CheckEdit {
 						batch.Checks = append(batch.Checks, check)
@@ -277,7 +277,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 							return nil, fmt.Errorf("approved command requires its original check selection")
 						}
 					}
-					if check.Command == "" || input.Handler == "engine.repair.v3" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+					if check.Command == "" || input.Handler == "engine.repair.v4" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
 						return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
 					}
 				}

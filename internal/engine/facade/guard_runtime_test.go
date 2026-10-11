@@ -64,7 +64,7 @@ func TestGuardAuthorizedSetCountsConfirmedDependentBatchesStably(t *testing.T) {
 // 次，再次到达上限重新拒绝（不累积）。
 func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	id, _ := d.action("engine.qa.design.v2")
+	id, _ := d.action("engine.qa.design.v3")
 	d.receipt(id)
 	// RESUME 回执要求 durable lifecycle buffer 里有该身份的 start 事件。
 	start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), DefaultProvider, id, id, protocol.LifecycleStart)

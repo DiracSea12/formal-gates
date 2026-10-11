@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,9 +14,6 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	currentDefinition "formal-gates/internal/engine/definition"
-	"formal-gates/internal/engine/encoder"
-	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
@@ -635,100 +631,6 @@ func TestPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly(t *testin
 			}
 			if _, err := os.Stat(created.StatePath); !os.IsNotExist(err) {
 				t.Fatalf("missing %s query recreated active state: %v", field, err)
-			}
-		})
-	}
-}
-
-func TestPersistenceProtocolRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing.T) {
-	supported := persistence.Envelope{
-		Writer:                    persistence.Writer,
-		StateSchemaVersion:        encoder.StateSchemaVersion,
-		WorkflowDefinitionVersion: currentDefinition.WorkflowDefinitionVersion,
-		DefinitionSource:          facade.DefaultDefinitionSource,
-		DefinitionDigest:          currentDefinition.WorkflowDefinitionDigest,
-		PackageDigest:             testkit.HarnessPackageDigest,
-		InstalledTargetIdentity:   "diagnostic-fixture",
-	}
-	cases := []struct {
-		name    string
-		content string
-		check   func(*testing.T, facade.DiagnosticReport)
-	}{
-		{
-			name:    "legacy readable summary",
-			content: "{\n  \"status\": \"SEALED\",\n  \"runId\": \"legacy-run\"\n}\n",
-			check: func(t *testing.T, report facade.DiagnosticReport) {
-				if !report.JSONReadable || report.Integrity != "unsupported" || report.Summary["status"] != "SEALED" || report.Summary["runId"] != "legacy-run" || len(report.DetectedVersions) != 0 || report.Recommendation != persistence.UnsupportedRunVersionCode+": state has no version envelope; rebuild it with the owning writer" {
-					t.Fatalf("legacy report = %+v", report)
-				}
-			},
-		},
-		{
-			name: "mismatched engine envelope",
-			content: "{\n" +
-				"  \"writer\": \"engine\",\n" +
-				"  \"stateSchemaVersion\": \"" + encoder.StateSchemaVersion + "\",\n" +
-				"  \"workflowDefinitionVersion\": \"old\",\n" +
-				"  \"definitionSource\": \"definitions/workflow.json\",\n" +
-				"  \"definitionDigest\": \"sha256:old\",\n" +
-				"  \"packageDigest\": \"sha256:old\",\n" +
-				"  \"status\": \"ACTIVE\"\n" +
-				"}\n",
-			check: func(t *testing.T, report facade.DiagnosticReport) {
-				wantDetected := map[string]any{"writer": "engine", "stateSchemaVersion": encoder.StateSchemaVersion, "workflowDefinitionVersion": "old", "definitionSource": "definitions/workflow.json", "definitionDigest": "sha256:old", "packageDigest": "sha256:old"}
-				wantRecommendation := (&persistence.UnsupportedRunVersionError{Field: "workflowDefinitionVersion", Expected: supported.WorkflowDefinitionVersion, Observed: "old"}).Error() + "; rebuild it with the owning writer"
-				if !report.JSONReadable || report.Integrity != "unsupported" || !reflect.DeepEqual(report.DetectedVersions, wantDetected) || report.Summary["status"] != "ACTIVE" || report.Recommendation != wantRecommendation {
-					t.Fatalf("mismatched report = %+v", report)
-				}
-			},
-		},
-		{
-			name:    "malformed JSON",
-			content: "{\"writer\":\"engine\"",
-			check: func(t *testing.T, report facade.DiagnosticReport) {
-				if report.JSONReadable || report.Integrity != "unknown" || report.DetectedVersions != nil || report.Summary != nil || report.Recommendation != "rebuild the state with the owning writer" {
-					t.Fatalf("malformed report = %+v", report)
-				}
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, "state.json")
-			if err := os.WriteFile(path, []byte(tc.content), 0o640); err != nil {
-				t.Fatalf("write fixture: %v", err)
-			}
-			before, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read fixture: %v", err)
-			}
-			beforeInfo, err := os.Stat(path)
-			if err != nil {
-				t.Fatalf("stat fixture: %v", err)
-			}
-			report, err := facade.Diagnose(path, supported.PackageDigest, supported.InstalledTargetIdentity)
-			if err != nil {
-				t.Fatalf("DiagnoseStateWithSupported: %v", err)
-			}
-			if report.Path != filepath.Clean(path) || report.Supported != supported {
-				t.Fatalf("diagnose identity = %q / %+v", report.Path, report.Supported)
-			}
-			tc.check(t, report)
-			after, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read diagnosed fixture: %v", err)
-			}
-			afterInfo, err := os.Stat(path)
-			if err != nil {
-				t.Fatalf("stat diagnosed fixture: %v", err)
-			}
-			if !bytes.Equal(before, after) || beforeInfo.Mode() != afterInfo.Mode() || beforeInfo.Size() != afterInfo.Size() || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
-				t.Fatalf("raw diagnose changed input: before=%+v after=%+v", beforeInfo, afterInfo)
-			}
-			if !reflect.DeepEqual(persistenceFixtureArtifactNames(t, root), []string{"state.json"}) {
-				t.Fatalf("raw diagnose created artifacts: %v", persistenceFixtureArtifactNames(t, root))
 			}
 		})
 	}

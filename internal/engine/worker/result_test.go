@@ -14,7 +14,7 @@ import (
 func semanticInput() protocol.WorkerInput {
 	binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "original-revision", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "approved-route", TopologyScope: "original-topology"}
 	manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"alpha", "beta"}, Points: []coverage.AcceptancePoint{{PointID: "one", ObservableBehavior: "first behavior", Oracle: "first oracle"}, {PointID: "two", ObservableBehavior: "second behavior", Oracle: "second oracle"}}, Cases: []coverage.AcceptanceCase{{CaseID: "new"}, {CaseID: "prior"}}, SharedSteps: []coverage.SharedStep{{ID: "setup", Procedure: "real setup"}}}
-	return protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v2", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
+	return protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v3", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
 }
 func decodeSemantic(t *testing.T, input protocol.WorkerInput, result any) protocol.WorkerResultPayload {
 	t.Helper()
@@ -125,18 +125,18 @@ func TestExecutionCheckpointDoesNotResubmitCompletedCaseEdges(t *testing.T) {
 
 func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 	for _, sample := range []struct{ handler, raw string }{
-		{"engine.qa.design.v2", `{"actionId":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v2", `{"provider":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v2", `{"payloadDigest":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v2", `{"binding":{"generation":9},"cases":[],"coverage":{}}`},
-		{"engine.qa.design.v2", `{"sources":["wrong"],"cases":[],"coverage":{}}`},
-		{"engine.qa.design.v2", `{"cases":[{"caseId":"new","mode":"WHITEBOX","oracle":"actual"}],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"actionId":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"provider":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"payloadDigest":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"binding":{"generation":9},"cases":[],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"sources":["wrong"],"cases":[],"coverage":{}}`},
+		{"engine.qa.design.v3", `{"cases":[{"caseId":"new","mode":"WHITEBOX","oracle":"actual"}],"coverage":{}}`},
 		{"engine.gate.v2", `{"status":"PASS","findings":[{"id":"wrong","severity":"P3","message":"real finding"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"id":"wrong","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"decision":"ACCEPT","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"scope":"FULL","sourceDecisions":[],"pointDecisions":[],"caseDecisions":[]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[{"id":"wrong","status":"PASS","reason":"actual"}],"pointDecisions":[],"caseDecisions":[]}`},
-		{"engine.repair.v3", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
+		{"engine.repair.v4", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
 		{"engine.qa.execution.v2", `{"binding":{"candidate":{"identity":"wrong"}},"records":{}}`},
 		{"engine.qa.execution.v2", `{"records":[{"sourceId":"wrong","result":"EXECUTED_PASS"}]}`},
 	} {

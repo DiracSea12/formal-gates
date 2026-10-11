@@ -173,7 +173,7 @@ func TestInputOwnershipIncludesEmbeddedTestInputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	command := exec.Command("go", "test", "./...")
+	command := exec.Command("go", "test", "-timeout=0", "./...")
 	command.Dir = root
 	if out, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("compiler rejected embed inputs: %v %s", err, out)

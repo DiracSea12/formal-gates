@@ -29,7 +29,7 @@ type CaseChange struct {
 }
 type SharedStepChange struct {
 	Remove      bool               `json:"remove,omitempty"`
-	Artifacts   *[]string          `json:"artifacts,omitempty"`
+	Artifacts   *[]StringChange    `json:"artifacts,omitempty"`
 	Independent *bool              `json:"independent,omitempty"`
 	Procedure   *string            `json:"procedure,omitempty"`
 	Operations  *[]OperationChange `json:"operations,omitempty"`
@@ -39,9 +39,52 @@ type SharedStepChange struct {
 type OperationChange struct {
 	Reuse   *int                    `json:"reuse,omitempty"`
 	Kind    *coverage.OperationKind `json:"kind,omitempty"`
-	Argv    *[]string               `json:"argv,omitempty"`
+	Argv    *[]StringChange         `json:"argv,omitempty"`
 	Command *string                 `json:"command,omitempty"`
 	Stdin   *string                 `json:"stdin,omitempty"`
+}
+
+// StringChange is either a newly authored string or an original field position.
+type StringChange struct {
+	Reuse *int `json:"reuse,omitempty"`
+	value string
+}
+
+func (change *StringChange) UnmarshalJSON(raw []byte) error {
+	if len(raw) > 0 && raw[0] == '"' {
+		return json.Unmarshal(raw, &change.value)
+	}
+	type body StringChange
+	if err := decodeObject(raw, (*body)(change)); err != nil {
+		return err
+	}
+	if change.Reuse == nil {
+		return fmt.Errorf("string selection requires an original field position")
+	}
+	return nil
+}
+
+func (change StringChange) MarshalJSON() ([]byte, error) {
+	if change.Reuse != nil {
+		type body StringChange
+		return json.Marshal(body(change))
+	}
+	return json.Marshal(change.value)
+}
+
+func reviseStrings(original []string, changes []StringChange) ([]string, error) {
+	result := make([]string, 0, len(changes))
+	for _, change := range changes {
+		value := change.value
+		if change.Reuse != nil {
+			if *change.Reuse < 1 || *change.Reuse > len(original) {
+				return nil, fmt.Errorf("string selection is outside original field")
+			}
+			value = original[*change.Reuse-1]
+		}
+		result = append(result, value)
+	}
+	return result, nil
 }
 
 // An explicit sequence supplies its final order; omitted original positions
@@ -68,7 +111,11 @@ func reviseOperations(original []coverage.Operation, changes []OperationChange) 
 			item.Kind = *change.Kind
 		}
 		if change.Argv != nil {
-			item.Argv = *change.Argv
+			var err error
+			item.Argv, err = reviseStrings(item.Argv, *change.Argv)
+			if err != nil {
+				return nil, err
+			}
 		}
 		item.Argv = slices.Clone(item.Argv)
 		if change.Command != nil {
@@ -187,6 +234,7 @@ func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
 	value := struct {
 		*body
 		Operations *[]OperationChange `json:"operations,omitempty"`
+		Artifacts  *[]StringChange    `json:"artifacts,omitempty"`
 	}{body: (*body)(item)}
 	if err := decodeObject(raw, &value); err != nil {
 		return err
@@ -196,10 +244,19 @@ func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	item.changes = &change
-	if item.Step == 0 && value.Operations != nil {
-		var err error
-		item.Operations, err = reviseOperations(nil, *value.Operations)
-		return err
+	if item.Step == 0 {
+		if value.Operations != nil {
+			var err error
+			item.Operations, err = reviseOperations(nil, *value.Operations)
+			if err != nil {
+				return err
+			}
+		}
+		if value.Artifacts != nil {
+			var err error
+			item.Artifacts, err = reviseStrings(nil, *value.Artifacts)
+			return err
+		}
 	}
 	return nil
 }
@@ -229,6 +286,8 @@ func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
 func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
 	operations := change.Operations
 	change.Operations = nil
+	artifacts := change.Artifacts
+	change.Artifacts = nil
 	raw, err := json.Marshal(change)
 	if err != nil {
 		return err
@@ -238,6 +297,12 @@ func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
 	}
 	if operations != nil {
 		item.Operations, err = reviseOperations(item.Operations, *operations)
+		if err != nil {
+			return err
+		}
+	}
+	if artifacts != nil {
+		item.Artifacts, err = reviseStrings(item.Artifacts, *artifacts)
 	}
 	return err
 }

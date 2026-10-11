@@ -115,7 +115,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
-	if role != "engine.qa.design.v2" && role != "engine.qa.review.rationale.v2" {
+	if role != "engine.qa.design.v3" && role != "engine.qa.review.rationale.v2" {
 		return true
 	}
 	if s.Validation == nil {
@@ -127,7 +127,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 	mode := s.validationMode(b.Task)
 	set := s.Validation.Sets[mode]
 	source := s.sourceValidationTask(b.Task)
-	if role == "engine.qa.design.v2" {
+	if role == "engine.qa.design.v3" {
 		if set != nil && set.Status != "DRAFT" && set.Status != "THAWED" {
 			return false
 		}
@@ -223,7 +223,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		context, current := s.repairComparisonContext(b.Task, cd)
 		return current && context.binding == b && s.repairComparisonResult(b.Task) == nil
 	}
-	if s.validationRole(b.Task, cd) == "engine.development.batch.v3" {
+	if s.validationRole(b.Task, cd) == "engine.development.batch.v4" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil
 	}
@@ -234,7 +234,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
-	if s.validationRole(b.Task, cd) == "engine.repair.v3" {
+	if s.validationRole(b.Task, cd) == "engine.repair.v4" {
 		for _, work := range s.repairWork() {
 			if work.task == b.Task && work.wave.ID == b.WaveID {
 				return work.result == nil

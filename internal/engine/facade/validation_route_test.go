@@ -61,7 +61,7 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 		t.Fatal("route update rewrote/duplicated original evidence")
 	}
 	resolveGateFinding(d, finding, w.ID)
-	_, in = d.action("engine.repair.v3")
+	_, in = d.action("engine.repair.v4")
 	if in.Binding.Candidate != w.Candidate.Identity {
 		t.Fatal("repair candidate changed without a repair")
 	}
@@ -72,13 +72,13 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, oldID)
-	repairID, repairInput := d.action("engine.repair.v3")
+	repairID, repairInput := d.action("engine.repair.v4")
 	d.receipt(repairID)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.repair.v3")
+	id, in := d.action("engine.repair.v4")
 	if id != repairID || in.Binding != repairInput.Binding {
 		t.Fatal("route addition replaced an already issued repair obligation")
 	}
@@ -107,11 +107,11 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 		t.Run(map[bool]string{false: "original", true: "replacement"}[replacement], func(t *testing.T) {
 			d, finding, oldID := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, oldID)
-			oldRepair, _ := d.action("engine.repair.v3")
+			oldRepair, _ := d.action("engine.repair.v4")
 			if replacement {
 				confirmValidationWork(d, oldRepair)
 				d.materialize()
-				current, _ := d.action("engine.repair.v3")
+				current, _ := d.action("engine.repair.v4")
 				if current == oldRepair {
 					t.Fatal("REDO retained original dispatch")
 				}
@@ -121,18 +121,18 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 			d.reopen()
 			d.drive()
 			for action, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v3" {
+				if input.Handler == "engine.repair.v4" {
 					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
 				}
 			}
-			d.action("engine.qa.design.v2")
+			d.action("engine.qa.design.v3")
 		})
 	}
 }
 
 func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v2")
+	id, in := d.action("engine.qa.design.v3")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -147,7 +147,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	if a.Status != "ACCEPTED" {
 		t.Fatalf("ordinary gate addition rejected unchanged in-flight QA review: %s", a.Status)
 	}
-	id, in = d.action("engine.development.batch.v3")
+	id, in = d.action("engine.development.batch.v4")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate inputs"}})
 	d.materialize()
 	d.materialize()
@@ -225,12 +225,12 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 
 func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v2")
+	id, in := d.action("engine.qa.design.v3")
 	manifest := simpleManifest(in)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
-	currentID, current := d.action("engine.qa.design.v2")
+	currentID, current := d.action("engine.qa.design.v3")
 	if currentID != id || current.Binding != in.Binding || current.Manifest.Binding != in.Manifest.Binding {
 		t.Fatal("route addition replaced the issued design context")
 	}
@@ -344,11 +344,11 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newValidationDriver(t, "whitebox", "quality")
-			id, in := d.action("engine.development.batch.v3")
+			id, in := d.action("engine.development.batch.v4")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input"}})
 			d.materialize()
 			d.materialize()
-			id, in = d.action("engine.qa.design.v2")
+			id, in = d.action("engine.qa.design.v3")
 			manifest := in.Manifest
 			manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 			for _, c := range manifest.Cases {
@@ -398,12 +398,12 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v3")
+	id, in := d.action("engine.repair.v4")
 	task := in.Binding.Task
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-interrupted"}})
 	d.drive()
-	id, retry := d.action("engine.repair.v3")
+	id, retry := d.action("engine.repair.v4")
 	before := d.run.Attempts[task]
 	if before.Attempts != 1 || before.MaxAttempts != 2 || retry.Binding.Task != task {
 		t.Fatal("setup did not retain first failure")
@@ -475,7 +475,7 @@ func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
 	}
 	d.drive()
-	d.action("engine.development.batch.v3")
+	d.action("engine.development.batch.v4")
 }
 
 // TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges：§6.3.1 开发已
@@ -534,7 +534,7 @@ func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing
 	d.confirmRoute(route)
 	d.confirmRoute(route)
 	d.drive()
-	id, in := d.action("engine.development.batch.v3")
+	id, in := d.action("engine.development.batch.v4")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
 	d.materialize()
@@ -565,7 +565,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v3")
+	id, in := d.action("engine.repair.v4")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	d.verifyRepair(edit)
@@ -617,7 +617,7 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "input", RootCause: "valid input panic", Consequence: "normal command cannot complete", Severity: "P1", SeverityRationale: "core valid input fails with no workaround", Verification: review.FindingVerification{Scope: "confirmed input", Severity: "core failure", Causality: "input panic", Reproduction: "app run valid-input", Classification: "implementation"}, Reason: "observed valid input panic"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v3")
+	id, in = d.action("engine.repair.v4")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	if edit.Binding.PureP2 {
