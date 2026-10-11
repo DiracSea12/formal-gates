@@ -15,7 +15,7 @@ func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
 			key := runtime.TaskKey{Node: "qa", Step: "design", Scope: "current-duty"}
 			pending := PendingAction{ActionID: "retry", Task: key, AttemptID: "current-attempt"}
 			binding := WorkBinding{Task: key, Generation: 2, RequirementRevision: "confirmed"}
-			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v3"}}}}
+			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v4"}}}}
 			state := &State{DispatchBindings: map[string]WorkBinding{"retry": binding, "rejected": binding}, Attempts: map[runtime.TaskKey]Attempt{key: {PreviousAction: "rejected"}}, RejectedResults: map[string]RejectedResult{"rejected": {ActionID: "rejected", Task: key, AttemptID: "original-attempt", Status: "REJECTED_INVALID_RESULT", Reason: "original semantic defect", Payload: WorkerResult{Outcome: OutcomePass}}}, RecoveryRecords: []RecoveryRecord{{ActionID: "rejected", Task: key, AttemptID: "original-attempt", Detail: "original semantic defect"}}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
 			switch changed {
 			case "task":

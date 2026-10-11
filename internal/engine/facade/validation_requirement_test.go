@@ -182,7 +182,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			gate, gi := d.gateAction("quality")
 			report := executionFor(qi)
 			result := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
@@ -218,7 +218,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 				if delivery == "retry" {
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "environment-interrupted"}})
 					d.drive()
-					qa, qi = d.action("engine.qa.execution.v2")
+					qa, qi = d.action("engine.qa.execution.v3")
 					report = executionFor(qi)
 					result = nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
 					event = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
@@ -276,7 +276,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.qa.execution.v2")
+	id, in = d.action("engine.qa.execution.v3")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("setup needs AFFECTED")
 	}

@@ -44,7 +44,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 			t.Run(verdict+"/"+original, func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality", "security")
 				d.reviewReady()
-				id, input := d.action("engine.qa.execution.v2")
+				id, input := d.action("engine.qa.execution.v3")
 				executed := executionFor(input)
 				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				id, input = d.gateAction("quality")
@@ -102,7 +102,7 @@ func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
 				if original == "DISPOSED" {
 					d.disposeGate("security")
 				}
-				id, input = d.action("engine.qa.execution.v2")
+				id, input = d.action("engine.qa.execution.v3")
 				executed = executionFor(input)
 				d.business(id, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &executed}))
 				d.drive()

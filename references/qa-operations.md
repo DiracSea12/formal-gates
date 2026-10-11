@@ -15,6 +15,20 @@
 {"kind":"SHELL","command":"printf '%s' \"$value\"\n"}
 ```
 
+首次设计、设计续作、指定用例修订和缺 invocation 的 `commands` 使用同一原值选择。
+`command`、`stdin`、每个 `argv` 参数和共享 `artifacts` 元素可填写真正新创作的字符串，
+或用 `{"read":1,"from":2,"to":3}` 选择原 workspace read 的一基序号与闭区间行号。
+程序从原 native LocationFacts 取得该区间的完整字节，保留换行、空格与引号，不解析
+shell 参数、不去除换行、不猜路径。argv 的每个元素仍是单独参数；要选择无末尾换行
+的参数或产物名，其原 read 区间本身必须含有该原值。语义提交与原结果装配共用原 native facts，
+逐值核真实 read、区间及最终操作。恢复消费同一原事实，不能用新的读取替换原来源。
+
+修改已存在 operations 时，`{"reuse":1}` 选择原操作序号，省略字段保留原值。
+显式数组决定最终顺序；未选择项删除，`[]` 清空。argv 与 artifacts 的元素还可用
+`{"reuse":1}` 选择该原字段的元素序号。新项没有可复用的原元素；command 与 stdin
+省略时保留原值，填写时仅使用新字符串或 read 来源。切换 kind 清除不适用的原
+command 或 argv，并须提供相应的新调用。最终批准与执行载荷始终只含具体原字符串。
+
 `ARGV` 必须提供非空数组和非空 executable，不能提供 `command`；后续参数可以是空
 字符串，空格、引号和特殊字符都是该参数的原值。`SHELL` 必须提供非空 `command`，
 不能提供非空 `argv`。操作不含 cwd、env、插件、条件或循环字段。完整 shell 文本可以

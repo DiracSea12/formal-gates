@@ -79,7 +79,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				d.drive()
 				ready := false
 				for _, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.qa.design.v3" && input.Manifest.Binding.ReviewKind == mode {
+					if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == mode {
 						ready = true
 						break
 					}
@@ -93,7 +93,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		design, qi := qaModeAction(d, "engine.qa.design.v3", mode)
+		design, qi := qaModeAction(d, "engine.qa.design.v4", mode)
 		manifest := qi.Manifest
 		manifest.Cases = nil
 		manifest.Edges = nil
@@ -235,7 +235,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v3")
+	design, qi := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(qi)
 	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '%s' "$1"; cat; printf x >> qa-executions`, "fixture", "quoted words"}, Stdin: " actual-input"}}
 	manifest.Cases[0].Oracle = "stdout is quoted words actual-input"
@@ -256,7 +256,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	for {
 		d.drive()
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.qa.execution.v2" {
+			if input.Handler == "engine.qa.execution.v3" {
 				action, issued = id, input
 			}
 		}
@@ -290,7 +290,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	}
 	d.receipt(action)
 	pending := d.run.PendingActions[action]
-	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution.v2", Provider: d.host(), Pending: pending, Validation: &issued}
+	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution.v3", Provider: d.host(), Pending: pending, Validation: &issued}
 	compare := worker.ExecutionJudgments{Execution: worker.Execution{Records: comparisonTupleFixture(issued, map[string]worker.Observation{"invalid": {Result: coverage.ExecutedPass, Comparison: "Actual stdout rejected and exit 7 match the declared negative oracle"}})}}
 	raw, err := json.Marshal(compare)
 	if err != nil {
@@ -305,7 +305,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	}
 	d.reopen()
 	d.drive()
-	resumedAction, resumed := d.action("engine.qa.execution.v2")
+	resumedAction, resumed := d.action("engine.qa.execution.v3")
 	if resumedAction != action || len(resumed.Completed) != 1 || resumed.Completed[0].CaseID != "invalid" || !reflect.DeepEqual(resumed.PendingCases, []string{"normal"}) {
 		t.Fatalf("native checkpoint partition changed: %+v", resumed)
 	}
@@ -408,7 +408,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	design, authored := waitAction("engine.qa.design.v3")
+	design, authored := waitAction("engine.qa.design.v4")
 	if err := os.WriteFile(filepath.Join(authored.Workspace.Path, "app_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFailure(t *testing.T){t.Fatal(\"observed failure\")}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	review, reviewed := waitAction("engine.qa.review.rationale.v2")
 	approved := approvedReview(manifest)
 	d.business(review, protocol.ValidationResult{Binding: reviewed.Binding, Status: "PASS", Review: &approved})
-	action, issued := waitAction("engine.qa.execution.v2")
+	action, issued := waitAction("engine.qa.execution.v3")
 	if len(issued.ExecutionFacts) != 1 || issued.ExecutionFacts[0].CaseID != "failure" || issued.ExecutionFacts[0].Operations[0].Evidence.GoResult != "fail" || issued.ExecutionFacts[0].Operations[0].Evidence.ExitCode != 1 {
 		t.Fatalf("failed/no-match native readiness: %+v", issued.ExecutionFacts)
 	}
@@ -440,7 +440,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 		t.Fatal("no-match actual operation receipt was lost")
 	}
 	d.receipt(action)
-	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution.v2", Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &issued}
+	workerInput := protocol.WorkerInput{Handler: "engine.qa.execution.v3", Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &issued}
 	compare := worker.ExecutionJudgments{Execution: worker.Execution{Records: comparisonTupleFixture(issued, map[string]worker.Observation{"failure": {Result: coverage.ExecutedFail, Comparison: "The exact test ran and failed its assertion, contrary to the passing oracle"}})}}
 	raw, _ := json.Marshal(compare)
 	event, err := worker.DecodeResult(workerInput, d.eventID(), raw, "verified-go-comparison")

@@ -67,7 +67,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 	var priorManifest, priorCandidate string
 	tasks := map[string]bool{}
 	for semanticReview := 0; semanticReview < 3; semanticReview++ {
-		id, input := d.action("engine.qa.design.v3")
+		id, input := d.action("engine.qa.design.v4")
 		if tasks[input.Binding.Task.String()] {
 			t.Fatal("a new design obligation reused completed work")
 		}
@@ -76,7 +76,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 			logicalTask := input.Binding.Task
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 			d.drive()
-			id, input = d.action("engine.qa.design.v3")
+			id, input = d.action("engine.qa.design.v4")
 			if input.Binding.Task != logicalTask || len(d.run.Validation.Sets[coverage.ReviewWhitebox].ReviewHistory) != semanticReview {
 				t.Fatal("invalid design advanced the task or semantic review generation")
 			}
@@ -135,7 +135,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 		d.drive()
 	}
 	old := d.validationAsk("RETRY")
-	id, input := d.action("engine.qa.design.v3")
+	id, input := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -190,7 +190,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 	for _, remedy := range []string{"QA_ARTIFACT_REPAIR", "DISMISS"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			_, designed := d.action("engine.qa.design.v3")
+			_, designed := d.action("engine.qa.design.v4")
 			manifest := simpleManifest(designed)
 			for i := range manifest.Cases {
 				if manifest.Cases[i].CaseID == "invalid" {
@@ -198,7 +198,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 				}
 			}
 			d.reviewReadyWithManifest(manifest)
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			gate, gi := d.action("engine.gate.v2")
 			report := executionFor(qi)
 			var failed coverage.ExecutionRecord
@@ -262,7 +262,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 			d.submit(event)
 			d.drive()
 			if remedy == "QA_ARTIFACT_REPAIR" {
-				id, input := d.action("engine.qa.design.v3")
+				id, input := d.action("engine.qa.design.v4")
 				manifest := input.Manifest
 				for i := range manifest.Cases {
 					if manifest.Cases[i].CaseID == failed.CaseID {
@@ -275,7 +275,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 				reviewed := approvedReview(manifest)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &reviewed})
 				d.materialize()
-				id, input = d.action("engine.qa.execution.v2")
+				id, input = d.action("engine.qa.execution.v3")
 				rerun := executionFor(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &rerun, Tool: "app-v1", Environment: "isolated-project"})
 				id, input = d.action("engine.gate.v2")
@@ -301,7 +301,7 @@ func TestGateInputExcludesQAMaterialsAcrossReopen(t *testing.T) {
 	d.reviewReady()
 	for i := 0; i < 2; i++ {
 		_, gate := d.action("engine.gate.v2")
-		_, qa := d.action("engine.qa.execution.v2")
+		_, qa := d.action("engine.qa.execution.v3")
 		if gate.Contract != nil || len(gate.Manifest.Cases) != 0 || len(gate.Manifest.SharedSteps) != 0 || gate.Execution != nil || len(gate.Completed) != 0 || gate.Whitelist != nil {
 			t.Fatal("gate received QA materials")
 		}

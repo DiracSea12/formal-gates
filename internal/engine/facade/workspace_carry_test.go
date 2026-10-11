@@ -29,7 +29,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			gate, gi := d.action("engine.gate.v2")
 			report := executionFor(qi)
 			tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)

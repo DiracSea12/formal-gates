@@ -255,12 +255,6 @@ func inheritNativeIdentity(directory string, request map[string]any, impl native
 			if err != nil {
 				return &blockedError{message: "original native invocation is UNKNOWN; reconcile before resume"}
 			}
-			if getOf(request, "provider") == "cursor" {
-				source, err = readJSONFile(filepath.Join(prior, "identity.json"))
-				if err != nil {
-					return err
-				}
-			}
 		} else {
 			if err := impl.verifySource(prior, source); err != nil {
 				return err
@@ -271,8 +265,10 @@ func inheritNativeIdentity(directory string, request map[string]any, impl native
 			return &blockedError{message: "native invocation identities conflict"}
 		}
 		identity = observed
-		if getOf(request, "provider") == "cursor" {
-			request["native_store"] = getOf(source, "native_store")
+		if impl.inheritInvocation != nil {
+			if err := impl.inheritInvocation(prior, request, source); err != nil {
+				return err
+			}
 		}
 	}
 	requested, _ := request["identity"].(string)

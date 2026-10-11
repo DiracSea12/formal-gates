@@ -71,7 +71,7 @@ func TestDevelopmentContinuationPreservesSemanticProgress(t *testing.T) {
 			}
 		})
 	}
-	for _, role := range []string{"engine.qa.design.v3", "engine.qa.execution.v2", "engine.gate.v2", "engine.repair.verify.v2"} {
+	for _, role := range []string{"engine.qa.design.v4", "engine.qa.execution.v3", "engine.gate.v2", "engine.repair.verify.v2"} {
 		input := protocol.WorkerInput{Handler: role, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 		raw, _ := json.Marshal(DevelopmentContinuation{Summary: "progress", RemainingWork: "pending"})
 		if _, err := DecodeResultWithPaths(input, "partial", raw, "original", []string{}); err == nil {

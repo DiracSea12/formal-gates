@@ -17,7 +17,7 @@ func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
 				inventory := &protocol.CoverageInventory{Sources: []coverage.RequiredSource{{SourceID: "SOL-001", Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}, {SourceID: "SOL-002", Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}}, Points: []coverage.AcceptancePoint{{PointID: "SP-001", ObservableBehavior: "records outcome", Oracle: "record exists"}}, Links: []protocol.SourcePoint{{SourceID: "SOL-001", PointID: "SP-001"}, {SourceID: "SOL-002", PointID: "AC-001"}, {SourceID: "SOL-002", PointID: "SP-001"}}}
 				d := configuredValidationDriver(t, inventory, "blackbox")
 				dev, di := d.action("engine.development.batch.v4")
-				design, qi := d.action("engine.qa.design.v3")
+				design, qi := d.action("engine.qa.design.v4")
 				m := simpleManifest(qi)
 				for _, id := range []string{"normal", "invalid"} {
 					m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "SOL-001", PointID: "SP-001", CaseID: id}, coverage.CoverageEdge{SourceID: "SOL-002", PointID: "AC-001", CaseID: id})
@@ -45,14 +45,14 @@ func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
 						}
 					}
 					for _, in := range d.run.ValidationInputs {
-						if in.Handler == "engine.qa.execution.v2" {
+						if in.Handler == "engine.qa.execution.v3" {
 							t.Error("execution issued with missing relation")
 						}
 					}
 					return
 				}
 				d.materialize()
-				qa, in := d.action("engine.qa.execution.v2")
+				qa, in := d.action("engine.qa.execution.v3")
 				found := false
 				for _, e := range in.Whitelist.Entries {
 					if e.SourceID == "SOL-002" && e.PointID == "SP-001" {
@@ -93,9 +93,9 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			inventory := relationInventory()
 			d := configuredValidationDriver(t, inventory, "blackbox")
-			_, in := d.action("engine.qa.design.v3")
+			_, in := d.action("engine.qa.design.v4")
 			d.reviewReadyWithManifest(relationManifest(in))
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			report := executionFor(qi)
 			if phase == "completed" {
 				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
@@ -123,7 +123,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 				t.Fatal("carried result was rewritten")
 			}
 			d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal", "invalid"}}, "")
-			id, in := d.action("engine.qa.design.v3")
+			id, in := d.action("engine.qa.design.v4")
 			manifest := relationManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 			d.drive()
@@ -131,7 +131,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 			approved := approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 			d.materialize()
-			id, in = d.action("engine.qa.execution.v2")
+			id, in = d.action("engine.qa.execution.v3")
 			report = executionFor(in)
 			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
@@ -147,7 +147,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	inventory.Links = append(inventory.Links, protocol.SourcePoint{SourceID: "SOL-002", PointID: "SP-001"})
 	d := configuredValidationDriver(t, inventory, "blackbox", "whitebox", "quality")
 	dev, di := d.action("engine.development.batch.v4")
-	id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
+	id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
 	black := simpleManifest(in)
 	black.Sources = []string{"REQ-001", "SOL-001"}
 	for _, c := range black.Cases {
@@ -161,7 +161,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement inputs and records"}})
 	d.materialize()
 	d.materialize()
-	id, in = qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
+	id, in = qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
 	white := in.Manifest
 	white.Sources = []string{"SOL-002"}
 	white.Cases = []coverage.AcceptanceCase{{CaseID: "white-normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
@@ -177,7 +177,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.materialize()
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
-		id, in = qaModeAction(d, "engine.qa.execution.v2", mode)
+		id, in = qaModeAction(d, "engine.qa.execution.v3", mode)
 		report := executionFor(in)
 		for _, edge := range in.Whitelist.Entries {
 			if mode == coverage.ReviewBlackbox && edge.SourceID == "SOL-002" || mode == coverage.ReviewWhitebox && edge.SourceID != "SOL-002" {
@@ -203,22 +203,22 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	d.drive()
 	id, in = d.gateAction("security")
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution.v2" {
+		if input.Handler == "engine.qa.execution.v3" {
 			t.Fatal("QA dispatched without its own host scope")
 		}
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution.v2" && input.Execution != nil && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+		if input.Handler == "engine.qa.execution.v3" && input.Execution != nil && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 			t.Fatal("blackbox scope authorized whitebox")
 		}
 	}
-	id, in = qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewBlackbox)
+	id, in = qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewBlackbox)
 	report := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.recordExecutionScope(coverage.ReviewWhitebox, "white-normal")
-	id, in = qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewWhitebox)
+	id, in = qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewWhitebox)
 	report = executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	d.drive()

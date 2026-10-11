@@ -169,7 +169,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 			}
 			d.reopen()
 			d.drive()
-			_, qa := d.action("engine.qa.execution.v2")
+			_, qa := d.action("engine.qa.execution.v3")
 			if len(qa.ExecutionFacts) != len(required) {
 				t.Fatal("comparison did not receive every required native case")
 			}

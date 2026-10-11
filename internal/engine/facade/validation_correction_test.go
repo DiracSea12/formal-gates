@@ -147,7 +147,7 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 			case "engine.gate.v2":
 				d.business(action, protocol.ValidationResult{Binding: current.Binding, Status: "PASS"})
 				advanced = true
-			case "engine.qa.execution.v2":
+			case "engine.qa.execution.v3":
 				report := executionFor(current)
 				d.business(action, nativeExecutionResult(current, protocol.ValidationResult{Binding: current.Binding, Status: "PASS", Execution: &report}))
 				advanced = true
@@ -210,7 +210,7 @@ func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
 				decideValidation(d, d.validationAsk("QA_RETRY"), "approve", target)
 				d.reopen()
 				d.drive()
-				id, in := d.action("engine.qa.execution.v2")
+				id, in := d.action("engine.qa.execution.v3")
 				report := executionFor(in)
 				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			case "requirement-carry":

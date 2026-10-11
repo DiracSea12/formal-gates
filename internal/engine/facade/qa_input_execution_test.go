@@ -33,7 +33,7 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
 	development, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v3")
+	design, qi := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(qi)
 	configure(&manifest)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
@@ -55,7 +55,7 @@ func awaitQAInput(t *testing.T, d *validationDriver, ready func(protocol.Validat
 	for {
 		d.drive()
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.qa.execution.v2" && ready(input) {
+			if input.Handler == "engine.qa.execution.v3" && ready(input) {
 				return id, input
 			}
 		}
@@ -439,15 +439,15 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 		m.Cases[1].Oracle = "stdout beta, stderr two, exit seven"
 	})
 	action, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.CommandCases) == 2 })
-	commands := worker.CommandBindings{}
+	commands := [][]coverage.Operation{}
 	for _, id := range input.CommandCases {
 		command := `printf alpha; printf one >&2; printf x >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"`
 		if id == "invalid" {
 			command = `printf beta; printf two >&2; printf y >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"; exit 7`
 		}
-		commands.Commands = append(commands.Commands, []coverage.Operation{{Kind: coverage.OperationShell, Command: command}})
+		commands = append(commands, []coverage.Operation{{Kind: coverage.OperationShell, Command: command}})
 	}
-	body, _ := json.Marshal(commands)
+	body, _ := json.Marshal(map[string]any{"commands": commands})
 	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &input}, d.eventID(), body, "original-two-case-commands")
 	if err != nil {
 		t.Fatal(err)

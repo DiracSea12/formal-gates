@@ -796,8 +796,8 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialS
 	return nil
 }
 
-// Open loads an existing engine run and validates all six identity fields
-// before exposing a writer.  No fallback to the legacy namespace occurs.
+// Open loads an existing engine run and validates its complete identity
+// before exposing a writer.
 func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) {
 	runtimeFiles := vcs.RuntimeFiles{}
 	if len(inventories) != 0 {

@@ -182,7 +182,7 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := json.Unmarshal(body, &material); err != nil {
 		t.Fatal(err)
 	}
-	material.Input.Handler = "engine.qa.design.v3"
+	material.Input.Handler = "engine.qa.design.v4"
 	material.Input.Validation.Workspace.Source = base
 	material.Input.Validation.ReviewBase = base
 	body, err = json.Marshal(material)

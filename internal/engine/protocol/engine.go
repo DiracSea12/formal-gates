@@ -2146,7 +2146,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	class := record.FailureClass
 	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && class == authoring.FailureTransientEngine {
 		if record.Validation != nil {
-			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v2" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
+			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v3" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
 				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "runtime progress requires a QA execution checkpoint", record, nextRevision)
 			}
 			next, err := e.prepareValidationResult(state, record, nextRevision)

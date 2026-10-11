@@ -504,7 +504,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
-	case "engine.qa.design.v3":
+	case "engine.qa.design.v4":
 		mode := in.Manifest.Binding.ReviewKind
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
@@ -548,7 +548,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
-	case "engine.qa.execution.v2":
+	case "engine.qa.execution.v3":
 		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{}}}
 		payload = result
 		seen := []string{}

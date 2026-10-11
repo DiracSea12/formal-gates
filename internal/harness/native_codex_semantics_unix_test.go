@@ -255,7 +255,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 func TestCodexQAContinuationUsesCurrentSemanticsWithPersistentToolDeclaration(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["read_only"] = true
-	input := protocol.WorkerInput{Handler: "engine.qa.execution.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}
+	input := protocol.WorkerInput{Handler: "engine.qa.execution.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}
 	commands := map[string]any{"commands": []any{[]any{map[string]any{"kind": "ARGV", "argv": []any{"printf", "accepted"}}}}}
 	prepare := func() map[string]any {
 		t.Helper()

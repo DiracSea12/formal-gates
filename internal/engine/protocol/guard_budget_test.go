@@ -76,7 +76,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 			GranularityReview: plan, Verification: review.OperatorVerification{Evidence: "verified"},
 		}},
 	}
-	qaTask := pipelineTask(cd, "engine.qa.execution.v2", "wave-1:BLACKBOX")
+	qaTask := pipelineTask(cd, "engine.qa.execution.v3", "wave-1:BLACKBOX")
 	gateTask := pipelineTask(cd, "engine.gate.v2", "wave-1:quality")
 	state.Validation = &Validation{
 		RequirementRevision: "rev-1", Generation: 1,
@@ -732,7 +732,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	}
 	must(reg.RegisterHandler("engine.funnel.parse", authoring.RunnerEngineLocal))
 	must(reg.RegisterHandler("engine.development.batch.v4", authoring.RunnerAgentWorker))
-	must(reg.RegisterHandler("engine.qa.execution.v2", authoring.RunnerAgentWorker))
+	must(reg.RegisterHandler("engine.qa.execution.v3", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
 	must(reg.RegisterPredicate("pred.funnel.post"))
@@ -760,7 +760,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	}
 	cd, err := compiler.Compile(&compiler.Definition{
 		Version: "1", EntryNode: "funnel",
-		Steps: []authoring.Step{parse, agent("development.worker", "engine.development.batch.v4"), agent("qa.execution", "engine.qa.execution.v2")},
+		Steps: []authoring.Step{parse, agent("development.worker", "engine.development.batch.v4"), agent("qa.execution", "engine.qa.execution.v3")},
 	}, reg)
 	must(err)
 	engine, err := New(mustStoreAt(t, t.TempDir()), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)

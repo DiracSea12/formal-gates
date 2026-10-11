@@ -17,7 +17,7 @@ func validationWithGateFinding(t *testing.T) (*validationDriver, string, string)
 	t.Helper()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	r := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	id, in = d.gateAction("quality")
@@ -125,14 +125,14 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
 				}
 			}
-			d.action("engine.qa.design.v3")
+			d.action("engine.qa.design.v4")
 		})
 	}
 }
 
 func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -186,7 +186,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 			t.Fatal("new requirement facts rewrote an accepted event")
 		}
 	}
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
@@ -204,7 +204,7 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	r := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	id, in = d.gateAction("quality")
@@ -225,12 +225,12 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 
 func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(in)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
-	currentID, current := d.action("engine.qa.design.v3")
+	currentID, current := d.action("engine.qa.design.v4")
 	if currentID != id || current.Binding != in.Binding || current.Manifest.Binding != in.Manifest.Binding {
 		t.Fatal("route addition replaced the issued design context")
 	}
@@ -250,7 +250,7 @@ func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 	id, in = d.gateAction("quality")
@@ -282,7 +282,7 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			id, in := d.action("engine.qa.execution.v2")
+			id, in := d.action("engine.qa.execution.v3")
 			report := executionFor(in)
 			qaEvidenceResult := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
 			result := protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "qa-evidence", Validation: &qaEvidenceResult}}
@@ -305,7 +305,7 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 			d.reopen()
 			d.drive()
-			newID, newInput := d.action("engine.qa.execution.v2")
+			newID, newInput := d.action("engine.qa.execution.v3")
 			if newID == id || newInput.Binding.WaveID == in.Binding.WaveID || newInput.Binding.Task == in.Binding.Task {
 				t.Fatal("replacement reused old wave dispatch")
 			}
@@ -348,7 +348,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input"}})
 			d.materialize()
 			d.materialize()
-			id, in = d.action("engine.qa.design.v3")
+			id, in = d.action("engine.qa.design.v4")
 			manifest := in.Manifest
 			manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 			for _, c := range manifest.Cases {
@@ -576,7 +576,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.qa.execution.v2")
+	id, in = d.action("engine.qa.execution.v3")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("ordinary gate addition changed AFFECTED into FULL")
 	}
@@ -600,7 +600,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	original := in.Binding.Candidate
 	report := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
@@ -626,7 +626,7 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-	id, in = d.action("engine.qa.execution.v2")
+	id, in = d.action("engine.qa.execution.v3")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("expected affected repair validation")
 	}

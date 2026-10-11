@@ -124,7 +124,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	} else {
 		return WorkerInput{}, false
 	}
-	if input.Handler == "engine.qa.execution.v2" {
+	if input.Handler == "engine.qa.execution.v3" {
 		wave := s.validationWave(input.Validation.Binding.WaveID)
 		if wave == nil || !s.qaComparisonReady(wave.Targets[pending.Task.String()], cd) {
 			return WorkerInput{}, false

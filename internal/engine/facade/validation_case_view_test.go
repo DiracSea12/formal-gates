@@ -172,7 +172,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "two independent predicates"}})
 			materialize()
 			materialize()
-			id, in = d.action("engine.qa.design.v3")
+			id, in = d.action("engine.qa.design.v4")
 			m := in.Manifest
 			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "positive_test.go::TestPositive", Oracle: "positive true"}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "negative_test.go::TestNegative", Oracle: "negative false"}}
 			for _, c := range m.Cases {
@@ -189,7 +189,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 			r.SourceDecisions[0].Status = coverage.StatusFail
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &r})
 			changed = true
-			id, in = d.action("engine.qa.design.v3")
+			id, in = d.action("engine.qa.design.v4")
 			m.Cases[0].Oracle = "positive equals true with actual value reported"
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"positive_test.go", "negative_test.go", "fixture_test.go"}}})
 			materialize()
@@ -263,7 +263,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				negativeRef = "negative_test.go::TestNegativeAlternate"
 				for _, affected := range []string{"negative", "positive"} {
 					d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Category: "CASE_EXECUTABILITY", Mode: coverage.ReviewWhitebox, AffectedCases: []string{affected}}, "")
-					design, di := d.action("engine.qa.design.v3")
+					design, di := d.action("engine.qa.design.v4")
 					m = di.Manifest
 					m.Cases[1].TestRef = negativeRef
 					if affected == "positive" {
@@ -290,7 +290,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				return
 			}
 			materialize()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			execution := executionFor(qi)
 			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution}))
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {

@@ -11,7 +11,7 @@ func TestDesignSelectedItemsRetainOmittedSemantics(t *testing.T) {
 	operation := coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"./app", "original input"}}
 	original := coverage.AcceptanceCase{CaseID: "issued-case", Scenario: "SUCCESS", PublicEntry: "./app", Preconditions: "built original app", Steps: "run original input", Oracle: "original output", Operations: []coverage.Operation{operation}, SharedSteps: []string{"issued-step"}, Files: []string{"app_test.go"}, TestRef: "app_test.go#TestOriginal"}
 	shared := coverage.SharedStep{ID: "issued-step", Procedure: "prepare original input", Artifacts: []string{"prepared.txt"}, Independent: true, Operations: []coverage.Operation{operation}, Files: []string{"setup_test.go"}}
-	input := protocol.WorkerInput{Handler: "engine.qa.design.v3", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{original}, SharedSteps: []coverage.SharedStep{shared}}}}
+	input := protocol.WorkerInput{Handler: "engine.qa.design.v4", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{original}, SharedSteps: []coverage.SharedStep{shared}}}}
 	value, _, err := decodeRoleBody(input, []byte(`{"cases":[{"case":1,"oracle":"new output"}],"sharedSteps":[{"step":1,"procedure":"new preparation"}],"coverage":[]}`))
 	if err != nil {
 		t.Fatal(err)

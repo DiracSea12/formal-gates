@@ -52,7 +52,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.drive()
-	design, input := master.action("engine.qa.design.v3")
+	design, input := master.action("engine.qa.design.v4")
 	if input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
 		t.Fatal("retained master did not start merge QA design")
 	}
@@ -256,7 +256,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	var id string
 	var input protocol.ValidationInput
 	for action, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v2" || in.Handler == "engine.gate.v2" {
+		if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v2" {
 			id, input = action, in
 			break
 		}
@@ -265,7 +265,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 		t.Fatalf("unexpected mainline task: %+v", master.run.ValidationInputs)
 	}
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution.v2" {
+	if input.Handler == "engine.qa.execution.v3" {
 		report := executionFor(input)
 		result.Execution = &report
 		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -399,7 +399,7 @@ func TestConflictContextRejectsNonConflictEdits(t *testing.T) {
 
 func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution.v2" {
+	if input.Handler == "engine.qa.execution.v3" {
 		report := executionFor(input)
 		result.Execution = &report
 		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -433,7 +433,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			result.Status = "FAIL"
 			result.Findings = []review.Finding{{Severity: "P2", Message: "Combined command output differs from the confirmed oracle"}}
 		}
-		if input.Handler == "engine.qa.execution.v2" {
+		if input.Handler == "engine.qa.execution.v3" {
 			result.Status = "FAIL"
 			result.Execution.Records[0].Result = coverage.ExecutedFail
 			failedCase = result.Execution.Records[0].CaseID
@@ -506,7 +506,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	// their original event identities without changing the native candidate.
 	var events []protocol.Event
 	for id, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v2" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
+		if in.Handler == "engine.qa.execution.v3" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
 			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
 		}
 		if in.Handler == "engine.gate.v2" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {

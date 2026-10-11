@@ -115,7 +115,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
-	if role != "engine.qa.design.v3" && role != "engine.qa.review.rationale.v2" {
+	if role != "engine.qa.design.v4" && role != "engine.qa.review.rationale.v2" {
 		return true
 	}
 	if s.Validation == nil {
@@ -127,7 +127,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 	mode := s.validationMode(b.Task)
 	set := s.Validation.Sets[mode]
 	source := s.sourceValidationTask(b.Task)
-	if role == "engine.qa.design.v3" {
+	if role == "engine.qa.design.v4" {
 		if set != nil && set.Status != "DRAFT" && set.Status != "THAWED" {
 			return false
 		}

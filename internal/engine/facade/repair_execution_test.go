@@ -132,7 +132,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one public command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 	d.drive()
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(in)
 	for i := range manifest.Cases {
 		argument := "valid"
@@ -157,7 +157,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	e.Paths = []string{"app.go", "go.mod"}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: e})
 	d.drive()
-	id, in = d.action("engine.qa.execution.v2")
+	id, in = d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -408,7 +408,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		var action string
 		var input protocol.ValidationInput
 		for id, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution.v2" || in.Handler == "engine.gate.v2" {
+			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v2" {
 				action, input = id, in
 				break
 			}
@@ -417,7 +417,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 			break
 		}
 		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-		if input.Handler == "engine.qa.execution.v2" {
+		if input.Handler == "engine.qa.execution.v3" {
 			report := executionFor(input)
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)

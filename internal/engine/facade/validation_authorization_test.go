@@ -39,7 +39,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 	d.reopen()
 	d.drive()
-	id, input := d.action("engine.qa.execution.v2")
+	id, input := d.action("engine.qa.execution.v3")
 	d.receipt(id)
 	before, err := d.f.engine.Load()
 	if err != nil {
@@ -155,7 +155,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 func failCaseReviews(d *validationDriver, count int) {
 	d.t.Helper()
 	for i := 0; i < count; i++ {
-		id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
+		id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
 		manifest := in.Manifest
 		if len(manifest.Cases) == 0 {
 			manifest = simpleManifest(in)
@@ -252,7 +252,7 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 		t.Run(arrival, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			report := executionFor(qi)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			gate, gi := d.gateAction("quality")
@@ -271,7 +271,7 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 			d.submit(chosen)
 			d.reopen()
 			d.drive()
-			fresh, fi := d.action("engine.qa.execution.v2")
+			fresh, fi := d.action("engine.qa.execution.v3")
 			if fresh == qa || fi.Binding.Task == qi.Binding.Task || fi.Binding.Candidate != qi.Binding.Candidate || len(d.run.Validation.Waves) != 2 {
 				t.Fatal("same-snapshot rerun did not create exactly one authorized semantic duty")
 			}
@@ -438,7 +438,7 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 	}
 	d.reviewReady()
 	for index := 0; index < 3; index++ {
-		qa, qi := d.action("engine.qa.execution.v2")
+		qa, qi := d.action("engine.qa.execution.v3")
 		report := executionFor(qi)
 		d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 		gate, gi := d.gateAction("quality")
@@ -515,7 +515,7 @@ func TestExactWaiverAndQARetryPreserveUnselectedProblems(t *testing.T) {
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 	d.reopen()
@@ -567,7 +567,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			dev, di := d.action("engine.development.batch.v4")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			d.materialize()
-			id, in := d.action("engine.qa.design.v3")
+			id, in := d.action("engine.qa.design.v4")
 			manifest := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 			var reviewTask string
@@ -584,7 +584,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			d.reopen()
 			d.drive()
 			if remedy == "redesign" {
-				id, in = d.action("engine.qa.design.v3")
+				id, in = d.action("engine.qa.design.v4")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 				id, in = d.action("engine.qa.review.rationale.v2")
 				if in.Binding.Task.String() == reviewTask {
@@ -595,7 +595,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			}
 			d.materialize()
 			if remedy == "redesign" {
-				id, in = d.action("engine.qa.execution.v2")
+				id, in = d.action("engine.qa.execution.v3")
 				report := executionFor(in)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			}
@@ -617,7 +617,7 @@ func completeWaivedCandidate(d *validationDriver) {
 	d.reopen()
 	d.drive()
 	for id, in := range d.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v2" {
+		if in.Handler == "engine.qa.execution.v3" {
 			report := executionFor(in)
 			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 		}
@@ -676,7 +676,7 @@ func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) 
 				}
 				scope := scopeInput.Observation.Scopes[0]
 				d.recordExecutionScope(scope.Mode, scope.ApprovedCases...)
-				id, in := d.action("engine.qa.execution.v2")
+				id, in := d.action("engine.qa.execution.v3")
 				report := executionFor(in)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 				d.reopen()
@@ -734,7 +734,7 @@ func TestRuntimeSkipRetainsExactFailedAttemptWithoutGrantingPass(t *testing.T) {
 	if d.run.Validation.Waves[0].Targets[target].Status != "AUTHORIZED_SKIP" || !d.run.NotGuaranteed {
 		t.Fatal("runtime skip was not recorded separately from PASS")
 	}
-	qa, qi := d.action("engine.qa.execution.v2")
+	qa, qi := d.action("engine.qa.execution.v3")
 	report := executionFor(qi)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 	d.reopen()
@@ -814,7 +814,7 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 			dev, di := d.action("engine.development.batch.v4")
-			design, qi := d.action("engine.qa.design.v3")
+			design, qi := d.action("engine.qa.design.v4")
 			manifest := simpleManifest(qi)
 			d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 			id, ri := d.action("engine.qa.review.rationale.v2")
@@ -922,7 +922,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	if d.run.Validation.Candidate != nil || len(d.run.Validation.Waves) != 0 {
 		t.Fatal("one mode waiver bypassed another mode's review")
 	}
-	id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
+	id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
 	manifest := in.Manifest
 	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -932,7 +932,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	approved := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.materialize()
-	id, in = qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewWhitebox)
+	id, in = qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewWhitebox)
 	for _, entry := range in.Whitelist.Entries {
 		if entry.ReviewKind != coverage.ReviewWhitebox {
 			t.Fatal("unapproved waived cases leaked into another mode whitelist")
@@ -949,7 +949,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.reopen()
 	d.drive()
-	id, in = qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
+	id, in = qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
 	m := in.Manifest
 	m.Cases[0].Preconditions += "; initialize current command input"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -995,7 +995,7 @@ func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 	d.reopen()
@@ -1121,7 +1121,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 			d := postwaveRepairOffer(t)
 			repeatRepairQA(d)
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-			qaAction, qaInput := d.action("engine.qa.execution.v2")
+			qaAction, qaInput := d.action("engine.qa.execution.v3")
 			d.receipt(qaAction)
 			d.reopen()
 			d.drive()
@@ -1152,7 +1152,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 					t.Fatal("retry did not retire the actual current selected QA")
 				}
 				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-				fresh, input := d.action("engine.qa.execution.v2")
+				fresh, input := d.action("engine.qa.execution.v3")
 				if fresh == qaAction || input.Binding.Task == qaInput.Binding.Task || input.Binding.Candidate != qaInput.Binding.Candidate {
 					t.Fatal("retry reused the selected execution or changed candidate")
 				}
@@ -1188,7 +1188,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 			var input protocol.ValidationInput
 			if life != "unissued" {
 				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-				action, input = d.action("engine.qa.execution.v2")
+				action, input = d.action("engine.qa.execution.v3")
 				d.receipt(action)
 			}
 			if life == "awaiting-result" {
@@ -1214,7 +1214,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 			}
 			if life == "unissued" {
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.qa.execution.v2" {
+					if in.Handler == "engine.qa.execution.v3" {
 						t.Fatal("unissued QA already has an actual execution")
 					}
 				}
@@ -1256,7 +1256,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 				}
 			}
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-			fresh, freshInput := d.action("engine.qa.execution.v2")
+			fresh, freshInput := d.action("engine.qa.execution.v3")
 			if fresh == action || freshInput.Binding.Task == input.Binding.Task {
 				t.Fatal("fresh QA continued a replaced execution")
 			}
@@ -1296,7 +1296,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 				}
 				repeatRepairQA(d)
 				d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-				qa, input := d.action("engine.qa.execution.v2")
+				qa, input := d.action("engine.qa.execution.v3")
 				d.receipt(qa)
 				ask := d.validationAsk("REPAIR")
 				before := authorizationSnapshot(d)
@@ -1410,7 +1410,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d := postwaveRepairOffer(t)
 	repeatRepairQA(d)
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-	qa, qaInput := d.action("engine.qa.execution.v2")
+	qa, qaInput := d.action("engine.qa.execution.v3")
 	d.receipt(qa)
 	ask := d.validationAsk("REPAIR")
 	event := decideValidation(d, ask, "approve")
@@ -1453,7 +1453,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 			}
 			repeatRepairQA(d)
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
-			qa, _ := d.action("engine.qa.execution.v2")
+			qa, _ := d.action("engine.qa.execution.v3")
 			d.receipt(qa)
 			ask := d.validationAsk("REPAIR")
 			before := authorizationSnapshot(d)
@@ -1596,13 +1596,13 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
-	black, blackInput := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
+	black, blackInput := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
 	blackManifest := simpleManifest(blackInput)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Manifest: &blackManifest})
 	black, blackInput = qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
 	blackReview := approvedReview(blackManifest)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Review: &blackReview})
-	white, whiteInput := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
+	white, whiteInput := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
 	whiteManifest := whiteInput.Manifest
 	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	whiteManifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -1612,8 +1612,8 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	whiteReview := approvedReview(whiteManifest)
 	d.business(white, protocol.ValidationResult{Binding: whiteInput.Binding, Status: "PASS", Review: &whiteReview})
 	d.materialize()
-	black, blackInput = qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewBlackbox)
-	white, whiteInput = qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewWhitebox)
+	black, blackInput = qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewBlackbox)
+	white, whiteInput = qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewWhitebox)
 	d.receipt(white)
 	before := authorizationSnapshot(d)
 	whitePending := d.run.PendingActions[white]
@@ -1627,7 +1627,7 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	if _, obsolete := after.State.ObsoleteActions[white]; obsolete {
 		t.Fatal("unselected QA was retired")
 	}
-	fresh, freshInput := qaModeAction(d, "engine.qa.execution.v2", coverage.ReviewBlackbox)
+	fresh, freshInput := qaModeAction(d, "engine.qa.execution.v3", coverage.ReviewBlackbox)
 	if fresh == black || freshInput.Binding.Task == blackInput.Binding.Task {
 		t.Fatal("selected blackbox QA was not replaced")
 	}
@@ -1655,7 +1655,7 @@ func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v3")
+	design, qi := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(qi)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	id, ri := d.action("engine.qa.review.rationale.v2")

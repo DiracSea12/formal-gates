@@ -15,7 +15,8 @@ import (
 	"formal-gates/internal/engine/worker"
 )
 
-func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
+func nativeProjectCommandSource(t *testing.T, input protocol.WorkerInput, semantic func(int) any) (protocol.Event, string, string) {
+	t.Helper()
 	directory, workspace := nativeToolFixture(t)
 	command := "./checks/project-check --label \"原命令 two words\" ''\nprintf 'next-line\\n'\n"
 	if err := os.Mkdir(filepath.Join(workspace, "checks"), 0755); err != nil {
@@ -27,7 +28,6 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("Project checks:\n"+command), 0600); err != nil {
 		t.Fatal(err)
 	}
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -74,16 +74,7 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 	}
 	read := call(nativeWorkspaceTool, map[string]any{"action": "read", "listing": intOf(listing["listing"]), "entry": entry})
 	number := intOf(read["read"])
-	verification := []string{}
-	for range review.RequiredVerificationChecks() {
-		verification = append(verification, "Explicit fixture evidence for the current project and plan")
-	}
-	checks := []any{}
-	for _, purpose := range []string{protocol.CheckEdit, protocol.CheckFullBuild, protocol.CheckFullTests} {
-		checks = append(checks, map[string]any{"read": number, "from": 2, "to": 3, "purpose": purpose})
-	}
-	batch := map[string]any{"subtasks": []any{map[string]any{"description": "Deliver the public command"}}, "deliverable": "Public command", "publicEntry": "Project command", "artifacts": []any{map[string]any{"read": number}}, "interfaces": "Public arguments", "stateBoundary": "Project source", "risk": "Keep existing behavior", "dod": []any{map[string]any{"description": "Public behavior matches the oracle"}}, "checks": checks, "rollback": "Restore project source", "recovery": "Continue the original task", "handoff": "Original command checks are available", "contextCost": "One capability"}
-	value := map[string]any{"findings": []any{}, "verification": verification, "granularityReview": map[string]any{"reason": "One independent capability", "verificationTier": "FINAL", "batches": []any{batch}}}
+	value := semantic(number)
 	call(nativeSemanticTool, value)
 	if err := os.WriteFile(filepath.Join(directory, "native-source.json"), []byte(`{"sessionId":"original-session","turn":1}`), 0600); err != nil {
 		t.Fatal(err)
@@ -104,22 +95,6 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := event.Result.Review.GranularityReview
-	if err := protocol.ValidateGranularity(plan); err != nil {
-		t.Fatal(err)
-	}
-	for _, check := range plan.Batches[0].Checks {
-		if check.Command != command {
-			t.Fatalf("original command bytes changed: %q", check.Command)
-		}
-	}
-	argv := coverage.ShellCommand(plan.Batches[0].Checks[0].Command)
-	actual := exec.Command(argv[0], argv[1:]...)
-	actual.Dir = workspace
-	out, err := actual.CombinedOutput()
-	if err != nil || string(out) != "<--label>\n<原命令 two words>\n<>\nnext-line\n" {
-		t.Fatalf("original approved invocation: %q %v", out, err)
-	}
 	recovered, err := observeNative(directory, "original-session")
 	if err != nil || !reflect.DeepEqual(source, recovered) {
 		t.Fatal("native recovery changed source", err)
@@ -138,5 +113,80 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 	}
 	if _, err := NativeWorkerResultEvidence("dsh", directory, source); err == nil {
 		t.Fatal("lost original read/tool evidence admitted")
+	}
+	return event, workspace, command
+}
+
+func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	event, workspace, command := nativeProjectCommandSource(t, input, func(number int) any {
+		verification := []string{}
+		for range review.RequiredVerificationChecks() {
+			verification = append(verification, "Explicit fixture evidence for the current project and plan")
+		}
+		checks := []any{}
+		for _, purpose := range []string{protocol.CheckEdit, protocol.CheckFullBuild, protocol.CheckFullTests} {
+			checks = append(checks, map[string]any{"read": number, "from": 2, "to": 3, "purpose": purpose})
+		}
+		batch := map[string]any{"subtasks": []any{map[string]any{"description": "Deliver the public command"}}, "deliverable": "Public command", "publicEntry": "Project command", "artifacts": []any{map[string]any{"read": number}}, "interfaces": "Public arguments", "stateBoundary": "Project source", "risk": "Keep existing behavior", "dod": []any{map[string]any{"description": "Public behavior matches the oracle"}}, "checks": checks, "rollback": "Restore project source", "recovery": "Continue the original task", "handoff": "Original command checks are available", "contextCost": "One capability"}
+		return map[string]any{"findings": []any{}, "verification": verification, "granularityReview": map[string]any{"reason": "One independent capability", "verificationTier": "FINAL", "batches": []any{batch}}}
+	})
+	plan := event.Result.Review.GranularityReview
+	if err := protocol.ValidateGranularity(plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range plan.Batches[0].Checks {
+		if check.Command != command {
+			t.Fatalf("original command bytes changed: %q", check.Command)
+		}
+	}
+	argv := coverage.ShellCommand(plan.Batches[0].Checks[0].Command)
+	actual := exec.Command(argv[0], argv[1:]...)
+	actual.Dir = workspace
+	out, err := actual.CombinedOutput()
+	if err != nil || string(out) != "<--label>\n<原命令 two words>\n<>\nnext-line\n" {
+		t.Fatalf("original approved invocation: %q %v", out, err)
+	}
+}
+
+func TestNativeReadOwnsOriginalQAInvocation(t *testing.T) {
+	for _, kind := range []string{"design", "commands"} {
+		t.Run(kind, func(t *testing.T) {
+			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{RequirementRevision: "confirmed", Generation: 7}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "confirmed", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "the documented behavior", Oracle: "the documented output"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "source", PointID: "point"}}}}
+			if kind == "commands" {
+				input.Handler = "engine.qa.execution.v3"
+				input.Validation.CommandCases = []string{"approved-case"}
+			}
+			event, workspace, original := nativeProjectCommandSource(t, input, func(read int) any {
+				operation := map[string]any{"kind": "SHELL", "command": map[string]any{"read": read, "from": 2, "to": 3}}
+				if kind == "commands" {
+					return map[string]any{"commands": [][]any{{operation}}}
+				}
+				return map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "matches documented output", "operations": []any{operation}, "sharedSteps": []int{1}}}, "sharedSteps": []any{map[string]any{"procedure": "run the original preparation", "operations": []any{operation}}}, "coverage": [][]int{{1}}}
+			})
+			var operation coverage.Operation
+			if kind == "commands" {
+				if !event.Result.Validation.Checkpoint || event.Result.Validation.QACommands[0].CaseID != "approved-case" {
+					t.Fatal("original missing-invocation responsibility changed")
+				}
+				operation = event.Result.Validation.QACommands[0].Operations[0]
+			} else {
+				manifest := event.Result.Validation.Manifest
+				operation = manifest.Cases[0].Operations[0]
+				if manifest.SharedSteps[0].Operations[0].Command != original {
+					t.Fatal("shared preparation original bytes changed")
+				}
+			}
+			if operation.Command != original {
+				t.Fatalf("original recipe bytes changed: %q", operation.Command)
+			}
+			argv := coverage.ShellCommand(operation.Command)
+			actual := exec.Command(argv[0], argv[1:]...)
+			actual.Dir = workspace
+			out, err := actual.CombinedOutput()
+			if err != nil || string(out) != "<--label>\n<原命令 two words>\n<>\nnext-line\n" {
+				t.Fatalf("original QA invocation: %q %v", out, err)
+			}
+		})
 	}
 }

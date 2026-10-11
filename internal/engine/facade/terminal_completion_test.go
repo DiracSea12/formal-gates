@@ -35,7 +35,7 @@ func concludePromoted(t *testing.T) *validationDriver {
 	if pendingPromotionSource(snap.State) != "" {
 		t.Fatalf("rejected promotion left an intent behind: %q", pendingPromotionSource(snap.State))
 	}
-	qa, qi := d.action("engine.qa.execution.v2")
+	qa, qi := d.action("engine.qa.execution.v3")
 	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -112,7 +112,7 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
 		d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 		d.reviewReady()
-		qa, qi := d.action("engine.qa.execution.v2")
+		qa, qi := d.action("engine.qa.execution.v3")
 		gate, gi := d.action("engine.gate.v2")
 		report := executionFor(qi)
 		tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)

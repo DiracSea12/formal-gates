@@ -592,13 +592,13 @@ func approvedReview(m coverage.AcceptanceManifest) coverage.ReviewResult {
 }
 func (d *validationDriver) reviewReady() {
 	d.t.Helper()
-	_, input := d.action("engine.qa.design.v3")
+	_, input := d.action("engine.qa.design.v4")
 	d.reviewReadyWithManifest(simpleManifest(input))
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v3")
+	design, qi := d.action("engine.qa.design.v4")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
 	}
@@ -655,7 +655,7 @@ func nativeExecutionResult(input protocol.ValidationInput, result protocol.Valid
 func TestValidationPipelineAdmitsCanonicalReceiptFacts(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v2")
+	qa, qi := d.action("engine.qa.execution.v3")
 	gate, gi := d.action("engine.gate.v2")
 	if len(d.run.PendingActions) != 2 {
 		t.Fatal("QA and gates were not issued together")
@@ -739,7 +739,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 		Alternatives: []coverage.AlternativeVerification{{SourceID: "SOL-002", Reason: "release policy is document verification", Method: "inspect release policy", Status: coverage.StatusPass, Evidence: "policy contains required supported platform statement"}},
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
-	design, qi := d.action("engine.qa.design.v3")
+	design, qi := d.action("engine.qa.design.v4")
 	dev, di := d.action("engine.development.batch.v4")
 	m := simpleManifest(qi)
 	m.Edges = nil
@@ -756,7 +756,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented records"}})
 	d.materialize()
 	d.materialize()
-	_, input := d.action("engine.qa.execution.v2")
+	_, input := d.action("engine.qa.execution.v3")
 	if len(input.Contract.RequiredSources.Sources) != 2 || len(input.Whitelist.Entries) != 6 {
 		t.Fatalf("source/point edges lost: %+v", input)
 	}
@@ -809,7 +809,7 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 		}
 	}
 	// Carried source bindings are projected after verifying the original result's dispatch.
-	id, input := d.action("engine.qa.design.v3")
+	id, input := d.action("engine.qa.design.v4")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	if d.run.Validation.Sets[coverage.ReviewBlackbox].Manifest.Binding.RequirementRevision != revision {
@@ -824,7 +824,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := request.BaseSnapshot
-	id, input := d.action("engine.qa.design.v3")
+	id, input := d.action("engine.qa.design.v4")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -907,7 +907,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
 	materialize()
 	materialize()
-	id, input = d.action("engine.qa.design.v3")
+	id, input = d.action("engine.qa.design.v4")
 	m = input.Manifest
 	for _, row := range []struct{ id, scenario, test string }{{"white-success", "SUCCESS", "TestSuccess"}, {"white-misuse", "MISUSE", "TestMisuse"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.test, Oracle: "specified input outcome"})
@@ -938,14 +938,14 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 }
 
 func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
-	for _, handler := range []string{"engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			var action string
 			var input protocol.ValidationInput
 			var result protocol.ValidationResult
 			if handler == "engine.qa.review.rationale.v2" {
-				design, designed := d.action("engine.qa.design.v3")
+				design, designed := d.action("engine.qa.design.v4")
 				manifest := simpleManifest(designed)
 				d.business(design, protocol.ValidationResult{Binding: designed.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
@@ -956,11 +956,11 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 				d.reviewReady()
 				action, input = d.action(handler)
 				result = protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-				if handler == "engine.qa.execution.v2" {
+				if handler == "engine.qa.execution.v3" {
 					report := executionFor(input)
 					result.Execution, result.Tool, result.Environment = &report, "app-v1", "isolated-project"
 				} else {
-					qa, qi := d.action("engine.qa.execution.v2")
+					qa, qi := d.action("engine.qa.execution.v3")
 					report := executionFor(qi)
 					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 				}
@@ -975,7 +975,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 			if current.Binding != input.Binding {
 				t.Fatal("carry rewrote the issued work binding")
 			}
-			if handler == "engine.qa.execution.v2" {
+			if handler == "engine.qa.execution.v3" {
 				before, _ := json.Marshal(input.Execution)
 				after, _ := json.Marshal(current.Execution)
 				if string(before) != string(after) {
@@ -1021,7 +1021,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 		t.Run(string(choice), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			gate, gi := d.action("engine.gate.v2")
 			report := executionFor(qi)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
@@ -1453,7 +1453,7 @@ func (d *validationDriver) assertRequiredValidationComplete(scope coverage.Scope
 		d.t.Fatalf("required validation did not qualify for promotion: scope=%s status=%s next=%+v", wave.Scope, wave.Status, d.run.Next)
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution.v2" || input.Handler == "engine.gate.v2" {
+		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v2" {
 			d.t.Fatal("completed validation issued an additional QA or gate")
 		}
 	}

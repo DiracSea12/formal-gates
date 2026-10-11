@@ -49,7 +49,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v3", "engine.readiness.plan.v4"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v4", "engine.readiness.plan.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -137,7 +137,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *testing.T) {
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", ContentDigest: "confirmed-digest", Content: "Complete confirmed requirement body.", Requirements: []requirement.FrozenRequirement{{ID: "REQ-001", Title: "behavior", Requirement: "required behavior"}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "qa-design"}}}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v3"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
 			if handler == "engine.review.worker.v2" {
@@ -230,7 +230,7 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.gate.v2", "engine.qa.execution.v2"} {
+	for _, handler := range []string{"engine.gate.v2", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -376,7 +376,7 @@ func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -422,7 +422,7 @@ func TestQAExecutionMaterialSelectsCurrentModeAndKeepsSharedEvidenceRules(t *tes
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
 		t.Run(string(mode), func(t *testing.T) {
 			input := semanticInput()
-			input.Handler = "engine.qa.execution.v2"
+			input.Handler = "engine.qa.execution.v3"
 			input.Pending.AttemptID = "attempt"
 			input.RequirementDocument.Content = "Confirmed scope"
 			input.Validation.Manifest.Binding.ReviewKind = mode

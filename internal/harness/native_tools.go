@@ -918,7 +918,7 @@ func (t *nativeWorkspaceTools) submitSemantics(raw json.RawMessage) (any, error)
 		return nil, err
 	}
 	if t.material != nil {
-		if err := worker.ValidateSemanticBody(t.material.Input, body); err != nil {
+		if err := worker.ValidateSemanticBody(t.material.Input, body, workerLocationFacts(t.facts)); err != nil {
 			return nil, err
 		}
 	}

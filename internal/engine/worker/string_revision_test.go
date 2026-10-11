@@ -136,7 +136,11 @@ func TestStringRevisionSchemaBindsEachOriginalArray(t *testing.T) {
 	checkArray := func(t *testing.T, array map[string]any, want []int) {
 		t.Helper()
 		branches := array["items"].(map[string]any)["anyOf"].([]any)
-		if len(branches) != 2 || !reflect.DeepEqual(branches[1].(map[string]any)["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) || array["description"] == "" {
+		source := branches[1].(map[string]any)
+		if !reflect.DeepEqual(source["required"], []any{"read", "from", "to"}) {
+			t.Fatal("original read source range missing", source)
+		}
+		if len(branches) != 3 || !reflect.DeepEqual(branches[2].(map[string]any)["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) || array["description"] == "" {
 			t.Fatal("element choices are not bound to the original array", array)
 		}
 	}

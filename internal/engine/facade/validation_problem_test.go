@@ -28,7 +28,7 @@ func TestAcceptedAdjudicationRemainsCorrectable(t *testing.T) {
 // C REQ-001 allows unchanged shared instructions to retain their approval.
 func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	m := simpleManifest(in)
 	m.SharedSteps = []coverage.SharedStep{{ID: "setup", Procedure: "initialize a clean project once"}}
 	for i := range m.Cases {
@@ -44,7 +44,7 @@ func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	sg := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "case clarification", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: sg.ID, Decision: "ACCEPT", Reason: "clarify this case only", AffectedCases: []string{"invalid"}}}})
 	d.drive()
-	id, in = d.action("engine.qa.design.v3")
+	id, in = d.action("engine.qa.design.v4")
 	m = in.Manifest
 	m.Cases[1].Oracle = "rejects invalid input with the documented diagnostic"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -79,7 +79,7 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-	id, in = d.action("engine.qa.execution.v2")
+	id, in = d.action("engine.qa.execution.v3")
 	r := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	d.drive()
@@ -140,7 +140,7 @@ func TestAdjudicationRevisionConflict(t *testing.T) {
 func gateImpactBoundary(t *testing.T) *validationDriver {
 	d := newValidationDriver(t, "blackbox", "quality", "security")
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	r := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 	id, in = d.gateAction("security")

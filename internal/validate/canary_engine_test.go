@@ -76,7 +76,7 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 		if material.Input.RunID != "canary" || material.Input.Provider != "codex" || material.Input.Pending.ActionID == "" || !strings.Contains(material.Input.RequirementDocument.Content, "The installed workflow must complete its verified route.") || material.Input.RequirementDocument.ContentDigest == "" || !strings.Contains(material.Prompt, "workspace requirement operation reads the complete original confirmed document") || len(material.ResultSchema) == 0 {
 			t.Fatalf("worker material lost complete production context: %s", path)
 		}
-		if material.Input.Handler == "engine.qa.execution.v2" {
+		if material.Input.Handler == "engine.qa.execution.v3" {
 			in := material.Input.Validation
 			if len(in.ExecutionFacts) != 2 {
 				t.Fatalf("execution omitted real native case facts: %+v", in)

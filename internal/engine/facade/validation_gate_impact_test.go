@@ -62,7 +62,7 @@ func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
 						}
 					}
 				}
-				d.action("engine.qa.execution.v2") // Independent QA is eligible while this gate awaits a judgment.
+				d.action("engine.qa.execution.v3") // Independent QA is eligible while this gate awaits a judgment.
 				event := protocol.Event{ID: d.eventID(), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: choice, Reason: "Independently checked authorization changes against the security gate's original responsibility"}}}
 				accepted := d.submit(event)
 				before, _ := d.f.engine.Load()
@@ -100,7 +100,7 @@ func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
 						}
 					}
 				}
-				id, in := d.action("engine.qa.execution.v2")
+				id, in := d.action("engine.qa.execution.v3")
 				r := executionFor(in)
 				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r}))
 				d.drive()

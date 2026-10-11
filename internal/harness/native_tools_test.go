@@ -837,7 +837,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	for _, fact := range resumed.facts {
 		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v3", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","files":[{"read":%d}],"testFile":1,"testSymbol":2}],"coverage":[]}`, originalRead))
 	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
 	if err != nil {

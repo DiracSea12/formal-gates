@@ -33,7 +33,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
-			id, in := d.action("engine.qa.design.v3")
+			id, in := d.action("engine.qa.design.v4")
 			m := simpleManifest(in)
 			for i := range m.Cases {
 				argument := "valid"
@@ -69,7 +69,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 			}
-			id, in = wait("engine.qa.execution.v2")
+			id, in = wait("engine.qa.execution.v3")
 			report := executionFor(in)
 			tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})

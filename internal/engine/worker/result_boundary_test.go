@@ -32,7 +32,7 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 }
 
 func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v3", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.repair.verify.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -64,7 +64,7 @@ func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
 
 func TestExecutionInabilityRetainsActualCompletedComparisons(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.qa.execution.v2"
+	input.Handler = "engine.qa.execution.v3"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "new"}, {ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "two", CaseID: "remaining"}}}
 	input.Validation.RequiredCases = []string{"new", "remaining"}
@@ -95,7 +95,7 @@ func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T
 			t.Fatalf("invalid body accepted: %s", raw)
 		}
 	}
-	input.Handler = "engine.qa.execution.v2"
+	input.Handler = "engine.qa.execution.v3"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 	input.Validation.PendingCases = []string{"new"}

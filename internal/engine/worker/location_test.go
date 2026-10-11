@@ -12,7 +12,7 @@ import (
 )
 
 func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.gate.v2", "engine.qa.execution.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.gate.v2", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -28,7 +28,7 @@ func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
 					body.Verification = append(body.Verification, "Original requirement evidence inspected")
 				}
 				value = body
-			} else if handler == "engine.qa.execution.v2" {
+			} else if handler == "engine.qa.execution.v3" {
 				input.Validation.Execution = &coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull}
 				input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 				value = ExecutionJudgments{Execution: Execution{Records: []*Observation{}}, Findings: []Finding{finding}}

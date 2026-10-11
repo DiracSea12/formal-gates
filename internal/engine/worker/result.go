@@ -35,7 +35,7 @@ type Design struct {
 	Checkpoint bool `json:"checkpoint,omitempty"`
 }
 type CommandBindings struct {
-	Commands [][]coverage.Operation `json:"commands"`
+	Commands [][]OperationChange `json:"commands"`
 }
 
 type ExecutionJudgments struct {
@@ -301,7 +301,7 @@ func DecodeResultWithPaths(input protocol.WorkerInput, eventID protocol.EventID,
 }
 
 func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID, raw []byte, originalDigest string, paths []string, locationFacts []LocationFact) (protocol.Event, error) {
-	value, interruption, err := decodeRoleBody(input, raw)
+	value, interruption, err := decodeRoleBody(input, raw, locationFacts)
 	if err != nil {
 		return protocol.Event{}, err
 	}
@@ -492,7 +492,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				return protocol.Event{}, err
 			}
 			body.Manifest, body.DesignChange = &manifest, &change
-			if input.Handler == "engine.qa.design.v3" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v4" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				if paths == nil {
 					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
 				}
@@ -686,14 +686,14 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return &Repair{}, nil
 	case "engine.merge.resolve.v3":
 		return &ConflictResolution{}, nil
-	case "engine.qa.design.v3":
+	case "engine.qa.design.v4":
 		if len(input.Validation.AffectedCases) > 0 {
 			return &CaseRevisions{}, nil
 		}
 		return &Design{}, nil
 	case "engine.qa.review.rationale.v2":
 		return &CaseReview{}, nil
-	case "engine.qa.execution.v2":
+	case "engine.qa.execution.v3":
 		if len(input.Validation.CommandCases) > 0 {
 			return &CommandBindings{}, nil
 		}
@@ -709,7 +709,11 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 	}
 }
 
-func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, string, error) {
+func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]LocationFact) (decodedResult, string, error) {
+	var facts []LocationFact
+	if len(locationFacts) > 0 {
+		facts = locationFacts[0]
+	}
 	schema, err := completedSchema(input)
 	if err != nil {
 		return decodedResult{}, "", err
@@ -739,7 +743,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		if strings.TrimSpace(text) == "" {
 			return decodedResult{}, "", fmt.Errorf("interruption requires an actual reason")
 		}
-		if input.Handler == "engine.qa.execution.v2" && input.Validation != nil {
+		if input.Handler == "engine.qa.execution.v3" && input.Validation != nil {
 			var partial ExecutionInterruption
 			if err := decodeObject(raw, &partial); err != nil {
 				return decodedResult{}, "", err
@@ -794,13 +798,13 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 				v.Resolution.Paths = append(v.Resolution.Paths, conflict.Path)
 			}
 		case *Design:
-			manifest, err := assembleDesign(input, body)
+			manifest, err := assembleDesign(input, body, facts)
 			if err != nil {
 				return result, "", err
 			}
 			v.Manifest, v.Checkpoint = manifest, body.Checkpoint
 		case *CaseRevisions:
-			manifest, err := reviseCases(input.Validation, body)
+			manifest, err := reviseCases(input.Validation, body, facts)
 			if err != nil {
 				return result, "", err
 			}
@@ -813,12 +817,13 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 			if len(body.Commands) != len(input.Validation.CommandCases) {
 				return result, "", fmt.Errorf("commands must follow exactly the issued missing-command cases")
 			}
-			for index, operations := range body.Commands {
+			for index, changes := range body.Commands {
+				operations, err := reviseOperations(nil, changes, facts)
+				if err != nil {
+					return result, "", err
+				}
 				if len(operations) == 0 {
 					return result, "", fmt.Errorf("a missing invocation requires actual operations")
-				}
-				if err := coverage.ValidateOperations(operations); err != nil {
-					return result, "", err
 				}
 				v.QACommands = append(v.QACommands, protocol.QACaseOperations{CaseID: input.Validation.CommandCases[index], Operations: operations})
 			}
@@ -986,7 +991,7 @@ func selectedTestRef(item Case, files []string, original string, facts []Locatio
 }
 
 // ValidateSemanticBody checks the issued role body before publishing tool evidence.
-func ValidateSemanticBody(input protocol.WorkerInput, raw []byte) error {
-	_, _, err := decodeRoleBody(input, raw)
+func ValidateSemanticBody(input protocol.WorkerInput, raw []byte, facts ...[]LocationFact) error {
+	_, _, err := decodeRoleBody(input, raw, facts...)
 	return err
 }

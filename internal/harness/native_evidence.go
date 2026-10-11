@@ -40,11 +40,15 @@ func NativeWorkerResultEvidence(provider, directory string, source map[string]an
 	if err != nil {
 		return worker.ResultSource{}, err
 	}
-	result := worker.ResultSource{Answer: answer, Digest: digest, Identity: identity}
+	return worker.ResultSource{Answer: answer, Digest: digest, Identity: identity, LocationFacts: workerLocationFacts(facts)}, nil
+}
+
+func workerLocationFacts(facts []nativeToolFact) []worker.LocationFact {
+	var result []worker.LocationFact
 	for _, fact := range facts {
-		result.LocationFacts = append(result.LocationFacts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
+		result = append(result, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	return result, nil
+	return result
 }
 
 func nativeToolFacts(directory string) ([]nativeToolFact, error) {

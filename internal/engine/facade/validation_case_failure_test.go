@@ -23,7 +23,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"},
 			}
 			d.reviewReady()
-			id, in := d.action("engine.qa.execution.v2")
+			id, in := d.action("engine.qa.execution.v3")
 			report := executionFor(in)
 			for i := range report.Records {
 				report.Records[i].Result = coverage.ExecutedFail
@@ -163,7 +163,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				}
 				for action, input := range d.run.ValidationInputs {
 					switch input.Handler {
-					case "engine.qa.execution.v2":
+					case "engine.qa.execution.v3":
 						r := executionFor(input)
 						d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &r}))
 					case "engine.gate.v2":
@@ -194,7 +194,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-	action, input = d.action("engine.qa.execution.v2")
+	action, input = d.action("engine.qa.execution.v3")
 	execution := executionFor(input)
 	d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution}))
 	d.drive()
@@ -240,7 +240,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 
 func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -251,7 +251,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	d.materialize()
 	d.materialize()
-	id, in = d.action("engine.qa.design.v3")
+	id, in = d.action("engine.qa.design.v4")
 	m = in.Manifest
 	for _, item := range []struct{ id, scenario string }{{"normal", "SUCCESS"}, {"invalid", "MISUSE"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: "white-" + item.id, Scenario: item.scenario, Mode: coverage.CaseWhitebox, TestRef: "app_test.go::Test" + map[string]string{"normal": "Normal", "invalid": "Invalid"}[item.id], Oracle: "specified input outcome"})
@@ -270,7 +270,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d.materialize()
 	actions := map[coverage.ReviewKind]string{}
 	for action, input := range d.run.ValidationInputs {
-		if input.Handler != "engine.qa.execution.v2" {
+		if input.Handler != "engine.qa.execution.v3" {
 			continue
 		}
 		report := executionFor(input)
@@ -315,7 +315,7 @@ func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	report := executionFor(in)
 	report.Records[0].Result = coverage.ExecutedFail
 	report.Records[0].Comparison = "actual input outcome violates requirement"

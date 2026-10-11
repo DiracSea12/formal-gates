@@ -99,7 +99,7 @@ func TestDisposedValidationTargetRetiresEveryRetryDelivery(t *testing.T) {
 					t.Fatal("disposed task was reissued")
 				}
 			}
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			report := executionFor(qi)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			d.reopen()

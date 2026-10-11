@@ -1001,6 +1001,132 @@ func TestCursorAbsentModelOptionsUseNativeSelection(t *testing.T) {
 	}
 }
 
+func TestCursorOriginalInvocationCarriesSavedStore(t *testing.T) {
+	for _, completed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("completed=%t", completed), func(t *testing.T) {
+			s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "native-default", "", true)
+			action := filepath.Join(filepath.Dir(s.directory), "action")
+			s.directory = filepath.Join(action, "original")
+			if err := os.MkdirAll(s.directory, 0755); err != nil {
+				t.Fatal(err)
+			}
+			delete(s.request, "model")
+			delete(s.request, "reasoning_effort")
+			materialPath := filepath.Join(filepath.Dir(action), "material.json")
+			input := protocol.WorkerInput{Handler: "engine.gate.v2", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+			if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: input}); err != nil {
+				t.Fatal(err)
+			}
+			s.request["engine"] = map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": input.Pending.ActionID, "attemptId": input.Pending.AttemptID}}
+			if !completed {
+				s.peer.Exit = 7
+			}
+			s.save(t)
+			originalDirectory := s.directory
+			if completed {
+				if source, err := cursorExecute(s.request, s.directory, false); err != nil {
+					t.Fatalf("original completion: %v %v", source, err)
+				}
+			} else {
+				binary, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeRequest(t, s.directory, map[string]any{"kind": "native", "argv": []string{binary, "-test.run=^TestCursorNativeInvocation$"}, "cwd": s.workspace, "stdin": "", "environment": map[string]any{"FORMAL_GATES_CURSOR_INVOCATION": s.directory}, "engine": s.request["engine"]})
+				supervisor := exec.Command(binary, "-test.run=^TestCursorInvocationSupervisor$")
+				supervisor.Env = append(os.Environ(), "FORMAL_GATES_CURSOR_SUPERVISOR="+s.directory)
+				if output, err := supervisor.CombinedOutput(); err != nil {
+					t.Fatalf("original failed supervisor: %v %s", err, output)
+				}
+				body, digest, identity, err := NativeFailureEvidence("cursor", s.directory)
+				if err != nil || len(body) == 0 || digest == "" || identity != s.peer.UUID {
+					t.Fatalf("original failed invocation proof: %q %q %s %v", identity, digest, body, err)
+				}
+				t.Logf("original failed invocation identity=%s digest=%s failure=%s receipt=%v", identity, digest, body, readReceipt(t, s.directory))
+			}
+			identity, err := NativeStartEvidence("cursor", originalDirectory)
+			if err != nil || identity != s.peer.UUID {
+				t.Fatalf("original ACK: %q %v", identity, err)
+			}
+			s.resume(t)
+			delete(s.request, "identity")
+			delete(s.request, "native_store")
+			impl, err := nativeImplementationFor("cursor")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if completed {
+				wrong := map[string]any{"provider": "cursor", "engine": s.request["engine"], "identity": "11111111-1111-4111-8111-111111111111"}
+				if err := inheritNativeIdentity(s.directory, wrong, impl); err == nil || !strings.Contains(err.Error(), "differs from original source identity") {
+					t.Fatalf("different requested identity: %v", err)
+				}
+				if err := inheritNativeIdentity(s.directory, s.request, impl); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := os.Stat(filepath.Join(originalDirectory, "source.json")); !os.IsNotExist(err) {
+					t.Fatal("failed process published a completed source")
+				}
+				if string(readBytes(t, s.peer.Store)) != s.peer.UUID+":initialized" {
+					t.Fatal("failed original process changed its initialized context")
+				}
+				s.peer.ExpectedContext = s.peer.UUID + ":initialized"
+			}
+			if !completed {
+				if err := inheritNativeIdentity(s.directory, s.request, impl); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if s.request["identity"] != s.peer.UUID || s.request["native_store"] != s.peer.Store || cursorCalls(t, s) != 2 {
+				t.Fatalf("original invocation carrier: %v", s.request)
+			}
+			s.peer.Exit = 0
+			s.save(t)
+			continued, err := cursorExecute(s.request, s.directory, false)
+			if err != nil || continued["identity"] != identity || continued["native_store"] != s.peer.Store || getOf(continued["selection"], "model") != "native-default" || cursorCalls(t, s) != 3 {
+				t.Fatalf("original context continuation: %v %v", continued, err)
+			}
+			if err := cursorVerifySource(s.directory, continued); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("continued identity=%s store=%s selection=%v calls=%d context=%s", continued["identity"], continued["native_store"], continued["selection"], cursorCalls(t, s), readBytes(t, s.peer.Store))
+		})
+	}
+}
+
+func cursorInvocationServices(directory string) ExecutionServices {
+	return ExecutionServices{
+		Admit: func(owned string, request map[string]any) (func(), error) {
+			original, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+			if err != nil {
+				return nil, err
+			}
+			if owned != directory || !valuesEqual(request["engine"], getOf(original, "engine")) {
+				return nil, fmt.Errorf("Cursor invocation admission differs from original action/attempt")
+			}
+			return nil, nil
+		},
+		ClaimMessage:   func(string, string, bool) (*protocol.TaskMessage, error) { return nil, nil },
+		ReceiptMessage: func(string, protocol.TaskMessage) error { return nil },
+	}
+}
+
+func TestCursorNativeInvocation(t *testing.T) {
+	directory := os.Getenv("FORMAL_GATES_CURSOR_INVOCATION")
+	if directory == "" {
+		return
+	}
+	os.Exit(RunNative(directory, os.Stderr, cursorInvocationServices(directory)))
+}
+
+func TestCursorInvocationSupervisor(t *testing.T) {
+	directory := os.Getenv("FORMAL_GATES_CURSOR_SUPERVISOR")
+	if directory == "" {
+		return
+	}
+	os.Exit(Supervise(directory, cursorInvocationServices(directory)))
+}
+
 // Credential-store selection is native input, independent of the caller's
 // ambient environment when a captured invocation is resumed.
 func TestCursorCredentialStoreRemainsBound(t *testing.T) {

@@ -300,17 +300,17 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	if p.GranularityReview != nil && role != "engine.repair.v5" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
-	if p.DesignChange != nil && role != "engine.qa.design.v3" {
+	if p.DesignChange != nil && role != "engine.qa.design.v4" {
 		return validationError("only QA design can change its manifest")
 	}
-	if len(p.QACommands) > 0 && role != "engine.qa.execution.v2" {
+	if len(p.QACommands) > 0 && role != "engine.qa.execution.v3" {
 		return validationError("only QA execution can bind a missing invocation")
 	}
-	if p.Checkpoint && role != "engine.qa.design.v3" && role != "engine.qa.execution.v2" {
+	if p.Checkpoint && role != "engine.qa.design.v4" && role != "engine.qa.execution.v3" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
 	mode := s.validationMode(b.Task)
-	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution.v2" && p.Checkpoint && p.Execution != nil) {
+	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution.v3" && p.Checkpoint && p.Execution != nil) {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
@@ -372,7 +372,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 
 		}
-	case "engine.qa.design.v3":
+	case "engine.qa.design.v4":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}
@@ -448,7 +448,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if p.Review.Verdict() == coverage.StatusFail {
 			set.reopen(nil)
 		}
-	case "engine.qa.execution.v2", "engine.gate.v2":
+	case "engine.qa.execution.v3", "engine.gate.v2":
 		w := s.validationWave(b.WaveID)
 		_, repairTarget := s.repairGateTarget(b.Task)
 		if w == nil || w.Status != "COLLECTING" && repairTarget == nil && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
@@ -458,7 +458,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if target == nil || target.Status == "DISPOSED" || target.Status == "PASS" || target.Status == "FAIL" {
 			return validationError("validation target is already settled or unknown")
 		}
-		if role == "engine.qa.execution.v2" {
+		if role == "engine.qa.execution.v3" {
 			if len(p.QACommands) > 0 {
 				if count != 1 || !p.Checkpoint || p.Status != "PASS" || len(p.Findings) != 0 {
 					return validationError("QA command binding records only a checkpoint, not a verdict")
@@ -494,7 +494,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}{w.ID, b.Task.String(), i, raw})
 			s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), Raw: &raw}
 		}
-		if role == "engine.qa.execution.v2" {
+		if role == "engine.qa.execution.v3" {
 			for _, row := range target.Execution.Records {
 				if row.Result != coverage.ExecutedFail {
 					continue

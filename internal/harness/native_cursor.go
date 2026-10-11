@@ -80,6 +80,17 @@ func cursorConfiguredBinding(config settings.Values) (map[string]any, error) {
 	return binding, nil
 }
 func cursorValidateBinding(binding any) error { return validateNativeBinding(binding, "cursor") }
+func cursorInheritInvocation(directory string, request map[string]any, source any) error {
+	if source == nil {
+		var err error
+		source, err = readJSONFile(filepath.Join(directory, "identity.json"))
+		if err != nil {
+			return err
+		}
+	}
+	request["native_store"] = getOf(source, "native_store")
+	return nil
+}
 func cursorVerifySource(directory string, source any) error {
 	if err := verifyNativeSource(directory, source, "cursor"); err != nil {
 		return err

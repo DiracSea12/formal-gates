@@ -274,17 +274,14 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 					selected = input.ApprovedChecks[check.Reuse-1]
 				} else {
 					if check.Read != 0 {
-						if check.Command != "" || check.Read < 1 || check.Read > len(facts) || facts[check.Read-1].Kind != "read" {
+						if check.Command != "" {
 							return nil, fmt.Errorf("check requires an original published read without an authored command")
 						}
-						lines := strings.SplitAfter(string(facts[check.Read-1].Content), "\n")
-						if lines[len(lines)-1] == "" {
-							lines = lines[:len(lines)-1]
+						var err error
+						selected.Command, err = sourceReadText(facts, check.Read, check.From, check.To)
+						if err != nil {
+							return nil, err
 						}
-						if check.From < 1 || check.To < check.From || check.To > len(lines) {
-							return nil, fmt.Errorf("check selects source lines from the original read")
-						}
-						selected.Command = strings.Join(lines[check.From-1:check.To], "")
 					} else if check.From != 0 || check.To != 0 {
 						return nil, fmt.Errorf("check range requires an original published read")
 					}
@@ -317,7 +314,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 	return result, nil
 }
 
-func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error) {
+func assembleDesign(input protocol.WorkerInput, value *Design, facts []LocationFact) (*Manifest, error) {
 	issued := input.Validation.Manifest
 	caseIDs, stepIDs := []string{}, []string{}
 	for _, item := range issued.Cases {
@@ -339,10 +336,7 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 	}
 	result := &Manifest{Replace: value.Replace, RemoveCases: removedCases, RemoveSharedSteps: removedSteps, Coverage: map[string][]string{}}
 	for index, item := range value.SharedSteps {
-		id := contentID("shared", struct {
-			Binding any
-			Item    any
-		}{issued.Binding, item}, index)
+		id := ""
 		if item.Step != 0 {
 			selected, err := selectIDs([]int{item.Step}, stepIDs[:len(issued.SharedSteps)])
 			if err != nil {
@@ -354,11 +348,24 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 		if item.Step != 0 {
 			original := issued.SharedSteps[item.Step-1]
 			step = SharedStep{ID: original.ID, Artifacts: slices.Clone(original.Artifacts), Independent: original.Independent, Procedure: original.Procedure, Operations: slices.Clone(original.Operations)}
-			if err := applySharedStepChange(&step, *item.changes); err != nil {
+			if err := applySharedStepChange(&step, *item.changes, facts); err != nil {
 				return nil, err
 			}
-		} else if item.Procedure == "" {
-			return nil, fmt.Errorf("new shared step requires a procedure")
+		} else {
+			if item.Procedure == "" {
+				return nil, fmt.Errorf("new shared step requires a procedure")
+			}
+			if err := applySharedStepChange(&step, *item.changes, facts); err != nil {
+				return nil, err
+			}
+		}
+		if item.Step == 0 {
+			item.Operations, item.Artifacts = step.Operations, step.Artifacts
+			id = contentID("shared", struct {
+				Binding any
+				Item    any
+			}{issued.Binding, item}, index)
+			step.ID = id
 		}
 		result.SharedSteps = append(result.SharedSteps, step)
 		if !slices.Contains(stepIDs, id) {
@@ -370,10 +377,7 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 		selectedCaseIDs = nil
 	}
 	for index, item := range value.Cases {
-		id := contentID("case", struct {
-			Binding any
-			Item    any
-		}{issued.Binding, item}, index)
+		id := ""
 		if item.Case != 0 {
 			selected, err := selectIDs([]int{item.Case}, caseIDs)
 			if err != nil {
@@ -389,11 +393,24 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 		if item.Case != 0 {
 			original := issued.Cases[item.Case-1]
 			entry = Case{CaseID: original.CaseID, Operations: slices.Clone(original.Operations), Scenario: original.Scenario, SharedSteps: slices.Clone(original.SharedSteps), PublicEntry: original.PublicEntry, Preconditions: original.Preconditions, Steps: original.Steps, Oracle: original.Oracle}
-			if err := applyCaseChange(&entry, *item.changes, stepIDs); err != nil {
+			if err := applyCaseChange(&entry, *item.changes, stepIDs, facts); err != nil {
 				return nil, err
 			}
-		} else if item.Scenario == "" || item.Oracle == "" {
-			return nil, fmt.Errorf("new case requires a scenario and oracle")
+		} else {
+			if item.Scenario == "" || item.Oracle == "" {
+				return nil, fmt.Errorf("new case requires a scenario and oracle")
+			}
+			if err := applyCaseChange(&entry, *item.changes, stepIDs, facts); err != nil {
+				return nil, err
+			}
+		}
+		if item.Case == 0 {
+			item.Operations = entry.Operations
+			id = contentID("case", struct {
+				Binding any
+				Item    any
+			}{issued.Binding, item}, index)
+			entry.CaseID = id
 		}
 		result.Cases = append(result.Cases, entry)
 		if !slices.Contains(selectedCaseIDs, id) {
@@ -423,4 +440,19 @@ func contentID(kind string, value any, index int) string {
 	}{value, index})
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("%s-%x", kind, sum[:12])
+}
+
+// sourceReadText preserves the exact bytes in a published read's line range.
+func sourceReadText(facts []LocationFact, read, from, to int) (string, error) {
+	if read < 1 || read > len(facts) || facts[read-1].Kind != "read" {
+		return "", fmt.Errorf("source requires an original published read")
+	}
+	lines := strings.SplitAfter(string(facts[read-1].Content), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if from < 1 || to < from || to > len(lines) {
+		return "", fmt.Errorf("source selects lines from the original read")
+	}
+	return strings.Join(lines[from-1:to], ""), nil
 }

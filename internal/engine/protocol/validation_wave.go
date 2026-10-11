@@ -545,7 +545,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		handler := "engine.gate.v2"
 		part := gate
 		if mode != "" {
-			handler = "engine.qa.execution.v2"
+			handler = "engine.qa.execution.v3"
 			part = string(mode)
 			target.Mode = mode
 			target.Kind = "QA"

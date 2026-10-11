@@ -12,7 +12,7 @@ import (
 
 func TestPortableZCodeLifecycleUsesIssuedToolCallIdentity(t *testing.T) {
 	root := t.TempDir()
-	input := protocol.WorkerInput{RunID: "portable-zcode", Provider: host.ZCode, Handler: "engine.qa.execution.v2", Pending: protocol.PendingAction{ActionID: "issued-action"}}
+	input := protocol.WorkerInput{RunID: "portable-zcode", Provider: host.ZCode, Handler: "engine.qa.execution.v3", Pending: protocol.PendingAction{ActionID: "issued-action"}}
 	payload, err := portableLifecyclePayload(root, input)
 	if err != nil {
 		t.Fatal(err)

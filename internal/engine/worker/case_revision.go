@@ -40,17 +40,21 @@ type OperationChange struct {
 	Reuse   *int                    `json:"reuse,omitempty"`
 	Kind    *coverage.OperationKind `json:"kind,omitempty"`
 	Argv    *[]StringChange         `json:"argv,omitempty"`
-	Command *string                 `json:"command,omitempty"`
-	Stdin   *string                 `json:"stdin,omitempty"`
+	Command *StringChange           `json:"command,omitempty"`
+	Stdin   *StringChange           `json:"stdin,omitempty"`
 }
 
-// StringChange is either a newly authored string or an original field position.
+// StringChange selects original field positions or read bytes, or authors new text.
 type StringChange struct {
 	Reuse *int `json:"reuse,omitempty"`
+	Read  *int `json:"read,omitempty"`
+	From  *int `json:"from,omitempty"`
+	To    *int `json:"to,omitempty"`
 	value string
 }
 
 func (change *StringChange) UnmarshalJSON(raw []byte) error {
+	*change = StringChange{}
 	if len(raw) > 0 && raw[0] == '"' {
 		return json.Unmarshal(raw, &change.value)
 	}
@@ -58,29 +62,42 @@ func (change *StringChange) UnmarshalJSON(raw []byte) error {
 	if err := decodeObject(raw, (*body)(change)); err != nil {
 		return err
 	}
-	if change.Reuse == nil {
-		return fmt.Errorf("string selection requires an original field position")
+	if change.Reuse != nil {
+		if *change.Reuse < 1 || change.Read != nil || change.From != nil || change.To != nil {
+			return fmt.Errorf("string reuse selects only an original field position")
+		}
+	} else if change.Read == nil || change.From == nil || change.To == nil || *change.Read < 1 || *change.From < 1 || *change.To < *change.From {
+		return fmt.Errorf("string source requires read and an inclusive from/to line range")
 	}
 	return nil
 }
-
 func (change StringChange) MarshalJSON() ([]byte, error) {
-	if change.Reuse != nil {
+	if change.Reuse != nil || change.Read != nil {
 		type body StringChange
 		return json.Marshal(body(change))
 	}
 	return json.Marshal(change.value)
 }
 
-func reviseStrings(original []string, changes []StringChange) ([]string, error) {
+func (change StringChange) text(original []string, facts []LocationFact) (string, error) {
+	if change.Reuse != nil {
+		if *change.Reuse < 1 || *change.Reuse > len(original) {
+			return "", fmt.Errorf("string selection is outside original field")
+		}
+		return original[*change.Reuse-1], nil
+	}
+	if change.Read != nil {
+		return sourceReadText(facts, *change.Read, *change.From, *change.To)
+	}
+	return change.value, nil
+}
+
+func reviseStrings(original []string, changes []StringChange, facts []LocationFact) ([]string, error) {
 	result := make([]string, 0, len(changes))
 	for _, change := range changes {
-		value := change.value
-		if change.Reuse != nil {
-			if *change.Reuse < 1 || *change.Reuse > len(original) {
-				return nil, fmt.Errorf("string selection is outside original field")
-			}
-			value = original[*change.Reuse-1]
+		value, err := change.text(original, facts)
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, value)
 	}
@@ -89,7 +106,7 @@ func reviseStrings(original []string, changes []StringChange) ([]string, error) 
 
 // An explicit sequence supplies its final order; omitted original positions
 // are removed. Reused operations retain omitted fields applicable to their kind.
-func reviseOperations(original []coverage.Operation, changes []OperationChange) ([]coverage.Operation, error) {
+func reviseOperations(original []coverage.Operation, changes []OperationChange, facts []LocationFact) ([]coverage.Operation, error) {
 	result := make([]coverage.Operation, 0, len(changes))
 	for _, change := range changes {
 		item := coverage.Operation{}
@@ -112,17 +129,25 @@ func reviseOperations(original []coverage.Operation, changes []OperationChange) 
 		}
 		if change.Argv != nil {
 			var err error
-			item.Argv, err = reviseStrings(item.Argv, *change.Argv)
+			item.Argv, err = reviseStrings(item.Argv, *change.Argv, facts)
 			if err != nil {
 				return nil, err
 			}
 		}
 		item.Argv = slices.Clone(item.Argv)
 		if change.Command != nil {
-			item.Command = *change.Command
+			var err error
+			item.Command, err = change.Command.text(nil, facts)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if change.Stdin != nil {
-			item.Stdin = *change.Stdin
+			var err error
+			item.Stdin, err = change.Stdin.text(nil, facts)
+			if err != nil {
+				return nil, err
+			}
 		}
 		result = append(result, item)
 	}
@@ -141,7 +166,7 @@ func revisionSharedSteps(input *protocol.ValidationInput) []coverage.SharedStep 
 	return steps
 }
 
-func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Manifest, error) {
+func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions, facts []LocationFact) (*Manifest, error) {
 	shared := revisionSharedSteps(input)
 	if len(changes.Cases) != len(input.AffectedCases) || changes.SharedSteps != nil && len(changes.SharedSteps) != len(shared) {
 		return nil, fmt.Errorf("case revisions must cover exactly the issued affected cases and shared steps")
@@ -163,7 +188,7 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 			for _, step := range input.Manifest.SharedSteps {
 				ids = append(ids, step.ID)
 			}
-			if err := applyCaseChange(&item, change, ids); err != nil {
+			if err := applyCaseChange(&item, change, ids, facts); err != nil {
 				return nil, err
 			}
 		}
@@ -181,7 +206,7 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 				manifest.RemoveSharedSteps = append(manifest.RemoveSharedSteps, original.ID)
 				continue
 			}
-			if err := applySharedStepChange(&item, changes.SharedSteps[index]); err != nil {
+			if err := applySharedStepChange(&item, changes.SharedSteps[index], facts); err != nil {
 				return nil, err
 			}
 		}
@@ -222,11 +247,6 @@ func (item *DesignedCase) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	item.changes = &change
-	if item.Case == 0 && value.Operations != nil {
-		var err error
-		item.Operations, err = reviseOperations(nil, *value.Operations)
-		return err
-	}
 	return nil
 }
 func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
@@ -244,23 +264,9 @@ func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	item.changes = &change
-	if item.Step == 0 {
-		if value.Operations != nil {
-			var err error
-			item.Operations, err = reviseOperations(nil, *value.Operations)
-			if err != nil {
-				return err
-			}
-		}
-		if value.Artifacts != nil {
-			var err error
-			item.Artifacts, err = reviseStrings(nil, *value.Artifacts)
-			return err
-		}
-	}
 	return nil
 }
-func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
+func applyCaseChange(item *Case, change CaseChange, stepIDs []string, facts []LocationFact) error {
 	selected := change.SharedSteps
 	change.SharedSteps = nil
 	operations := change.Operations
@@ -279,11 +285,11 @@ func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
 		}
 	}
 	if operations != nil {
-		item.Operations, err = reviseOperations(item.Operations, *operations)
+		item.Operations, err = reviseOperations(item.Operations, *operations, facts)
 	}
 	return err
 }
-func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
+func applySharedStepChange(item *SharedStep, change SharedStepChange, facts []LocationFact) error {
 	operations := change.Operations
 	change.Operations = nil
 	artifacts := change.Artifacts
@@ -296,13 +302,13 @@ func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
 		return err
 	}
 	if operations != nil {
-		item.Operations, err = reviseOperations(item.Operations, *operations)
+		item.Operations, err = reviseOperations(item.Operations, *operations, facts)
 		if err != nil {
 			return err
 		}
 	}
 	if artifacts != nil {
-		item.Artifacts, err = reviseStrings(item.Artifacts, *artifacts)
+		item.Artifacts, err = reviseStrings(item.Artifacts, *artifacts, facts)
 	}
 	return err
 }

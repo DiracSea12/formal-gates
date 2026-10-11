@@ -65,7 +65,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			write(di.Workspace.Path, "app.py", "def valid(value):\n    return isinstance(value, str) and bool(value)\n")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.py"}, Summary: "validate strings"}})
 			d.drive()
-			design, in := d.action("engine.qa.design.v3")
+			design, in := d.action("engine.qa.design.v4")
 			if in.Workspace == nil || in.Workspace.Role != "whitebox-authoring" {
 				t.Fatalf("wrong authoring input: %+v", in.Workspace)
 			}
@@ -225,7 +225,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 				if set.Candidate != ri.Binding.Candidate || !reflect.DeepEqual(set.ReviewHistory, originalHistory) || snap.State.NativeActionCurrent(finalIntent, d.f.definition) {
 					t.Fatal("final receipt changed or invalidated its original artifact/review source")
 				}
-				_, execution := d.action("engine.qa.execution.v2")
+				_, execution := d.action("engine.qa.execution.v3")
 				if execution.Binding.Candidate != final.Identity || execution.Execution == nil || execution.Execution.Candidate.Identity != final.Identity {
 					t.Fatal("execution responsibility lost the combined final candidate")
 				}

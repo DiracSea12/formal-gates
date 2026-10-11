@@ -13,7 +13,7 @@ import (
 
 func TestApprovedQASuggestionsHaveIssuedSemanticDuty(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v3")
+	id, in := d.action("engine.qa.design.v4")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -29,7 +29,7 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 	for _, affected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "defer", true: "accepted-case-change"}[affected], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design.v3")
+			id, in := d.action("engine.qa.design.v4")
 			manifest := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 			d.drive()
@@ -91,7 +91,7 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 				if set.Status != "DRAFT" || set.Review != nil {
 					t.Fatal("accepted impact bypassed redesign")
 				}
-				d.action("engine.qa.design.v3")
+				d.action("engine.qa.design.v4")
 			} else if set.Status != "FROZEN" || !reflect.DeepEqual(set.Review, &approved) {
 				t.Fatal("optional disposition changed original approval")
 			}
@@ -113,7 +113,7 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, development := d.action("engine.development.batch.v4")
-	id, in := qaModeAction(d, "engine.qa.design.v3", coverage.ReviewBlackbox)
+	id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
 	black := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &black})
 	d.drive()
@@ -129,7 +129,7 @@ func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: development.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement the confirmed command"}})
 	d.materialize()
 	d.materialize()
-	id, in = qaModeAction(d, "engine.qa.design.v3", coverage.ReviewWhitebox)
+	id, in = qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
 	white := in.Manifest
 	white.Cases = []coverage.AcceptanceCase{{CaseID: "white-normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 	for _, c := range white.Cases {
@@ -171,7 +171,7 @@ func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution.v2")
+	id, in := d.action("engine.qa.execution.v3")
 	execution := executionFor(in)
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution}))
 	id, in = d.gateAction("quality")
@@ -180,7 +180,7 @@ func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.qa.design.v3")
+	id, in = d.action("engine.qa.design.v4")
 	manifest := in.Manifest
 	manifest.Cases[0].Preconditions += "; initialize the executable input"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
@@ -197,7 +197,7 @@ func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
 
 func TestAcceptedSuggestionReachesIssuedCaseRevision(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.qa.design.v3")
+	id, input := d.action("engine.qa.design.v4")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -207,13 +207,13 @@ func TestAcceptedSuggestionReachesIssuedCaseRevision(t *testing.T) {
 	suggestion := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "case correction", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: suggestion.ID, Decision: "ACCEPT", Reason: "The corrected oracle must state the actual diagnostic", AffectedCases: []string{"invalid"}}}})
 	d.drive()
-	id, input = d.action("engine.qa.design.v3")
+	id, input = d.action("engine.qa.design.v4")
 	if len(input.AcceptedSuggestions) != 1 || input.AcceptedSuggestions[0].ID != suggestion.ID || input.AcceptedSuggestions[0].Message != suggestion.Message || input.AcceptedSuggestions[0].Decision != "ACCEPT" || !reflect.DeepEqual(input.AffectedCases, []string{"invalid"}) {
 		t.Fatal("issued revision omitted its original accepted instruction or exact affected cases")
 	}
 	d.reopen()
 	d.drive()
-	repeatedID, repeatedInput := d.action("engine.qa.design.v3")
+	repeatedID, repeatedInput := d.action("engine.qa.design.v4")
 	if repeatedID != id || !reflect.DeepEqual(input, repeatedInput) {
 		t.Fatal("recovery changed the issued correction or created another design duty")
 	}

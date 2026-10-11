@@ -11,7 +11,7 @@ func TestFirstReviewRequiresFullBaseline(t *testing.T) {
 	for _, order := range []string{"normal", "result-first", "held"} {
 		t.Run(order, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			id, in := d.action("engine.qa.design.v3")
+			id, in := d.action("engine.qa.design.v4")
 			m := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			id, in = d.action("engine.qa.review.rationale.v2")

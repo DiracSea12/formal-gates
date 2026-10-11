@@ -87,7 +87,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 							t.Fatalf("wrong development source: %+v", in)
 						}
 						d.develop(id, in)
-					case "engine.qa.design.v3":
+					case "engine.qa.design.v4":
 						d.design(id, in)
 					case "engine.qa.review.rationale.v2":
 						d.caseReview(id, in)

@@ -24,7 +24,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 				"invalid": {ExitCode: 0, StdoutText: "QA harness overwrote the rejecting exit"},
 			}
 			d.reviewReady()
-			id, in := d.action("engine.qa.execution.v2")
+			id, in := d.action("engine.qa.execution.v3")
 			report := executionFor(in)
 			for i := range report.Records {
 				row := &report.Records[i]
@@ -132,7 +132,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 		t.Run(fmt.Sprintf("independent-raw=%t", rawOpen), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v2")
+			qa, qi := d.action("engine.qa.execution.v3")
 			initial := executionFor(qi)
 			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &initial}))
 			gate, gi := d.gateAction("quality")
@@ -158,7 +158,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 
 			priorProblem, _ := json.Marshal(d.run.Validation.Problems[original])
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-			affected, ai := d.action("engine.qa.execution.v2")
+			affected, ai := d.action("engine.qa.execution.v3")
 			affectedReport := executionFor(ai)
 			d.business(affected, nativeExecutionResult(ai, protocol.ValidationResult{Binding: ai.Binding, Status: "PASS", Execution: &affectedReport}))
 			d.assertRequiredValidationComplete(coverage.ScopeAffected)
@@ -167,7 +167,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 1, StdoutText: "unexpected whitespace validation error"}}
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			d.drive()
-			id, in := d.action("engine.qa.execution.v2")
+			id, in := d.action("engine.qa.execution.v3")
 			if in.Execution.Scope != coverage.ScopeAffected || len(in.RequiredCases) != 2 {
 				t.Fatal("explicit QA retry lost its complete approved scope")
 			}

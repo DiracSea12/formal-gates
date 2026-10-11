@@ -15,6 +15,7 @@ type nativeImplementation struct {
 	validateBinding   func(binding any) error
 	verifySource      func(directory string, source any) error
 	verifyStart       func(request, acknowledgement any, identity string) error
+	inheritInvocation func(directory string, request map[string]any, source any) error
 	reconcile         func(directory string, process any) (map[string]any, error)
 	execute           func(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error)
 }
@@ -30,7 +31,7 @@ func init() {
 		{"claude", nativeImplementation{capture: claudeCaptureBinding, captureConfigured: claudeConfiguredBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
 		{"codex", nativeImplementation{capture: codexCaptureBinding, captureConfigured: codexConfiguredBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
 		{"workbuddy", nativeImplementation{cleanup: workbuddyInvocationCleanup, capture: workbuddyCaptureBinding, captureConfigured: workbuddyConfiguredBinding, validateBinding: workbuddyValidateBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
-		{"cursor", nativeImplementation{capture: cursorCaptureBinding, captureConfigured: cursorConfiguredBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: cursorReconcile, execute: cursorExecute}},
+		{"cursor", nativeImplementation{capture: cursorCaptureBinding, captureConfigured: cursorConfiguredBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
 	}
 
 	for _, entry := range platforms {
