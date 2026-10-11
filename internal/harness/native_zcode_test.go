@@ -726,9 +726,7 @@ func TestZcodeRespondTable(t *testing.T) {
 		t.Fatalf("official auth = %s %s", got, reply.status)
 	}
 
-	// No helper beside the harness root: the missing credential is answered as
-	// such, never fabricated.
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", t.TempDir())
+	// Without a package-owned helper, the credential remains unavailable.
 	reply, err = z.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "p1"})
 	if err != nil {
 		t.Fatal(err)
@@ -766,8 +764,14 @@ func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available")
 	}
-	root := t.TempDir()
-	packageDir := filepath.Join(root, "runtime", "langgraph", "formal_gates_harness")
+	if runNativePackageTest(t) {
+		return
+	}
+	root, err := nativePackageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageDir := filepath.Join(root, "internal", "harness")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +779,6 @@ func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
 	if err := os.WriteFile(helper, []byte("process.stdout.write('key-for-' + process.argv[2]);\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", root)
 	store := filepath.Join(t.TempDir(), "credentials.json")
 	if err := os.WriteFile(store, []byte(`{"anything": "ignored"}`), 0o644); err != nil {
 		t.Fatal(err)

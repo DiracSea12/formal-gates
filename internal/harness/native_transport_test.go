@@ -299,8 +299,7 @@ func TestNativeHeldAnswerObservationBoundary(t *testing.T) {
 }
 
 // TestNativeWaitDuration pins wait(): per-message budget without a deadline,
-// unlimited for UNBOUNDED, and the 0.1s floor against a passing deadline
-// (mirrors the reference's wait() unit assertions).
+// unlimited for UNBOUNDED, and the 0.1s floor against a passing deadline.
 func TestNativeWaitDuration(t *testing.T) {
 	if got := nativeWaitDuration(40*time.Second, time.Time{}, false); got == nil || *got != 40*time.Second {
 		t.Fatalf("wait(40, None) = %v, want 40s", got)
@@ -378,7 +377,7 @@ func TestReadJSONFileSemantics(t *testing.T) {
 }
 
 // TestNativeErrorTexts pins the family-prefixed rendering the error file
-// records (the Python driver strips this prefix), and that a plain Go error
+// records, and that a plain Go error
 // is recorded as its own text.
 func TestNativeErrorTexts(t *testing.T) {
 	cases := []struct {

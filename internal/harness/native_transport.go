@@ -76,17 +76,13 @@ type sessionUnavailableError struct {
 	code     any
 }
 
-// duplicateKeyError is a repeated object key in a document decoded with
-// infra.read semantics.
+// duplicateKeyError reports a repeated object key in a native document.
 type duplicateKeyError struct{ key string }
 
 func (e *duplicateKeyError) Error() string { return "duplicate JSON field: " + e.key }
 
-// nativeErrorText is the text the native error file and stderr carry: the
-// reference exception family name once, then the message, so the Python driver
-// can strip the prefix (its _message_without_type_prefix). A plain Go error -
-// a malformed request, an unreadable file, a failed spawn - has no family and
-// is recorded as its own text.
+// nativeErrorText records a typed error family once, followed by its message.
+// Untyped request, file and spawn errors retain their own text.
 func nativeErrorText(err error) string {
 	switch typed := err.(type) {
 	case *sessionUnavailableError:
@@ -296,9 +292,8 @@ func isIntegerLiteral(v any) bool {
 
 // --- paths ---------------------------------------------------------------------
 
-// resolveNativePath mirrors Path.resolve(): an absolute, symlink-resolved,
-// lexically cleaned path. Non-existent trailing components keep the longest
-// existing prefix resolved, the way Python's non-strict resolve does.
+// resolveNativePath resolves an absolute, cleaned path and its existing symlinks.
+// A missing trailing component retains the resolved existing prefix.
 func resolveNativePath(path string) string {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -316,8 +311,7 @@ func resolveNativePath(path string) string {
 
 // --- shared evidence helpers (native_transport) --------------------------------
 
-// proofObj shapes one content proof like Python's file_proof:
-// {"sha256": ..., "size": ...}.
+// proofObj carries the content digest and byte size.
 func proofObj(proof ContentProof) map[string]any {
 	return map[string]any{"sha256": proof.SHA256, "size": proof.Size}
 }
@@ -839,11 +833,8 @@ func newNativeClient(hooks nativeHooks, argv []string, workspace, directory stri
 	return newNativeClientWithEnv(hooks, argv, workspace, directory, nil)
 }
 
-// newNativeClientWithEnv is newNativeClient with additional launch environment
-// variables layered over the caller's own (the Python constructor's environment
-// parameter, {**os.environ, **environment}). Adapters pin native configuration
-// paths in this environment. Duplicate keys resolve in the adapter's favour,
-// like the dict merge.
+// newNativeClientWithEnv layers the adapter’s bound environment over the caller’s.
+// Adapter values take precedence, including native configuration paths.
 func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directory string, environment map[string]string) (*nativeClient, error) {
 	c := &nativeClient{
 		hooks:      hooks,
@@ -1660,11 +1651,8 @@ func readNativeLine(reader *bufio.Reader) (string, error) {
 	}
 }
 
-// nativeQueue is an unbounded FIFO: the host may emit arbitrarily many
-// notifications while a response is pending, and Python's queue.Queue never
-// drops or blocks a producer. Every item is stamped with the sequence it
-// arrived under, so a consumer can tell messages that arrived after a given
-// moment from ones already queued before it.
+// nativeQueue preserves notification order while a response is pending. Each
+// item carries its receive sequence so consumers can distinguish new messages.
 type nativeQueue struct {
 	mu     sync.Mutex
 	items  []nativeQueueItem

@@ -35,7 +35,6 @@ type dshScenario struct {
 // The customize hook mutates the request map before it is serialised.
 func newDSHScenario(t *testing.T, steps []peerStep, customize func(request map[string]any)) *dshScenario {
 	t.Helper()
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", t.TempDir())
 	workspace := resolveNativePath(t.TempDir())
 	directory := resolveNativePath(t.TempDir())
 	// The evidence files the peer writes are resolved into the directory the

@@ -75,7 +75,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := nativeCapture("native-peer")
+	got, err := adapter.capture()
 	if err != nil || !reflect.DeepEqual(got, binding) {
 		t.Fatalf("capture = %#v %v", got, err)
 	}
@@ -86,10 +86,10 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 		}
 		return data
 	}
-	if err := nativeVerifyBinding("native-peer", raw(binding)); err != nil {
+	if err := adapter.validateBinding(binding); err != nil {
 		t.Fatal(err)
 	}
-	if err := nativeVerifySource("native-peer", directory, raw(source)); err != nil {
+	if err := adapter.verifySource(directory, source); err != nil {
 		t.Fatal(err)
 	}
 	request := map[string]any{"provider": "native-peer", "binding": binding, "prompt": "exact prompt", "probe": true}
@@ -103,7 +103,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, source) {
 		t.Fatalf("execute = %#v %v", got, err)
 	}
-	got, err = nativeReconcile("native-peer", directory, raw(process))
+	got, err = adapter.reconcile(directory, process)
 	if err != nil || !reflect.DeepEqual(got, source) {
 		t.Fatalf("reconcile = %#v %v", got, err)
 	}

@@ -30,7 +30,7 @@ func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, relative := range []string{"runtime/langgraph/formal_gates_harness/native_dsh.mjs", "runtime/langgraph/formal_gates_harness/zcode_credential.mjs"} {
+	for _, relative := range []string{"internal/harness/native_dsh.mjs", "internal/harness/zcode_credential.mjs"} {
 		declared := false
 		for _, entry := range entries {
 			if entry.Path == relative {
@@ -56,18 +56,18 @@ func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
 	paths := []string{
 		"native_dsh.mjs",
 		"runtime/native_dsh.mjs",
-		"runtime/langgraph/formal_gates_harness/nested/zcode_credential.mjs",
-		"runtime/langgraph/formal_gates_harness/Native_dsh.mjs",
+		"internal/harness/nested/zcode_credential.mjs",
+		"internal/harness/Native_dsh.mjs",
 	}
 	for _, ext := range []string{".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs"} {
-		paths = append(paths, "runtime/langgraph/formal_gates_harness/other"+ext, "references/other"+strings.ToUpper(ext))
+		paths = append(paths, "internal/harness/other"+ext, "references/other"+strings.ToUpper(ext))
 	}
 	for _, rel := range paths {
 		t.Run(rel, func(t *testing.T) {
 			root := installedScriptRuntimeFixture(t)
 			path := filepath.Join(root, filepath.FromSlash(rel))
-			if rel == "runtime/langgraph/formal_gates_harness/Native_dsh.mjs" {
-				if err := os.Remove(filepath.Join(root, "runtime/langgraph/formal_gates_harness/native_dsh.mjs")); err != nil {
+			if rel == "internal/harness/Native_dsh.mjs" {
+				if err := os.Remove(filepath.Join(root, "internal/harness/native_dsh.mjs")); err != nil {
 					t.Fatal(err)
 				}
 			}

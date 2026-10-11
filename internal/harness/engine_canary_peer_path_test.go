@@ -24,7 +24,6 @@ func TestCanaryLocalPeerUsesResolvedWorkspace(t *testing.T) {
 	for key, value := range c.hostEnvironment() {
 		environment[key] = value
 	}
-	environment["FORMAL_GATES_HARNESS_ROOT"] = t.TempDir()
 	objectOrEmpty(s.request["binding"])["environment"] = environment
 	e := &canaryLocalExecutor{t: t, canary: c}
 	if err := e.prepareNativePeer(s.request, s.directory, map[string]any{"ok": true}); err != nil {

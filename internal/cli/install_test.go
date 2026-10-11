@@ -948,7 +948,7 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
 	// manifest 登记五个可安装 host target：install 会拒绝 manifest 未登记为
 	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
-	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[`+
+	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[`+
 		`{"name":"Claude Code","support":"host-target"},`+
 		`{"name":"Codex","support":"host-target"},`+
 		`{"name":"Cursor","support":"host-target"},`+
@@ -979,7 +979,7 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-		rel := filepath.Join("runtime", "langgraph", "formal_gates_harness", name)
+		rel := filepath.Join("internal", "harness", name)
 		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))
 	}
 	return source
@@ -1184,8 +1184,8 @@ func assertInstalledScriptInventory(t *testing.T, source, root string) {
 	t.Helper()
 	// Only these host assets are installed scripts, with the admitted source bytes.
 	nativeScripts := map[string]bool{
-		filepath.FromSlash("runtime/langgraph/formal_gates_harness/native_dsh.mjs"):       true,
-		filepath.FromSlash("runtime/langgraph/formal_gates_harness/zcode_credential.mjs"): true,
+		filepath.FromSlash("internal/harness/native_dsh.mjs"):       true,
+		filepath.FromSlash("internal/harness/zcode_credential.mjs"): true,
 	}
 	for rel := range nativeScripts {
 		if readFile(t, filepath.Join(root, rel)) != readFile(t, filepath.Join(source, rel)) {

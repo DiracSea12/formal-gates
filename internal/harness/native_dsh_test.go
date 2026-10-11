@@ -82,8 +82,10 @@ func TestDSHSelectionParsing(t *testing.T) {
 // agent-loop/sandbox-policy/permission/approval overrides (the tool surface is
 // the unchanged mjs plugin's business). Atomic canonical bytes.
 func TestMakeDSHPatch(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", root)
+	root, err := nativePackageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	directory := t.TempDir()
 
 	path, err := makeDSHPatch(directory, true, false)
@@ -93,7 +95,7 @@ func TestMakeDSHPatch(t *testing.T) {
 	if path != filepath.Join(directory, "profile.json") {
 		t.Fatalf("patch path = %q", path)
 	}
-	plugin := filepath.Join(root, "runtime", "langgraph", "formal_gates_harness", "native_dsh.mjs")
+	plugin := filepath.Join(root, "internal", "harness", "native_dsh.mjs")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -219,8 +221,7 @@ func writeEvidence(t *testing.T, directory, source string, events []string) {
 }
 
 // TestObserveNativeRefusals pins the refusal texts of the evidence scan. A
-// turn-end reason renders as canonical JSON (the registered Go-style
-// difference from the reference's Python dict repr).
+// turn-end reason renders as canonical JSON.
 func TestObserveNativeRefusals(t *testing.T) {
 	event := func(sessionID, eventType string, data string) string {
 		return `{"sessionId": "` + sessionID + `", "event": {"type": "` + eventType + `", "data": ` + data + `}}`
@@ -279,12 +280,10 @@ func TestObserveNativeSavedOutputDiffers(t *testing.T) {
 	}
 }
 
-// TestDSHReconcile pins reconcile's three ways: eligible legacy and
-// NATIVE_RESULT-prefixed failures are recovered with the reconciliation block,
+// TestDSHReconcile checks qualified NATIVE_RESULT failures and their recovery receipts,
 // ineligible failures are refused, and workspace/model selection changes are
 // refused (合同 reconcile 全表).
 func TestDSHReconcile(t *testing.T) {
-	const legacy = "RuntimeBlocked: DSH_RESULT: final message is not a JSON result object"
 	const resultPrefixed = "RuntimeBlocked: NATIVE_RESULT: multiple candidate objects"
 	raw := "Already implemented.\n\n```json\n{\"status\": \"PASS\", \"summary\": \"ok\"}\n```"
 
@@ -313,7 +312,7 @@ func TestDSHReconcile(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), []byte(strings.Join([]string{
-			`{"sessionId": "s-1", "event": {"type": "assistant/message", "data": {"turn": 1, "step": 0, "usage": {"inputTokens": 12}, "message": {"content": [{"type": "text", "text": ` + jsonString(t, raw) + `}]}}}}`,
+			`{"sessionId": "s-1", "event": {"type": "assistant/message", "data": {"turn": 1, "step": 0, "usage": {"inputTokens": 12}, "message": {"content": [{"type": "text", "text": ` + mustCanonical(t, raw) + `}]}}}}`,
 			`{"sessionId": "s-1", "event": {"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}}`,
 		}, "\n")+"\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -324,42 +323,41 @@ func TestDSHReconcile(t *testing.T) {
 		return directory
 	}
 
-	for _, original := range []string{legacy, resultPrefixed} {
-		directory := fixture(t, original, "", "test-model")
-		source, err := dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
-		if err != nil {
-			t.Fatalf("eligible %q: %v", original, err)
-		}
-		if !valuesEqual(source["reconciliation"], map[string]any{
-			"kind":               "completed-output-format",
-			"original_exit_code": 1,
-			"original_error":     original,
-			"new_model_calls":    0,
-		}) {
-			t.Fatalf("reconciliation = %v", source["reconciliation"])
-		}
-		if body := readTestFileBytes(t, filepath.Join(directory, "source.json")); !bytes.Contains(body, []byte(`"reconciliation":`)) {
-			t.Fatalf("source.json missing the reconciliation block: %s", body)
-		}
-		// The original error record is never rewritten.
-		if record := readTestFileBytes(t, filepath.Join(directory, "native-error.json")); !bytes.Contains(record, []byte(jsonString(t, original))) {
-			t.Fatalf("native-error.json rewritten: %s", record)
-		}
+	original := resultPrefixed
+	directory := fixture(t, original, "", "test-model")
+	source, err := dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
+	if err != nil {
+		t.Fatalf("eligible %q: %v", original, err)
+	}
+	if !valuesEqual(source["reconciliation"], map[string]any{
+		"kind":               "completed-output-format",
+		"original_exit_code": 1,
+		"original_error":     original,
+		"new_model_calls":    0,
+	}) {
+		t.Fatalf("reconciliation = %v", source["reconciliation"])
+	}
+	if body := readTestFileBytes(t, filepath.Join(directory, "source.json")); !bytes.Contains(body, []byte(`"reconciliation":`)) {
+		t.Fatalf("source.json missing the reconciliation block: %s", body)
+	}
+	// The original error record is never rewritten.
+	if record := readTestFileBytes(t, filepath.Join(directory, "native-error.json")); !bytes.Contains(record, []byte(mustCanonical(t, original))) {
+		t.Fatalf("native-error.json rewritten: %s", record)
 	}
 
-	directory := fixture(t, "RuntimeBlocked: DSH_TRANSPORT: native ACP process closed its output", "", "test-model")
-	_, err := dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
+	directory = fixture(t, "RuntimeBlocked: DSH_TRANSPORT: native ACP process closed its output", "", "test-model")
+	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
 	if err == nil || err.Error() != "DSH_RECONCILE: not a completed formatting-only failure" {
 		t.Fatalf("ineligible: %v", err)
 	}
 
-	directory = fixture(t, legacy, filepath.Join(t.TempDir(), "elsewhere"), "test-model")
+	directory = fixture(t, resultPrefixed, filepath.Join(t.TempDir(), "elsewhere"), "test-model")
 	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
 	if err == nil || err.Error() != "DSH_RECONCILE: workspace changed" {
 		t.Fatalf("workspace changed: %v", err)
 	}
 
-	directory = fixture(t, legacy, "", "other-model")
+	directory = fixture(t, resultPrefixed, "", "other-model")
 	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
 	if err == nil || err.Error() != "DSH_RECONCILE: original model selection differs" {
 		t.Fatalf("selection changed: %v", err)

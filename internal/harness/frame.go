@@ -15,7 +15,7 @@ import (
 //
 // This is the framing question only: "is there exactly one unambiguous result
 // object here?". Whether the object is an acceptable role result is a different
-// contract, owned by ValidateWorker.
+// contract, owned by the engine’s worker result admission.
 //
 // The refusal strings are observable behaviour: existing tests assert them and
 // they surface in user-facing reports, so they are reproduced verbatim.

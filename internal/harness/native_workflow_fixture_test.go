@@ -451,9 +451,6 @@ func (c *engineCanary) hostEnvironment() map[string]string {
 		case host.DeepSeek:
 			environment["DSH_HOME"], environment["DSH_PROJECT_DIR"] = paths["host"], c.project
 		}
-		if len(c.installed.Targets) == 1 {
-			environment["FORMAL_GATES_HARNESS_ROOT"] = c.installed.Targets[0].TargetPath
-		}
 		return environment
 	}
 	script, _ := getOf(getOf(c.binding, "launch"), "script").(string)
@@ -495,9 +492,6 @@ func (c *engineCanary) hostEnvironment() map[string]string {
 	}
 	for _, key := range lifecycle.ProviderEnvironmentKeys() {
 		environment[key] = ""
-	}
-	if len(c.installed.Targets) == 1 {
-		environment["FORMAL_GATES_HARNESS_ROOT"] = c.installed.Targets[0].TargetPath
 	}
 	return environment
 }

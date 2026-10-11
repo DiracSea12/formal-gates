@@ -77,10 +77,9 @@ func readBytes(t *testing.T, path string) []byte {
 // merged-PATH resolution behaviour, not to locate the child.
 func baseEnv(bin string) map[string]string {
 	return map[string]string{
-		"PATH":                        "/usr/bin:/bin",
-		"HOME":                        "/tmp",
-		"TMPDIR":                      "/private/tmp",
-		"FORMAL_GATES_HARNESS_BINARY": bin,
+		"PATH":   "/usr/bin:/bin",
+		"HOME":   "/tmp",
+		"TMPDIR": "/private/tmp",
 	}
 }
 

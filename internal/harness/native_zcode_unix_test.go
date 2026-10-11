@@ -47,7 +47,6 @@ type zcodeScenario struct {
 // The customize hook mutates the request map before it is serialised.
 func newZcodeScenario(t *testing.T, steps func(inputID string) []peerStep, customize func(request map[string]any)) *zcodeScenario {
 	t.Helper()
-	t.Setenv("FORMAL_GATES_HARNESS_ROOT", t.TempDir())
 	workspace := resolveNativePath(t.TempDir())
 	directory := resolveNativePath(t.TempDir())
 	inputID := "formal-gates-" + filepath.Base(directory)
@@ -892,11 +891,15 @@ func TestZcodeExecuteRuntimeHeadersCredential(t *testing.T) {
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
 	}
+	if runNativePackageTest(t) {
+		return
+	}
 	scenario := newZcodeScenario(t, steps, func(request map[string]any) { request["probe"] = true })
-	// The scenario owns FORMAL_GATES_HARNESS_ROOT; the fake helper and the
-	// store it reads land there before the run starts.
-	packageDir := filepath.Join(os.Getenv("FORMAL_GATES_HARNESS_ROOT"),
-		"runtime", "langgraph", "formal_gates_harness")
+	root, err := nativePackageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageDir := filepath.Join(root, "internal", "harness")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

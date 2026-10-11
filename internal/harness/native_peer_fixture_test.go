@@ -164,7 +164,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s.save(e.t)
 	case "dsh":
 		peerEnvironment := map[string]string{}
-		for _, key := range []string{"HOME", "DSH_HOME", "DSH_PROJECT_DIR", "FORMAL_GATES_HARNESS_ROOT"} {
+		for _, key := range []string{"HOME", "DSH_HOME", "DSH_PROJECT_DIR"} {
 			peerEnvironment[key] = environment[key].(string)
 		}
 		schema := mustCanonical(e.t, request["schema"])
@@ -180,7 +180,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		}
 	case "zcode":
 		peerEnvironment := map[string]string{}
-		for _, key := range []string{"HOME", "USERPROFILE", "ZCODE_DATA_BASE_DIR", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE", "FORMAL_GATES_HARNESS_ROOT"} {
+		for _, key := range []string{"HOME", "USERPROFILE", "ZCODE_DATA_BASE_DIR", "ZCODE_HOME", "ZCODE_STORAGE_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB", "ZCODE_LOG_DIR", "ZCODE_MAILBOX_ROOT", zcodeBuiltinCatalogueEnv, zcodePersonalConfigEnv, zcodeCredentialHelperEnv, "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"} {
 			peerEnvironment[key] = environment[key].(string)
 		}
 		input := "formal-gates-" + filepath.Base(dir)

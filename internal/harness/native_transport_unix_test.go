@@ -271,8 +271,7 @@ func blockedText(t *testing.T, err error) string {
 
 // TestTransportOutgoingFrameBytes pins the outgoing byte contract: the jsonrpc
 // envelope, the id counter starting at 1, the session params key set, and the
-// canonical compact form (registered bounded difference; the value is the
-// Python frame's equal).
+// canonical compact form.
 func TestTransportOutgoingFrameBytes(t *testing.T) {
 	client, _, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: `"method":"session/new"`, Send: `{"id": 1, "result": {"sessionId": "s-1"}}`},
@@ -606,8 +605,7 @@ func TestTransportResponseMatching(t *testing.T) {
 
 // TestTransportErrorEmbedding pins the error branch: an absent or null error
 // member is success (the result defaults to {}), any other error body is a
-// refusal whose text embeds the body as canonical JSON (registered bounded
-// difference: the reference embeds it with Python's default separators).
+// refusal whose text embeds the body as canonical JSON.
 func TestTransportErrorEmbedding(t *testing.T) {
 	for _, line := range []string{
 		`{"id": 1, "result": {"ok": true}}`,

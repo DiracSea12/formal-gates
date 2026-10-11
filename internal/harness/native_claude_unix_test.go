@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,11 +142,23 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 	script := filepath.Join(root, "peer.json")
 	binding["environment"] = map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config, "CLAUDE_PEER_SCRIPT": script}
 	prompt := "Review the bound task for " + identity
+	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate", Validation: &protocol.ValidationInput{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainSchema, err := decodeNativeJSON(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := map[string]any{"provider": "claude", "binding": binding, "workspace": workspace, "read_only": readOnly,
-		"identity": "", "model": "claude-fixture-model", "reasoning_effort": "high", "prompt": prompt, "schema": plainWorkerSchema()}
+		"identity": "", "model": "claude-fixture-model", "reasoning_effort": "high", "prompt": prompt, "schema": plainSchema}
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace,
 		"model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity}
-	answer := map[string]any{"summary": "native answer " + identity, "findings": []any{}, "check_reviews": []any{}}
+	answer := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "native answer " + identity}}}
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity,
 		"uuid": "result-" + identity, "num_turns": 3, "result": "ignored when structured output is available", "structured_output": answer,
 		"usage": map[string]any{"input_tokens": 12, "output_tokens": 3}, "modelUsage": map[string]any{"claude-fixture-model": map[string]any{"inputTokens": 12}}}
@@ -236,10 +250,11 @@ func TestClaudeNativeCompletionAndObservation(t *testing.T) {
 				t.Fatalf("native exit = %v", nativeSource)
 			}
 			answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
-			if getOf(answer, "summary") != "native answer "+identity {
+			if getOf(listOf(getOf(answer, "findings"))[0], "message") != "native answer "+identity {
 				t.Fatalf("root answer = %v", answer)
 			}
-			if _, err := validateWorkerAnswer("product-review", objectOrEmpty(answer), nil); err != nil {
+			body, _ := json.Marshal(answer)
+			if _, err := worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			before := proofsOf(t, s.directory, nativeSourceFiles)
@@ -413,9 +428,9 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 		delete(terminal, "structured_output")
 		delete(terminal, "usage")
 		delete(terminal, "modelUsage")
-		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"summary": "text result", "findings": []any{}, "check_reviews": []any{}}) + "\n```"
+		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"findings": []any{}}) + "\n```"
 		if invalidRole {
-			terminal["result"] = `{"status":"unexpected","summary":"invalid role result","findings":[],"check_reviews":{}}`
+			terminal["result"] = `{"status":"unexpected","findings":[]}`
 		}
 		s.save(t)
 		source, err := runNativeJob(s.directory)
@@ -423,7 +438,8 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 			t.Fatalf("fallback = %v, %v", source, err)
 		}
 		answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
-		_, err = validateWorkerAnswer("product-review", objectOrEmpty(answer), nil)
+		body, _ := json.Marshal(answer)
+		_, err = worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil)
 		if (err != nil) != invalidRole {
 			t.Fatalf("role acceptance = %v, invalid=%t", err, invalidRole)
 		}

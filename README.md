@@ -67,8 +67,6 @@ typed Ask 管理。安装支持和执行支持分别核对；doctor、模拟与�
 canary。发布与全局切换分别保留独立验收证据；五宿主与 Git/SVN/P4 非分片/分片
 的完整验收须绑定同一候选和实际安装副本，未运行项如实标记未验证或 skip。
 
-开发 harness 的用法、原生能力与恢复边界见 [harness 说明](references/langgraph-harness.md)。
-其 demo/fixture 或 HARNESS_COMPLETE 不等于正式 Seal。
 
 ## 安装与卸载
 

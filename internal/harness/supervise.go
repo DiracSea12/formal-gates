@@ -15,10 +15,7 @@ import (
 	"time"
 )
 
-// strerrorText mirrors CPython's os.strerror capitalisation. Go's
-// syscall.Errno.Error() lowercases the text ("no such file or directory"), so a
-// naive concatenation would break the Python side's error text byte for byte.
-// The exact capitalisation is observed behaviour and is preserved here.
+// strerrorText holds the error receipt’s exact OS message capitalisation.
 var strerrorText = map[int]string{
 	2:  "No such file or directory",
 	8:  "Exec format error",
@@ -28,10 +25,8 @@ var strerrorText = map[int]string{
 	26: "Text file busy",
 }
 
-// exceptionName maps an errno to the Python exception class CPython raises while
-// executing a subprocess. A directory is forced to PermissionError (errno 13):
-// on macOS execve on a directory returns EACCES, so the reference implementation
-// reports PermissionError, never IsADirectoryError.
+// exceptionName maps errno to the error receipt’s exception family.
+// Executing a directory reports PermissionError, matching its EACCES result.
 var exceptionName = map[int]string{
 	2:  "FileNotFoundError",
 	8:  "OSError",
@@ -49,8 +44,7 @@ const defpath = "/bin:/usr/bin"
 // the owner lock, records its
 // own process identity, spawns the request's command with the merged
 // environment, captures stdout/stderr to disk with an fsync, honours SIGTERM
-// cancellation, and writes an exit receipt whose shape and proofs match the
-// Python job runner exactly.
+// cancellation, and writes the original request-bound exit receipt and proofs.
 //
 // Exit codes:
 //   - 0 once exit.json has been written, regardless of the child's outcome;
@@ -180,15 +174,8 @@ func claimJob(directory string, request map[string]any) error {
 	return writeAtomicJSON(filepath.Join(directory, "process.json"), process)
 }
 
-// resolveSpawn performs every validation CPython's subprocess.Popen does before
-// exec and returns the ordered list of PATH candidates to try, or a Python-shaped
-// error string (and a nil candidate list) when the spawn must fail with code 127.
-//
-// The unreachable branches below (empty argv, embedded NUL, environment value
-// type, '=' in an environment key) are reproduced exactly because they are the
-// kind of "type-boundary silent narrowing" the migration is required to preserve;
-// ValidateSpec guarantees they cannot occur, so they are never exercised by real
-// requests, but the text is kept byte-identical to the measured reference.
+// resolveSpawn validates argv, cwd and environment before exec. It returns the
+// ordered PATH candidates or the error receipt text for an exit-127 spawn failure.
 func resolveSpawn(argv []string, cwd string, request map[string]any) (string, []string) {
 	if len(argv) == 0 {
 		return "IndexError: list index out of range", nil
@@ -528,8 +515,7 @@ func proofToMap(p ContentProof) map[string]any {
 // writeAtomicJSON serialises value with the single canonical encoder and writes
 // it atomically (temp file, fsync, rename). The value may be a typed record;
 // canonicalBody routes it through its JSON tags into the canonical encoder, so
-// the receipt is byte-identical to the Python reference's canonical() output
-// and no second JSON encoding is introduced.
+// the receipt uses the same canonical bytes without a second JSON encoding.
 func writeAtomicJSON(path string, value any) error {
 	encoded, err := canonicalBody(value)
 	if err != nil {

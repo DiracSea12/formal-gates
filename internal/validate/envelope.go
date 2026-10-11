@@ -230,7 +230,7 @@ func WriteBaselineReceipt(path string, receipt BaselineReceipt) error {
 
 func excludedPackagePath(path string, directory bool) bool {
 	parts := strings.Split(filepath.ToSlash(path), "/")
-	if parts[0] == ".git" || parts[0] == ".gates" || parts[0] == ".harness" {
+	if parts[0] == ".git" || parts[0] == ".gates" {
 		return true
 	}
 	if directory {

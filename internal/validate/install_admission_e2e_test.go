@@ -74,7 +74,7 @@ func e2eStartFixture(t *testing.T) (string, string) {
 // hostTargetTestManifest 是测试 fixture 的最小 manifest：登记四个可安装 host
 // target。install 会拒绝 manifest 未登记为 host-target 的安装目标（unknown
 // target 在写 target/state 前非零拒绝），fixture 必须携带该登记。
-const hostTargetTestManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[` +
+const hostTargetTestManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[` +
 	`{"name":"Claude Code","support":"host-target"},` +
 	`{"name":"Codex","support":"host-target"},` +
 	`{"name":"Cursor","support":"host-target"},` +
@@ -92,7 +92,7 @@ func e2eInstallSource(t *testing.T) string {
 		e2eWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-		copyValidateTestFile(t, repoRootValidateTest(t), root, "runtime/langgraph/formal_gates_harness/"+name)
+		copyValidateTestFile(t, repoRootValidateTest(t), root, "internal/harness/"+name)
 	}
 	return root
 }

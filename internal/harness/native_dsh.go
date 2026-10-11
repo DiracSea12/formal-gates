@@ -1,15 +1,12 @@
 package harness
 
-// The DSH ACP adapter (its verbatim Python reference lives in
-// tests/reference_native_dsh.py for the differential),
-// the provider dispatch behind `formal-gates harness native <dir>` and the
-// four native bridge operations. One native job is one process: read
+// The DSH ACP adapter serves `formal-gates harness native <dir>`.
+// One native job is one process: read
 // native-request.json, run the ACP sequence, land every evidence file, print
 // the result JSON to stdout as one canonical line, and on any execution error
 // write native-error.json and exit 1.
 
 import (
-	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/authoring"
 	"io"
@@ -183,34 +180,22 @@ func dshSelection(raw any) (map[string]any, error) {
 	return out, nil
 }
 
-// dshHarnessRoot mirrors command.go's root discovery exactly:
-// FORMAL_GATES_HARNESS_ROOT, else the nearest ancestor of the executable
-// holding runtime/langgraph/formal_gates_harness/__main__.py.
-func dshHarnessRoot() (string, error) {
-	if root := os.Getenv("FORMAL_GATES_HARNESS_ROOT"); root != "" {
-		return root, nil
-	}
+// nativePackageRoot locates the package supplying the native host assets.
+func nativePackageRoot() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	for dir := filepath.Dir(exe); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "runtime", "langgraph", "formal_gates_harness", "__main__.py")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return dir, nil
-		}
-	}
-	return "", &bindingError{message: "harness runtime not found; use scripts/harness setup"}
+	return filepath.Dir(filepath.Dir(exe)), nil
 }
 
-// dshPluginPath is the host-side plugin path: native_dsh.py's sibling .mjs,
-// resolved next to the production package.
+// dshPluginPath resolves the package-owned DSH native plugin.
 func dshPluginPath() (string, error) {
-	root, err := dshHarnessRoot()
+	root, err := nativePackageRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "runtime", "langgraph", "formal_gates_harness", "native_dsh.mjs"), nil
+	return filepath.Join(root, "internal", "harness", "native_dsh.mjs"), nil
 }
 
 // makeDSHPatch writes profile.json: the harness-native plugin (read_only adds
@@ -352,9 +337,8 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 // exit/error records remain unchanged; no host is started and no model is
 // called; the caller must still accept the recovered business result.
 func dshReconcile(directory string, process any) (map[string]any, error) {
-	legacyError := "RuntimeBlocked: DSH_RESULT: final message is not a JSON result object"
 	eligible := func(original string) bool {
-		return original == legacyError || strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:")
+		return strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:")
 	}
 	recover := func() (map[string]any, error) {
 		identity, err := readJSONFile(filepath.Join(directory, "identity.json"))
@@ -404,7 +388,7 @@ func configuredIs(configured map[string]any, option, requested string) bool {
 	return current == requested
 }
 
-// dshExecute runs DSH's ACP sequence for one request (native_dsh.execute).
+// dshExecute runs DSH’s ACP sequence for one request.
 func dshExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (result map[string]any, err error) {
 	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
 		return nil, mkdirErr
@@ -795,103 +779,4 @@ func (e *nativeInvocationError) failureClass() authoring.FailureClass {
 	default:
 		return authoring.FailureTransientEngine
 	}
-}
-
-// --- the four native bridge operations -----------------------------------------
-
-// nativeRefusal is a typed business refusal of a native bridge operation. It
-// travels inside the operation's value as {"ok": false, "kind", "refusal"},
-// exactly like the verify-files convention, so the Python caller's refuse()
-// raises the same exception family the reference implementation raised: kind
-// "binding" maps to the HarnessError family, anything else to RuntimeBlocked.
-type nativeRefusal struct {
-	kind    string
-	refusal string
-}
-
-func (e *nativeRefusal) Error() string { return e.refusal }
-
-// asNativeRefusal converts a native typed error into a bridge refusal carrying
-// the exception family, mirroring Python's refuse(): the refusal text is the
-// bare message (without the family prefix that only the native-error.json
-// record adds), the RuntimeBlocked family (SessionUnavailable included) keeps
-// kind "", the HarnessError family reports kind "binding". Anything else (a
-// malformed payload leaking through) stays a bridge failure.
-func asNativeRefusal(err error) error {
-	if err == nil {
-		return nil
-	}
-	switch typed := err.(type) {
-	case *sessionUnavailableError:
-		return &nativeRefusal{kind: "", refusal: typed.message}
-	case *blockedError:
-		return &nativeRefusal{kind: "", refusal: typed.message}
-	case *bindingError:
-		return &nativeRefusal{kind: "binding", refusal: typed.message}
-	}
-	return err
-}
-
-// nativeCapture is the native-capture operation: bind the provider to the
-// exact binaries it will execute.
-func nativeCapture(provider string) (any, error) {
-	impl, err := nativeImplementationFor(provider)
-	if err != nil {
-		return nil, asNativeRefusal(err)
-	}
-	binding, err := impl.capture()
-	if err != nil {
-		return nil, asNativeRefusal(err)
-	}
-	return binding, nil
-}
-
-// nativeVerifyBinding is the native-verify-binding operation.
-func nativeVerifyBinding(provider string, binding json.RawMessage) error {
-	impl, err := nativeImplementationFor(provider)
-	if err != nil {
-		return asNativeRefusal(err)
-	}
-	value, err := decodeNativeJSON(binding)
-	if err != nil {
-		return err
-	}
-	if err := impl.validateBinding(value); err != nil {
-		return asNativeRefusal(err)
-	}
-	return nil
-}
-
-// nativeVerifySource is the native-verify-source operation.
-func nativeVerifySource(provider string, directory string, source json.RawMessage) error {
-	impl, err := nativeImplementationFor(provider)
-	if err != nil {
-		return asNativeRefusal(err)
-	}
-	value, err := decodeNativeJSON(source)
-	if err != nil {
-		return err
-	}
-	if err := impl.verifySource(directory, value); err != nil {
-		return asNativeRefusal(err)
-	}
-	return nil
-}
-
-// nativeReconcile is the native-reconcile operation: recover an eligible
-// completed-output failure.
-func nativeReconcile(provider string, directory string, process json.RawMessage) (any, error) {
-	impl, err := nativeImplementationFor(provider)
-	if err != nil {
-		return nil, asNativeRefusal(err)
-	}
-	value, err := decodeNativeJSON(process)
-	if err != nil {
-		return nil, err
-	}
-	source, err := impl.reconcile(directory, value)
-	if err != nil {
-		return nil, asNativeRefusal(err)
-	}
-	return source, nil
 }

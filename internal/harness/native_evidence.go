@@ -6,7 +6,6 @@ import (
 	"formal-gates/internal/engine/worker"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 )
 
@@ -30,23 +29,6 @@ func NativeResultEvidence(provider, directory string, source map[string]any) ([]
 	}
 	answer, err := os.ReadFile(filepath.Join(directory, "answer.json"))
 	return answer, "sha256:" + digest, textOf(source["identity"]), err
-}
-
-// nativeResultToolFacts resolves locations only from the original verified
-// native answer and the tool context covered by that answer's source receipt.
-func nativeResultToolFacts(directory string, source map[string]any, judgment WorkerJudgment) ([]nativeToolFact, error) {
-	body, _, _, err := NativeResultEvidence(textOf(source["provider"]), directory, source)
-	if err != nil {
-		return nil, err
-	}
-	var original WorkerJudgment
-	if err := StrictDecode(body, &original); err != nil {
-		return nil, err
-	}
-	if !reflect.DeepEqual(original, judgment) {
-		return nil, fmt.Errorf("worker judgment differs from its original native answer")
-	}
-	return nativeToolFacts(directory)
 }
 
 // NativeWorkerResultEvidence carries only facts covered by the original source.

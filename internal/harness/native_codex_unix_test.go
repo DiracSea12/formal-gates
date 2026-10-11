@@ -576,10 +576,14 @@ func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["prompt"] = "Read the complete native execution evidence:\n" + strings.Repeat("command output: \"value\" ✓\n", 4096)
-	s.request["schema"] = WorkerSchema()
+	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate", Validation: &protocol.ValidationInput{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["schema"] = schema
 	s.request["read_only"] = true
 	s.peer.StrictSchema = true
-	domain := map[string]any{"summary": "compared complete native evidence", "findings": []any{}, "check_reviews": []any{}}
+	domain := map[string]any{"findings": []any{}}
 	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
@@ -633,71 +637,6 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 		t.Fatal("large frame recovery issued new native work")
 	}
 	t.Logf("complete native turn/start frame=%d bytes", len(turnFrame))
-}
-
-func TestCodexFindingLocationsUseVerifiedOriginalToolEvidence(t *testing.T) {
-	s := newCodexScenario(t)
-	s.request["schema"] = WorkerSchema()
-	s.request["read_only"] = true
-	if err := os.WriteFile(filepath.Join(s.workspace, "app.go"), []byte("package app\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	s.peer.Reverse = []any{
-		map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "list", "tool": "workspace", "arguments": map[string]any{"action": "list"}}},
-		map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "read", "tool": "workspace", "arguments": map[string]any{"action": "read", "listing": 1, "entry": 1}}},
-	}
-	s.peer.Replies = []any{
-		map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"entries":[{"directory":false,"entry":1,"name":"app.go"}],"listing":1}`}}},
-		map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"lines":["package app\n"],"read":2}`}}},
-	}
-	domain := map[string]any{"summary": "Reviewed original code", "findings": []any{map[string]any{"severity": "P3", "message": "The declared package is app", "locations": []any{map[string]any{"read": 2}}}}, "check_reviews": []any{}}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
-	source, err := s.execute(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	accept := func(directory string, receipt map[string]any, result map[string]any) (WorkerResult, error) {
-		payload, _ := json.Marshal(map[string]any{"role": "implementation-quality-gate", "checks": []any{}, "result": result, "nativeDirectory": directory, "nativeSource": receipt})
-		checked, err := dispatch(envelope{Operation: "validate-worker", Payload: payload})
-		if err != nil {
-			return WorkerResult{}, err
-		}
-		return checked.(map[string]any)["result"].(WorkerResult), nil
-	}
-	result, err := accept(s.directory, source, domain)
-	if err != nil || len(result.Findings) != 1 || !reflect.DeepEqual(result.Findings[0].Paths, []string{"app.go"}) {
-		t.Fatalf("original location: %+v %v", result, err)
-	}
-	before := nativePeerTurns(t, s)
-	recovered, err := NativeJobSource("codex", s.directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(s.workspace, "earlier.go"), []byte("different path\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	replayed, err := accept(s.directory, recovered, domain)
-	if err != nil || !reflect.DeepEqual(replayed, result) || nativePeerTurns(t, s) != before {
-		t.Fatalf("recovery changed original finding or started a model turn: %+v %v", replayed, err)
-	}
-	if _, err := accept(t.TempDir(), source, domain); err == nil {
-		t.Fatal("arbitrary directory supplied location facts")
-	}
-	changed := map[string]any{"summary": "different model answer", "findings": domain["findings"], "check_reviews": []any{}}
-	if _, err := accept(s.directory, source, changed); err == nil {
-		t.Fatal("semantic answer did not belong to verified native source")
-	}
-	domain["findings"].([]any)[0].(map[string]any)["paths"] = []any{"app.go"}
-	if _, err := accept(s.directory, source, domain); err == nil {
-		t.Fatal("raw path wire fallback was accepted")
-	}
-	delete(domain["findings"].([]any)[0].(map[string]any), "paths")
-	if err := os.WriteFile(filepath.Join(s.directory, nativeToolContextFile), []byte(`{"facts":[]}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := accept(s.directory, source, domain); err == nil {
-		t.Fatal("unverified tool context supplied paths")
-	}
 }
 
 func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T) {
@@ -775,7 +714,12 @@ func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s.request["materials"], s.request["schema"], s.request["read_only"] = materials, WorkerSchema(), true
+	input := protocol.WorkerInput{Handler: "engine.gate", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.request["materials"], s.request["schema"], s.request["read_only"] = materials, schema, true
 	step := func(arguments map[string]any, response map[string]any) {
 		s.peer.Reverse = append(s.peer.Reverse, map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": fmt.Sprint(len(s.peer.Reverse) + 1), "tool": "workspace", "arguments": arguments}})
 		body, _ := json.Marshal(response)
@@ -796,7 +740,7 @@ func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
 	step(map[string]any{"action": "read", "listing": 5, "entry": 1}, map[string]any{"read": 6, "lines": []any{"original base\n"}})
 	step(map[string]any{"action": "list", "listing": 4, "entry": 2}, listing(7, "renamed.go"))
 	step(map[string]any{"action": "read", "listing": 7, "entry": 1}, map[string]any{"read": 8, "lines": []any{"original candidate\n"}})
-	domain := map[string]any{"summary": "Reviewed both original versions", "findings": []any{map[string]any{"severity": "P3", "message": "Original paths remain attributable", "locations": []any{map[string]any{"read": 6}, map[string]any{"read": 8}}}}, "check_reviews": []any{}}
+	domain := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "Original paths remain attributable", "locations": []any{map[string]any{"read": 6}, map[string]any{"read": 8}}}}}
 	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
@@ -806,13 +750,15 @@ func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(map[string]any{"role": "implementation-quality-gate", "checks": []any{}, "result": domain, "nativeDirectory": s.directory, "nativeSource": source})
-	checked, err := dispatch(envelope{Operation: "validate-worker", Payload: payload})
+	evidence, err := NativeWorkerResultEvidence("codex", s.directory, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := checked.(map[string]any)["result"].(WorkerResult)
-	if !reflect.DeepEqual(result.Findings[0].Paths, []string{"removed.go", "renamed.go"}) {
+	result, err := worker.DecodeResultWithFacts(input, "result", evidence.Answer, evidence.Digest, nil, evidence.LocationFacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Result.Validation.Findings[0].Locations, []string{"removed.go", "renamed.go"}) {
 		t.Fatal("locations exposed temporary materials", result)
 	}
 	after, err := os.ReadFile(filepath.Join(s.directory, nativeToolContextFile))

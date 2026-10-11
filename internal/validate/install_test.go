@@ -13,8 +13,8 @@ import (
 // smoke stub; the public binary and real script execution are tested by harness.
 func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.T) {
 	for _, fault := range []string{
-		"copy-component:runtime/langgraph/formal_gates_harness/native_dsh.mjs",
-		"copy-component:runtime/langgraph/formal_gates_harness/zcode_credential.mjs",
+		"copy-component:internal/harness/native_dsh.mjs",
+		"copy-component:internal/harness/zcode_credential.mjs",
 		"switched",
 		"verify-stage:installed-target",
 	} {
@@ -36,7 +36,7 @@ func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.
 				t.Fatal(err)
 			}
 			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-				path := filepath.Join(source, "runtime", "langgraph", "formal_gates_harness", name)
+				path := filepath.Join(source, "internal", "harness", name)
 				if err := os.WriteFile(path, []byte("candidate script "+name+"\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -58,7 +58,7 @@ func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.
 				t.Fatalf("replacement after rollback failed: %v", err)
 			}
 			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-				rel := filepath.Join("runtime", "langgraph", "formal_gates_harness", name)
+				rel := filepath.Join("internal", "harness", name)
 				want, err := os.ReadFile(filepath.Join(source, rel))
 				if err != nil {
 					t.Fatal(err)

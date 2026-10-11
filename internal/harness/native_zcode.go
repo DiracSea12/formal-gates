@@ -21,7 +21,7 @@ package harness
 // abandons the turn when none comes back, so respond answers that one
 // interaction from the same provisioning index -- see zcodeRequestAuth().
 //
-// Serialization is value-level, with no CPython emulation:
+// Serialization uses the canonical encoder:
 // prompt schemas and embedded error bodies are rendered with the canonical
 // encoder (prompt objects present additionalProperties last; see
 // schemaForPrompt), and the ZCODE_*/RuntimeBlocked:/SessionUnavailable:
@@ -261,14 +261,13 @@ func zcodeCredentialStore() string {
 	return filepath.Join(zcodeHostDataDirectory(), ".zcode", "v2", zcodeCredentialsFile)
 }
 
-// zcodeCredentialHelperPath locates the host-side credential helper next to
-// the production harness package (Path(__file__).with_name).
+// zcodeCredentialHelperPath resolves the package-owned host credential helper.
 func zcodeCredentialHelperPath() (string, error) {
-	root, err := dshHarnessRoot()
+	root, err := nativePackageRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "runtime", "langgraph", "formal_gates_harness", zcodeCredentialHelper), nil
+	return filepath.Join(root, "internal", "harness", zcodeCredentialHelper), nil
 }
 
 // zcodeRequestAuth is the request credential the host asks its client for, or
@@ -322,8 +321,7 @@ func zcodeRequestAuth(provider string) string {
 }
 
 // zcodeClient is ZCode's adapter state around the shared transport: the bound
-// session identity and the events its notification hook committed (the Python
-// Client's identity and events attributes). The events slice is a receive
+// session identity and the events its notification hook committed. The events slice is a receive
 // buffer, not a transcript: the execution loop clears each slot as it reads
 // the event and resets the drained buffer before waiting for more, and
 // native-events.jsonl is the only durable record of the whole turn.
@@ -1259,10 +1257,8 @@ func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort
 	return configured, nil
 }
 
-// zcodeHandshake checks the protocol both sides agreed on, or refuses to guess
-// (handshake). The embedded protocol body is rendered canonically (registered
-// bounded difference: the reference embeds it with Python's default
-// separators).
+// zcodeHandshake checks the agreed protocol and renders an incompatible
+// protocol body as canonical JSON.
 func zcodeHandshake(snapshot any) (map[string]any, error) {
 	protocol := objectOrEmpty(getOf(snapshot, "protocol"))
 	if !valuesEqual(protocol["name"], zcodeProtocolName) || !valuesEqual(protocol["version"], zcodeProtocolVersion) {
@@ -1394,12 +1390,8 @@ const zcodeSchemaDirectiveKey = "additionalProperties"
 // presenting the directive key last instead of first removes the trigger
 // without touching the value.
 //
-// Registered bounded difference: the frozen reference embeds the schema with
-// Python's default separators in dict order, so the two sides' prompt bytes
-// already differ in separators and now also in this key's position; the
-// values are equal. This rendering is for the prompt only -- identity,
-// tool-policy, source and every other evidence serialization keep
-// CanonicalJSON.
+// This ordering is for the prompt only. Identity, tool-policy, source and
+// all other evidence serialization use CanonicalJSON.
 func schemaForPrompt(value any) ([]byte, error) {
 	var out strings.Builder
 	if err := encodeSchemaForPrompt(value, &out); err != nil {
@@ -1772,9 +1764,7 @@ func (s *zcodeSession) sendTurn(request any) error {
 	if err != nil {
 		return err
 	}
-	// The schema is embedded through schemaForPrompt: the canonical form with
-	// the one presentation-order change (registered bounded difference:
-	// value-equal to the reference's default-separator rendering).
+	// The schema uses the prompt’s declared presentation order.
 	schema, err := schemaForPrompt(schemaValue)
 	if err != nil {
 		return err

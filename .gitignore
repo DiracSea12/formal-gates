@@ -16,10 +16,6 @@ review_scratch/
 *.review.json
 *.review.md
 
-# Python cache from validation scripts
-__pycache__/
-*.py[cod]
-
 # Package demo output (regenerated locally)
 examples/package-validation-demo-output.txt
 
@@ -29,8 +25,3 @@ bin/
 # Untracked knowledge/backlog files (session-local, not committed)
 P2-BACKLOG.md
 PROMPT-ENGINEERING-KNOWLEDGE.md
-
-# Optional development-only runtime and private evidence
-.harness/
-__pycache__/
-*.pyc

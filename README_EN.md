@@ -82,8 +82,6 @@ global cutover each require their own acceptance evidence. Five-host and Git/SVN
 unsliced/sliced acceptance must bind the same candidate and actual installed copy;
 unexecuted cells are reported as unverified or skipped.
 
-The [development harness](references/langgraph-harness.md) documents native capability and recovery.
-Its demo/fixture result or HARNESS_COMPLETE is not a formal Seal.
 
 ## Installation And Uninstall
 

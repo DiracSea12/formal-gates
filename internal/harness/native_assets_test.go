@@ -70,7 +70,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 	}
 	assets := make(map[string][]byte)
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-		rel := "runtime/langgraph/formal_gates_harness/" + name
+		rel := "internal/harness/" + name
 		assets[rel], err = os.ReadFile(filepath.Join(source, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatal(err)
@@ -131,6 +131,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 					t.Fatalf("registered source or host identity differs: %+v", record)
 				}
 				target := filepath.FromSlash(record.Target)
+				helper := filepath.Join(target, "internal", "harness", zcodeCredentialHelper)
 				run(filepath.Join(target, "bin", name), "package", "validate", "--root", target)
 				installed, err := validate.PackageReceipt(target, source)
 				if err != nil || installed.Digest != record.InstalledDigest {
@@ -156,13 +157,6 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 					installReceipt.PackageDigest != record.PackageDigest || installReceipt.Targets[0].TargetPath != record.Target ||
 					installReceipt.Targets[0].InstalledDigest != record.InstalledDigest || installReceipt.Targets[0].Smoke != "PASS" {
 					t.Fatalf("install artifact does not bind registered target: %+v err=%v", installReceipt, err)
-				}
-				t.Setenv("FORMAL_GATES_HARNESS_ROOT", target)
-				plugin, pluginErr := dshPluginPath()
-				helper, helperErr := zcodeCredentialHelperPath()
-				if pluginErr != nil || helperErr != nil || plugin != filepath.Join(target, "runtime", "langgraph", "formal_gates_harness", "native_dsh.mjs") ||
-					helper != filepath.Join(target, "runtime", "langgraph", "formal_gates_harness", "zcode_credential.mjs") {
-					t.Fatalf("native locators did not use installed target: plugin=%s helper=%s errors=%v/%v", plugin, helper, pluginErr, helperErr)
 				}
 				for rel, want := range assets {
 					path := filepath.Join(target, filepath.FromSlash(rel))

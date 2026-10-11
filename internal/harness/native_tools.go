@@ -13,7 +13,6 @@ import (
 
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
-	"formal-gates/internal/requirement"
 )
 
 const nativeWorkspaceTool = "workspace"
@@ -46,16 +45,6 @@ type nativeToolContext struct {
 	Workspace     string           `json:"workspace"`
 	RequestDigest string           `json:"requestDigest"`
 	Facts         []nativeToolFact `json:"facts"`
-}
-
-type nativeLocation = worker.Location
-
-func nativeLocationPaths(locations []nativeLocation, facts []nativeToolFact) ([]string, error) {
-	sources := make([]worker.LocationFact, 0, len(facts))
-	for _, fact := range facts {
-		sources = append(sources, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
-	}
-	return worker.LocationPaths(locations, sources, requirement.FrozenRequirementProjection{})
 }
 
 func verifyNativeToolFact(fact nativeToolFact, directory, action, workspace string) error {

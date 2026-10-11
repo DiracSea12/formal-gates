@@ -119,7 +119,7 @@ func TestCodexSchemaTransportsRoleContracts(t *testing.T) {
 		"confirmed-development": {Handler: "engine.development.batch", Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}},
 		"autonomous-repair":     {Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}},
 	}
-	domains := map[string]any{"readiness": schema, "worker": WorkerSchema()}
+	domains := map[string]any{"readiness": schema}
 	for name, input := range roles {
 		body, err := worker.ResultSchema(input)
 		if err != nil {
@@ -167,25 +167,36 @@ func TestCodexDomainProjectionPreservesValidationInputs(t *testing.T) {
 	if !reflect.DeepEqual(result, map[string]any{"required": nil, "nullable": nil, "unknown": "retained"}) {
 		t.Fatalf("projection rewrote validation inputs: %v", result)
 	}
+	input := protocol.WorkerInput{Handler: "engine.gate", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	domain, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := codexDomainResult(codexPlain(t, domain), map[string]any{"result": map[string]any{"findings": []any{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validBody, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.DecodeResultWithFacts(input, "result", validBody, "sha256:source", nil, nil); err != nil {
+		t.Fatalf("valid native gate result: %v", err)
+	}
 	for name, answer := range map[string]map[string]any{
-		"missing-findings": {"summary": "ready", "check_reviews": []any{}},
-		"null-summary":     {"summary": nil, "findings": []any{}, "check_reviews": []any{}},
-		"wrong-type":       {"summary": 7, "findings": []any{}, "check_reviews": []any{}},
-		"unknown-field":    {"summary": "ready", "findings": []any{}, "check_reviews": []any{}, "extra": "reject"},
+		"missing-findings": {},
+		"null-findings":    {"findings": nil},
+		"wrong-type":       {"findings": 7},
+		"unknown-field":    {"findings": []any{}, "extra": "reject"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			projected, err := codexDomainResult(codexPlain(t, WorkerSchema()), map[string]any{"result": answer})
+			projected, err := codexDomainResult(codexPlain(t, domain), map[string]any{"result": answer})
 			if err != nil {
 				t.Fatal(err)
 			}
 			body, _ := json.Marshal(projected)
-			var worker WorkerJudgment
-			err = StrictDecode(body, &worker)
-			if err == nil {
-				_, err = workerJudgmentResult("development", worker, nil)
-			}
-			if err == nil {
-				t.Fatal("existing worker validator accepted invalid domain result")
+			if _, err := worker.DecodeResultWithFacts(input, "result", body, "sha256:source", nil, nil); err == nil {
+				t.Fatal("worker admission accepted invalid domain result")
 			}
 		})
 	}

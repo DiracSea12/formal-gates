@@ -59,7 +59,7 @@ func faultRepoRoot(t *testing.T) string {
 // faultCopyPackage 按生产的包输入口径把源仓库复制成无 .git 的包夹具：
 // Git 是输入集的唯一权威——tracked 文件（即使命中 ignore 规则）与未跟踪
 // 且未被 ignore 的文件都是包输入；生产 PackageReceipt 无条件排除的本地
-// 运行根 .git/.gates/.harness 同样排除。逐条目复制并要求常规文件，夹具
+// 运行根 .git/.gates 同样排除。逐条目复制并要求常规文件，夹具
 // 因此不会携带符号链接等执行器工件。
 func faultCopyPackage(t *testing.T, source, target string) {
 	t.Helper()
@@ -72,7 +72,7 @@ func faultCopyPackage(t *testing.T, source, target string) {
 		if relative == "" {
 			continue
 		}
-		if root, _, _ := strings.Cut(relative, "/"); root == ".git" || root == ".gates" || root == ".harness" {
+		if root, _, _ := strings.Cut(relative, "/"); root == ".git" || root == ".gates" {
 			continue
 		}
 		sourcePath := filepath.Join(source, filepath.FromSlash(relative))
@@ -116,7 +116,7 @@ func faultInstallSource(t *testing.T) string {
 		faultWriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), []byte(relative+"\n"), 0o600)
 	}
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-		copyValidateTestFile(t, repoRootValidateTest(t), root, "runtime/langgraph/formal_gates_harness/"+name)
+		copyValidateTestFile(t, repoRootValidateTest(t), root, "internal/harness/"+name)
 	}
 	return root
 }

@@ -753,12 +753,9 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	if actual := readTestFile(t, target.ManagedRulePath); actual != "<formal-gates:host-instructions:start>\n"+rule+"\n<formal-gates:host-instructions:end>\n" {
 		t.Fatal("managed rule differs from the installed package's canonical block")
 	}
-	helper, err := zcodeCredentialHelperPath()
-	if err != nil || helper != filepath.Join(target.TargetPath, "runtime", "langgraph", "formal_gates_harness", zcodeCredentialHelper) || !zcodeIsRegularFile(helper) {
+	helper := filepath.Join(target.TargetPath, "internal", "harness", zcodeCredentialHelper)
+	if !zcodeIsRegularFile(helper) {
 		t.Fatalf("installed helper = %s, %v", helper, err)
-	}
-	if os.Getenv("FORMAL_GATES_HARNESS_ROOT") != target.TargetPath {
-		t.Fatal("helper root did not come from the actual install target")
 	}
 
 	identities := map[string]bool{}
@@ -834,10 +831,10 @@ var canaryNativePathPeer = `
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const keys = ['HOME','USERPROFILE','ZCODE_DATA_BASE_DIR','ZCODE_HOME','ZCODE_STORAGE_DIR','ZCODE_SESSION_DB_PATH','ZCODE_SESSION_DB','ZCODE_LOG_DIR','ZCODE_MAILBOX_ROOT','ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_SCRIPT','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT','` + strings.Join(lifecycle.ProviderEnvironmentKeys(), "','") + `'];
+const keys = ['HOME','USERPROFILE','ZCODE_DATA_BASE_DIR','ZCODE_HOME','ZCODE_STORAGE_DIR','ZCODE_SESSION_DB_PATH','ZCODE_SESSION_DB','ZCODE_LOG_DIR','ZCODE_MAILBOX_ROOT','ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_SCRIPT','FORMAL_GATES_ZCODE_CREDENTIALS','` + strings.Join(lifecycle.ProviderEnvironmentKeys(), "','") + `'];
 const environment = Object.fromEntries(keys.map(key => [key, process.env[key] ?? '']));
 const config = path.join(process.env.ZCODE_DATA_BASE_DIR, '.zcode', 'v2');
-const paths = Object.fromEntries(['ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_CREDENTIALS','FORMAL_GATES_HARNESS_ROOT'].map(key => [key, fs.realpathSync(process.env[key])]));
+const paths = Object.fromEntries(['ZCODE_BUILTIN_PROVIDER_CONFIG_FILE','ZCODE_PERSONAL_PROVIDER_CONFIG_FILE','FORMAL_GATES_ZCODE_CREDENTIALS'].map(key => [key, fs.realpathSync(process.env[key])]));
 paths.sessionDatabase = process.env.ZCODE_SESSION_DB_PATH;
 if (paths.sessionDatabase !== process.env.ZCODE_SESSION_DB) process.exit(6);
 const settings = JSON.parse(fs.readFileSync(path.join(config, 'setting.json')));

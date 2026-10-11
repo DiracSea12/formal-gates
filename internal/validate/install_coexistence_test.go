@@ -10,7 +10,7 @@ import (
 	"formal-gates/internal/engine/facade"
 )
 
-const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","runtime/langgraph/formal_gates_harness/native_dsh.mjs","runtime/langgraph/formal_gates_harness/zcode_credential.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
+const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
 
 func coexistenceWriteFile(t *testing.T, path, data string, mode os.FileMode) {
 	t.Helper()
@@ -34,7 +34,7 @@ func coexistenceSource(t *testing.T) string {
 		coexistenceWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
-		copyValidateTestFile(t, repoRootValidateTest(t), root, "runtime/langgraph/formal_gates_harness/"+name)
+		copyValidateTestFile(t, repoRootValidateTest(t), root, "internal/harness/"+name)
 	}
 	return root
 }
