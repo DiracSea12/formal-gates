@@ -71,7 +71,6 @@ type engineCanary struct {
 	t              *testing.T
 	binary, home   string
 	nativeHost     string
-	localPeer      bool
 	run            facade.Run
 	project        string
 	vcs            *vcs.Provider

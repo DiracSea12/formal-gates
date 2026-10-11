@@ -19,6 +19,8 @@ var IDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 var RequiredActionIDs = []string{"development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "start-readiness", "validation-observation"}
 
+var roleRuleIDs = []string{"gate", "qa", "qa-design-blackbox", "qa-design-whitebox", "qa-execution-blackbox", "qa-execution-whitebox", "qa-review-blackbox", "qa-review-whitebox"}
+
 // 内置 QA 模式与合并验证的保留 ID。它们不是门文件，而是 CLI 识别的内置条目：
 // blackbox（黑盒，真实 QA：在 QA 隔离工作区按当前需求设计、快照后对主工作区已构建
 // 产品实际使用验证）与 whitebox（白盒，开发后读实现设计的结构测试）是正常路线的可选
@@ -42,6 +44,7 @@ type PromptCatalog struct {
 	CatalogRevision string             `json:"catalogRevision"`
 	Gates           []PromptDefinition `json:"gates"`
 	Actions         []PromptDefinition `json:"actions"`
+	RoleRules       []PromptDefinition `json:"-"`
 }
 
 func LoadPromptCatalog(root string) (PromptCatalog, error) {
@@ -63,8 +66,15 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("action prompts: %w", err)
 	}
-	if err := validateActionCatalog(actions); err != nil {
+	if err := validatePromptIDs("actions", actions, RequiredActionIDs); err != nil {
 		return PromptCatalog{}, fmt.Errorf("action prompts: %w", err)
+	}
+	roleRules, err := discoverPromptDirectory(filepath.Join(root, "prompts", "roles"))
+	if err != nil {
+		return PromptCatalog{}, fmt.Errorf("role rules: %w", err)
+	}
+	if err := validatePromptIDs("role rules", roleRules, roleRuleIDs); err != nil {
+		return PromptCatalog{}, fmt.Errorf("role rules: %w", err)
 	}
 
 	baseHash := sha256.Sum256([]byte(base))
@@ -76,12 +86,16 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 	for _, gate := range gates {
 		hashPart(h, "gate:"+gate.ID, gate.Content)
 	}
+	for _, rules := range roleRules {
+		hashPart(h, "role:"+rules.ID, rules.Content)
+	}
 	return PromptCatalog{
 		Base:            base,
 		BaseRevision:    hex.EncodeToString(baseHash[:]),
 		CatalogRevision: hex.EncodeToString(h.Sum(nil)),
 		Gates:           gates,
 		Actions:         actions,
+		RoleRules:       roleRules,
 	}, nil
 }
 
@@ -93,17 +107,17 @@ func PackageRouteCandidates(root string) ([]string, error) {
 	return catalog.RouteCandidates(), nil
 }
 
-func validateActionCatalog(actions []PromptDefinition) error {
-	ids := make([]string, 0, len(actions))
-	for _, action := range actions {
-		ids = append(ids, action.ID)
+func validatePromptIDs(kind string, definitions []PromptDefinition, expected []string) error {
+	ids := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		ids = append(ids, definition.ID)
 	}
-	if len(ids) != len(RequiredActionIDs) {
-		return fmt.Errorf("expected actions %s; found %s", strings.Join(RequiredActionIDs, ", "), strings.Join(ids, ", "))
+	if len(ids) != len(expected) {
+		return fmt.Errorf("expected %s %s; found %s", kind, strings.Join(expected, ", "), strings.Join(ids, ", "))
 	}
-	for index, id := range RequiredActionIDs {
+	for index, id := range expected {
 		if ids[index] != id {
-			return fmt.Errorf("expected actions %s; found %s", strings.Join(RequiredActionIDs, ", "), strings.Join(ids, ", "))
+			return fmt.Errorf("expected %s %s; found %s", kind, strings.Join(expected, ", "), strings.Join(ids, ", "))
 		}
 	}
 	return nil
@@ -122,6 +136,15 @@ func (catalog PromptCatalog) Action(id string) (PromptDefinition, bool) {
 	for _, action := range catalog.Actions {
 		if action.ID == id {
 			return action, true
+		}
+	}
+	return PromptDefinition{}, false
+}
+
+func (catalog PromptCatalog) RoleRule(id string) (PromptDefinition, bool) {
+	for _, rules := range catalog.RoleRules {
+		if rules.ID == id {
+			return rules, true
 		}
 	}
 	return PromptDefinition{}, false

@@ -147,6 +147,13 @@ func promptPackage(t *testing.T, gates map[string]string) string {
 	for _, id := range prompts.RequiredActionIDs {
 		writeTestFile(t, filepath.Join(root, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rules := range catalog.RoleRules {
+		writeTestFile(t, filepath.Join(root, "prompts", "roles", rules.ID+".md"), rules.Content)
+	}
 	for id, text := range gates {
 		writeTestFile(t, filepath.Join(root, "gates", id+".md"), text+"\n")
 	}
@@ -162,6 +169,64 @@ func writeTestFile(t *testing.T, path, text string) {
 	}
 }
 
-// TestRequirementRevisionNormalizesCRLF 保证需求工件哈希跨平台稳定：Windows 上 git
-// 检出按 autocrlf 把工作树行尾转 CRLF，隔离工作区与主工作区行尾不一致会导致注入
-// 哈希校验误报。规范化后 CRLF 与 LF 内容哈希一致。
+func TestRoleRulesStayPrivateAndBindCatalogAndPackageContent(t *testing.T) {
+	root := promptPackage(t, map[string]string{"quality": "checks"})
+	before, err := prompts.LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := PackageReceipt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rules := range before.RoleRules {
+		t.Run(rules.ID, func(t *testing.T) {
+			if _, public := before.Action(rules.ID); public {
+				t.Fatal("role payload became a public action")
+			}
+			if _, gate := before.Gate(rules.ID); gate {
+				t.Fatal("role payload became a gate")
+			}
+			path := filepath.Join(root, "prompts", "roles", rules.ID+".md")
+			found := false
+			for _, entry := range inventory.Entries {
+				if entry.Path == filepath.ToSlash(filepath.Join("prompts", "roles", rules.ID+".md")) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("role payload missing from original package inventory")
+			}
+			writeTestFile(t, path, rules.Content+"\nAdditional role duty.\n")
+			after, err := prompts.LoadPromptCatalog(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest, err := PackageDigest(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.CatalogRevision == after.CatalogRevision || inventory.Digest == digest {
+				t.Fatal("role body change escaped catalog/package binding")
+			}
+			if before.BaseRevision != after.BaseRevision || !reflect.DeepEqual(before.Actions, after.Actions) || !reflect.DeepEqual(before.RouteCandidates(), after.RouteCandidates()) {
+				t.Fatal("private role payload changed shared/action/route identity")
+			}
+			writeTestFile(t, path, rules.Content)
+		})
+	}
+}
+
+func TestRoleRuleCatalogRejectsIncompletePayloads(t *testing.T) {
+	for _, missing := range []string{"gate", "qa", "qa-design-blackbox", "qa-design-whitebox", "qa-execution-blackbox", "qa-execution-whitebox", "qa-review-blackbox", "qa-review-whitebox"} {
+		t.Run(missing, func(t *testing.T) {
+			root := promptPackage(t, nil)
+			if err := os.Remove(filepath.Join(root, "prompts", "roles", missing+".md")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prompts.LoadPromptCatalog(root); err == nil {
+				t.Fatal("catalog accepted a missing required role payload")
+			}
+		})
+	}
+}

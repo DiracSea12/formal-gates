@@ -129,17 +129,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks := []string{}
 	if value.ReadOnly {
-		base := catalog.Base
-		if input.Handler != "engine.gate.v2" {
-			before, gate, found := strings.Cut(base, "\n## 门审材料\n")
-			if found {
-				_, after, found := strings.Cut(gate, "\n## 严重度与发现证据\n")
-				if found {
-					base = before + "\n## 严重度与发现证据\n" + after
-				}
-			}
-		}
-		blocks = append(blocks, "[Shared reviewer contract]\n"+roleRules(base, input))
+		blocks = append(blocks, "[Shared reviewer contract]\n"+catalog.Base)
 	}
 	if input.Handler == "engine.gate.v2" {
 		if input.Validation.Gate == nil {
@@ -149,13 +139,33 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		if !ok {
 			return Material{}, fmt.Errorf("gate %s has no bound prompt", input.Validation.Gate.Gate)
 		}
-		blocks = append(blocks, "[Gate]\n"+roleRules(gate.Content, input))
+		blocks = append(blocks, "[Gate]\n"+gate.Content)
 	} else if actionID != "" {
 		action, ok := catalog.Action(actionID)
 		if !ok {
 			return Material{}, fmt.Errorf("worker action %s has no bound prompt", actionID)
 		}
-		blocks = append(blocks, "[Action]\n"+roleRules(action.Content, input))
+		blocks = append(blocks, "[Action]\n"+action.Content)
+	}
+	var ruleIDs []string
+	switch input.Handler {
+	case "engine.gate.v2":
+		ruleIDs = []string{"gate"}
+	case "engine.repair.verify.v2":
+		ruleIDs = []string{"qa-execution-blackbox", "qa-execution-whitebox"}
+	case "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
+		mode := "blackbox"
+		if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			mode = "whitebox"
+		}
+		ruleIDs = []string{"qa", actionID + "-" + mode}
+	}
+	for _, id := range ruleIDs {
+		rules, ok := catalog.RoleRule(id)
+		if !ok {
+			return Material{}, fmt.Errorf("worker role rules %s have no bound prompt", id)
+		}
+		blocks = append(blocks, "[Role rules]\n"+rules.Content)
 	}
 	document := input.RequirementDocument
 	document.Content = ""

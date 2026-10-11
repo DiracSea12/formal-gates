@@ -141,6 +141,13 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	for _, id := range prompts.RequiredActionIDs {
 		mustWriteCLI(t, filepath.Join(pkg, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rules := range catalog.RoleRules {
+		mustWriteCLI(t, filepath.Join(pkg, "prompts", "roles", rules.ID+".md"), rules.Content)
+	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")
 	return root, pkg
 }

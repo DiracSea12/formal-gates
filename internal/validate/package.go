@@ -48,6 +48,7 @@ var requiredDirs = []string{
 	"agents",
 	"prompts",
 	"prompts/actions",
+	"prompts/roles",
 	"gates",
 	"bin",
 	"cmd",

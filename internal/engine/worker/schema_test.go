@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -153,7 +154,10 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 }
 
 func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
-	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}, {ID: "qa-design"}, {ID: "qa-execution"}, {ID: "qa-review"}}}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, role := range []struct {
 		handler string
 		kind    coverage.ReviewKind
@@ -549,7 +553,11 @@ func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *tes
 }
 
 func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
-	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop"}, {ID: "qa-design", Content: "Design"}, {ID: "qa-review", Content: "Review"}, {ID: "qa-execution", Content: "Execute"}}, Gates: []prompts.PromptDefinition{{ID: "quality", Content: "Judge"}}}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Gates = []prompts.PromptDefinition{{ID: "quality", Content: "Judge"}}
 	for _, role := range []struct {
 		handler  string
 		statuses []string
@@ -608,7 +616,11 @@ func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "qa-execution"}}})
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := Render(input, catalog)
 	if err != nil {
 		t.Fatal(err)
 	}

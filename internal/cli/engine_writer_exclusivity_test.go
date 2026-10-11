@@ -322,6 +322,9 @@ func engineWriterAdmission(t *testing.T, root string) *facade.Admission {
 	for _, action := range catalog.Actions {
 		mustWriteCLI(t, filepath.Join(target, "prompts", "actions", action.ID+".md"), action.Content)
 	}
+	for _, rules := range catalog.RoleRules {
+		mustWriteCLI(t, filepath.Join(target, "prompts", "roles", rules.ID+".md"), rules.Content)
+	}
 	for _, gate := range catalog.Gates {
 		mustWriteCLI(t, filepath.Join(target, "gates", gate.ID+".md"), gate.Content)
 	}

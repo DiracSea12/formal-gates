@@ -136,7 +136,10 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 
 func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *testing.T) {
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", ContentDigest: "confirmed-digest", Content: "Complete confirmed requirement body.", Requirements: []requirement.FrozenRequirement{{ID: "REQ-001", Title: "behavior", Requirement: "required behavior"}}}
-	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "qa-design"}}}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
@@ -182,7 +185,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		t.Run(string(mode), func(t *testing.T) {
 			input := semanticInput()
 			input.Pending.AttemptID = "attempt"
@@ -192,7 +195,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == coverage.ReviewBlackbox {
+			if mode != coverage.ReviewWhitebox {
 				for _, absent := range []string{"testFile", "testSymbol", "白盒测试文件", "Omit public-entry fields"} {
 					if strings.Contains(material.Prompt, absent) {
 						t.Fatal("blackbox received unrelated whitebox instructions", absent)
@@ -419,7 +422,7 @@ func TestQAExecutionMaterialSelectsCurrentModeAndKeepsSharedEvidenceRules(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		t.Run(string(mode), func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = "engine.qa.execution.v3"
@@ -449,5 +452,98 @@ func TestQAExecutionMaterialSelectsCurrentModeAndKeepsSharedEvidenceRules(t *tes
 				}
 			}
 		})
+	}
+}
+
+func TestQAReviewMaterialKeepsCommonPreparationAndCurrentModeDuties(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
+		t.Run(string(mode), func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = "engine.qa.review.rationale.v2"
+			input.RequirementDocument.Content = "Confirmed scope"
+			input.Validation.Manifest.Binding.ReviewKind = mode
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, common := range []string{
+				"逐条独立判断尚未批准的 case/shared-step",
+				"测试准备可构造规则见 QA Design，构造正常前置不要求重跑前序流程。",
+				"## 每条用例六项", "任一项不成立该 case FAIL",
+				"逐验收点核正向、失败/不得误报、边界/中间态及相关正常回归",
+				"共同说明只独立核一次，变化时核全部引用者",
+				"QA 正常可达前置的构造按 QA Design",
+			} {
+				if !strings.Contains(material.Prompt, common) {
+					t.Fatal("common review duty lost", common)
+				}
+			}
+			black := []string{"黑盒在基线隔离区审当前需求与公开步骤", "黑盒不能用已有套件替代公开入口实跑。"}
+			white := []string{"白盒读实际实现与候选测试。", "白盒先独立列行为、分支、oracle", "白盒逐项读 reviewBase、reviewArtifact 原差异及代码/配置", "声明为测试不等于归属证明"}
+			current, other := black, white
+			if mode == coverage.ReviewWhitebox {
+				current, other = white, black
+			}
+			for _, rule := range current {
+				if !strings.Contains(material.Prompt, rule) {
+					t.Fatal("current mode duty lost", rule)
+				}
+			}
+			for _, rule := range other {
+				if strings.Contains(material.Prompt, rule) {
+					t.Fatal("other mode duty leaked", rule)
+				}
+			}
+			stored, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recovered protocol.WorkerInput
+			if err := json.Unmarshal(stored, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := Render(recovered, catalog)
+			if err != nil || !reflect.DeepEqual(material, replay) {
+				t.Fatalf("serialized recovery changed role material: %v", err)
+			}
+		})
+	}
+}
+
+func TestRoleMaterialRejectsMissingSelectedRules(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := semanticInput()
+	input.RequirementDocument.Content = "Confirmed scope"
+	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewBlackbox
+	catalog.RoleRules = slices.DeleteFunc(catalog.RoleRules, func(rules prompts.PromptDefinition) bool { return rules.ID == "qa-design-blackbox" })
+	if _, err := Render(input, catalog); err == nil || !strings.Contains(err.Error(), "qa-design-blackbox") {
+		t.Fatalf("missing current role body was accepted: %v", err)
+	}
+}
+
+func TestRepairComparisonMaterialPreservesBothApprovedModes(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := semanticInput()
+	input.Handler = "engine.repair.verify.v2"
+	input.RequirementDocument.Content = "Confirmed scope"
+	input.Validation.Repair = &protocol.RepairInput{}
+	material, err := Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{"黑盒依据真实公开入口观察。", "白盒依据本轮指定结构测试。", "自测主张、模拟输出或代码检视不能代替执行事实。"} {
+		if !strings.Contains(material.Prompt, rule) {
+			t.Fatal("approved affected-case comparison duty lost", rule)
+		}
 	}
 }

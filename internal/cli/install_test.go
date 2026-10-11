@@ -75,6 +75,7 @@ func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	}
 	assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
 	assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
+	assertFileContains(t, filepath.Join(target, "prompts", "roles", "qa-design-blackbox.md"), "黑盒在从基线")
 	assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
 	for _, installedPackageEntry := range []string{"go.mod", "cmd", "internal", ".github"} {
 		if _, err := os.Stat(filepath.Join(target, installedPackageEntry)); err != nil {
@@ -109,6 +110,7 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 			target := filepath.Join(project, filepath.FromSlash(tc.targetRel))
 			assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
 			assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
+			assertFileContains(t, filepath.Join(target, "prompts", "roles", "qa-design-blackbox.md"), "黑盒在从基线")
 			assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
 			assertInstalledScriptInventory(t, source, target)
 		})
@@ -978,6 +980,14 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		t.Fatal("cannot locate CLI test source")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	roleFiles, err := os.ReadDir(filepath.Join(repoRoot, "prompts", "roles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range roleFiles {
+		rel := filepath.Join("prompts", "roles", file.Name())
+		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))
+	}
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
 		rel := filepath.Join("internal", "harness", name)
 		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))

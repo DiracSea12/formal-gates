@@ -5,20 +5,17 @@ import (
 	"testing"
 	"time"
 
-	"formal-gates/internal/engine/acceptance"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/encoder"
 	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
-// 用例：收口段 marker 扫描——nil 定义、携带 MISSING_ENGINE_ADAPTER 的
-// diagnostic-only 定义拒绝；正常编译产物（含 shipped definition）通过，
-// 通过即"可编码为 canonical 制品、无 marker、可执行"的机械证明。
-func TestScanNoMissingEngineAdapterBindsMarkerToExecutability(t *testing.T) {
-	if err := acceptance.ScanNoMissingEngineAdapter(nil); err == nil {
-		t.Error("nil definition must be rejected")
-	}
+// canonical encoder 拒绝 nil 和 diagnostic-only marker 定义，并接受
+// 完整注册的契约夹具与六种步骤类型的协议测试图。
+func TestEncodeAcceptsRegisteredGraphsAndRejectsDiagnosticDefinitions(t *testing.T) {
+	_, err := encoder.Encode(nil)
+	wantErrContaining(t, err, "nil definition")
 
 	res, err := compiler.CompileDiagnostic(fxDefinition(t), fxRegistryWithout(t, "h.s.review"))
 	if err != nil {
@@ -27,22 +24,18 @@ func TestScanNoMissingEngineAdapterBindsMarkerToExecutability(t *testing.T) {
 	if !res.Definition.MissingEngineAdapter {
 		t.Fatal("fixture must carry the marker for this case")
 	}
-	err = acceptance.ScanNoMissingEngineAdapter(res.Definition)
-	if err == nil {
-		t.Error("marker definition must fail the closure scan")
-	} else {
-		wantErrContaining(t, err, "MISSING_ENGINE_ADAPTER")
-	}
+	_, err = encoder.Encode(res.Definition)
+	wantErrContaining(t, err, "MISSING_ENGINE_ADAPTER")
 
-	if err := acceptance.ScanNoMissingEngineAdapter(fxCompile(t, fxDefinition(t), fxRegistry(t))); err != nil {
-		t.Fatalf("clean compile must pass the scan: %v", err)
+	if _, err := encoder.Encode(fxCompile(t, fxDefinition(t), fxRegistry(t))); err != nil {
+		t.Fatalf("fully registered contract fixture must encode: %v", err)
 	}
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := acceptance.ScanNoMissingEngineAdapter(cd); err != nil {
-		t.Fatalf("shipped definition must pass the scan: %v", err)
+	if _, err := encoder.Encode(cd); err != nil {
+		t.Fatalf("fully registered protocol test graph must encode: %v", err)
 	}
 }
 
