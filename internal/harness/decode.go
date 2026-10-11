@@ -56,6 +56,7 @@ func StrictDecode(b []byte, dst any) error {
 		return e
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
 	d.DisallowUnknownFields()
 	if e := d.Decode(dst); e != nil {
 		return e

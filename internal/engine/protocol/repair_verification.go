@@ -68,7 +68,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 	}
 
 	for action, binding := range s.DispatchBindings {
-		if binding.VerificationSource == "" || s.validationRole(binding.Task, cd) != "engine.repair.verify" || !s.validationWorkCarryAuthorized(action, binding.Task) || slices.ContainsFunc(contexts, func(c repairComparison) bool { return c.binding.Task == binding.Task }) {
+		if binding.VerificationSource == "" || s.validationRole(binding.Task, cd) != "engine.repair.verify.v2" || !s.validationWorkCarryAuthorized(action, binding.Task) || slices.ContainsFunc(contexts, func(c repairComparison) bool { return c.binding.Task == binding.Task }) {
 			continue
 		}
 		wave := s.validationWave(binding.WaveID)
@@ -141,7 +141,7 @@ func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult,
 		Source, Cases string
 		Final         bool
 	}{actions, source.Digest, digestOfCanonical(context.affected), final}), "sha256:")
-	task := s.replacementFold(pipelineTask(cd, "engine.repair.verify", scope))
+	task := s.replacementFold(pipelineTask(cd, "engine.repair.verify.v2", scope))
 	if verification != nil {
 		task = verification.task
 	}

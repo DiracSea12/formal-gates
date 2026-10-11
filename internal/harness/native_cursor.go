@@ -273,9 +273,9 @@ func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer,
 	allowed := false
 	switch input.Event {
 	case "preToolUse":
-		allowed = input.Tool == "MCP:"+nativeWorkspaceTool && resolveNativePath(input.Cwd) == tools.workspace
+		allowed = (input.Tool == "MCP:"+nativeWorkspaceTool || input.Tool == "MCP:"+nativeSemanticTool) && resolveNativePath(input.Cwd) == tools.workspace
 	case "beforeMCPExecution":
-		allowed = input.Server == "formal-gates" && input.Tool == nativeWorkspaceTool && (input.Cwd == "" || resolveNativePath(input.Cwd) == tools.workspace)
+		allowed = input.Server == "formal-gates" && (input.Tool == nativeWorkspaceTool || input.Tool == nativeSemanticTool) && (input.Cwd == "" || resolveNativePath(input.Cwd) == tools.workspace)
 	}
 	permission := "deny"
 	if allowed {
@@ -348,14 +348,6 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	readOnly, ok := getOf(request, "read_only").(bool)
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
-	}
-	schemaValue, err := mustEntry(request, "schema")
-	if err != nil {
-		return nil, err
-	}
-	schema, err := schemaForPrompt(schemaValue)
-	if err != nil {
-		return nil, err
 	}
 	model, _, err := cursorModelArgument(request)
 	if err != nil {
@@ -434,7 +426,7 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
-	argv = append(argv, prompt+"\nReturn ONLY one JSON object matching this schema:\n"+string(schema))
+	argv = append(argv, prompt)
 	events, err := os.OpenFile(filepath.Join(directory, "native-events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
@@ -600,25 +592,11 @@ func cursorObserve(directory string, materialize bool) (map[string]any, error) {
 	if !valuesEqual(selection, getOf(source, "selection")) {
 		return nil, &blockedError{message: "CURSOR_BINDING: native selection differs from source"}
 	}
-	answer, ok := terminal["result"].(string)
-	if !ok {
-		return nil, &blockedError{message: "CURSOR_RESULT: native result is not text"}
-	}
-	if materialize {
-		if err := writeNativeAnswer(directory, answer, "CURSOR"); err != nil {
-			return nil, err
-		}
-	} else {
-		saved, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
-		if err != nil {
-			return nil, err
-		}
-		if normalizeNewlines(string(saved)) != normalizeNewlines(answer) {
-			return nil, &blockedError{message: "CURSOR_RESULT: saved output differs"}
-		}
+	if err := writeSubmittedAnswer(directory); err != nil {
+		return nil, err
 	}
 	return evidenceSource(directory, "cursor", identity, map[string]any{"native_store": store, "selection": selection, "native_request": terminal["request_id"], "native_result": terminal, "usage_evidence": terminal["usage"]})
 }
 func cursorReconcile(directory string, process any) (map[string]any, error) {
-	return reconcileCompletedOutput(directory, process, "CURSOR", func(original string) bool { return strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:") }, func() (map[string]any, error) { return cursorObserve(directory, true) })
+	return recoverNativeSource(directory, process, "CURSOR", func() (map[string]any, error) { return cursorObserve(directory, true) })
 }

@@ -183,7 +183,7 @@ func TestNativeFormEnumsUseOriginalFieldAndOptionValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := filepath.Join(run, "decision.json")
-	if code, errors := respondCLI(t, "--run", run, "--choice", "1", "--values", `[{"choice":2}]`, "--save-decision", file); code != 0 {
+	if code, errors := respondCLI(t, "--run", run, "--choice", "1", "--form-field", "1", "--form-choice", "2", "--save-decision", file); code != 0 {
 		t.Fatal(code, errors)
 	}
 	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {

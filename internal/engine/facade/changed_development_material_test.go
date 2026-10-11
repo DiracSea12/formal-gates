@@ -21,13 +21,13 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality"}))
 			d.drive()
-			dev, di := d.action("engine.development.batch")
+			dev, di := d.action("engine.development.batch.v2")
 			if err := os.WriteFile(filepath.Join(di.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) > 1 }\n"), 0644); err != nil {
 				t.Fatal(err)
 			}
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 			d.drive()
-			design, in := d.action("engine.qa.design")
+			design, in := d.action("engine.qa.design.v2")
 			manifest := in.Manifest
 			manifest.Cases = []coverage.AcceptanceCase{{CaseID: "valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "Valid accepts the actual word", Files: []string{"app_test.go"}}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "MISUSE", TestRef: "app_test.go::TestInvalid", Oracle: "Valid rejects empty input", Files: []string{"app_test.go"}}}
 			manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "invalid"}}
@@ -37,7 +37,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			}
 			d.business(design, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 			d.drive()
-			review, before := d.action("engine.qa.review.rationale")
+			review, before := d.action("engine.qa.review.rationale.v2")
 			if before.ReviewArtifact == nil {
 				t.Fatal("first actual test artifact is absent")
 			}
@@ -67,14 +67,14 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Impact: impact, Reason: "Confirm each retained and rebuilt responsibility"}}})
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			d.drive()
-			nextDev, newInput := d.action("engine.development.batch")
+			nextDev, newInput := d.action("engine.development.batch.v2")
 			devEntry, statErr := os.ReadFile(filepath.Join(newInput.Workspace.Path, "app_test.go"))
 			if err := os.WriteFile(filepath.Join(newInput.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) >= 2 }\n"), 0644); err != nil {
 				t.Fatal(err)
 			}
 			d.business(nextDev, protocol.ValidationResult{Binding: newInput.Binding, Status: "PASS", Development: batchEvidence(newInput)})
 			d.drive()
-			_, after := d.action("engine.qa.design")
+			_, after := d.action("engine.qa.design.v2")
 			actual, materialErr := os.ReadFile(filepath.Join(after.Workspace.Path, "app_test.go"))
 			facts := map[string]any{"approvedArtifact": approvedArtifact, "oldDevelopment": before.ReviewBase, "oldArtifact": before.ReviewArtifact, "oldWorkspace": before.Workspace, "newDevelopment": d.run.Validation.DevelopmentSnapshot, "newDevelopmentInput": newInput, "newDeveloperTestBody": string(devEntry), "newDeveloperTestError": fmt.Sprint(statErr), "newAuthoring": after, "newAuthoringTestBody": string(actual), "newAuthoringTestError": fmt.Sprint(materialErr), "confirmedRequirementChoices": choices, "rejected": d.run.RejectedResults}
 			if evidence := os.Getenv("NATIVE_VCS_EVIDENCE"); evidence != "" {
@@ -107,7 +107,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			}
 			originalInput := after
 			d.reopen()
-			_, restored := d.action("engine.qa.design")
+			_, restored := d.action("engine.qa.design.v2")
 			if !reflect.DeepEqual(originalInput, restored) {
 				t.Fatal("reopened authoring changed its original source binding", restored)
 			}

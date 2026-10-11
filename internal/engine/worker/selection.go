@@ -85,8 +85,15 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 	}
 	result := &protocol.GranularityReview{Reason: value.Reason, VerificationTier: value.VerificationTier, CheckpointReason: value.CheckpointReason}
 	ids := []string{}
-	for index := range value.Batches {
-		ids = append(ids, fmt.Sprintf("batch-%d", index+1))
+	for index, item := range value.Batches {
+		id := fmt.Sprintf("batch-%d", index+1)
+		if item.Reuse != 0 {
+			if input.ApprovedPlan == nil || item.Reuse < 1 || item.Reuse > len(input.ApprovedPlan.Batches) {
+				return nil, fmt.Errorf("batch reuse selects an original confirmed batch")
+			}
+			id = input.ApprovedPlan.Batches[item.Reuse-1].ID
+		}
+		ids = append(ids, id)
 	}
 	for _, group := range value.CheckpointGroups {
 		selected, err := selectIDs(group, ids)
@@ -97,15 +104,33 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 	}
 	for index, item := range value.Batches {
 		batch := protocol.DevelopmentBatch{Deliverable: item.Deliverable, PublicEntry: item.PublicEntry, Interfaces: item.Interfaces, StateBoundary: item.StateBoundary, Risk: item.Risk, Rollback: item.Rollback, Recovery: item.Recovery, Handoff: item.Handoff, ContextCost: item.ContextCost, Spike: item.Spike}
+		reused := item.Reuse != 0
+		if reused {
+			batch = input.ApprovedPlan.Batches[item.Reuse-1]
+			change := *item.changes
+			change.Owner, change.DependsOn, change.Subtasks, change.DoD, change.Checks, change.Artifacts, change.NewArtifacts, change.Route = nil, nil, nil, nil, nil, nil, nil, nil
+			raw, err := json.Marshal(change)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(raw, &batch); err != nil {
+				return nil, err
+			}
+		} else {
+			batch.Route = nil
+		}
 		batch.ID = ids[index]
-		batch.Route = nil
 		var err error
 		if completed {
+			if reused {
+				return nil, fmt.Errorf("completed repair uses current native artifacts, not a carried batch")
+			}
 			if len(value.Batches) != 1 || paths == nil || item.Artifacts != nil || item.NewArtifacts != nil {
 				return nil, fmt.Errorf("completed repair artifacts require original single-batch native paths")
 			}
 			batch.Artifacts = slices.Clone(paths)
-		} else {
+		} else if !reused || item.changes.Artifacts != nil || item.changes.NewArtifacts != nil {
+			batch.Artifacts = nil
 			for _, location := range item.Artifacts {
 				if location.Line != 0 || location.RequirementLine != 0 {
 					return nil, fmt.Errorf("artifact selects an original file, not a source line")
@@ -124,9 +149,11 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 				batch.Artifacts = append(batch.Artifacts, name)
 			}
 		}
-		batch.DependsOn, err = selectIDs(item.DependsOn, ids)
-		if err != nil {
-			return nil, err
+		if !reused || item.changes.DependsOn != nil {
+			batch.DependsOn, err = selectIDs(item.DependsOn, ids)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if item.Owner != nil {
 			if *item.Owner < 0 {
@@ -138,40 +165,64 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 				batch.Owner = fmt.Sprintf("slice-%d", *item.Owner)
 			}
 		}
-		for i, sub := range item.Subtasks {
-			batch.Subtasks = append(batch.Subtasks, protocol.DevelopmentSubtask{ID: fmt.Sprintf("%s-task-%d", batch.ID, i+1), Description: sub.Description})
-		}
-		for i, dod := range item.DoD {
-			batch.DoD = append(batch.DoD, protocol.DevelopmentCriterion{ID: fmt.Sprintf("criterion-%d", i+1), Description: dod.Description})
-		}
-		if input.Handler == "engine.repair" {
-			for _, check := range input.ApprovedChecks {
-				if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests {
-					batch.Checks = append(batch.Checks, check)
+		if !reused {
+			for i, sub := range item.Subtasks {
+				if sub.Reuse != 0 || sub.Remove {
+					return nil, fmt.Errorf("new subtask cannot select an original item")
+				}
+				batch.Subtasks = append(batch.Subtasks, protocol.DevelopmentSubtask{ID: fmt.Sprintf("%s-task-%d", batch.ID, i+1), Description: sub.Description})
+			}
+			for i, dod := range item.DoD {
+				if dod.Reuse != 0 || dod.Remove {
+					return nil, fmt.Errorf("new criterion cannot select an original item")
+				}
+				batch.DoD = append(batch.DoD, protocol.DevelopmentCriterion{ID: fmt.Sprintf("criterion-%d", i+1), Description: dod.Description})
+			}
+		} else {
+			if item.changes.Subtasks != nil {
+				batch.Subtasks, err = reviseSubtasks(batch.Subtasks, item.Subtasks, batch.ID)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if item.changes.DoD != nil {
+				batch.DoD, err = reviseCriteria(batch.DoD, item.DoD)
+				if err != nil {
+					return nil, err
 				}
 			}
 		}
-		for i, check := range item.Checks {
-			selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
-			if check.Reuse != 0 {
-				if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" {
-					return nil, fmt.Errorf("check reuse selects only an original approved check")
-				}
-				selected = input.ApprovedChecks[check.Reuse-1]
-			} else {
-				for _, approved := range input.ApprovedChecks {
-					if approved.Command == check.Command {
-						return nil, fmt.Errorf("approved command requires its original check selection")
+		if !reused || item.changes.Checks != nil {
+			batch.Checks = nil
+			if input.Handler == "engine.repair.v2" {
+				for _, check := range input.ApprovedChecks {
+					if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests {
+						batch.Checks = append(batch.Checks, check)
 					}
 				}
-				if check.Command == "" || input.Handler == "engine.repair" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
-					return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
-				}
 			}
-			if !slices.ContainsFunc(batch.Checks, func(existing protocol.DevelopmentCheck) bool {
-				return existing.Purpose == selected.Purpose && existing.Command == selected.Command
-			}) {
-				batch.Checks = append(batch.Checks, selected)
+			for i, check := range item.Checks {
+				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
+				if check.Reuse != 0 {
+					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" {
+						return nil, fmt.Errorf("check reuse selects only an original approved check")
+					}
+					selected = input.ApprovedChecks[check.Reuse-1]
+				} else {
+					for _, approved := range input.ApprovedChecks {
+						if approved.Command == check.Command {
+							return nil, fmt.Errorf("approved command requires its original check selection")
+						}
+					}
+					if check.Command == "" || input.Handler == "engine.repair.v2" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+						return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
+					}
+				}
+				if !slices.ContainsFunc(batch.Checks, func(existing protocol.DevelopmentCheck) bool {
+					return existing.Purpose == selected.Purpose && existing.Command == selected.Command
+				}) {
+					batch.Checks = append(batch.Checks, selected)
+				}
 			}
 		}
 		if item.Route != nil {
@@ -220,7 +271,17 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 			}
 			id = selected[0]
 		}
-		result.SharedSteps = append(result.SharedSteps, SharedStep{Artifacts: item.Artifacts, Independent: item.Independent, ID: id, Procedure: item.Procedure, Operations: item.Operations, Files: item.Files})
+		step := SharedStep{Artifacts: item.Artifacts, Independent: item.Independent, ID: id, Procedure: item.Procedure, Operations: item.Operations, Files: item.Files}
+		if item.Step != 0 {
+			original := issued.SharedSteps[item.Step-1]
+			step = SharedStep{ID: original.ID, Artifacts: slices.Clone(original.Artifacts), Independent: original.Independent, Procedure: original.Procedure, Operations: slices.Clone(original.Operations)}
+			if err := applySharedStepChange(&step, *item.changes); err != nil {
+				return nil, err
+			}
+		} else if item.Procedure == "" {
+			return nil, fmt.Errorf("new shared step requires a procedure")
+		}
+		result.SharedSteps = append(result.SharedSteps, step)
 		stepIDs = append(stepIDs, id)
 	}
 	selectedCaseIDs := slices.Clone(caseIDs)
@@ -243,7 +304,17 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 		if err != nil {
 			return nil, err
 		}
-		result.Cases = append(result.Cases, Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestFile: item.TestFile, TestSymbol: item.TestSymbol})
+		entry := Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestFile: item.TestFile, TestSymbol: item.TestSymbol}
+		if item.Case != 0 {
+			original := issued.Cases[item.Case-1]
+			entry = Case{CaseID: original.CaseID, Operations: slices.Clone(original.Operations), Scenario: original.Scenario, SharedSteps: slices.Clone(original.SharedSteps), PublicEntry: original.PublicEntry, Preconditions: original.Preconditions, Steps: original.Steps, Oracle: original.Oracle}
+			if err := applyCaseChange(&entry, *item.changes, stepIDs); err != nil {
+				return nil, err
+			}
+		} else if item.Scenario == "" || item.Oracle == "" {
+			return nil, fmt.Errorf("new case requires a scenario and oracle")
+		}
+		result.Cases = append(result.Cases, entry)
 		if !slices.Contains(selectedCaseIDs, id) {
 			selectedCaseIDs = append(selectedCaseIDs, id)
 		}

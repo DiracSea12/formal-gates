@@ -87,7 +87,7 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 		Source: cost.SourceUnavailable,
 		Reason: resolved.Reason,
 	}
-	if state.validationRole(pending.Task, e.cfg.Definition) == "engine.gate" {
+	if state.validationRole(pending.Task, e.cfg.Definition) == "engine.gate.v2" {
 		entry.Kind = "gate"
 	}
 	if resolved.State == CostSourceReady {

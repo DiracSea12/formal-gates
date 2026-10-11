@@ -24,7 +24,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 			d.reviewReady()
 			original := d.run.Validation.Waves[0].Candidate.Identity
 			for round, affected := range example.affected {
-				id, in := d.action("engine.qa.execution")
+				id, in := d.action("engine.qa.execution.v2")
 				report := executionFor(in)
 				if round == 1 {
 					for i := range report.Records {
@@ -72,7 +72,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 					}
 				}
 				d.drive()
-				id, in = d.action("engine.repair")
+				id, in = d.action("engine.repair.v2")
 				edit := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct affected case output", AffectedCases: []string{affected}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: affected, Result: coverage.ExecutedPass, Procedure: "run app with the affected input", Observation: "specified output returned", Comparison: "exact output matches requirement"}}}}
 				d.business(id, edit)
 				if edit.Binding.PureP2 {
@@ -92,7 +92,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 					d.drive()
 				}
 			}
-			id, in := d.action("engine.qa.execution")
+			id, in := d.action("engine.qa.execution.v2")
 			report := executionFor(in)
 			for i := range report.Records {
 				if report.Records[i].CaseID == "normal" {

@@ -13,12 +13,12 @@ import (
 
 func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.gate"
+	input.Handler = "engine.gate.v2"
 	result := decodeSemantic(t, input, Gate{Findings: []Finding{{Severity: "P1", Message: "Actual public contract failure"}}})
 	if result.Outcome != protocol.OutcomePass || result.FailureClass != "" || result.Validation.Status != "FAIL" || len(result.Validation.Findings) != 1 {
 		t.Fatalf("semantic defect became a transport failure: %+v", result)
 	}
-	input.Handler = "engine.review.worker"
+	input.Handler = "engine.review.worker.v2"
 	input.Validation = nil
 	input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
 	body := Review{Findings: []Finding{{Severity: "P1", Message: "Requirement contradicts public behavior"}}, Verification: []string{}}
@@ -32,18 +32,18 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 }
 
 func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker", "engine.readiness.plan", "engine.development.batch", "engine.repair", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.repair.verify", "engine.gate"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v2", "engine.development.batch.v2", "engine.repair.v2", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
-			if handler == "engine.review.worker" || handler == "engine.readiness.plan" {
+			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v2" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-				if handler == "engine.readiness.plan" {
+				if handler == "engine.readiness.plan.v2" {
 					input.Review.Action = review.StartReadiness
 				}
 			}
-			if handler == "engine.repair.verify" {
+			if handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{}
 			}
 			result := decodeSemantic(t, input, Interruption{InterruptionReason: "The issued source cannot be read, so the duty could not be completed"})
@@ -64,7 +64,7 @@ func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
 
 func TestExecutionInabilityRetainsActualCompletedComparisons(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.qa.execution"
+	input.Handler = "engine.qa.execution.v2"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "new"}, {ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "two", CaseID: "remaining"}}}
 	input.Validation.RequiredCases = []string{"new", "remaining"}
@@ -89,13 +89,13 @@ func TestExecutionInabilityRetainsActualCompletedComparisons(t *testing.T) {
 
 func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.gate"
+	input.Handler = "engine.gate.v2"
 	for _, raw := range []string{`{"outcome":"PASS","validation":{"status":"FAIL","findings":[]}}`, `{"status":"FAIL","findings":[],"failureClass":"BUSINESS_REJECT"}`, `{"status":"FAIL","findings":[],"interruptionReason":"cannot finish"}`, `{"interruptionReason":" "}`, `{"status":"PASS"}`, `{"status":"PASS","findings":[]} {"interruptionReason":"extra"}`} {
 		if _, err := DecodeResultWithPaths(input, "result", []byte(raw), "actual-native-digest", []string{}); err == nil {
 			t.Fatalf("invalid body accepted: %s", raw)
 		}
 	}
-	input.Handler = "engine.qa.execution"
+	input.Handler = "engine.qa.execution.v2"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 	input.Validation.PendingCases = []string{"new"}

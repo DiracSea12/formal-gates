@@ -40,6 +40,7 @@ func newDSHScenario(t *testing.T, steps []peerStep, customize func(request map[s
 	// The evidence files the peer writes are resolved into the directory the
 	// command itself will resolve, before the script is serialised.
 	for i := range steps {
+		steps[i].SemanticJob = directory
 		for j := range steps[i].Files {
 			steps[i].Files[j].Path = filepath.Join(directory, steps[i].Files[j].Path)
 		}
@@ -88,7 +89,7 @@ func successSteps() []peerStep {
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}, "close": {}}}}}`},
 		{On: `"method":"session/new"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "configOptions": [{"id": "model"}, {"id": "reasoning_effort", "currentValue": "high"}]}}`},
 		{On: `"method":"session/set_config_option"`, Send: `{"id": "@ID@", "result": {"configOptions": [{"id": "model", "currentValue": "test-model"}, {"id": "reasoning_effort", "currentValue": "high"}]}}`},
-		{On: `"method":"session/prompt"`, Files: []peerFile{
+		{On: `"method":"session/prompt"`, Semantics: map[string]any{"status": "PASS", "summary": "observed", "findings": []any{}, "check_reviews": map[string]any{}}, Files: []peerFile{
 			{Path: "native-source.json", Body: `{"sessionId": "s-1", "inputId": "in-1", "turn": 1, "transcriptPath": "/t/root.jsonl"}`},
 			{Path: "native-events.jsonl", Body: events},
 		}, Send: `{"id": "@ID@", "result": {"stopReason": "end_turn"}}`},
@@ -135,7 +136,7 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 	if !valuesEqual(selection, map[string]any{"model": "test-model", "reasoning_effort": "high"}) {
 		t.Fatalf("selection = %v", selection)
 	}
-	if !valuesEqual(objectOrEmpty(value)["files"], proofsOf(t, scenario.directory, nativeSourceFiles)) {
+	if !valuesEqual(objectOrEmpty(value)["files"], proofsOf(t, scenario.directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile))) {
 		t.Fatalf("files = %v", objectOrEmpty(value)["files"])
 	}
 	usage := listOf(objectOrEmpty(value)["usage_evidence"])
@@ -170,9 +171,8 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 	if !valuesEqual(sourceRecord, value) {
 		t.Fatalf("source.json = %v, stdout = %v", sourceRecord, value)
 	}
-	// answer.raw.txt keeps the original text; answer.json is the framed result.
-	if body := readTestFileBytes(t, filepath.Join(scenario.directory, "answer.raw.txt")); string(body) != "```json\n"+dshTestAnswerJSON+"\n```" {
-		t.Fatalf("answer.raw.txt = %q", body)
+	if _, err := os.Stat(filepath.Join(scenario.directory, "answer.raw.txt")); !os.IsNotExist(err) {
+		t.Fatal("prose result payload remains")
 	}
 	if body := readTestFileBytes(t, filepath.Join(scenario.directory, "answer.json")); string(body) != `{"check_reviews":{},"findings":[],"status":"PASS","summary":"observed"}` {
 		t.Fatalf("answer.json = %s", body)
@@ -200,11 +200,7 @@ func TestRunNativeNewSessionSuccessTurn(t *testing.T) {
 		t.Fatalf("session/new must carry the empty additional-server list:\n%s", echo)
 	}
 
-	// The prompt text: the request prompt, the fixed middle line, and the
-	// schema re-encoded canonically (value-equal to the reference's
-	// default-separator form).
-	wantPrompt := dshTestPrompt + "\nReturn ONLY one JSON object matching this result schema:\n" +
-		mustCanonical(t, scenario.request["schema"])
+	wantPrompt := dshTestPrompt
 	promptFrame := frameByMethod(t, echo, "session/prompt")
 	promptParts := listOf(objectOrEmpty(promptFrame["params"])["prompt"])
 	if len(promptParts) != 1 {

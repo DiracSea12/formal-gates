@@ -7,22 +7,22 @@ export const inject = ['tools']
 export function apply(ctx, config) {
   if (!isAbsolute(config.directory) || typeof config.read_only !== 'boolean') throw new Error('Invalid harness native configuration')
   if (config.managed_tools) {
-    if (!isAbsolute(config.executable) || config.tool?.name !== 'workspace') throw new Error('Native workspace tool requires its executable and schema')
+    if (!isAbsolute(config.executable) || !Array.isArray(config.tools)) throw new Error('Native workspace tool requires its executable and schema')
     let previous = Promise.resolve()
-    const unregister = ctx.tools.register({
-      name: config.tool.name,
-      description: config.tool.description,
-      parameters: config.tool.inputSchema,
+    const unregister = config.tools.map(tool => ctx.tools.register({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema,
       output: { schema: { type: 'object' }, render(_args, result) { return [{ type: 'text', text: JSON.stringify(result) }] } },
       execute(args) {
-        const call = previous.then(() => invokeWorkspace(config, args))
+        const call = previous.then(() => invokeTool(config, tool.name, args))
         previous = call.catch(() => {})
         return call
       },
-    })
-    const allowed = new Set(['workspace', 'AskUserQuestion', 'ask_user_question'])
+    }))
+    const allowed = new Set([...config.tools.map(tool => tool.name), 'AskUserQuestion', 'ask_user_question'])
     const unguard = ctx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'Issued action uses the registered workspace tool')
-    ctx.effect(() => () => { unguard(); unregister() })
+    ctx.effect(() => () => { unguard(); unregister.forEach(remove => remove()) })
     ctx.on('agent/created', ({ agent }) => {
       const tools = ctx.tools.schemas(agent).map(tool => tool.name)
       agent.ctx.tools.restrict({ deny: tools.filter(name => !allowed.has(name)) })
@@ -62,7 +62,7 @@ export function apply(ctx, config) {
   ctx.provide('harnessNativeReady',true)
 }
 
-function invokeWorkspace(config, args) {
+function invokeTool(config, name, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(config.executable, ['harness', 'native-tools', config.directory], { stdio: ['pipe', 'pipe', 'pipe'] })
     const output = [], errors = []
@@ -79,6 +79,6 @@ function invokeWorkspace(config, args) {
         resolve(JSON.parse(reply.result.content[0].text))
       } catch (error) { reject(error) }
     })
-    child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace', arguments: args } }) + '\n')
+    child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) + '\n')
   })
 }

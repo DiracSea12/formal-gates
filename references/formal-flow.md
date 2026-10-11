@@ -7,7 +7,7 @@
 
 ## 公共入口
 
-workflow 只有八个入口：
+workflow 的当前入口以 `workflow --help` 和各子命令帮助为准：
 
 | 入口 | 职责 |
 | --- | --- |
@@ -19,6 +19,10 @@ workflow 只有八个入口：
 | `next` | 只读下一边界及 freshness。 |
 | `diagnose` | 原始只读诊断状态或终态摘要。 |
 | `guard-preview` | 只读、非权威的生产 guard 计算，见 [guard 合同](guard-preview.md)。 |
+| `progress` | 从原事实派生进度及原输出游标。 |
+| `message` | 向原 worker 提交新语义文字或原输入文件字节。 |
+| `handoff` | 为原开发职责准备受限转交 Ask。 |
+| `replan` | 为原需求内计划调整准备确认候选。 |
 
 安装、卸载、hook、lifecycle、canary 和脱离 run 的 gate 检查属于维护/诊断面，
 不能推进业务或改写 workflow 状态。正常 loader 要求版本、definition/package 摘要和
@@ -31,36 +35,23 @@ installed-target 身份精确匹配；不匹配返回 `UNSUPPORTED_RUN_VERSION`�
 未决选择才询问。无待澄清问题时明确说明。regular 的完整需求与方案写入唯一正式
 UTF-8 Markdown 文件；不要求用户原始输入采用固定模板。
 
-文件保留自然语言正文，并使用唯一 `## 需求点` 章节。最小结构为：
+主代理只创作标题、要求、验收条件、来源和方案的语义正文。固定 Markdown 章节、
+REQ/AC 身份及未修改原文由 `requirement` 程序入口持有，不手写模板或重录已存内容。
 
-```markdown
-# 本次需求与方案
-
-完整目标、边界与方案正文。
-
-## 需求点
-
-### 归档已完成任务
-
-#### 要求
-
-归档命令移动已完成任务，保留未完成任务。
-
-#### 验收条件
-
-- 已完成任务能从归档列表读取，未完成任务仍在当前列表。
-
-#### 来源
-
-用户明确要求。
+```bash
+formal-gates requirement append --root <repo> --file <新文件名> \
+  --title <新标题> --requirement <新要求正文> --acceptance <新验收条件> \
+  --source <实际来源> --solution <完整方案正文>
+formal-gates requirement show --root <repo>
+formal-gates requirement edit --root <repo> --item <原需求序号> --requirement <新正文>
+formal-gates requirement edit --root <repo> --item <原需求序号> \
+  --condition <原验收序号> --acceptance <新验收正文>
 ```
 
-需求标题与验收条目只写内容，不分配编号。程序按正式章节中的需求块和验收条目顺序
-生成唯一 REQ/AC 身份并在 `requirementDocument` 投影中携带；用户或外部材料已提供的
-REQ/AC 身份原样保留，生成编号跳过这些身份。原文件正文与精确 revision 不因分配编号
-改变，需求与其验收条目的关联由原章节层级确定。直接字段顺序为要求→验收条件→来源；全部改变产品/流程行为或
-需要 QA 保证的义务须进入需求点。纯实现位置、代码边界与未来迁移约束留在方案正文，
-由技术审、diff 和实现质量门验证，不伪装为 QA 的 AC。
+当前正式文件由原 run 的 intake 绑定取得；无 run 时使用 `show` 提供的 `--document` 序号。
+省略字段保留原字节，新增名称和正文可创作。返回原完整材料与精确 revision，编辑或保存
+不代表用户确认。全部改变产品/流程行为及需要 QA 保证的义务须进入需求点；纯实现位置、
+代码边界与未来约束留在方案正文，不伪装为 QA 的 AC。
 
 **次序固定为：结构预检 → 展示完整文件与精确 revision → 用户明确确认 → start。**
 启动前预检使用现有 start 的只读模式：
@@ -112,8 +103,8 @@ formal-gates workflow drive --root <repo>
 formal-gates workflow show --root <repo>
 formal-gates workflow status --root <repo>
 formal-gates workflow next --root <repo>
-formal-gates workflow submit --root <repo> < <request-choices.json>
-formal-gates workflow next --root <repo> --decision <choices.json> \
+formal-gates workflow submit --root <repo> --request <当前控制类型>
+formal-gates workflow next --root <repo> --ask <原序号> --choice <真实选择> \
   --save-candidate <confirmation.json>
 # 展示程序返回的当前确认内容，获得用户明确确认后：
 formal-gates workflow submit --confirmation <confirmation.json>
@@ -121,7 +112,7 @@ formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
 
-show/status/next/drive/主动 submit 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。`submit --confirmation` 仍从原候选自动绑定项目和 run。
+show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。`submit --confirmation` 仍从原候选自动绑定项目和 run。
 
 start/show/status/next/drive/submit 默认展示当前语义问题、短选择、必要确认材料及实际执行边界，
 不输出内部派发材料或 adapter 指令。程序调用者需要完整原投影时显式使用 `--machine`；
@@ -132,8 +123,8 @@ regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文
 lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
 在开发中降为 lightweight。
 
-`submit` 的 stdin 只接真实语义请求，`request` 选择当前控制类型；程序创建 REQUEST
-Ask，不直接授权。决定使用 `next --decision --save-candidate`：默认展示的 `ask` 先编号当前 run
+`submit --request` 选择当前控制类型；程序创建 REQUEST Ask，不直接授权。
+决定使用 `next --ask --choice --save-candidate`：默认展示的 `ask` 先编号当前 run
 未决 Ask，再按子 run 的稳定顺序编号已建立的当前子流程 Ask；程序绑定原目标，`--machine` 保留本地投影。
 `choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
 Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation`
@@ -270,7 +261,7 @@ PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ac
 “投递结果未知”原因与原文，不表示宿主确定没有收到，也不自动重发。动作关闭、替换
 或取消时，未投递消息明确结束并留证；任务 PASS 不能删除这些消息。
 
-`workflow progress --after-revision <上次revision>` 只读派生经过时间、真实运行/未启动/
+`workflow progress --after-file <原进度输出文件>` 只读派生经过时间、真实运行/未启动/
 受阻、当前准备/命令/原生等待/结果处理及区间、新结果、准备执行/复用和实际原生调用。
 完成、失败和取消/替代分开；没有 pending 本身不证明完成。native-process 的调用数不是
 计费模型请求数。缺时钟/用量源显示 unavailable，不填零或相加并行区间。`--machine`
@@ -278,10 +269,12 @@ PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ac
 
 ## 原需求内调整计划与转交
 
-`workflow replan --decision <语义选择文件> --save-candidate <确认文件>` 只准备当前未终结
+`workflow replan --work <原序号> --work-disposition <CARRY|REDO> --work-reason <理由>
+--changed-item <实际改变> --transitive-impact <影响> --carry-reason <保留理由>
+--save-candidate <确认文件>` 只准备当前未终结
 regular 的计划重审：正式需求字节/revision 不变，product/topology 结论保留，逐项 work
-仍由用户选择 carry/redo 并给理由。选择文件沿原 RequirementChangeInput 的 work、children
-与 impact 形状，省略 classification/redo。原 `submit --confirmation` 确认后才重做
+仍由用户选择 carry/redo 并给理由。按各子命令帮助选择原 work/child 的序号和新的影响解释，不写固定 JSON 外壳；
+程序保存完整 RequirementChangeInput，省略 classification/redo。原 `submit --confirmation` 确认后才重做
 start-readiness；优化或增加 Batch 必须由新技审生成完整计划并经 route/plan 再确认。
 不能通过自由任务正文绕过。普通相同需求的重复提交继续拒绝。
 
@@ -299,7 +292,7 @@ start-readiness；优化或增加 Batch 必须由新技审生成完整计划并�
 读取原全文或行范围；不把正文重复灌入每次启动消息，不建索引或强制读取闸门。
 原始结构化材料仍由引擎校验与接纳，模型不编写机械身份或直接改 workflow state。
 
-WorkBuddy 用原 codebuddy/cbc print-mode CLI、StructuredOutput 和同一 engine MCP 工具。
+WorkBuddy 用原 codebuddy/cbc print-mode CLI 和同一 engine MCP 工具。
 安装提供 `.codebuddy/skills/formal-gates` 与 CODEBUDDY.md，不写 global hook。启动前
 核原 CLI 能力与原用户 product config；续用先观察原 session store，再由 `--resume`
 证明原身份。启动、等待、双流、取消、观察恢复、语义结果和费用沿共用原 owner。
@@ -307,3 +300,23 @@ CLI 会话的短 cwd 只承载原生存储，文件操作仍在已绑定的实�
 清理该原资源。用量只累计原 assistant UUID 的 input/output/cache-read，summary 不重复
 相加；缺必需类别仍 unavailable。安装/本地 peer 通过不等于付费现场整流程通过，真实
 调用须使用用户已授权的模型和额度。
+
+## 语义结果与原生问答
+
+各宿主向当前 worker 声明同一个 `submit_semantics` 工具。模型只提交当前角色的语义值、
+枚举或原材料序号，SDK 传对象、程序编码规范结果；原 tool call、材料和宿主终态共同
+证明接纳。最终普通消息不解析为 JSON 结果。同一次提交只允许精确同值重放，原任务
+续用使用其当前 material 和执行实例；恢复观察原事实，不重新提交。原会话、轮次、
+权限和费用继续由原 owner 持有。
+
+`native show --root <repo>` 展示原问题，`native respond --root <repo>` 只选择原问题/选项序号，
+使用 `--response-question`、`--response-choice`、`--response-text` 或 `--response-text-file`；
+表单以 `--form-field` 加 `--form-choice`/`--form-value`/`--form-value-file` 输入语义。
+程序生成完整候选，原 `--save-decision` 后须明确确认原 `--decision-file`，不能重填身份。
+`workflow message --text` 是新创作的语义转达；原文转发用 `--text-file` 读取原字节。
+没有原 chat API 的源证明时，不能将模型转述声称为原文零复制。
+
+脱离 run 的 `gate report --root <repo> --review <原序号>` 以具体 finding、证据和位置 flags
+构造结果，例如 `--review-complete` 或 `--finding-severity`/`--finding-message`；原比较、
+路径和总体状态由程序取得。`--decision`、stdin typed JSON、精确 ID/path 接口保留给
+人工或程序集成，不是模型编写模板的入口。完整参数见各命令 `--help`。

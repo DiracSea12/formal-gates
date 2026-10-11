@@ -45,7 +45,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	step, err := authoring.NewAgentStep(
 		authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version},
 		authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-		authoring.AgentSpec{Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}},
+		authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}},
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -203,7 +203,15 @@ func dshPluginPath() (string, error) {
 // sandboxPolicy to its inject list) and the ACP overlay; a probe additionally
 // disables session-title-llm. The native hook registers the original-request
 // workspace tool and restricts builtins; engine admission owns every operation.
-func makeDSHPatch(directory string, readOnly bool, probe bool) (string, error) {
+func makeDSHPatch(directory string, readOnly bool, probe bool, services ...ExecutionServices) (string, error) {
+	var schemas []any
+	if !probe {
+		tools, err := newNativeWorkspaceTools(directory, services...)
+		if err != nil {
+			return "", err
+		}
+		schemas = tools.schemas()
+	}
 	plugin, err := dshPluginPath()
 	if err != nil {
 		return "", err
@@ -221,7 +229,7 @@ func makeDSHPatch(directory string, readOnly bool, probe bool) (string, error) {
 			"id":     "harness-native",
 			"name":   plugin,
 			"inject": inject,
-			"config": map[string]any{"directory": directory, "read_only": readOnly, "executable": executable, "tool": nativeWorkspaceToolSchema(readOnly), "managed_tools": !probe},
+			"config": map[string]any{"directory": directory, "read_only": readOnly, "executable": executable, "tools": schemas, "managed_tools": !probe},
 		}}},
 		map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}},
 	}
@@ -249,7 +257,6 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 	if !valuesEqual(getOf(source, "sessionId"), identity) || !isIntegerLiteral(turn) {
 		return nil, &blockedError{message: "DSH_BINDING: native source does not match the session"}
 	}
-	answer := ""
 	ended := false
 	var usage []any
 	err = forEachSessionEvent(directory, identity, func(record map[string]any) error {
@@ -282,15 +289,7 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 					"usage": eventUsage,
 				})
 			}
-			var text strings.Builder
-			for _, part := range listOf(getOf(objectOrEmpty(getOrOf(data, "message", map[string]any{})), "content")) {
-				if valuesEqual(getOf(part, "type"), "text") {
-					if segment, isString := getOf(part, "text").(string); isString {
-						text.WriteString(segment)
-					}
-				}
-			}
-			answer = text.String()
+
 		case valuesEqual(eventType, "assistant/attempt"):
 			// Preserve native usage, never infer or fill a missing counter with
 			// zero: an attempt counts only when its usage object has entries.
@@ -319,7 +318,7 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 		return nil, &blockedError{message: "DSH_RESULT: committed turn/end evidence is missing"}
 	}
 	// Keep original bytes; reconciliation never rewrites the native evidence.
-	if err := writeNativeAnswer(directory, answer, "DSH"); err != nil {
+	if err := writeSubmittedAnswer(directory); err != nil {
 		return nil, err
 	}
 	var usageEvidence any
@@ -333,14 +332,8 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 	})
 }
 
-// dshReconcile recovers only a completed native turn whose result framing
-// was refused. Original process
-// exit/error records remain unchanged; no host is started and no model is
-// called; the caller must still accept the recovered business result.
+// Recovery retains the original session, workspace and host selection.
 func dshReconcile(directory string, process any) (map[string]any, error) {
-	eligible := func(original string) bool {
-		return strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:")
-	}
 	recover := func() (map[string]any, error) {
 		identity, err := readJSONFile(filepath.Join(directory, "identity.json"))
 		if err != nil {
@@ -379,7 +372,7 @@ func dshReconcile(directory string, process any) (map[string]any, error) {
 		source["selection"] = getOrOf(identity, "selection", map[string]any{})
 		return source, nil
 	}
-	return reconcileCompletedOutput(directory, process, "DSH", eligible, recover)
+	return recoverNativeSource(directory, process, "DSH", recover)
 }
 
 // configuredIs reports whether the selection currently holds the requested
@@ -428,7 +421,7 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	if !isBool {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	patch, err := makeDSHPatch(directory, readOnly, probe)
+	patch, err := makeDSHPatch(directory, readOnly, probe, services...)
 	if err != nil {
 		return nil, err
 	}
@@ -528,23 +521,10 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 		if !isString {
 			return nil, fmt.Errorf("prompt must be a string")
 		}
-		// The reference concatenation evaluates request['prompt'] then
-		// request['schema'] left to right, so a missing key is its own error,
-		// never a silently null schema dump. The schema is embedded in its
-		// canonical JSON form (registered bounded difference: value-equal to
-		// the reference's default-separator rendering).
-		schemaValue, entryErr := mustEntry(request, "schema")
-		if entryErr != nil {
-			return nil, entryErr
-		}
-		schema, dumpErr := CanonicalJSON(schemaValue)
-		if dumpErr != nil {
-			return nil, dumpErr
-		}
-		prompt := promptText + "\nReturn ONLY one JSON object matching this result schema:\n" + string(schema)
+
 		response, err := client.request("session/prompt",
 			map[string]any{"sessionId": identity,
-				"prompt": []any{map[string]any{"type": "text", "text": prompt}}},
+				"prompt": []any{map[string]any{"type": "text", "text": promptText}}},
 			nativeUnbounded)
 		if err != nil {
 			return nil, err

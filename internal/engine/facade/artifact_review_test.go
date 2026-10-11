@@ -58,14 +58,14 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m compileall -q ."
 			plan.Batches[0].Checks[1].Command = strconv.Quote(python) + " -m unittest discover -v"
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, plan, "whitebox", "quality")
-			dev, di := d.action("engine.development.batch")
+			dev, di := d.action("engine.development.batch.v2")
 			if di.Workspace == nil {
 				t.Fatal("development lacks signed workspace")
 			}
 			write(di.Workspace.Path, "app.py", "def valid(value):\n    return isinstance(value, str) and bool(value)\n")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.py"}, Summary: "validate strings"}})
 			d.drive()
-			design, in := d.action("engine.qa.design")
+			design, in := d.action("engine.qa.design.v2")
 			if in.Workspace == nil || in.Workspace.Role != "whitebox-authoring" {
 				t.Fatalf("wrong authoring input: %+v", in.Workspace)
 			}
@@ -90,7 +90,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			}
 			d.business(design, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: paths}})
 			d.drive()
-			reviewID, ri := d.action("engine.qa.review.rationale")
+			reviewID, ri := d.action("engine.qa.review.rationale.v2")
 			if ri.ReviewArtifact == nil || ri.ReviewArtifact.Identity != ri.Binding.Candidate || ri.ReviewBase != d.run.Validation.DevelopmentSnapshot || ri.ReviewArtifact.TestOnly || ri.ReviewArtifact.ProductionViewEqual || ri.ReviewArtifact.GateView != nil {
 				t.Fatalf("raw review material asserted approval or lost source: %+v", ri)
 			}
@@ -123,7 +123,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 				}
 			}
 			d.reopen()
-			_, reopened := d.action("engine.qa.review.rationale")
+			_, reopened := d.action("engine.qa.review.rationale.v2")
 			if !reflect.DeepEqual(reopened.ReviewArtifact, ri.ReviewArtifact) || reopened.ReviewBase != ri.ReviewBase {
 				t.Fatal("reopen changed original review source/diff")
 			}
@@ -225,7 +225,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 				if set.Candidate != ri.Binding.Candidate || !reflect.DeepEqual(set.ReviewHistory, originalHistory) || snap.State.NativeActionCurrent(finalIntent, d.f.definition) {
 					t.Fatal("final receipt changed or invalidated its original artifact/review source")
 				}
-				_, execution := d.action("engine.qa.execution")
+				_, execution := d.action("engine.qa.execution.v2")
 				if execution.Binding.Candidate != final.Identity || execution.Execution == nil || execution.Execution.Candidate.Identity != final.Identity {
 					t.Fatal("execution responsibility lost the combined final candidate")
 				}

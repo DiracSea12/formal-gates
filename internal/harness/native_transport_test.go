@@ -451,55 +451,6 @@ func TestForEachSessionEvent(t *testing.T) {
 // TestWriteAnswerSemantics pins write_answer: the bytes are kept, a re-run is
 // idempotent, a real difference is refused while line-ending-equal bytes are
 // not, and a framing refusal passes through with its NATIVE_RESULT prefix.
-func TestWriteAnswerSemantics(t *testing.T) {
-	directory := t.TempDir()
-	if err := writeNativeAnswer(directory, `{"ok": true}`, "DSH"); err != nil {
-		t.Fatal(err)
-	}
-	if body, _ := os.ReadFile(filepath.Join(directory, "answer.raw.txt")); string(body) != `{"ok": true}` {
-		t.Fatalf("answer.raw.txt = %q", body)
-	}
-	if body, _ := os.ReadFile(filepath.Join(directory, "answer.json")); string(body) != `{"ok":true}` {
-		t.Fatalf("answer.json = %q", body)
-	}
-	if err := writeNativeAnswer(directory, `{"ok": true}`, "DSH"); err != nil {
-		t.Fatalf("idempotent re-run: %v", err)
-	}
-
-	err := writeNativeAnswer(directory, `{"ok": false}`, "DSH")
-	if err == nil || err.Error() != "DSH_RESULT: saved output differs" {
-		t.Fatalf("saved output differs: %v", err)
-	}
-
-	err = writeNativeAnswer(t.TempDir(), "not json", "DSH")
-	if err == nil || err.Error() != "NATIVE_RESULT: no unambiguous result object" {
-		t.Fatalf("framing refusal: %v", err)
-	}
-}
-
-func TestWriteAnswerLineEndings(t *testing.T) {
-	for _, newline := range []struct{ name, text string }{{"LF", "\n"}, {"CRLF", "\r\n"}, {"CR", "\r"}} {
-		t.Run(newline.name, func(t *testing.T) {
-			directory := t.TempDir()
-			text := strings.ReplaceAll("{\n\"ok\": true\n}", "\n", newline.text)
-			for _, answer := range []string{text, text, "{\n\"ok\": true\n}"} {
-				if err := writeNativeAnswer(directory, answer, "DSH"); err != nil {
-					t.Fatal(err)
-				}
-				if body := readBytes(t, filepath.Join(directory, "answer.raw.txt")); string(body) != text {
-					t.Fatalf("native bytes changed: %q", body)
-				}
-				if body := readBytes(t, filepath.Join(directory, "answer.json")); string(body) != `{"ok":true}` {
-					t.Fatalf("business result changed: %s", body)
-				}
-			}
-			err := writeNativeAnswer(directory, strings.ReplaceAll(text, "true", "false"), "DSH")
-			if err == nil || err.Error() != "DSH_RESULT: saved output differs" {
-				t.Fatalf("different result accepted: %v", err)
-			}
-		})
-	}
-}
 
 // TestEvidenceSourceShape pins the receipt: provider, identity, the caller's
 // extra keys, then proofs for the four files; usage_evidence is null when
@@ -544,75 +495,6 @@ func proofsOf(t *testing.T, directory string, names []string) map[string]any {
 	return out
 }
 
-// TestReconcileCompletedOutputGate pins the shared gate: exit_code==1 (numbers
-// compare by value: this package's 1 meets the record's literal), an empty
-// process error text, the error file existing and the caller's eligibility
-// predicate, checked before any recovery runs.
-func TestReconcileCompletedOutputGate(t *testing.T) {
-	eligible := func(original string) bool { return original == "LEGACY" }
-	recover := func() (map[string]any, error) {
-		return map[string]any{"provider": "dsh"}, nil
-	}
-	base := func(t *testing.T) string {
-		t.Helper()
-		directory := t.TempDir()
-		if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return directory
-	}
-
-	directory := base(t)
-	if err := writeAtomicJSON(filepath.Join(directory, "native-error.json"),
-		map[string]any{"error": "LEGACY"}); err != nil {
-		t.Fatal(err)
-	}
-	source, err := reconcileCompletedOutput(directory,
-		map[string]any{"exit_code": 1, "error": ""}, "X", eligible, recover)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !valuesEqual(source["reconciliation"], map[string]any{
-		"kind":               "completed-output-format",
-		"original_exit_code": 1,
-		"original_error":     "LEGACY",
-		"new_model_calls":    0,
-	}) {
-		t.Fatalf("reconciliation = %v", source["reconciliation"])
-	}
-
-	// Passers: numeric equality (the record's 1.0 literal) and non-string
-	// error values (recorded without a message).
-	for name, process := range map[string]any{
-		"exit_code 1.0":  map[string]any{"exit_code": json.Number("1.0"), "error": ""},
-		"error non-text": map[string]any{"exit_code": 1, "error": 0},
-	} {
-		if _, err := reconcileCompletedOutput(directory, process, "X", eligible, recover); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	for name, process := range map[string]any{
-		"exit code 0":    map[string]any{"exit_code": 0, "error": ""},
-		"exit code 2":    map[string]any{"exit_code": 2, "error": ""},
-		"exit code true": map[string]any{"exit_code": true, "error": ""},
-		"error nonempty": map[string]any{"exit_code": 1, "error": "killed"},
-	} {
-		if _, err := reconcileCompletedOutput(directory, process, "X", eligible, recover); err == nil ||
-			err.Error() != "X_RECONCILE: not a completed formatting-only failure" {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-
-	empty := t.TempDir()
-	_, err = reconcileCompletedOutput(empty, map[string]any{"exit_code": 1, "error": ""}, "X", eligible, recover)
-	if err == nil || err.Error() != "X_RECONCILE: not a completed formatting-only failure" {
-		t.Fatalf("no error file: %v", err)
-	}
-}
-
-// TestResolveNativePath pins Path.resolve(): symlinks are resolved (including
-// a symlinked prefix such as macOS /var) and a non-existent tail keeps the
-// longest existing prefix resolved.
 func TestResolveNativePath(t *testing.T) {
 	directory := t.TempDir()
 	real := filepath.Join(directory, "real")

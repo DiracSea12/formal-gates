@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -18,55 +17,8 @@ import (
 	"formal-gates/internal/requirement"
 )
 
-// codexPeerAnswer spells a domain fixture in the native transport schema.
-func codexPeerAnswer(schema, value any) any {
-	if value == nil {
-		return nil
-	}
-	contract := objectOrEmpty(schema)
-	if codexObjectUnion(contract) {
-		return map[string]any{"result": codexPeerAnswer(codexObjectBranch(contract, value), value)}
-	}
-	if len(listOf(contract["anyOf"])) > 0 {
-		return codexPeerAnswer(codexObjectBranch(contract, value), value)
-	}
-	if codexOpen, ok := codexOpenMap(contract); ok {
-		values := objectOrEmpty(value)
-		keys := make([]string, 0, len(values))
-		for key := range values {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		rows := make([]any, 0, len(keys))
-		for _, key := range keys {
-			rows = append(rows, map[string]any{"key": key, "value": codexPeerAnswer(codexOpen, values[key])})
-		}
-		return rows
-	}
-	switch input := value.(type) {
-	case map[string]any:
-		properties := objectOrEmpty(contract["properties"])
-		output := make(map[string]any, len(properties))
-		for key, property := range properties {
-			output[key] = codexPeerAnswer(property, input[key])
-		}
-		return output
-	case []any:
-		rows := make([]any, len(input))
-		for i, item := range input {
-			itemSchema := contract["items"]
-			if prefix := listOf(contract["prefixItems"]); i < len(prefix) {
-				itemSchema = prefix[i]
-			}
-			rows[i] = codexPeerAnswer(itemSchema, item)
-		}
-		return rows
-	}
-	return value
-}
-
-func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
-	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.validation.observation", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "finding"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"case"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
+func TestCodexNativeObservationPreservesSemanticContract(t *testing.T) {
+	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.validation.observation.v2", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "finding"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"case"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +27,7 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["schema"] = schema
 	s.peer.StrictSchema = true
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +41,7 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !valuesEqual(actual, domain) {
-		t.Fatalf("native tuple transport changed semantic values: %s", raw)
+		t.Fatalf("native semantic submission changed semantic values: %s", raw)
 	}
 	event, err := worker.DecodeResult(input, "result", raw, digest)
 	if err != nil {
@@ -97,7 +49,7 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 	}
 	rows := event.Result.Validation.Observations
 	if len(rows) != 3 || rows[0].Validation.Findings[0].FindingID != "finding" || rows[1].Validation.Mode != coverage.ReviewBlackbox || rows[2].Validation.Gate != "quality" {
-		t.Fatal("tuple projection lost the original issued obligations")
+		t.Fatal("semantic submission lost the original issued obligations")
 	}
 	before, err := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
 	if err != nil {
@@ -112,7 +64,7 @@ func TestCodexNativeObservationTuplePreservesSemanticContract(t *testing.T) {
 	}
 }
 
-func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
+func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 	plan := nativeWorkerGranularityFixture()
 	completedPlan := nativeWorkerGranularityFixture()
 	completedPlan.Batches[0].NewArtifacts = nil
@@ -126,9 +78,9 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 		input  protocol.WorkerInput
 		domain any
 	}{
-		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
-		{"confirmed-batch", protocol.WorkerInput{Handler: "engine.development.batch", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
-		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
+		{"readiness", protocol.WorkerInput{Handler: "engine.readiness.plan.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
+		{"confirmed-batch", protocol.WorkerInput{Handler: "engine.development.batch.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
+		{"autonomous-repair", protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, err := worker.ResultSchema(sample.input)
@@ -150,7 +102,7 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 				}
 			}
 			scenario.peer.StrictSchema = true
-			scenario.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+			scenario.peer.Answer = codexPlain(t, domain).(map[string]any)
 			before, _ := json.Marshal(schema)
 			source, err := scenario.execute(t)
 			if err != nil {
@@ -164,10 +116,10 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 			if err != nil || !valuesEqual(answer, domain) {
 				t.Fatalf("domain result = %v %v", answer, err)
 			}
-			expectedRaw, _ := json.Marshal(scenario.peer.Answer)
-			raw, err := os.ReadFile(filepath.Join(scenario.directory, "answer.raw.txt"))
-			if err != nil || !bytes.Equal(raw, expectedRaw) {
-				t.Fatal("native raw answer was rewritten")
+			expectedSemantic, _ := json.Marshal(scenario.peer.Answer)
+			semantic, err := os.ReadFile(filepath.Join(scenario.directory, "answer.json"))
+			if err != nil || !bytes.Equal(semantic, expectedSemantic) {
+				t.Fatal("canonical submitted semantics were rewritten")
 			}
 			normalized, digest, _, err := NativeResultEvidence("codex", scenario.directory, source)
 			if err != nil {
@@ -219,9 +171,9 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 				t.Fatalf("recovered source = %v %v", recovered, err)
 			}
 			repeated, _ := os.ReadFile(filepath.Join(scenario.config, "rpc.jsonl"))
-			repeatedRaw, _ := os.ReadFile(filepath.Join(scenario.directory, "answer.raw.txt"))
-			if !bytes.Equal(rpc, repeated) || !bytes.Equal(raw, repeatedRaw) {
-				t.Fatal("recovery replayed work or changed raw evidence")
+			repeatedSemantic, _ := os.ReadFile(filepath.Join(scenario.directory, "answer.json"))
+			if !bytes.Equal(rpc, repeated) || !bytes.Equal(semantic, repeatedSemantic) {
+				t.Fatal("recovery replayed work or changed canonical semantics")
 			}
 			if getOf(source, "usage_evidence") == nil {
 				t.Fatal("original native usage evidence missing")
@@ -231,7 +183,7 @@ func TestCodexNativeStrictSchemaProjectionAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +208,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			domain := codexPlain(t, result).(map[string]any)
 			s := newCodexScenario(t)
 			s.request["schema"], s.peer.StrictSchema = schema, true
-			s.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+			s.peer.Answer = codexPlain(t, domain).(map[string]any)
 			source, err := s.execute(t)
 			if err != nil {
 				t.Fatal(err)
@@ -285,7 +237,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			if err := codexVerifySource(s.directory, source); err != nil {
 				t.Fatal(err)
 			}
-			before, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			before, err := os.ReadFile(filepath.Join(s.directory, "answer.json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,31 +245,10 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			if err != nil || !valuesEqual(recovered, source) {
 				t.Fatalf("native repair recovery changed source: %v %v", recovered, err)
 			}
-			after, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
+			after, err := os.ReadFile(filepath.Join(s.directory, "answer.json"))
 			if err != nil || !bytes.Equal(before, after) {
 				t.Fatal("repair recovery rewrote the native original output")
 			}
 		})
-	}
-}
-
-func TestCodexNativeDuplicateDictionaryKeepsRawEvidence(t *testing.T) {
-	s := newCodexScenario(t)
-	s.request["schema"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"dod"}, "properties": map[string]any{"dod": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}}}
-	s.peer.StrictSchema = true
-	s.peer.Answer = map[string]any{"dod": []any{map[string]any{"key": "same", "value": "first"}, map[string]any{"key": "same", "value": "second"}}}
-	if _, err := s.execute(t); err == nil {
-		t.Fatal("duplicate keys accepted")
-	}
-	before, err := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := codexReconcile(s.directory, map[string]any{"exit_code": 0}); err == nil {
-		t.Fatal("recovery accepted duplicate keys")
-	}
-	after, _ := os.ReadFile(filepath.Join(s.directory, "answer.raw.txt"))
-	if !bytes.Equal(before, after) {
-		t.Fatal("refusal rewrote raw answer")
 	}
 }

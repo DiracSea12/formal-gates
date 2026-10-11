@@ -352,7 +352,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.validation.observation", "engine.gate", "engine.repair", "engine.repair.verify":
+	case "engine.development.batch.v2", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v2", "engine.repair.verify.v2":
 		return string(p.Handler)
 	}
 	return ""
@@ -366,7 +366,7 @@ func pipelineStep(cd *compiler.CompiledDefinition, handler string) (compiler.Com
 	return compiler.CompiledStep{}, false
 }
 func pipelineEnabled(s *State, cd *compiler.CompiledDefinition) bool {
-	_, ok := pipelineStep(cd, "engine.development.batch")
+	_, ok := pipelineStep(cd, "engine.development.batch.v2")
 	return ok && s.Route != "lightweight"
 }
 func pipelineTask(cd *compiler.CompiledDefinition, handler, scope string) runtime.TaskKey {
@@ -437,12 +437,12 @@ func (s *State) prewaveBlocked(mode coverage.ReviewKind, role string, cd *compil
 		return false
 	}
 	for action, binding := range s.DispatchBindings {
-		if s.liveDispatch(action) && s.prewaveWorkCurrent(binding, cd) && s.validationRole(binding.Task, cd) == "engine.qa.review.rationale" && s.validationMode(binding.Task) == mode {
+		if s.liveDispatch(action) && s.prewaveWorkCurrent(binding, cd) && s.validationRole(binding.Task, cd) == "engine.qa.review.rationale.v2" && s.validationMode(binding.Task) == mode {
 			return false
 		}
 	}
 	for task, attempt := range s.EndedAttempts {
-		if s.endedWorkCurrent(attempt, cd) && s.validationRole(task, cd) == "engine.qa.review.rationale" && s.validationMode(task) == mode {
+		if s.endedWorkCurrent(attempt, cd) && s.validationRole(task, cd) == "engine.qa.review.rationale.v2" && s.validationMode(task) == mode {
 			return false
 		}
 	}
@@ -457,7 +457,7 @@ func (s *State) prewaveBlocked(mode coverage.ReviewKind, role string, cd *compil
 		}
 		switch r.Kind {
 		case "QA_REVIEW":
-			if r.Target == s.qaReviewTarget(mode) && (d.Choice == "redesign" || d.Choice == "approve" && role == "engine.qa.review.rationale") {
+			if r.Target == s.qaReviewTarget(mode) && (d.Choice == "redesign" || d.Choice == "approve" && role == "engine.qa.review.rationale.v2") {
 				return false
 			}
 		case "RETRY":
@@ -492,7 +492,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	role := s.validationRole(key, cd)
-	if role == "engine.validation.observation" {
+	if role == "engine.validation.observation.v2" {
 		if input := s.validationObservationInput(); input != nil && s.sourceValidationTask(key) == observationTask(cd, input) {
 			b.WaveID, b.Candidate = input.WaveID, input.Candidate.Identity
 		}
@@ -501,17 +501,17 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 		return b
 	}
-	if role == "engine.repair.verify" {
+	if role == "engine.repair.verify.v2" {
 		if context, ok := s.repairComparisonContext(key, cd); ok {
 			return context.binding
 		}
 	}
-	if role == "engine.merge.resolve" {
+	if role == "engine.merge.resolve.v2" {
 		if params, ready := s.nextIntegrationParameters(cd); ready && params.Integration != nil {
 			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
 		}
 	}
-	if role == "engine.development.batch" {
+	if role == "engine.development.batch.v2" {
 		if request, _, batch, ok := s.developmentBatch(key, cd); ok {
 			b.PlanRequest, b.BatchID = request, batch.ID
 			_, _, revision := s.confirmedDevelopmentPlan()
@@ -525,18 +525,18 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if set := v.Sets[mode]; set != nil {
 		b.CaseVersion = set.Version
 	}
-	if role != "engine.development.batch" && role != "engine.merge.resolve" && !(role == "engine.qa.design" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
+	if role != "engine.development.batch.v2" && role != "engine.merge.resolve.v2" && !(role == "engine.qa.design.v2" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
 		b.Candidate = v.DevelopmentSnapshot
 		if v.Candidate != nil {
 			b.Candidate = v.Candidate.Identity
 		}
 	}
-	if role == "engine.qa.review.rationale" {
+	if role == "engine.qa.review.rationale.v2" {
 		if set := v.Sets[mode]; set != nil && set.Candidate != "" {
 			b.Candidate = set.Candidate
 		}
 	}
-	if role == "engine.repair" {
+	if role == "engine.repair.v2" {
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				b.PureP2 = work.wave.Repair.PureP2 || work.pureP2
@@ -557,7 +557,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			}
 		}
 	}
-	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution" || role == "engine.gate") {
+	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution.v2" || role == "engine.gate.v2") {
 		b.WaveID = wave.ID
 		b.Candidate = wave.Candidate.Identity
 	}
@@ -576,7 +576,7 @@ func (s *State) nextDesignScope(mode coverage.ReviewKind, cd *compiler.CompiledD
 			continue
 		}
 		key := result.Validation.Binding.Task
-		if s.validationRole(key, cd) == "engine.qa.design" && s.validationMode(key) == mode {
+		if s.validationRole(key, cd) == "engine.qa.design.v2" && s.validationMode(key) == mode {
 			completed++
 		}
 	}
@@ -609,15 +609,15 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: reason})
 	}
 	if input := s.validationObservationInput(); input != nil {
-		if _, registered := pipelineStep(cd, "engine.validation.observation"); registered {
-			add("engine.validation.observation", observationTask(cd, input).Scope, false)
+		if _, registered := pipelineStep(cd, "engine.validation.observation.v2"); registered {
+			add("engine.validation.observation.v2", observationTask(cd, input).Scope, false)
 		}
 	}
 	s.projectDevelopmentTasks(view, cd)
 	s.projectRepairGates(view, cd)
 	s.projectRepairComparisons(view, cd)
 	if p, ready := s.nextIntegrationParameters(cd); ready && p.Integration.StartAction != "" && len(s.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 && s.integrationResolution(p.Integration.StartAction) == nil {
-		add("engine.merge.resolve", p.Integration.StartAction, false)
+		add("engine.merge.resolve.v2", p.Integration.StartAction, false)
 	}
 	for _, mode := range s.validationKinds() {
 		set := v.Sets[mode]
@@ -626,15 +626,15 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 		if set == nil {
 			if mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge || v.AuthoringWorkspace != "" {
-				add("engine.qa.design", s.nextDesignScope(mode, cd), false)
+				add("engine.qa.design.v2", s.nextDesignScope(mode, cd), false)
 			}
 			continue
 		}
 		switch set.Status {
 		case "DRAFT", "THAWED":
-			add("engine.qa.design", s.nextDesignScope(mode, cd), s.prewaveBlocked(mode, "engine.qa.design", cd) || mode == coverage.ReviewWhitebox && v.AuthoringWorkspace == "")
+			add("engine.qa.design.v2", s.nextDesignScope(mode, cd), s.prewaveBlocked(mode, "engine.qa.design.v2", cd) || mode == coverage.ReviewWhitebox && v.AuthoringWorkspace == "")
 		case "REVIEW":
-			add("engine.qa.review.rationale", s.reviewTask(mode, v.Generation, set.Version, cd).Scope, s.prewaveBlocked(mode, "engine.qa.review.rationale", cd) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
+			add("engine.qa.review.rationale.v2", s.reviewTask(mode, v.Generation, set.Version, cd).Scope, s.prewaveBlocked(mode, "engine.qa.review.rationale.v2", cd) || (mode == coverage.ReviewWhitebox && set.Candidate == ""))
 		}
 	}
 	wave := s.currentValidationWave()
@@ -644,9 +644,9 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 	if wave.Status == "COLLECTING" && s.validateCoverageRelations() == nil {
 		for _, target := range wave.Targets {
 			if target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED" {
-				handler := "engine.gate"
+				handler := "engine.gate.v2"
 				if target.Kind == "QA" {
-					handler = "engine.qa.execution"
+					handler = "engine.qa.execution.v2"
 				}
 				add(handler, target.Task.Scope, (target.Kind == "QA" && !s.qaComparisonReady(target, cd)) || (target.Kind == "QA" && wave.Scope == coverage.ScopeAffected && len(target.RequiredCases) == 0) || target.GateImpact != nil && target.GateImpact.Decision == "")
 			}

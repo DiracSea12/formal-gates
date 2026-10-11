@@ -18,7 +18,7 @@ type streamAdapter struct {
 	provider, prefix   string
 	capture            func() (map[string]any, error)
 	probe              func(string, string, map[string]string) (map[string]any, error)
-	arguments          func(any, string, string, string, map[string]string, string, string) ([]string, string, error)
+	arguments          func(any, string, string, string, map[string]string, string) ([]string, string, error)
 	selection          func(any) map[string]any
 	checkSelection     func(any, map[string]any) error
 	sessionUnavailable func(string, string) error
@@ -53,19 +53,11 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	if !ok {
 		return nil, fmt.Errorf("prompt must be a string")
 	}
-	schemaValue, err := mustEntry(request, "schema")
-	if err != nil {
-		return nil, err
-	}
-	schema, err := CanonicalJSON(schemaValue)
-	if err != nil {
-		return nil, err
-	}
 	_, ok = getOf(request, "read_only").(bool)
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	argv, nativeWorkspace, err := adapter.arguments(request, directory, executable, workspace, environment, prompt, string(schema))
+	argv, nativeWorkspace, err := adapter.arguments(request, directory, executable, workspace, environment, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -278,15 +270,7 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 	if !valuesEqual(selection, getOf(source, "selection")) {
 		return nil, &blockedError{message: adapter.prefix + "_BINDING: native selection differs from recorded identity"}
 	}
-	answer, _ := terminal["result"].(string)
-	if structured, exists := terminal["structured_output"]; exists {
-		encoded, err := CanonicalJSON(structured)
-		if err != nil {
-			return nil, err
-		}
-		answer = string(encoded)
-	}
-	if err := writeNativeAnswer(directory, answer, adapter.prefix); err != nil {
+	if err := writeSubmittedAnswer(directory); err != nil {
 		return nil, err
 	}
 	var usage any
@@ -299,20 +283,7 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 }
 
 func streamReconcile(adapter streamAdapter, directory string, process any) (map[string]any, error) {
-	if valuesEqual(getOf(process, "exit_code"), 0) && getOf(process, "error") == "" {
-		source, err := streamObserve(adapter, directory)
-		if err != nil {
-			return nil, err
-		}
-		if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
-			return nil, err
-		}
-		return source, nil
-	}
-
-	return reconcileCompletedOutput(directory, process, adapter.prefix, func(original string) bool {
-		return strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:")
-	}, func() (map[string]any, error) { return streamObserve(adapter, directory) })
+	return recoverNativeSource(directory, process, adapter.prefix, func() (map[string]any, error) { return streamObserve(adapter, directory) })
 }
 
 // A subagent's messages are native evidence, but never the root session's

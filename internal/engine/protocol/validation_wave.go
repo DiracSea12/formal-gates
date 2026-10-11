@@ -186,7 +186,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 			s.QAWorktree = ""
 			changed = true
 		}
-		if s.caseSetWaiver(mode) == "" && (set.Status == "DRAFT" || set.Status == "THAWED" || set.Status == "REVIEW") && s.prewaveBlocked(mode, "engine.qa.review.rationale", e.cfg.Definition) {
+		if s.caseSetWaiver(mode) == "" && (set.Status == "DRAFT" || set.Status == "THAWED" || set.Status == "REVIEW") && s.prewaveBlocked(mode, "engine.qa.review.rationale.v2", e.cfg.Definition) {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "QA_REVIEW", Mode: mode, Target: s.qaReviewTarget(mode)}, nextRevision) || changed
 		}
 	}
@@ -536,10 +536,10 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			mode = coverage.ReviewMerge
 		}
 		target := &ValidationTarget{Status: "PENDING", Gate: gate, Kind: "GATE"}
-		handler := "engine.gate"
+		handler := "engine.gate.v2"
 		part := gate
 		if mode != "" {
-			handler = "engine.qa.execution"
+			handler = "engine.qa.execution.v2"
 			part = string(mode)
 			target.Mode = mode
 			target.Kind = "QA"
@@ -785,7 +785,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 		return false, nil
 	}
 
-	task := pipelineTask(e.cfg.Definition, "engine.repair", w.Candidate.Identity)
+	task := pipelineTask(e.cfg.Definition, "engine.repair.v2", w.Candidate.Identity)
 	// Native identities may contain separators; the logical snapshot key uses
 	// its content digest, never a platform path embedded in TaskKey syntax.
 	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")

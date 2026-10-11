@@ -343,11 +343,11 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				if !slices.Contains(gates, "blackbox") {
 					return
 				}
-				id, input := d.action("engine.qa.design")
+				id, input := d.action("engine.qa.design.v2")
 				manifest := simpleManifest(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
-				id, input = d.action("engine.qa.review.rationale")
+				id, input = d.action("engine.qa.review.rationale.v2")
 				review := approvedReview(manifest)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
 				d.drive()
@@ -376,7 +376,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				}
 			}
 			if slices.Contains(gates, "blackbox") {
-				id, input := d.action("engine.qa.execution")
+				id, input := d.action("engine.qa.execution.v2")
 				report := executionFor(input)
 				tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})

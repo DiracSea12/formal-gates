@@ -12,18 +12,18 @@ import (
 
 func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design")
+	id, in := d.action("engine.qa.design.v2")
 	m := simpleManifest(in)
 	m.SharedSteps = []coverage.SharedStep{{ID: "setup", Procedure: "prepare the existing fixture", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf fixture"}}}}
 	m.Cases[1].SharedSteps = []string{"setup"}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
-	id, in = d.action("engine.qa.review.rationale")
+	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	r.SharedStepDecisions = []coverage.ReviewDecision{{ID: "setup", Status: coverage.StatusPass, Reason: "The fixed fixture preparation supplies the referenced negative case"}}
 	r.CaseDecisions[0].Status, r.PointDecisions[0].Status, r.SourceDecisions[0].Status = coverage.StatusFail, coverage.StatusFail, coverage.StatusFail
 	r.SetStatus = coverage.StatusFail
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &r})
-	id, in = d.action("engine.qa.design")
+	id, in = d.action("engine.qa.design.v2")
 	d.reopen()
 	d.drive()
 	in = d.run.ValidationInputs[id]
@@ -50,7 +50,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), invalidRaw, "original-native-answer")
+	invalid, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design.v2", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), invalidRaw, "original-native-answer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), raw, "original-native-answer")
+	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design.v2", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), raw, "original-native-answer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	if a.Status == "REJECTED_INVALID_RESULT" {
 		t.Fatal("retained issued content failed original admission")
 	}
-	_, current := d.action("engine.qa.review.rationale")
+	_, current := d.action("engine.qa.review.rationale.v2")
 	if len(current.Manifest.Cases) != 2 || !reflect.DeepEqual(current.Manifest.Cases[1], m.Cases[1]) || len(current.InheritableReviews) != 1 || current.InheritableReviews[0].ID != m.Cases[1].CaseID || len(current.Manifest.Edges) != len(m.Edges) {
 		t.Fatalf("continued design lost retained responsibility or its unchanged review: cases=%#v original=%#v inherited=%#v edges=%#v originalEdges=%#v", current.Manifest.Cases, m.Cases[1], current.InheritableReviews, current.Manifest.Edges, m.Edges)
 	}
@@ -86,7 +86,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 	for _, resume := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reopen", true: "native-resume"}[resume], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design")
+			id, in := d.action("engine.qa.design.v2")
 			full := simpleManifest(in)
 			part := full
 			part.Cases = append([]coverage.AcceptanceCase(nil), full.Cases[:1]...)
@@ -114,7 +114,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 				t.Fatal("checkpoint changed duty or lost recorded design")
 			}
 			for _, next := range d.run.ValidationInputs {
-				if next.Handler == "engine.qa.review.rationale" {
+				if next.Handler == "engine.qa.review.rationale.v2" {
 					t.Fatal("partial design prepared review")
 				}
 			}
@@ -140,7 +140,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 				d.submit(receipt)
 			}
 			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "completed all designed cases", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &full}}})
-			review, ri := d.action("engine.qa.review.rationale")
+			review, ri := d.action("engine.qa.review.rationale.v2")
 			if !reflect.DeepEqual(ri.Manifest, full) {
 				t.Fatal("final completion lost cumulative cases")
 			}
@@ -156,17 +156,17 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 
 func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design")
+	id, in := d.action("engine.qa.design.v2")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
-	id, in = d.action("engine.qa.review.rationale")
+	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	r.CaseDecisions[0].Status = coverage.StatusFail
 	r.PointDecisions[0].Status = coverage.StatusFail
 	r.SourceDecisions[0].Status = coverage.StatusFail
 	r.SetStatus = coverage.StatusFail
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &r})
-	id, in = d.action("engine.qa.design")
+	id, in = d.action("engine.qa.design.v2")
 	part := m
 	part.Cases = append([]coverage.AcceptanceCase(nil), m.Cases[:1]...)
 	part.Edges = nil
@@ -180,13 +180,13 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 	if a.Status != "REJECTED_INVALID_RESULT" {
 		t.Fatal("no-op checkpoint repair was accepted")
 	}
-	retry, ri := d.action("engine.qa.design")
+	retry, ri := d.action("engine.qa.design.v2")
 	if ri.Binding.Task != in.Binding.Task {
 		t.Fatal("invalid checkpoint reset duty")
 	}
 	m.Cases[0].Oracle = "exit zero and print accepted input"
 	d.business(retry, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Manifest: &m})
-	_, ri = d.action("engine.qa.review.rationale")
+	_, ri = d.action("engine.qa.review.rationale.v2")
 	if len(ri.InheritableReviews) != 1 || ri.InheritableReviews[0].ID != "invalid" {
 		t.Fatal("retained approval was lost or changed case inherited")
 	}
@@ -194,11 +194,11 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 
 func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.development.batch")
+	id, in := d.action("engine.development.batch.v2")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
 	d.materialize()
-	id, in = qaModeAction(d, "engine.qa.design", coverage.ReviewBlackbox)
+	id, in = qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
 	full := simpleManifest(in)
 	part := full
 	part.Cases = append([]coverage.AcceptanceCase(nil), full.Cases[:1]...)
@@ -213,20 +213,20 @@ func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 	if a.Status != "REJECTED_INVALID_RESULT" {
 		t.Fatal("partial final design skipped full scenario contract")
 	}
-	retry, ri := qaModeAction(d, "engine.qa.design", coverage.ReviewBlackbox)
+	retry, ri := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
 	if ri.Binding.Task != in.Binding.Task || d.run.Attempts[ri.Binding.Task].Attempts != 1 {
 		t.Fatal("invalid final design reset original allowance")
 	}
 	d.business(retry, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Manifest: &full})
-	_, white := qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)
+	_, white := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewWhitebox)
 	if white.Binding.Task == ri.Binding.Task {
 		t.Fatal("mode responsibilities folded")
 	}
-	review, reviewInput := qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewBlackbox)
+	review, reviewInput := qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
 	r := approvedReview(full)
 	d.business(review, protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &r})
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
-	design, di := qaModeAction(d, "engine.qa.design", coverage.ReviewBlackbox)
+	design, di := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewBlackbox)
 	replacement := full
 	replacement.Cases = append([]coverage.AcceptanceCase(nil), full.Cases[1:]...)
 	replacement.Edges = nil
@@ -236,14 +236,14 @@ func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 		}
 	}
 	d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &replacement, DesignChange: &protocol.QADesignChange{Replace: true}})
-	review, reviewInput = qaModeAction(d, "engine.qa.review.rationale", coverage.ReviewBlackbox)
+	review, reviewInput = qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
 	if len(reviewInput.Manifest.Cases) != 1 {
 		t.Fatal("explicit final replacement could not remove obsolete case")
 	}
 	r = approvedReview(replacement)
 	d.business(review, protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &r})
 	d.reopen()
-	_, afterWhite := qaModeAction(d, "engine.qa.design", coverage.ReviewWhitebox)
+	_, afterWhite := qaModeAction(d, "engine.qa.design.v2", coverage.ReviewWhitebox)
 	if afterWhite.Binding != white.Binding {
 		t.Fatal("blackbox final edits replaced independent whitebox duty")
 	}
@@ -254,14 +254,14 @@ func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 
 func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design")
+	id, in := d.action("engine.qa.design.v2")
 	m := simpleManifest(in)
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "record draft", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Checkpoint: true}}})
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.reopen()
 	d.drive()
-	next, ni := d.action("engine.qa.design")
+	next, ni := d.action("engine.qa.design.v2")
 	if next == id || ni.Binding.Task == in.Binding.Task {
 		t.Fatal("THAW retained superseded design duty")
 	}
@@ -275,7 +275,7 @@ func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
 		t.Fatal("superseded design became effective")
 	}
 	d.business(next, protocol.ValidationResult{Binding: ni.Binding, Status: "PASS", Manifest: &m})
-	_, ri := d.action("engine.qa.review.rationale")
+	_, ri := d.action("engine.qa.review.rationale.v2")
 	if !reflect.DeepEqual(ri.Manifest, m) {
 		t.Fatal("replacement did not prepare actual complete design")
 	}
@@ -283,7 +283,7 @@ func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
 
 func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	design, input := d.action("engine.qa.design")
+	design, input := d.action("engine.qa.design.v2")
 	manifest := simpleManifest(input)
 	obsolete := manifest.Cases[0]
 	obsolete.CaseID, obsolete.Steps = "obsolete", "repeat the superseded public example"
@@ -292,12 +292,12 @@ func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: link.SourceID, PointID: link.PointID, CaseID: obsolete.CaseID})
 	}
 	d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
-	review, ri := d.action("engine.qa.review.rationale")
+	review, ri := d.action("engine.qa.review.rationale.v2")
 	judgment := approvedReview(manifest)
 	judgment.CaseDecisions[2].Status = coverage.StatusFail
 	judgment.PointDecisions[0].Status, judgment.SourceDecisions[0].Status, judgment.SetStatus = coverage.StatusFail, coverage.StatusFail, coverage.StatusFail
 	d.business(review, protocol.ValidationResult{Binding: ri.Binding, Status: "FAIL", Review: &judgment})
-	design, input = d.action("engine.qa.design")
+	design, input = d.action("engine.qa.design.v2")
 	value := worker.Design{DesignManifest: worker.DesignManifest{RemoveCases: []int{3}, Cases: []worker.DesignedCase{}, Coverage: make([][]int, len(input.Manifest.Points))}}
 	raw, _ := json.Marshal(value)
 	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &input}, d.eventID(), raw, "original-explicit-removal")
@@ -315,7 +315,7 @@ func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
 		t.Fatal("removal replay changed the retained projection")
 	}
 	d.reopen()
-	_, current := d.action("engine.qa.review.rationale")
+	_, current := d.action("engine.qa.review.rationale.v2")
 	if !reflect.DeepEqual(current.Manifest.Cases, manifest.Cases[:2]) || len(current.InheritableReviews) != 2 || slices.ContainsFunc(current.Manifest.Edges, func(edge coverage.CoverageEdge) bool { return edge.CaseID == "obsolete" }) {
 		t.Fatal("explicit removal lost retained IDs, approval or coverage after recovery")
 	}

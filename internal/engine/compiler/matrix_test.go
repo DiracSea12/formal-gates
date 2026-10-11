@@ -50,7 +50,7 @@ func TestAgentReviewSeriesVocabularyAcceptsTheClosedSet(t *testing.T) {
 			header.Dependencies = []authoring.StepID{authoring.StepID(previous)}
 		}
 		steps = append(steps, authoring.AgentStep{
-			Header: header, IO: seriesIO(previous), Handler: "engine.review.worker",
+			Header: header, IO: seriesIO(previous), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonIndependentReview, ReviewSeries: mark, Timeout: time.Minute,
 		})
 		previous = string(id)
@@ -115,17 +115,17 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Boundary: authoring.BoundaryExternalCapability, Timeout: time.Second}},
 			"registered operation id required"},
 		{"agent without reason", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
+			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
 			Timeout: time.Second}},
 			"nonProgrammableReason required"},
 		{"agent negative timeout", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
+			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: -time.Second}},
 			"timeout must be >= 0"},
 		// worker result 合同的二次防线：绕过 constructor 的原始结构体缺
 		// postconditions 必拒（constructor 主拦项复核，封板后补漏）。
 		{"agent without postconditions", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
+			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: time.Second}},
 			"postcondition predicate reference required (worker result contract)"},
 		// 审查系列归属的二次防线：独立审查步必须显式声明系列归属，且系
@@ -135,21 +135,21 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Header: rawHeader("entry.s"),
 			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
 				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-			Handler: "engine.review.worker",
+			Handler: "engine.review.worker.v2",
 			Reason:  authoring.ReasonIndependentReview, Timeout: time.Second}},
 			"must declare its review series"},
 		{"agent series mark on a non-review reason", []authoring.Step{authoring.AgentStep{
 			Header: rawHeader("entry.s"),
 			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
 				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-			Handler: "engine.review.worker",
+			Handler: "engine.review.worker.v2",
 			Reason:  authoring.ReasonCreativeImplementation, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Second}},
 			"requires the INDEPENDENT_REVIEW reason"},
 		{"agent series mark outside the closed set", []authoring.Step{authoring.AgentStep{
 			Header: rawHeader("entry.s"),
 			IO: authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
 				Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-			Handler: "engine.review.worker",
+			Handler: "engine.review.worker.v2",
 			Reason:  authoring.ReasonIndependentReview, ReviewSeries: "qa-review", Timeout: time.Second}},
 			`review series "qa-review" invalid (closed set: product-review, start-readiness, unaffiliated)`},
 		{"human without request schema", []authoring.Step{authoring.HumanAskStep{
@@ -301,12 +301,12 @@ func TestKindAndRunnerMismatchBothModes(t *testing.T) {
 			return reg
 		}, `id "op.fan.transport" registered as schema, want operation`},
 		{"runner mismatch", func(t *testing.T) *Registry {
-			reg := goldenRegistry(t, "engine.review.worker")
-			if err := reg.RegisterHandler("engine.review.worker", authoring.RunnerEngineLocal); err != nil {
+			reg := goldenRegistry(t, "engine.review.worker.v2")
+			if err := reg.RegisterHandler("engine.review.worker.v2", authoring.RunnerEngineLocal); err != nil {
 				t.Fatalf("register handler: %v", err)
 			}
 			return reg
-		}, `handler "engine.review.worker" runner ENGINE_LOCAL != variant runner AGENT_WORKER`},
+		}, `handler "engine.review.worker.v2" runner ENGINE_LOCAL != variant runner AGENT_WORKER`},
 		{"ask kind mismatch", func(t *testing.T) *Registry {
 			// ask 类型 ID 错注册进 schema 槽：human 步解析 askKind 时报 kind
 			// 错用，而非含糊的 not found（单一命名空间的收益）。

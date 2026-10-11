@@ -60,17 +60,14 @@ func TestWorkBuddyCLI(t *testing.T) {
 		values[name] = args[index+1]
 		index += 2
 	}
-	want := map[string]string{"--print": "present", "--verbose": "present", "--strict-mcp-config": "present", "--output-format": "stream-json", "--input-format": "text", "--tools": "StructuredOutput", "--allowedTools": "StructuredOutput,mcp__formal-gates__workspace", "--setting-sources": "", "--settings": `{"disableAllHooks":true}`, "--permission-mode": "dontAsk", "--model": "selected-model", "--effort": "high"}
+	want := map[string]string{"--print": "present", "--verbose": "present", "--strict-mcp-config": "present", "--output-format": "stream-json", "--input-format": "text", "--tools": "", "--allowedTools": "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics", "--setting-sources": "", "--settings": `{"disableAllHooks":true}`, "--permission-mode": "dontAsk", "--model": "selected-model", "--effort": "high"}
 	for name, value := range want {
 		if values[name] != value {
 			fail("wrong native option " + name)
 		}
 	}
-	if len(values) != len(want)+3 {
+	if len(values) != len(want)+2 {
 		fail("unexpected native option")
-	}
-	if values["--json-schema"] != `{"type":"object"}` {
-		fail("wrong result schema")
 	}
 	prompt, err := io.ReadAll(os.Stdin)
 	if err != nil || string(prompt) != "Review current input" {
@@ -127,6 +124,8 @@ func TestWorkBuddyCLI(t *testing.T) {
 		time.Sleep(time.Hour)
 	}
 	encoder.Encode(map[string]any{"type": "assistant", "uuid": "response-" + values["--resume"], "session_id": identity, "message": map[string]any{"usage": map[string]any{"input_tokens": 11, "output_tokens": 7, "cache_read_input_tokens": 2}}})
+	server := getOf(getOf(config, "mcpServers"), "formal-gates")
+	peerSubmitSemantics(textOf(listOf(getOf(server, "args"))[2]), map[string]any{"summary": "native " + identity})
 	encoder.Encode(map[string]any{"type": "result", "subtype": "success", "uuid": "result-" + identity, "session_id": identity, "is_error": false, "structured_output": map[string]any{"summary": "native " + identity}})
 	os.Exit(0)
 }

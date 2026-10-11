@@ -1,19 +1,16 @@
 # 用户与项目设置
 
-配置可由用户或 AI 直接编辑。启动时按字段覆盖，优先级从低到高：默认值、用户
+模型通过 `settings show` 的原字段序号和 `settings set/remove --field <序号>` 修改配置，
+只填写新的语义值；程序保留其他字段并编码原配置文件。用户仍可人工编辑。启动时按字段覆盖，优先级从低到高：默认值、用户
 `~/.config/formal-gates/config.json`、项目 `.gates/token-cap.json` 的既有有限 cap、
 项目 `.gates/config.json`。旧 cap 输入只接受 `engineDispatchMaxTotalTokens`；新配置
 使用 `tokenCap`。同一 loader 校验所有输入，非法、未知字段或 null 明确报错，不静默
 禁用额度。删除字段表示继承。
 
-```json
-{
-  "capacity": 16,
-  "qaCapacity": 4,
-  "model": "deepseek-v4.1-flash",
-  "reasoningEffort": "high",
-  "tokenCap": 100000
-}
+```bash
+formal-gates settings show --root <repo>
+formal-gates settings set --root <repo> --scope project --field <原序号> --value <新值>
+formal-gates settings remove --root <repo> --scope project --field <原序号>
 ```
 
 | 字段 | 默认与含义 |

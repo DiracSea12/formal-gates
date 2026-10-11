@@ -68,6 +68,8 @@ type Granularity struct {
 	CheckpointReason string  `json:"checkpointReason,omitempty"`
 }
 type Batch struct {
+	Reuse         int `json:"reuse,omitempty"`
+	changes       *BatchChange
 	Owner         *int           `json:"owner,omitempty"`
 	DependsOn     []int          `json:"dependsOn,omitempty"`
 	Route         *RouteProposal `json:"route,omitempty"`
@@ -88,9 +90,13 @@ type Batch struct {
 	Spike         bool           `json:"spike,omitempty"`
 }
 type Subtask struct {
+	Reuse       int    `json:"reuse,omitempty"`
+	Remove      bool   `json:"remove,omitempty"`
 	Description string `json:"description"`
 }
 type Criterion struct {
+	Reuse       int    `json:"reuse,omitempty"`
+	Remove      bool   `json:"remove,omitempty"`
 	Description string `json:"description"`
 }
 type Check struct {
@@ -168,6 +174,7 @@ type DesignManifest struct {
 	Coverage          [][]int              `json:"coverage"`
 }
 type DesignedSharedStep struct {
+	changes     *SharedStepChange
 	Artifacts   []string             `json:"artifacts,omitempty"`
 	Independent bool                 `json:"independent,omitempty"`
 	Step        int                  `json:"step,omitempty"`
@@ -176,6 +183,7 @@ type DesignedSharedStep struct {
 	Files       *[]Location          `json:"files,omitempty"`
 }
 type DesignedCase struct {
+	changes       *CaseChange
 	Case          int                  `json:"case,omitempty"`
 	Files         *[]Location          `json:"files,omitempty"`
 	Operations    []coverage.Operation `json:"operations,omitempty"`
@@ -272,7 +280,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	} else if value.Validation != nil {
 		proposed = value.Validation.GranularityReview
 	}
-	completed := input.Handler == "engine.repair" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	completed := input.Handler == "engine.repair.v2" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
 	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
 	if err != nil {
 		return protocol.Event{}, err
@@ -450,7 +458,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				return protocol.Event{}, err
 			}
 			body.Manifest, body.DesignChange = &manifest, &change
-			if input.Handler == "engine.qa.design" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v2" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				if paths == nil {
 					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
 				}
@@ -506,7 +514,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			body.Review = &result
 		}
 		if v.RepairVerification != nil {
-			if input.Handler != "engine.repair.verify" || issued.Repair == nil || issued.Repair.FinalCandidate == nil {
+			if input.Handler != "engine.repair.verify.v2" || issued.Repair == nil || issued.Repair.FinalCandidate == nil {
 				return protocol.Event{}, fmt.Errorf("repair comparison lacks its issued native responsibility")
 			}
 			repairRecords, err := observations(v.RepairVerification.Records, issued.Repair.VerificationCases)
@@ -638,29 +646,29 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
 	switch input.Handler {
-	case "engine.development.batch":
+	case "engine.development.batch.v2":
 		return &Development{}, nil
-	case "engine.repair":
+	case "engine.repair.v2":
 		return &Repair{}, nil
-	case "engine.merge.resolve":
+	case "engine.merge.resolve.v2":
 		return &ConflictResolution{}, nil
-	case "engine.qa.design":
+	case "engine.qa.design.v2":
 		if len(input.Validation.AffectedCases) > 0 {
 			return &CaseRevisions{}, nil
 		}
 		return &Design{}, nil
-	case "engine.qa.review.rationale":
+	case "engine.qa.review.rationale.v2":
 		return &CaseReview{}, nil
-	case "engine.qa.execution":
+	case "engine.qa.execution.v2":
 		if len(input.Validation.CommandCases) > 0 {
 			return &CommandBindings{}, nil
 		}
 		return &ExecutionJudgments{}, nil
-	case "engine.validation.observation":
+	case "engine.validation.observation.v2":
 		return &ObservationJudgments{}, nil
-	case "engine.repair.verify":
+	case "engine.repair.verify.v2":
 		return &Execution{}, nil
-	case "engine.gate":
+	case "engine.gate.v2":
 		return &Gate{}, nil
 	default:
 		return nil, fmt.Errorf("worker result schema has no role %s", input.Handler)
@@ -677,7 +685,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		return decodedResult{}, "", err
 	}
 	if _, present := fields["remainingWork"]; present {
-		if input.Validation == nil || input.Handler != "engine.development.batch" && input.Handler != "engine.repair" {
+		if input.Validation == nil || input.Handler != "engine.development.batch.v2" && input.Handler != "engine.repair.v2" {
 			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
 		}
 		var partial DevelopmentContinuation
@@ -697,7 +705,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 		if strings.TrimSpace(text) == "" {
 			return decodedResult{}, "", fmt.Errorf("interruption requires an actual reason")
 		}
-		if input.Handler == "engine.qa.execution" && input.Validation != nil {
+		if input.Handler == "engine.qa.execution.v2" && input.Validation != nil {
 			var partial ExecutionInterruption
 			if err := decodeObject(raw, &partial); err != nil {
 				return decodedResult{}, "", err
@@ -786,7 +794,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte) (decodedResult, stri
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	if input.Handler == "engine.repair" && fields["completion"] != nil && fields["granularityReview"] != nil {
+	if input.Handler == "engine.repair.v2" && fields["completion"] != nil && fields["granularityReview"] != nil {
 		var plan struct {
 			Batches []map[string]json.RawMessage `json:"batches"`
 		}
@@ -890,10 +898,10 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 	if input.Validation == nil {
 		return nil
 	}
-	if input.Handler == "engine.development.batch" && input.Validation.Development != nil {
+	if input.Handler == "engine.development.batch.v2" && input.Validation.Development != nil {
 		return input.Validation.Development.Result
 	}
-	if input.Handler == "engine.repair" && input.Validation.Repair != nil {
+	if input.Handler == "engine.repair.v2" && input.Validation.Repair != nil {
 		return input.Validation.Repair.Result
 	}
 	return nil
@@ -936,4 +944,10 @@ func selectedTestRef(item Case, files []string, original string, facts []Locatio
 		return "", fmt.Errorf("testSymbol is not in the selected read's published test symbols")
 	}
 	return files[item.TestFile-1] + "::" + symbols[item.TestSymbol-1], nil
+}
+
+// ValidateSemanticBody checks the issued role body before publishing tool evidence.
+func ValidateSemanticBody(input protocol.WorkerInput, raw []byte) error {
+	_, _, err := decodeRoleBody(input, raw)
+	return err
 }

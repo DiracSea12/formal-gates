@@ -17,7 +17,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 	for _, scenario := range []string{"complete", "mandatory-and-selected", "illegal-impact"} {
 		t.Run(scenario, func(t *testing.T) {
 			d := gateImpactBoundary(t)
-			id, input := d.action("engine.validation.observation")
+			id, input := d.action("engine.validation.observation.v2")
 			issued := input.Observation
 			if issued == nil || len(issued.Scopes) != 1 || len(issued.GateImpacts) != 1 || issued.Scopes[0].Mode != coverage.ReviewBlackbox || !slices.Equal(issued.Scopes[0].MustExecute, []string{"invalid"}) || !slices.Contains(issued.Scopes[0].ApprovedCases, "normal") {
 				t.Fatalf("affected scope lost actual legal complement: %#v", issued)
@@ -114,7 +114,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 				t.Fatal("semantic completion did not refill the original approved native recipe")
 			}
 			d.drive()
-			_, qa := d.action("engine.qa.execution")
+			_, qa := d.action("engine.qa.execution.v2")
 			if !slices.Equal(qa.RequiredCases, required) {
 				t.Fatal("scope dropped required or selected case")
 			}
@@ -134,7 +134,7 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 	for _, execution := range []string{"unclaimed", "owned", "spawned", "unknown"} {
 		t.Run(execution, func(t *testing.T) {
 			d := gateImpactBoundary(t)
-			id, input := d.action("engine.validation.observation")
+			id, input := d.action("engine.validation.observation.v2")
 			state := driverState(t, d)
 			original := state.WorkerInputs(d.f.definition)[id]
 			refs, err := d.f.workerMaterials(state, true)
@@ -223,7 +223,7 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 				t.Fatal("reopen replay changed typed acceptance", repeated)
 			}
 			d.drive()
-			_, remaining := d.action("engine.validation.observation")
+			_, remaining := d.action("engine.validation.observation.v2")
 			if len(remaining.Observation.Scopes) != 0 || len(remaining.Observation.GateImpacts) != 1 {
 				t.Fatal("partial typed facts lost the remaining issued duty", remaining.Observation)
 			}

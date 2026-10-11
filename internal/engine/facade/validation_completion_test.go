@@ -13,7 +13,7 @@ import (
 func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
 	d := repairedExecutionDriver(t)
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-	action, input := d.action("engine.qa.execution")
+	action, input := d.action("engine.qa.execution.v2")
 	report := executionFor(input)
 	d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report}))
 	d.assertRequiredValidationComplete(coverage.ScopeAffected)

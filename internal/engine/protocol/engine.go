@@ -1832,7 +1832,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair") {
+			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v2" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v2") {
 				for _, prior := range state.RecoverableResults[actionID] {
 					if prior.Digest == payloadDigest {
 						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
@@ -2146,7 +2146,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	class := record.FailureClass
 	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && class == authoring.FailureTransientEngine {
 		if record.Validation != nil {
-			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
+			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v2" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
 				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "runtime progress requires a QA execution checkpoint", record, nextRevision)
 			}
 			next, err := e.prepareValidationResult(state, record, nextRevision)
@@ -2189,7 +2189,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
-		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch" || record.Validation != nil && record.Validation.Status == "CONTINUE" {
+		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch.v2" || record.Validation != nil && record.Validation.Status == "CONTINUE" {
 			if previous, ok := state.Results[record.ActionID]; ok {
 				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
 			}

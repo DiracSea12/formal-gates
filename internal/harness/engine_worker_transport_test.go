@@ -4,8 +4,6 @@ package harness
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"formal-gates/internal/prompts"
 	"os"
@@ -44,7 +42,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := protocol.WorkerInput{RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
+	input := protocol.WorkerInput{RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker.v2", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
 	material, err := worker.Render(input, catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +60,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err := json.Unmarshal(answer, &domain); err != nil {
 		t.Fatal(err)
 	}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, material.ResultSchema), domain).(map[string]any)
+	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	s.peer.StrictSchema = true
 	source, err := s.execute(t)
 	if err != nil {
@@ -79,10 +77,12 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if event.Result == nil || event.Result.ActionID != input.Pending.ActionID || event.Result.Review.DispatchID != input.Pending.ActionID || event.Result.Review.RequirementRevision != doc.ContentDigest {
 		t.Fatal("core native result was converted or rebound")
 	}
-	raw := readTestFileBytes(t, filepath.Join(s.directory, "answer.raw.txt"))
-	rawHash := sha256.Sum256(raw)
-	if event.Result.PayloadDigest != "sha256:"+hex.EncodeToString(rawHash[:]) {
-		t.Fatal("final event used a shape/decoded digest instead of original native bytes")
+	callsProof, err := fileProofOf(filepath.Join(s.directory, nativeToolCallsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Result.PayloadDigest != "sha256:"+textOf(callsProof["sha256"]) || !bytes.Equal(answerBytes, readTestFileBytes(t, filepath.Join(s.directory, "answer.json"))) {
+		t.Fatal("final event lost its original semantic call proof or canonical bytes")
 	}
 	expectedEvidence := []string{}
 	for index, key := range review.RequiredVerificationChecks() {
@@ -94,7 +94,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 }
 
 func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch", "engine.repair", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate"} {
+	for _, handler := range []string{"engine.development.batch.v2", "engine.repair.v2", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -102,13 +102,14 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := json.Marshal(schema)
-			wire, err := codexOutputSchema(schema)
+			wire, err := nativeSemanticToolSchemaFixture(t, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := codexPeerStrictSchema(codexPlain(t, wire)); err != nil {
-				t.Fatal(err)
+			if !valuesEqual(wire, codexPlain(t, schema)) {
+				t.Fatal("declared semantic tool schema differs from issued schema")
 			}
+
 			after, _ := json.Marshal(schema)
 			if string(before) != string(after) {
 				t.Fatal("native adapter changed domain result schema")
@@ -118,19 +119,20 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 }
 
 func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before, _ := json.Marshal(schema)
-	nativeSchema, err := codexOutputSchema(schema)
+	nativeSchema, err := nativeSemanticToolSchemaFixture(t, schema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := codexPeerStrictSchema(codexPlain(t, nativeSchema)); err != nil {
-		t.Fatal(err)
+	if !valuesEqual(nativeSchema, codexPlain(t, schema)) {
+		t.Fatal("declared semantic tool schema differs from issued schema")
 	}
+
 	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 		t.Run(tier, func(t *testing.T) {
 			plan := nativeWorkerGranularityFixture()
@@ -154,11 +156,11 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := codexPeerAnswer(codexPlain(t, schema), domain)
-			if getOf(getOf(getOf(wire, "result"), "granularityReview"), "verificationTier") != tier || len(listOf(getOf(getOf(getOf(wire, "result"), "granularityReview"), "batches"))) != len(plan.Batches) {
+			wire := codexPlain(t, domain)
+			if getOf(getOf(wire, "granularityReview"), "verificationTier") != tier || len(listOf(getOf(getOf(wire, "granularityReview"), "batches"))) != len(plan.Batches) {
 				t.Fatal("peer erased native plan fields")
 			}
-			projected, err := codexDomainResult(schema, wire)
+			projected, err := nativeSemanticToolRoundTrip(t, schema, wire)
 			if err != nil || !valuesEqual(projected, domain) {
 				t.Fatalf("tier transport changed domain evidence: %v", err)
 			}
@@ -179,7 +181,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 }
 
 func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
-	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
+	for _, handler := range []string{"engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
 			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
@@ -192,21 +194,21 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			var payload any
 			switch handler {
-			case "engine.qa.design":
+			case "engine.qa.design.v2":
 				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Case: 1, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
-			case "engine.qa.review.rationale":
+			case "engine.qa.review.rationale.v2":
 				payload = &worker.CaseReview{SourceDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "oracle valid"}}}
-			case "engine.qa.execution":
+			case "engine.qa.execution.v2":
 				payload = &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{{Result: coverage.ExecutedPass, Comparison: "matches"}}}, Findings: []worker.Finding{}}
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
-			case "engine.qa.design":
+			case "engine.qa.design.v2":
 				expected.DesignChange = &protocol.QADesignChange{RemoveCases: []string{}, RemoveSharedSteps: []string{}, CoveragePoints: []string{"AC"}}
-				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: []string{}, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
-			case "engine.qa.review.rationale":
+				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: manifest.Cases[0].SharedSteps, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
+			case "engine.qa.review.rationale.v2":
 				expected.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}, SharedStepDecisions: []coverage.ReviewDecision{}, SetStatus: coverage.StatusPass}
-			case "engine.qa.execution":
+			case "engine.qa.execution.v2":
 				expected.Execution = &coverage.ExecutionReport{Binding: execution, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
 				expected.Execution.Binding.ActualCaseIDs = []string{"case"}
 				expected.Tool, expected.Environment = "app", "issued environment"
@@ -221,15 +223,16 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			native, err := codexOutputSchema(schema)
+			native, err := nativeSemanticToolSchemaFixture(t, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := codexPeerStrictSchema(codexPlain(t, native)); err != nil {
-				t.Fatal(err)
+			if !valuesEqual(native, codexPlain(t, schema)) {
+				t.Fatal("declared semantic tool schema differs from issued schema")
 			}
-			wire := codexPeerAnswer(codexPlain(t, schema), domain)
-			projected, err := codexDomainResult(schema, wire)
+
+			wire := codexPlain(t, domain)
+			projected, err := nativeSemanticToolRoundTrip(t, schema, wire)
 			if err != nil || !valuesEqual(projected, domain) {
 				t.Fatalf("native machine values changed: got=%#v expected=%#v error=%v", projected, domain, err)
 			}
@@ -238,7 +241,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if handler == "engine.qa.design" {
+			if handler == "engine.qa.design.v2" {
 				actual := event.Result.Validation.Manifest
 				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID != "case" {
 					t.Fatal("substantive design replacement changed its original program identity")
@@ -257,7 +260,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 
 func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
-	for _, role := range []string{"engine.development.batch", "engine.repair"} {
+	for _, role := range []string{"engine.development.batch.v2", "engine.repair.v2"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			schema, err := worker.ResultSchema(input)
@@ -265,16 +268,20 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 				t.Fatal(err)
 			}
 			original, _ := json.Marshal(schema)
-			native, err := codexOutputSchema(schema)
+			native, err := nativeSemanticToolSchemaFixture(t, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plain := codexPlain(t, native)
-			if err = codexPeerStrictSchema(plain); err != nil {
-				t.Fatal(err)
+			if !valuesEqual(native, codexPlain(t, schema)) {
+				t.Fatal("declared semantic tool schema differs from issued schema")
 			}
+			plain := codexPlain(t, native)
+			if !valuesEqual(plain, codexPlain(t, schema)) {
+				t.Fatal("declared semantic schema changed issued keys")
+			}
+
 			completion := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["completion"].(map[string]any)
-			nativeCompletion, err := codexOutputSchema(completion)
+			nativeCompletion, err := nativeSemanticToolSchemaFixture(t, completion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -292,10 +299,10 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := codexPeerAnswer(schema, domain)
-			projected, err := codexDomainResult(schema, wire)
+			wire := codexPlain(t, domain)
+			projected, err := nativeSemanticToolRoundTrip(t, schema, wire)
 			if err != nil || !valuesEqual(projected, domain) {
-				t.Fatalf("native projection changed completion evidence: %v", err)
+				t.Fatalf("native semantic submission changed completion evidence: %v", err)
 			}
 			after, _ := json.Marshal(schema)
 			if !bytes.Equal(original, after) {
@@ -306,7 +313,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch", "engine.repair", "engine.merge.resolve", "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate"} {
+	for _, handler := range []string{"engine.development.batch.v2", "engine.repair.v2", "engine.merge.resolve.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -314,20 +321,21 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := json.Marshal(schema)
-			native, err := codexOutputSchema(schema)
+			native, err := nativeSemanticToolSchemaFixture(t, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := codexPeerStrictSchema(codexPlain(t, native)); err != nil {
-				t.Fatal(err)
+			if !valuesEqual(native, codexPlain(t, schema)) {
+				t.Fatal("declared semantic tool schema differs from issued schema")
 			}
+
 			body := objectOrEmpty(listOf(codexPlain(t, schema).(map[string]any)["anyOf"])[0])
 			fields := objectOrEmpty(body["properties"])
 			if fields["status"] != nil {
 				t.Fatal("model owns a program-derived role status")
 			}
 			domain := map[string]any{"interruptionReason": "Required source is not readable"}
-			projected, err := codexDomainResult(schema, codexPeerAnswer(codexPlain(t, schema), domain))
+			projected, err := nativeSemanticToolRoundTrip(t, schema, codexPlain(t, domain))
 			if err != nil || !valuesEqual(projected, domain) {
 				t.Fatal("native inability altered", err)
 			}

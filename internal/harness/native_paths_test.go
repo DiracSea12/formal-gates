@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +40,7 @@ func nativePathsFixture(t *testing.T) (string, func(string, string) string) {
 	}
 	return workspace, func(name, artifact string) string {
 		job := t.TempDir()
-		material := worker.Material{Input: protocol.WorkerInput{VCS: "git", Handler: "engine.development.batch", Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{Artifacts: []string{artifact}}}}}}
+		material := worker.Material{Input: protocol.WorkerInput{VCS: "git", Handler: "engine.development.batch.v2", Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{Artifacts: []string{artifact}}}}}}
 		materialPath := filepath.Join(job, "material.json")
 		body, _ := json.Marshal(material)
 		if err := os.WriteFile(materialPath, body, 0600); err != nil {
@@ -69,7 +71,7 @@ func TestNativeTerminalPathsPreserveSharedWorkspaceAndOriginalSource(t *testing.
 		}
 	}
 	for _, directory := range []string{left, right} {
-		if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err != nil {
+		if err := submitTerminalPathFixture(t, directory); err != nil {
 			t.Fatal(err)
 		}
 		source, err := evidenceSource(directory, "fixture", "session", nil)
@@ -88,7 +90,7 @@ func TestNativeTerminalPathsPreserveSharedWorkspaceAndOriginalSource(t *testing.
 		if err := os.WriteFile(filepath.Join(workspace, "later.txt"), []byte("later writer\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err != nil {
+		if err := submitTerminalPathFixture(t, directory); err != nil {
 			t.Fatal(err)
 		}
 		recovered, err := evidenceSource(directory, "fixture", "session", nil)
@@ -119,7 +121,7 @@ func TestNativeTerminalPathsMissingAtCompletedExitNeverRecapture(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(actual, []string{"future.txt"}) {
 		t.Fatal("negative control lacks real later diff", actual, err)
 	}
-	if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err == nil || !strings.Contains(err.Error(), "terminated") {
+	if err := submitTerminalPathFixture(t, directory); err == nil || !strings.Contains(err.Error(), "terminated") {
 		t.Fatal("completed exit was allowed to recapture future state", err)
 	}
 	for _, file := range []string{nativePathsFile, "answer.raw.txt"} {
@@ -129,13 +131,13 @@ func TestNativeTerminalPathsMissingAtCompletedExitNeverRecapture(t *testing.T) {
 	}
 }
 
-func TestNativeTerminalPathsBindOriginalRequestAndRawAnswer(t *testing.T) {
+func TestNativeTerminalPathsBindOriginalRequestAndSubmittedSemantics(t *testing.T) {
 	_, job := nativePathsFixture(t)
 	directory := job("empty", "left.txt")
-	if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err != nil {
+	if err := submitTerminalPathFixture(t, directory); err != nil {
 		t.Fatal(err)
 	}
-	facts, err := nativePathEvidence(directory, `{}`, false)
+	facts, err := nativePathEvidence(directory, `{"interruptionReason":"Path evidence fixture ended"}`, false)
 	if err != nil || facts.Paths == nil || len(facts.Paths) != 0 {
 		t.Fatal("captured empty diff must be an explicit empty array", facts, err)
 	}
@@ -145,7 +147,7 @@ func TestNativeTerminalPathsBindOriginalRequestAndRawAnswer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "native-request.json"), []byte(`{"workspace":"different","read_only":false,"engine":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nativePathEvidence(directory, `{}`, false); err == nil {
+	if _, err := nativePathEvidence(directory, `{"interruptionReason":"Path evidence fixture ended"}`, false); err == nil {
 		t.Fatal("captured facts accepted another native request")
 	}
 }
@@ -180,7 +182,7 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := json.Unmarshal(body, &material); err != nil {
 		t.Fatal(err)
 	}
-	material.Input.Handler = "engine.qa.design"
+	material.Input.Handler = "engine.qa.design.v2"
 	material.Input.Validation.Workspace.Source = base
 	material.Input.Validation.ReviewBase = base
 	body, err = json.Marshal(material)
@@ -190,7 +192,7 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := os.WriteFile(materialPath, body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeNativeAnswer(directory, `{ "cases": [] }`, "FIXTURE"); err != nil {
+	if err := submitTerminalPathFixture(t, directory); err != nil {
 		t.Fatal(err)
 	}
 	facts, err := nativePathEvidence(directory, `{ "cases": [] }`, false)
@@ -208,10 +210,10 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := os.WriteFile(materialPath, body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeNativeAnswer(directory, `{}`, "FIXTURE"); err != nil {
+	if err := submitTerminalPathFixture(t, directory); err != nil {
 		t.Fatal(err)
 	}
-	facts, err = nativePathEvidence(directory, `{}`, false)
+	facts, err = nativePathEvidence(directory, `{"interruptionReason":"Path evidence fixture ended"}`, false)
 	if err != nil || !reflect.DeepEqual(facts.Paths, []string{"added_test.txt", "retained_test.txt"}) {
 		t.Fatalf("complete material diff retained a file deleted back to development: %+v %v", facts, err)
 	}
@@ -221,8 +223,18 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := os.WriteFile(filepath.Join(workspace, "later_test.txt"), []byte("later\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := nativePathEvidence(directory, `{}`, false)
+	recovered, err := nativePathEvidence(directory, `{"interruptionReason":"Path evidence fixture ended"}`, false)
 	if err != nil || !reflect.DeepEqual(facts, recovered) {
 		t.Fatal("recovery changed original complete paths", recovered, err)
 	}
+}
+
+func submitTerminalPathFixture(t *testing.T, directory string) error {
+	t.Helper()
+	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": nativeSemanticTool, "arguments": map[string]any{"interruptionReason": "Path evidence fixture ended"}}})
+	var out, errout bytes.Buffer
+	if code := NativeTools(directory, bytes.NewReader(request), &out, &errout, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
+		return fmt.Errorf("native tools: %s", &errout)
+	}
+	return writeSubmittedAnswer(directory)
 }

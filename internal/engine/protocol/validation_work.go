@@ -23,7 +23,7 @@ func (e *Engine) retireSupersededObservations(s *State, nextRevision uint64) (bo
 	for _, id := range ids {
 		pending := s.PendingActions[id]
 		attempt := s.Attempts[pending.Task]
-		if attempt.Work == nil || s.validationRole(pending.Task, e.cfg.Definition) != "engine.validation.observation" || s.validationWorkOwed(*attempt.Work, e.cfg.Definition) {
+		if attempt.Work == nil || s.validationRole(pending.Task, e.cfg.Definition) != "engine.validation.observation.v2" || s.validationWorkOwed(*attempt.Work, e.cfg.Definition) {
 			continue
 		}
 		_, spawned := s.SpawnReceipts[id]
@@ -104,18 +104,18 @@ func (s *State) designReopening(mode coverage.ReviewKind) (string, uint64) {
 
 func (s *State) reviewTask(mode coverage.ReviewKind, generation uint64, version string, cd *compiler.CompiledDefinition) runtime.TaskKey {
 	set := s.Validation.Sets[mode]
-	return pipelineTask(cd, "engine.qa.review.rationale", fmt.Sprintf("%d:%s:%s:%s:%d", generation, mode, version, strings.TrimPrefix(digestOfCanonical(set.DesignTask), "sha256:"), len(set.ReviewHistory)+1))
+	return pipelineTask(cd, "engine.qa.review.rationale.v2", fmt.Sprintf("%d:%s:%s:%s:%d", generation, mode, version, strings.TrimPrefix(digestOfCanonical(set.DesignTask), "sha256:"), len(set.ReviewHistory)+1))
 }
 
 // prewaveWorkCurrent decides applicability, not transport completion. An
 // inapplicable dispatch keeps its receipt/identity bookkeeping until observed.
 func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinition) bool {
 	role := s.validationRole(b.Task, cd)
-	if role == "engine.validation.observation" {
+	if role == "engine.validation.observation.v2" {
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
-	if role != "engine.qa.design" && role != "engine.qa.review.rationale" {
+	if role != "engine.qa.design.v2" && role != "engine.qa.review.rationale.v2" {
 		return true
 	}
 	if s.Validation == nil {
@@ -127,7 +127,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 	mode := s.validationMode(b.Task)
 	set := s.Validation.Sets[mode]
 	source := s.sourceValidationTask(b.Task)
-	if role == "engine.qa.design" {
+	if role == "engine.qa.design.v2" {
 		if set != nil && set.Status != "DRAFT" && set.Status != "THAWED" {
 			return false
 		}
@@ -215,15 +215,15 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
 		return false
 	}
-	if s.validationRole(b.Task, cd) == "engine.validation.observation" {
+	if s.validationRole(b.Task, cd) == "engine.validation.observation.v2" {
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
-	if s.validationRole(b.Task, cd) == "engine.repair.verify" {
+	if s.validationRole(b.Task, cd) == "engine.repair.verify.v2" {
 		context, current := s.repairComparisonContext(b.Task, cd)
 		return current && context.binding == b && s.repairComparisonResult(b.Task) == nil
 	}
-	if s.validationRole(b.Task, cd) == "engine.development.batch" {
+	if s.validationRole(b.Task, cd) == "engine.development.batch.v2" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil
 	}
@@ -234,7 +234,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
-	if s.validationRole(b.Task, cd) == "engine.repair" {
+	if s.validationRole(b.Task, cd) == "engine.repair.v2" {
 		for _, work := range s.repairWork() {
 			if work.task == b.Task && work.wave.ID == b.WaveID {
 				return work.result == nil

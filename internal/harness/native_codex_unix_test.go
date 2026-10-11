@@ -232,11 +232,8 @@ func TestCodexRPCPeer(t *testing.T) {
 	} else {
 		check(getOf(frame, "params"), expected)
 	}
-	if peer.StrictSchema {
-		if err := codexPeerStrictSchema(getOf(getOf(frame, "params"), "outputSchema")); err != nil {
-			emit(map[string]any{"id": getOf(frame, "id"), "error": map[string]any{"code": 400, "message": "invalid_json_schema: " + err.Error()}})
-			os.Exit(0)
-		}
+	if getOf(getOf(frame, "params"), "outputSchema") != nil {
+		panic("native worker must submit via its declared semantic tool")
 	}
 	turn := codexPeerID(thread + textOf(expected) + fmt.Sprint(len(history)))
 	reply(frame, map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
@@ -328,7 +325,7 @@ func TestCodexRPCPeer(t *testing.T) {
 		}
 		domain := map[string]any{"interruptionReason": "The gate peer needs an explicit user decision"}
 		if peer.Mode == "workflow-invalid-review" {
-			if input.Review == nil || input.Handler != "engine.review.worker" {
+			if input.Review == nil || input.Handler != "engine.review.worker.v2" {
 				panic("invalid review fixture received another duty")
 			}
 			verification := []string{}
@@ -338,7 +335,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			verification[0] = " "
 			domain = map[string]any{"findings": []any{}, "verification": verification}
 		}
-		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch" {
+		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v2" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
@@ -351,7 +348,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			domain = map[string]any{"summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
 		}
 
-		if input.Handler == "engine.development.batch" && peer.Mode == "workflow-progress" {
+		if input.Handler == "engine.development.batch.v2" && peer.Mode == "workflow-progress" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if len(history) > 1 && (input.Validation.Development.Result == nil || input.Validation.Development.Result.Validation == nil || input.Validation.Development.Result.Validation.Development == nil || input.Validation.Development.Result.Validation.Development.RemainingWork == "") {
@@ -373,17 +370,17 @@ func TestCodexRPCPeer(t *testing.T) {
 				domain = map[string]any{"summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
 			}
 		}
-		plain, err := json.Marshal(material.ResultSchema)
-		if err != nil {
-			panic(err)
-		}
-		originalSchema, err := decodeNativeJSON(plain)
-		if err != nil {
-			panic(err)
-		}
-		answer = codexPeerAnswer(originalSchema, domain).(map[string]any)
+		answer = domain
 	}
-	text, _ := json.Marshal(answer)
+	if status == "completed" && peer.Mode != "bad_json" {
+		emit(map[string]any{"id": "semantic-submit", "method": "item/tool/call", "params": map[string]any{"threadId": thread, "turnId": turn, "callId": "semantic-submit", "tool": nativeSemanticTool, "arguments": answer}})
+		accepted := read()
+		check(getOf(accepted, "id"), "semantic-submit")
+		if getOf(getOf(accepted, "result"), "success") != true {
+			panic("semantic submission rejected: " + textOf(accepted))
+		}
+	}
+	text := []byte("Completed the semantic tool submission.")
 	if peer.Mode == "bad_json" {
 		text = []byte("invalid business json")
 	}
@@ -563,7 +560,7 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 				}
 			}
 		}
-		s.peer.ThreadParams["dynamicTools"] = []any{nativeWorkspaceToolSchema(s.request["read_only"] == true, material)}
+		s.peer.ThreadParams["dynamicTools"] = (&nativeWorkspaceTools{readOnly: s.request["read_only"] == true, material: material, semanticSchema: objectOrEmpty(s.request["schema"])}).schemas()
 	}
 	params, err := codexTurnParameters(s.request, "")
 	if err != nil {
@@ -594,7 +591,7 @@ func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["prompt"] = "Read the complete native execution evidence:\n" + strings.Repeat("command output: \"value\" ✓\n", 4096)
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +599,7 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	s.request["read_only"] = true
 	s.peer.StrictSchema = true
 	domain := map[string]any{"findings": []any{}}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
+	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)
@@ -659,7 +656,7 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 
 func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T) {
 	s := newCodexScenario(t)
-	input := protocol.WorkerInput{Handler: "engine.gate", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -677,7 +674,7 @@ func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T
 		map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"lines":["package app\n"],"read":2}`}}},
 	}
 	domain := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "Original declaration is app", "locations": []any{map[string]any{"read": 2, "line": 1}}}}}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, schema), domain).(map[string]any)
+	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)
@@ -732,7 +729,7 @@ func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	input := protocol.WorkerInput{Handler: "engine.gate", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -759,7 +756,7 @@ func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
 	step(map[string]any{"action": "list", "listing": 4, "entry": 2}, listing(7, "renamed.go"))
 	step(map[string]any{"action": "read", "listing": 7, "entry": 1}, map[string]any{"read": 8, "lines": []any{"original candidate\n"}})
 	domain := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "Original paths remain attributable", "locations": []any{map[string]any{"read": 6}, map[string]any{"read": 8}}}}}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), domain).(map[string]any)
+	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)
@@ -913,7 +910,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	read, _ := json.Marshal(map[string]any{"read": 2, "lines": lines})
 	s.peer.Reverse = []any{map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "resumed-read", "namespace": nil, "tool": "workspace", "arguments": map[string]any{"action": "read", "listing": 1, "entry": appEntry}}}}
 	s.peer.Replies = []any{map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(read)}}, "success": true}}
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), map[string]any{"interruptionReason": "The original resumed read finished; this peer now needs an operator decision"}).(map[string]any)
+	s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The original resumed read finished; this peer now needs an operator decision"}).(map[string]any)
 	s.save(t)
 	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
 	continued, err := NativeJobSource("codex", directory)
@@ -1509,4 +1506,17 @@ func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutc
 			}
 		})
 	}
+}
+
+func codexPlain(t *testing.T, value any) any {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := decodeNativeJSON(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plain
 }

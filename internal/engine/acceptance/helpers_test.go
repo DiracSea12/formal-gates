@@ -65,7 +65,7 @@ var workflowFixtureHandlers = []struct {
 }{
 	{"engine.entry.parse", authoring.RunnerEngineLocal},
 	{"engine.entry.persist", authoring.RunnerDurableActivity},
-	{"engine.review.worker", authoring.RunnerAgentWorker},
+	{"engine.review.worker.v2", authoring.RunnerAgentWorker},
 	{"engine.fan.slice", authoring.RunnerEngineLocal},
 	{"engine.fan.transport", authoring.RunnerHostAdapter},
 	{"engine.fan.join", authoring.RunnerEngineLocal},

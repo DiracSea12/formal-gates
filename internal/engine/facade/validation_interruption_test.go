@@ -14,7 +14,7 @@ import (
 
 func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	id, input := d.action("engine.qa.design")
+	id, input := d.action("engine.qa.design.v2")
 	for attempt := 0; attempt < 2; attempt++ {
 		manifest := simpleManifest(input)
 		manifest.Edges = nil
@@ -28,7 +28,7 @@ func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
 		}
 		d.drive()
 		previous := id
-		id, input = d.action("engine.qa.design")
+		id, input = d.action("engine.qa.design.v2")
 		state := driverState(t, d)
 		if state.Attempts[input.Binding.Task].PreviousAction != previous || input.Interruption == nil || input.Interruption.ActionID != previous || !strings.Contains(input.Interruption.Detail, rejected.Reason) {
 			t.Fatal("retry lost its own rejection feedback", input.Interruption)
@@ -72,7 +72,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
 			d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 			d.reviewReady()
-			id, input := d.action("engine.qa.execution")
+			id, input := d.action("engine.qa.execution.v2")
 			original := d.run.Attempts[input.Binding.Task]
 			full := executionFor(input)
 			partial := full
@@ -111,7 +111,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 
 			d.reopen()
 			d.drive()
-			retry, next := d.action("engine.qa.execution")
+			retry, next := d.action("engine.qa.execution.v2")
 			if next.Binding != input.Binding || retry == id || next.Interruption == nil || next.Interruption.ActionID != id || next.Interruption.InterruptionReason != cause || next.Interruption.Detail == cause {
 				t.Fatal("retry lost original responsibility or confused cause with routing explanation")
 			}
@@ -147,7 +147,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
-	id, input := d.action("engine.qa.execution")
+	id, input := d.action("engine.qa.execution.v2")
 	d.receipt(id)
 	start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 	d.submit(start)
@@ -233,7 +233,7 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 func TestInvalidInterruptedRowsDoNotReplaceProgress(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
-	id, input := d.action("engine.qa.execution")
+	id, input := d.action("engine.qa.execution.v2")
 	d.receipt(id)
 	report := executionFor(input)
 	report.Records[0].CaseID = "unknown"
@@ -245,7 +245,7 @@ func TestInvalidInterruptedRowsDoNotReplaceProgress(t *testing.T) {
 		t.Fatal("invalid partial rows became authoritative")
 	}
 	d.drive()
-	id, input = d.action("engine.qa.execution")
+	id, input = d.action("engine.qa.execution.v2")
 	before, _ := d.f.engine.Load()
 	event.ID = d.eventID()
 	event.Result.ActionID = id
@@ -262,7 +262,7 @@ func TestInvalidInterruptedRowsDoNotReplaceProgress(t *testing.T) {
 func TestLatestRuntimeCauseSurvivesInvalidRowsAndEndsAtRedo(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
-	id, input := d.action("engine.qa.execution")
+	id, input := d.action("engine.qa.execution.v2")
 	candidate := d.run.Validation.Waves[0].Candidate
 	for i, cause := range []string{"first tool exit", "second tool exit with incomplete evidence"} {
 		d.receipt(id)
@@ -275,12 +275,12 @@ func TestLatestRuntimeCauseSurvivesInvalidRowsAndEndsAtRedo(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: payload})
 		d.drive()
 		if i == 0 {
-			id, input = d.action("engine.qa.execution")
+			id, input = d.action("engine.qa.execution.v2")
 		}
 	}
 	decideValidation(d, d.validationAsk("RETRY"), "approve")
 	d.drive()
-	id, input = d.action("engine.qa.execution")
+	id, input = d.action("engine.qa.execution.v2")
 	if input.Interruption == nil || input.Interruption.InterruptionReason != "second tool exit with incomplete evidence" {
 		t.Fatal("controller rejection classification selected a stale cause")
 	}
@@ -288,7 +288,7 @@ func TestLatestRuntimeCauseSurvivesInvalidRowsAndEndsAtRedo(t *testing.T) {
 	confirmValidationWork(d, "")
 	d.reopen()
 	d.drive()
-	_, carried := d.action("engine.qa.execution")
+	_, carried := d.action("engine.qa.execution.v2")
 	if carried.Binding.Task != original || !reflect.DeepEqual(carried.Interruption, input.Interruption) {
 		t.Fatal("explicit CARRY lost original interruption evidence")
 	}
@@ -300,7 +300,7 @@ func TestLatestRuntimeCauseSurvivesInvalidRowsAndEndsAtRedo(t *testing.T) {
 		materializeUnchangedCandidate(d, candidate)
 	}
 	d.drive()
-	_, redone := d.action("engine.qa.execution")
+	_, redone := d.action("engine.qa.execution.v2")
 	if redone.Binding.Task == original || redone.Interruption != nil {
 		t.Fatal("REDO inherited another task's interruption cause")
 	}

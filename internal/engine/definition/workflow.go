@@ -22,7 +22,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "15"
+const Version authoring.DefinitionVersion = "16"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -38,18 +38,18 @@ var (
 		{"engine.children.prepare", authoring.RunnerEngineLocal},
 		{"engine.children.publish", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
-		{"engine.review.worker", authoring.RunnerAgentWorker},
-		{"engine.readiness.plan", authoring.RunnerAgentWorker},
+		{"engine.review.worker.v2", authoring.RunnerAgentWorker},
+		{"engine.readiness.plan.v2", authoring.RunnerAgentWorker},
 
-		{"engine.development.batch", authoring.RunnerAgentWorker},
-		{"engine.qa.design", authoring.RunnerAgentWorker},
-		{"engine.qa.review.rationale", authoring.RunnerAgentWorker},
-		{"engine.qa.execution", authoring.RunnerAgentWorker},
-		{"engine.validation.observation", authoring.RunnerAgentWorker},
-		{"engine.gate", authoring.RunnerAgentWorker},
-		{"engine.repair", authoring.RunnerAgentWorker},
-		{"engine.repair.verify", authoring.RunnerAgentWorker},
-		{"engine.merge.resolve", authoring.RunnerAgentWorker},
+		{"engine.development.batch.v2", authoring.RunnerAgentWorker},
+		{"engine.qa.design.v2", authoring.RunnerAgentWorker},
+		{"engine.qa.review.rationale.v2", authoring.RunnerAgentWorker},
+		{"engine.qa.execution.v2", authoring.RunnerAgentWorker},
+		{"engine.validation.observation.v2", authoring.RunnerAgentWorker},
+		{"engine.gate.v2", authoring.RunnerAgentWorker},
+		{"engine.repair.v2", authoring.RunnerAgentWorker},
+		{"engine.repair.verify.v2", authoring.RunnerAgentWorker},
+		{"engine.merge.resolve.v2", authoring.RunnerAgentWorker},
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
 		{"engine.workspace", authoring.RunnerHostAdapter},
 		{"engine.cleanup", authoring.RunnerHostAdapter},
@@ -105,14 +105,14 @@ func Workflow() *compiler.Definition {
 	must("entry.persist", err)
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIOWith("entry.persist"), authoring.AgentSpec{
-			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: 0,
 		})
 	must("review.worker", err)
 	// Readiness includes the structured granularity proposal for route confirmation.
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
 		reviewIOWith("review.worker"), authoring.AgentSpec{
-			Handler: "engine.readiness.plan", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.readiness.plan.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: 0,
 		})
 	must("review.readiness", err)
@@ -127,15 +127,15 @@ func Workflow() *compiler.Definition {
 		id, handler string
 		reason      authoring.NonProgrammableReason
 	}{
-		{"development.worker", "engine.development.batch", authoring.ReasonCreativeImplementation},
-		{"qa.design", "engine.qa.design", authoring.ReasonSemanticJudgment},
-		{"qa.review", "engine.qa.review.rationale", authoring.ReasonIndependentReview},
-		{"qa.execution", "engine.qa.execution", authoring.ReasonSemanticJudgment},
-		{"validation.observation", "engine.validation.observation", authoring.ReasonSemanticJudgment},
-		{"validation.gate", "engine.gate", authoring.ReasonIndependentReview},
-		{"development.repair", "engine.repair", authoring.ReasonCreativeImplementation},
-		{"repair.verification", "engine.repair.verify", authoring.ReasonSemanticJudgment},
-		{"merge.resolve", "engine.merge.resolve", authoring.ReasonCreativeImplementation},
+		{"development.worker", "engine.development.batch.v2", authoring.ReasonCreativeImplementation},
+		{"qa.design", "engine.qa.design.v2", authoring.ReasonSemanticJudgment},
+		{"qa.review", "engine.qa.review.rationale.v2", authoring.ReasonIndependentReview},
+		{"qa.execution", "engine.qa.execution.v2", authoring.ReasonSemanticJudgment},
+		{"validation.observation", "engine.validation.observation.v2", authoring.ReasonSemanticJudgment},
+		{"validation.gate", "engine.gate.v2", authoring.ReasonIndependentReview},
+		{"development.repair", "engine.repair.v2", authoring.ReasonCreativeImplementation},
+		{"repair.verification", "engine.repair.verify.v2", authoring.ReasonSemanticJudgment},
+		{"merge.resolve", "engine.merge.resolve.v2", authoring.ReasonCreativeImplementation},
 	} {
 		payload := authoring.AgentSpec{Handler: authoring.HandlerID(spec.handler), Reason: spec.reason, Timeout: 0, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
 		if spec.reason == authoring.ReasonIndependentReview {

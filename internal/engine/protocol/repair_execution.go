@@ -480,7 +480,7 @@ func (s *State) ensureRepairGates(cd *compiler.CompiledDefinition) bool {
 			source = intent.ActionID
 		}
 		for _, gate := range s.repairGates(work) {
-			task := s.replacementFold(pipelineTask(cd, "engine.gate", repairGateScope(source, gate)))
+			task := s.replacementFold(pipelineTask(cd, "engine.gate.v2", repairGateScope(source, gate)))
 			if work.wave.Repair.Targets == nil {
 				work.wave.Repair.Targets = map[string]*ValidationTarget{}
 			}
@@ -623,7 +623,7 @@ func (s *State) repairVerificationWork(w *ValidationWave, cd *compiler.CompiledD
 		}
 		final.Digest = digestOfCanonical(actions)
 	}
-	task := pipelineTask(cd, "engine.repair.verify", w.Repair.Task.Scope+":verification:"+strings.TrimPrefix(digestOfCanonical(struct{ Identity, Digest string }{final.Identity, final.Digest}), "sha256:"))
+	task := pipelineTask(cd, "engine.repair.verify.v2", w.Repair.Task.Scope+":verification:"+strings.TrimPrefix(digestOfCanonical(struct{ Identity, Digest string }{final.Identity, final.Digest}), "sha256:"))
 	work := &repairWork{wave: w, task: s.replacementFold(task), verification: true, plan: members[0].plan, planAction: members[0].planAction}
 	work.result = s.repairComparisonResult(work.task)
 	return work

@@ -2309,7 +2309,7 @@ func capacityRefillDefinition() (*compiler.CompiledDefinition, *compiler.Registr
 		step, err := authoring.NewAgentStep(
 			authoring.Header{ID: id, NodeID: "capacity", DefinitionVersion: definition.Version},
 			authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-			authoring.AgentSpec{Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 				ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute},
 		)
 		if err != nil {
@@ -2384,7 +2384,7 @@ func runTransientRetryRouting(report *HarnessReport, options HarnessOptions) err
 	step, err := authoring.NewAgentStep(
 		authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version},
 		authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-		authoring.AgentSpec{Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+		authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}},
 	)
 	if err != nil {

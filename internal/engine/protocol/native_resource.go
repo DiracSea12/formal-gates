@@ -149,7 +149,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	source := s.BaseSnapshot
 	scope := s.Validation.RequirementRevision
 	switch role {
-	case "engine.development.batch":
+	case "engine.development.batch.v2":
 		source = s.AcceptedNativeSnapshot()
 		request, _, _ := s.confirmedDevelopmentPlan()
 		scope = request + ":" + s.Validation.RequirementRevision + ":" + strconv.FormatUint(s.Validation.Generation, 10)
@@ -165,19 +165,19 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			source = w.Candidate.Identity
 		}
 		role = "development"
-	case "engine.merge.resolve":
+	case "engine.merge.resolve.v2":
 		if intent, ok := s.hostIntent(key.Scope); ok {
 			if p, err := candidateParameters(intent); err == nil {
 				return s.NativeResources[p.WorkspaceID]
 			}
 		}
 		return NativeResource{}
-	case "engine.repair.verify":
+	case "engine.repair.verify.v2":
 		if context, ok := s.repairComparisonContext(key, cd); ok {
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair":
+	case "engine.repair.v2":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity
@@ -194,7 +194,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			}
 		}
 		role = "development"
-	case "engine.qa.design":
+	case "engine.qa.design.v2":
 		if s.validationMode(key) == coverage.ReviewMerge {
 			source = s.AcceptedNativeSnapshot()
 		}
@@ -209,13 +209,13 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			scope += ":" + strconv.FormatUint(s.Validation.Generation, 10)
 			role = strings.ToLower(string(s.validationMode(key))) + "-design"
 		}
-	case "engine.qa.review.rationale":
+	case "engine.qa.review.rationale.v2":
 		set := s.Validation.Sets[s.validationMode(key)]
 		if set == nil {
 			return NativeResource{}
 		}
 		return s.taskResource(set.DesignTask, cd)
-	case "engine.validation.observation":
+	case "engine.validation.observation.v2":
 		if input := s.validationObservationInput(); input != nil {
 			if len(input.Suggestions) > 0 {
 				return s.taskResource(s.Validation.Sets[input.Suggestions[0].Mode].DesignTask, cd)
@@ -236,7 +236,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		} else {
 			return NativeResource{}
 		}
-	case "engine.qa.execution", "engine.gate":
+	case "engine.qa.execution.v2", "engine.gate.v2":
 		if _, target := s.repairGateTarget(key); target != nil {
 			if binding, ok := s.repairGateBinding(key, s.repairWork()); ok {
 				source, scope, role = binding.Candidate, key.String(), "gate"
@@ -249,7 +249,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		source = wave.Candidate.Identity
 		scope = wave.ID
-		if role == "engine.qa.execution" {
+		if role == "engine.qa.execution.v2" {
 			role = strings.ToLower(string(s.validationMode(key))) + "-execution"
 		} else {
 			role = "gate"
@@ -271,7 +271,7 @@ func (s *State) workspaceReady(key runtime.TaskKey, cd *compiler.CompiledDefinit
 		return true
 	}
 	r := s.taskResource(key, cd)
-	return s.resourceUsable(r.ID) && r.Status == "READY" && (s.validationRole(key, cd) != "engine.qa.review.rationale" || s.validationMode(key) != coverage.ReviewBlackbox || r.MirrorDigest == BlackboxCasesDigest(s.RunID, s.Validation.Sets[coverage.ReviewBlackbox].Manifest))
+	return s.resourceUsable(r.ID) && r.Status == "READY" && (s.validationRole(key, cd) != "engine.qa.review.rationale.v2" || s.validationMode(key) != coverage.ReviewBlackbox || r.MirrorDigest == BlackboxCasesDigest(s.RunID, s.Validation.Sets[coverage.ReviewBlackbox].Manifest))
 }
 func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDefinition) NativeResource {
 	if p.Stage == "CHECK_SOURCE" {
@@ -316,7 +316,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return chosen
 	case "AUTHORING":
-		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
+		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v2", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
 		return s.taskResource(task, cd)
 	case "QA_ARTIFACT":
 		return s.taskResource(p.DesignTasks[coverage.ReviewWhitebox], cd)

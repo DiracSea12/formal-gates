@@ -53,6 +53,9 @@ func newZcodeScenario(t *testing.T, steps func(inputID string) []peerStep, custo
 	var script []peerStep
 	if steps != nil {
 		script = steps(inputID)
+		for i := range script {
+			script[i].SemanticJob = directory
+		}
 	}
 	executable, echoPath := startPeer(t, peerScript{Steps: script})
 	appServer := filepath.Join(filepath.Dir(executable), "zcode.cjs")
@@ -134,7 +137,7 @@ func zcodeSuccessSteps(inputID string) []peerStep {
 			zcodeTurnPayload(inputID, ""))},
 		{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "assistant/message", "",
 			`{"inputId": "other-input"}`)},
-		{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 3, "turn.completed", "t-1",
+		{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 3, "turn.completed", "t-1",
 			zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON+
 				`, "usage": {"inputTokens": 9, "outputTokens": 2}`))},
 		{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
@@ -186,7 +189,7 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 		"inputTokens": jsonNumber("9"), "outputTokens": jsonNumber("2")}) {
 		t.Fatalf("usage = %v", value["usage_evidence"])
 	}
-	if !valuesEqual(value["files"], proofsOf(t, scenario.directory, nativeSourceFiles)) {
+	if !valuesEqual(value["files"], proofsOf(t, scenario.directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile))) {
 		t.Fatalf("files = %v", value["files"])
 	}
 
@@ -229,8 +232,8 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 		decodeTestJSON(t, string(record)), value) {
 		t.Fatalf("source.json = %s", record)
 	}
-	if body := readTestFileBytes(t, filepath.Join(scenario.directory, "answer.raw.txt")); string(body) != zcodeTestResponse {
-		t.Fatalf("answer.raw.txt = %q", body)
+	if _, err := os.Stat(filepath.Join(scenario.directory, "answer.raw.txt")); !os.IsNotExist(err) {
+		t.Fatal("prose result payload remains")
 	}
 	if body := readTestFileBytes(t, filepath.Join(scenario.directory, "answer.json")); string(body) != `{"status":"PASS","summary":"observed"}` {
 		t.Fatalf("answer.json = %s", body)
@@ -240,7 +243,7 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	if !strings.Contains(echo, `"persistence":"immediate"`) {
 		t.Fatalf("create must persist immediately:\n%s", echo)
 	}
-	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","AskUserQuestion"]`) || !strings.Contains(echo, `"mcpServers":[`) || strings.Contains(echo, "titleGenerationEnabled") {
+	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","mcp__formal-gates__submit_semantics","AskUserQuestion"]`) || !strings.Contains(echo, `"mcpServers":[`) || strings.Contains(echo, "titleGenerationEnabled") {
 		t.Fatalf("a writable action must register managed tools without a probe flag:\n%s", echo)
 	}
 	if !strings.Contains(echo, `"deliveryKind":"desktop-continuous"`) {
@@ -251,32 +254,11 @@ func TestZcodeExecuteNewSessionSuccessTurn(t *testing.T) {
 	if strings.Contains(echo, `"method":"session/setMode"`) {
 		t.Fatalf("an unrequested mode must not be declared:\n%s", echo)
 	}
-	// The prompt text: the request prompt, the fixed middle line, and the
-	// schema embedded canonically with each object's additionalProperties
-	// presented last.
-	wantPrompt := zcodeTestPrompt + "\nReturn ONLY one JSON object matching this schema:\n" +
-		zcodeTestSchemaPrompt
 	send := frameByMethod(t, echo, "session/send")
-	got := textOf(objectOrEmpty(send["params"])["content"])
-	if got != wantPrompt {
-		t.Fatalf("prompt:\n got %q\nwant %q", got, wantPrompt)
+	if getOf(getOf(send, "params"), "content") != zcodeTestPrompt {
+		t.Fatal("native prompt changed issued material")
 	}
-	// The embedded schema is value-equal to the request's: only the key order
-	// the directive is presented in differs.
-	embedded := decodeTestJSON(t, got[strings.LastIndex(got, "\n")+1:])
-	if !valuesEqual(embedded, scenario.request["schema"]) {
-		t.Fatalf("embedded schema value = %v", embedded)
-	}
-	// The notification evidence: canonical lines, only the bound session.
-	events := readTestFile(t, filepath.Join(scenario.directory, "native-events.jsonl"))
-	if strings.Count(events, "\n") != 3 {
-		t.Fatalf("native-events.jsonl = %q", events)
-	}
-	for _, line := range strings.Split(strings.TrimSpace(events), "\n") {
-		if decoded := decodeTestJSON(t, line); !valuesEqual(objectOrEmpty(decoded)["sessionId"], "s-1") {
-			t.Fatalf("foreign event recorded: %s", line)
-		}
-	}
+
 }
 
 // TestZcodeExecuteReadOnly pins the read-only role: the native tool allowlist
@@ -302,7 +284,7 @@ func TestZcodeExecuteReadOnly(t *testing.T) {
 		t.Fatalf("code = %d, stderr = %q", code, errout.String())
 	}
 	if policy := readTestFileBytes(t, filepath.Join(scenario.directory, "tool-policy.json")); string(policy) !=
-		`{"allowed":["mcp__formal-gates__workspace","AskUserQuestion"],"read_only":true}` {
+		`{"allowed":["mcp__formal-gates__workspace","mcp__formal-gates__submit_semantics","AskUserQuestion"],"read_only":true}` {
 		t.Fatalf("tool-policy.json = %s", policy)
 	}
 	sourceValue, err := readJSONFile(filepath.Join(scenario.directory, "native-source.json"))
@@ -314,7 +296,7 @@ func TestZcodeExecuteReadOnly(t *testing.T) {
 		t.Fatalf("read-only source must not carry a mode: %v", source)
 	}
 	echo := readTestFile(t, scenario.echoPath)
-	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","AskUserQuestion"]`) {
+	if !strings.Contains(echo, `"toolAllowlist":["mcp__formal-gates__workspace","mcp__formal-gates__submit_semantics","AskUserQuestion"]`) {
 		t.Fatalf("create must carry the allowlist:\n%s", echo)
 	}
 	frames := strings.Split(strings.TrimSpace(echo), "\n")
@@ -973,8 +955,8 @@ func TestZcodeTurnWaitsForItsTerminalEvent(t *testing.T) {
 	if source["identity"] != "s-1" || source["native_turn"] != "t-1" || source["input_id"] != scenario.inputID {
 		t.Fatalf("wrong native responsibility: %v", source)
 	}
-	if !valuesEqual(source["files"], proofsOf(t, scenario.directory, nativeSourceFiles)) || readTestFile(t, filepath.Join(scenario.directory, "answer.raw.txt")) != zcodeTestResponse {
-		t.Fatal("terminal receipt lost its original raw evidence")
+	if !valuesEqual(source["files"], proofsOf(t, scenario.directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile))) || readTestFile(t, filepath.Join(scenario.directory, "answer.json")) != `{"status":"PASS","summary":"observed"}` {
+		t.Fatal("terminal receipt lost its original semantic submission evidence")
 	}
 	observed, err := zcodeMaterializeSource(scenario.directory)
 	if err != nil || !valuesEqual(observed, source) {

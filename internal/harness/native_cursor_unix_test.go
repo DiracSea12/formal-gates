@@ -182,6 +182,7 @@ type cursorPeer struct {
 	Store           string            `json:"store"`
 	ExpectedContext string            `json:"expected_context"`
 	Events          []any             `json:"events"`
+	Semantics       any               `json:"semantics"`
 	Config          map[string]any    `json:"config"`
 	Exit            int               `json:"exit"`
 	Stderr          string            `json:"stderr"`
@@ -340,6 +341,9 @@ func TestCursorCLI(t *testing.T) {
 	}
 	waitMarker(peer.BeforeInit)
 	fmt.Fprint(os.Stderr, peer.Stderr)
+	if peer.Semantics != nil {
+		peerSubmitSemantics(textOf(listOf(getOf(server, "args"))[2]), peer.Semantics)
+	}
 	for _, event := range peer.Events {
 		if getOf(event, "type") == "result" {
 			waitMarker(peer.BeforeTerminal)
@@ -399,7 +403,7 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 		bound[k] = v
 	}
 	binding["environment"] = bound
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,10 +427,10 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 	nativeConfig := map[string]any{"model": map[string]any{"modelId": model, "displayModelId": model, "displayName": display, "aliases": []any{"model-alias"}}, "selectedModel": map[string]any{"modelId": model, "parameters": parameters}, "apiKey": "secret-not-evidence"}
 	init := map[string]any{"type": "system", "subtype": "init", "session_id": uuid, "cwd": workspace, "model": display, "permissionMode": "default"}
 	answer := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "native " + uuid + " " + model}}}
-	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": uuid, "request_id": "request-" + uuid, "result": mustCanonical(t, answer), "usage": map[string]any{"inputTokens": len(uuid), "outputTokens": len(model)}}
+	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": uuid, "request_id": "request-" + uuid, "result": "Semantic result submitted.", "usage": map[string]any{"inputTokens": len(uuid), "outputTokens": len(model)}}
 	sum := md5.Sum([]byte(workspace))
 	store := filepath.Join(config, "chats", hex.EncodeToString(sum[:]), uuid, "store.db")
-	s := &cursorScenario{request: request, directory: directory, workspace: workspace, script: script, peer: cursorPeer{UUID: uuid, Workspace: workspace, Environment: environment, Calls: filepath.Join(root, "calls.jsonl"), Store: store, Config: nativeConfig, Events: []any{init, terminal}}}
+	s := &cursorScenario{request: request, directory: directory, workspace: workspace, script: script, peer: cursorPeer{UUID: uuid, Workspace: workspace, Environment: environment, Calls: filepath.Join(root, "calls.jsonl"), Store: store, Config: nativeConfig, Events: []any{init, terminal}, Semantics: answer}}
 	s.save(t)
 	return s
 }
@@ -448,11 +452,7 @@ func (s *cursorScenario) save(t *testing.T) {
 	if model != "" {
 		s.peer.Args = append(s.peer.Args, "--model", model)
 	}
-	schema, err := schemaForPrompt(s.request["schema"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.peer.Args = append(s.peer.Args, textOf(s.request["prompt"])+"\nReturn ONLY one JSON object matching this schema:\n"+string(schema))
+	s.peer.Args = append(s.peer.Args, textOf(s.request["prompt"]))
 	body, _ := json.Marshal(s.peer)
 	if err := os.WriteFile(s.script, body, 0o644); err != nil {
 		t.Fatal(err)
@@ -729,7 +729,7 @@ func TestCursorNativeRefusals(t *testing.T) {
 			s.request["identity"] = s.peer.UUID
 			s.request["native_store"] = "/another/store.db"
 		}},
-		{"invalid-answer", "NATIVE_RESULT", func(s *cursorScenario) { objectOrEmpty(s.peer.Events[1])["result"] = "not JSON" }},
+		{"missing-submission", "NATIVE_RESULT", func(s *cursorScenario) { s.peer.Semantics = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -788,79 +788,32 @@ func TestCursorBracketParametersAndAlias(t *testing.T) {
 }
 func TestCursorReconcileDoesNotReplayPrompt(t *testing.T) {
 	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
-	if _, err := runNativeJob(s.directory); err != nil {
+	original, err := runNativeJob(s.directory)
+	if err != nil {
 		t.Fatal(err)
 	}
-	sourceBytes := readBytes(t, filepath.Join(s.directory, "native-source.json"))
-	eventBytes := readBytes(t, filepath.Join(s.directory, "native-events.jsonl"))
-	os.Remove(filepath.Join(s.directory, "source.json"))
-	os.Remove(filepath.Join(s.directory, "answer.json"))
-	os.Remove(filepath.Join(s.directory, "answer.raw.txt"))
-	writeAtomicJSON(filepath.Join(s.directory, "native-error.json"), map[string]any{"error": "RuntimeBlocked: NATIVE_RESULT: could not frame output"})
-	source, err := cursorReconcile(s.directory, map[string]any{"exit_code": 1, "error": ""})
-	if err != nil || getOf(source["reconciliation"], "new_model_calls") != 0 {
+	names := append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile)
+	originalProofs := proofsOf(t, s.directory, names)
+	if err := os.Remove(filepath.Join(s.directory, "source.json")); err != nil {
+		t.Fatal(err)
+	}
+	source, err := cursorReconcile(s.directory, map[string]any{"exit_code": 0, "error": ""})
+	if err != nil || !valuesEqual(source, original) {
 		t.Fatalf("reconcile %v %v", source, err)
 	}
-	if !bytes.Equal(sourceBytes, readBytes(t, filepath.Join(s.directory, "native-source.json"))) || !bytes.Equal(eventBytes, readBytes(t, filepath.Join(s.directory, "native-events.jsonl"))) || cursorCalls(t, s) != 2 {
+	if !valuesEqual(originalProofs, proofsOf(t, s.directory, names)) || cursorCalls(t, s) != 2 {
 		t.Fatal("reconciliation changed original facts or replayed")
 	}
-	writeAtomicJSON(filepath.Join(s.directory, "native-error.json"), map[string]any{"error": "RuntimeBlocked: CURSOR_PROCESS: interrupted"})
-	if _, err := cursorReconcile(s.directory, map[string]any{"exit_code": 1, "error": ""}); err == nil {
-		t.Fatal("interruption laundered")
-	}
-}
-
-func TestCursorResultLineEndings(t *testing.T) {
-	for _, newline := range []struct{ name, text string }{{"LF", "\n"}, {"CRLF", "\r\n"}, {"CR", "\r"}} {
-		t.Run(newline.name, func(t *testing.T) {
-			s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
-			terminal := objectOrEmpty(s.peer.Events[1])
-			answer := "{\n\"findings\":[{\"severity\":\"P3\",\"message\":\"native " + s.peer.UUID + "\"}]\n}"
-			terminal["result"] = strings.ReplaceAll(answer, "\n", newline.text)
-			s.save(t)
-			source, err := runNativeJob(s.directory)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(readBytes(t, filepath.Join(s.directory, "answer.raw.txt"))) != terminal["result"] {
-				t.Fatal("native result bytes changed")
-			}
-			before := proofsOf(t, s.directory, nativeSourceFiles)
-			observed, err := cursorObserve(s.directory, true)
-			if err != nil || !valuesEqual(source, observed) || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
-				t.Fatalf("repeated materialization %v %v", observed, err)
-			}
-			for i := 0; i < 2; i++ {
-				if err := cursorVerifySource(s.directory, source); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
-				t.Fatal("verification changed original evidence")
-			}
-			if err := writeAtomicJSON(filepath.Join(s.directory, "native-error.json"), map[string]any{"error": "RuntimeBlocked: NATIVE_RESULT: could not frame output"}); err != nil {
-				t.Fatal(err)
-			}
-			recovered, err := cursorReconcile(s.directory, map[string]any{"exit_code": 1, "error": ""})
-			if err != nil || getOf(recovered["reconciliation"], "new_model_calls") != 0 || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) || cursorCalls(t, s) != 2 {
-				t.Fatalf("recovery changed original evidence or replayed: %v %v", recovered, err)
-			}
-			changed := strings.ReplaceAll(textOf(terminal["result"]), "native ", "different ")
-			if changed == textOf(terminal["result"]) {
-				t.Fatal("changed output fixture must differ from its original")
-			}
-			if err := os.WriteFile(filepath.Join(s.directory, "answer.raw.txt"), []byte(changed), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			for _, materialize := range []bool{false, true} {
-				if _, err := cursorObserve(s.directory, materialize); err == nil || err.Error() != "CURSOR_RESULT: saved output differs" {
-					t.Fatalf("different result accepted: %v", err)
-				}
-			}
-			if err := cursorVerifySource(s.directory, source); err == nil {
-				t.Fatal("changed evidence accepted")
-			}
-		})
+	for _, process := range []map[string]any{{"exit_code": 1, "error": ""}, {"exit_code": 0, "error": "interrupted"}} {
+		if err := os.Remove(filepath.Join(s.directory, "source.json")); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if _, err := cursorReconcile(s.directory, process); err == nil || err.Error() != "CURSOR_RECONCILE: original native process did not complete successfully" {
+			t.Fatal("failed original process laundered", err)
+		}
+		if _, err := os.Stat(filepath.Join(s.directory, "source.json")); !os.IsNotExist(err) {
+			t.Fatal("failed original process became a recovered success")
+		}
 	}
 }
 

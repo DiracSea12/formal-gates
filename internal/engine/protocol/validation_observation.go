@@ -175,7 +175,7 @@ func (s *State) observationFinding(f *ValidationFinding) ObservationFinding {
 }
 
 func observationTask(cd *compiler.CompiledDefinition, input *ObservationInput) runtime.TaskKey {
-	return pipelineTask(cd, "engine.validation.observation", input.WaveID+":"+strings.TrimPrefix(digestOfCanonical(input), "sha256:"))
+	return pipelineTask(cd, "engine.validation.observation.v2", input.WaveID+":"+strings.TrimPrefix(digestOfCanonical(input), "sha256:"))
 }
 
 func (e *Engine) acceptWorkerObservations(s *State, record WorkerResult, nextRevision uint64) error {

@@ -19,7 +19,7 @@ import (
 )
 
 func gateResultContract() string {
-	return "[Result contract]\nReturn exactly one JSON object: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"message\":\"...\",\"locations\":[{\"read\":1,\"line\":2}]}]}. If you cannot perform the review, return {\"interruptionReason\":\"the actual reason\"}. Select read/line or listing/entry numbers only from the supplied original locationFacts; the program resolves paths and derives the overall status. Do not fill status, identities, or wrapper metadata. Do not add Markdown fences."
+	return "[Result contract]\nUse the program-provided gate report command to submit semantic review arguments. A completed review uses --review-complete, with optional --message. Start each finding with --finding-severity P0|P1|P2|P3, then --finding-message and its evidence: --finding-severity-rationale, --finding-category, --finding-requirement, --finding-normal-path, --finding-actual-error, --finding-deferral-impact, and --finding-verify-scope, --finding-verify-severity, --finding-verify-causality, --finding-verify-reproduction, --finding-verify-classification. Select original source locations with --finding-read and optional --finding-line, or --finding-listing and --finding-entry; repeat a source selector for another location. If you cannot perform the review, use --interruption-reason with the actual reason. Source numbers refer only to the supplied original locationFacts. The program constructs the result, resolves paths, and derives the overall status."
 }
 
 // StandaloneGateContext is original comparison evidence, outside run state.

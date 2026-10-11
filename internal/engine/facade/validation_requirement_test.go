@@ -106,7 +106,7 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	}
 	d.submit(ev)
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch" {
+		if input.Handler == "engine.development.batch.v2" {
 			t.Fatal("new contract executed before plan confirmation")
 		}
 	}
@@ -180,7 +180,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution")
+			qa, qi := d.action("engine.qa.execution.v2")
 			gate, gi := d.gateAction("quality")
 			report := executionFor(qi)
 			result := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
@@ -216,7 +216,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 				if delivery == "retry" {
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "environment-interrupted"}})
 					d.drive()
-					qa, qi = d.action("engine.qa.execution")
+					qa, qi = d.action("engine.qa.execution.v2")
 					report = executionFor(qi)
 					result = nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
 					event = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
@@ -260,7 +260,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair")
+	id, in := d.action("engine.repair.v2")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"
@@ -274,7 +274,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.qa.execution")
+	id, in = d.action("engine.qa.execution.v2")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("setup needs AFFECTED")
 	}

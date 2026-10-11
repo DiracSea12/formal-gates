@@ -82,11 +82,11 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 					}
 					d.materialize()
 				}
-				id, in := d.action("engine.development.batch")
+				id, in := d.action("engine.development.batch.v2")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 				materialize()
 				materialize()
-				id, in = d.action("engine.qa.design")
+				id, in = d.action("engine.qa.design.v2")
 				m := in.Manifest
 				m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 				for _, c := range m.Cases {
@@ -94,13 +94,13 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 				}
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 				materialize()
-				oldID, old := d.action("engine.qa.review.rationale")
+				oldID, old := d.action("engine.qa.review.rationale.v2")
 				if delivery != "result-first" {
 					d.receipt(oldID)
 				}
 				if delivery == "retry" {
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: oldID, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "review-runtime-error"}})
-					oldID, old = d.action("engine.qa.review.rationale")
+					oldID, old = d.action("engine.qa.review.rationale.v2")
 					d.receipt(oldID)
 				}
 				if delivery == "terminal-first" {
@@ -116,7 +116,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 				t.Logf("original review action=%s task=%v candidate=%s", oldID, old.Binding.Task, old.Binding.Candidate)
 				d.chooseValidation(protocol.ValidationRequest{Kind: kind, Mode: coverage.ReviewWhitebox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal", "invalid"}}, "")
 				testBytes = "func TestNormal() { changedInputSetup() }; func TestInvalid() { rejectEmptyInput() }"
-				id, in = d.action("engine.qa.design")
+				id, in = d.action("engine.qa.design.v2")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "initialize shared test fixture; same TestRef and oracle"}})
 				materialize()
 				now := d.run.Validation.Sets[coverage.ReviewWhitebox]
@@ -147,14 +147,14 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 				if len(d.run.Validation.Sets[coverage.ReviewWhitebox].ReviewHistory) != 0 {
 					t.Fatal("obsolete review consumed a semantic round")
 				}
-				fresh, input := d.action("engine.qa.review.rationale")
+				fresh, input := d.action("engine.qa.review.rationale.v2")
 				if fresh == oldID || input.Binding.Candidate != now.Candidate {
 					t.Fatal("replacement review did not bind its own artifact")
 				}
 				rr := approvedReview(input.Manifest)
 				d.business(fresh, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &rr})
 				materialize()
-				qa, qi := d.action("engine.qa.execution")
+				qa, qi := d.action("engine.qa.execution.v2")
 				execution := executionFor(qi)
 				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution}))
 				gate, gi := d.gateAction("quality")
@@ -174,13 +174,13 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 }
 
 func TestPrewaveRequirementDecisionsRetainExactDuty(t *testing.T) {
-	for _, role := range []string{"engine.qa.design", "engine.qa.review.rationale"} {
+	for _, role := range []string{"engine.qa.design.v2", "engine.qa.review.rationale.v2"} {
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.qa.design")
+				id, input := d.action("engine.qa.design.v2")
 				manifest := simpleManifest(input)
-				if role == "engine.qa.review.rationale" {
+				if role == "engine.qa.review.rationale.v2" {
 					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 					id, input = d.action(role)
 				}
@@ -192,8 +192,8 @@ func TestPrewaveRequirementDecisionsRetainExactDuty(t *testing.T) {
 				confirmValidationWork(d, selected)
 				d.reopen()
 				d.drive()
-				if redo && role == "engine.qa.review.rationale" {
-					id, input = d.action("engine.qa.design")
+				if redo && role == "engine.qa.review.rationale.v2" {
+					id, input = d.action("engine.qa.design.v2")
 					manifest = input.Manifest
 					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				}
@@ -201,10 +201,10 @@ func TestPrewaveRequirementDecisionsRetainExactDuty(t *testing.T) {
 				if redo == (id == old) {
 					t.Fatal("requirement work disposition was not honored")
 				}
-				if role == "engine.qa.design" {
+				if role == "engine.qa.design.v2" {
 					manifest = simpleManifest(input)
 					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
-					id, input = d.action("engine.qa.review.rationale")
+					id, input = d.action("engine.qa.review.rationale.v2")
 				}
 				review := approvedReview(input.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
@@ -230,16 +230,16 @@ func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
 		for _, replacement := range []bool{false, true} {
 			t.Run(fmt.Sprintf("unknown=%t/requirement-replacement=%t", unknown, replacement), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.qa.design")
+				id, input := d.action("engine.qa.design.v2")
 				manifest := simpleManifest(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
 				d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
-				old, oldInput := d.action("engine.qa.design")
+				old, oldInput := d.action("engine.qa.design.v2")
 				if replacement {
 					confirmValidationWork(d, old)
 					d.drive()
-					old, oldInput = d.action("engine.qa.design")
+					old, oldInput = d.action("engine.qa.design.v2")
 					manifest = oldInput.Manifest
 				}
 				if unknown {
@@ -258,7 +258,7 @@ func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
 				if _, pending := d.run.PendingActions[old]; !pending {
 					t.Fatal("unobserved external work retired before identity receipt")
 				}
-				fresh, freshInput := d.action("engine.qa.design")
+				fresh, freshInput := d.action("engine.qa.design.v2")
 				if fresh == old || freshInput.Binding.Task == oldInput.Binding.Task {
 					t.Fatal("explicit new responsibility reused old design")
 				}
@@ -287,7 +287,7 @@ func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
 				}
 				manifest = freshInput.Manifest
 				d.business(fresh, protocol.ValidationResult{Binding: freshInput.Binding, Status: "PASS", Manifest: &manifest})
-				id, input = d.action("engine.qa.review.rationale")
+				id, input = d.action("engine.qa.review.rationale.v2")
 				review := approvedReview(input.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
 				if d.run.Validation.Sets[coverage.ReviewBlackbox].Status != "FROZEN" {

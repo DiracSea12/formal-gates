@@ -20,11 +20,11 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, input := d.action("engine.qa.design")
+			id, input := d.action("engine.qa.design.v2")
 			manifest := simpleManifest(input)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 			d.drive()
-			id, input = d.action("engine.qa.review.rationale")
+			id, input = d.action("engine.qa.review.rationale.v2")
 			approved := approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved, Suggestions: []protocol.QASuggestion{{Severity: "P3", Message: "Clarify invalid input preparation"}, {Severity: "P3", Message: "Clarify successful input preparation"}}})
 			suggestions := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions
@@ -37,7 +37,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 				d.drive()
 				expected = append(expected, test.impacts[i]...)
 				if len(expected) > 0 {
-					_, design := d.action("engine.qa.design")
+					_, design := d.action("engine.qa.design.v2")
 					if openTask != "" && design.Binding.Task.String() != openTask {
 						t.Fatal("suggestion disposition replaced an open design obligation")
 					}
@@ -67,7 +67,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 					t.Fatalf("lost accepted impact %s", id)
 				}
 			}
-			id, input = d.action("engine.qa.design")
+			id, input = d.action("engine.qa.design.v2")
 			for _, caseID := range expected {
 				if slices.ContainsFunc(input.InheritableReviews, func(d coverage.ReviewDecision) bool { return d.ID == caseID }) {
 					t.Fatalf("affected case %s inherited old approval", caseID)
@@ -84,7 +84,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 			if d.run.Validation.Sets[coverage.ReviewBlackbox].Status != "REVIEW" {
 				t.Fatal("redesign froze without fresh review")
 			}
-			id, input = d.action("engine.qa.review.rationale")
+			id, input = d.action("engine.qa.review.rationale.v2")
 			approved = approvedReview(manifest)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved})
 			d.drive()

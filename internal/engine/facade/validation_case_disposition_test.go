@@ -24,7 +24,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 				"invalid": {ExitCode: 0, StdoutText: "QA harness overwrote the rejecting exit"},
 			}
 			d.reviewReady()
-			id, in := d.action("engine.qa.execution")
+			id, in := d.action("engine.qa.execution.v2")
 			report := executionFor(in)
 			for i := range report.Records {
 				row := &report.Records[i]
@@ -75,7 +75,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 			if problem == "" {
 				t.Fatal("valid-input defect lacks its canonical problem")
 			}
-			repairAction, repairInput := d.action("engine.repair")
+			repairAction, repairInput := d.action("engine.repair.v2")
 			d.chooseValidation(protocol.ValidationRequest{Kind: "VALIDATION_DETAIL_DISPOSITION", Target: wave.ID, Obligations: []string{problem}, Remedies: []string{"REPAIR", "DISMISS"}}, "DISMISS")
 			d.reopen()
 			d.drive()
@@ -132,7 +132,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 		t.Run(fmt.Sprintf("independent-raw=%t", rawOpen), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution")
+			qa, qi := d.action("engine.qa.execution.v2")
 			initial := executionFor(qi)
 			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &initial}))
 			gate, gi := d.gateAction("quality")
@@ -144,7 +144,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: initialWave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 			}
 			d.drive()
-			repair, ri := d.action("engine.repair")
+			repair, ri := d.action("engine.repair.v2")
 			completion := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct whitespace validation", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app with the representative valid input", Observation: "exit zero", Comparison: "normal input succeeds as required"}}}}
 			d.business(repair, completion)
 			d.verifyRepair(completion)
@@ -158,7 +158,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 
 			priorProblem, _ := json.Marshal(d.run.Validation.Problems[original])
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-			affected, ai := d.action("engine.qa.execution")
+			affected, ai := d.action("engine.qa.execution.v2")
 			affectedReport := executionFor(ai)
 			d.business(affected, nativeExecutionResult(ai, protocol.ValidationResult{Binding: ai.Binding, Status: "PASS", Execution: &affectedReport}))
 			d.assertRequiredValidationComplete(coverage.ScopeAffected)
@@ -167,7 +167,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 			d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 1, StdoutText: "unexpected whitespace validation error"}}
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			d.drive()
-			id, in := d.action("engine.qa.execution")
+			id, in := d.action("engine.qa.execution.v2")
 			if in.Execution.Scope != coverage.ScopeAffected || len(in.RequiredCases) != 2 {
 				t.Fatal("explicit QA retry lost its complete approved scope")
 			}

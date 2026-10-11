@@ -20,13 +20,13 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		return nil, err
 	}
 	interruption := fixedObject(map[string]any{"interruptionReason": map[string]any{"type": "string", "minLength": 1}}, []string{"interruptionReason"})
-	if input.Handler == "engine.qa.execution" {
+	if input.Handler == "engine.qa.execution.v2" {
 		fields := interruption["properties"].(map[string]any)
 		fields["records"] = body["properties"].(map[string]any)["records"]
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
 	alternatives := []any{body, interruption}
-	if input.Validation != nil && (input.Handler == "engine.development.batch" || input.Handler == "engine.repair") {
+	if input.Validation != nil && (input.Handler == "engine.development.batch.v2" || input.Handler == "engine.repair.v2") {
 		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
 		if err != nil {
 			return nil, err
@@ -36,7 +36,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		alternatives = append(alternatives, partial)
 	}
-	if input.Handler == "engine.repair" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+	if input.Handler == "engine.repair.v2" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
 		fields := body["properties"].(map[string]any)
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
@@ -48,6 +48,9 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		batches := maps.Clone(planFields["batches"].(map[string]any))
 		batches["minItems"], batches["maxItems"] = 1, 1
 		batch := maps.Clone(batches["items"].(map[string]any))
+		if alternatives, ok := batch["anyOf"].([]any); ok {
+			batch = maps.Clone(alternatives[0].(map[string]any))
+		}
 		batchFields := maps.Clone(batch["properties"].(map[string]any))
 		delete(batchFields, "artifacts")
 		delete(batchFields, "newArtifacts")
@@ -72,7 +75,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
-	if input.Handler == "engine.repair" {
+	if input.Handler == "engine.repair.v2" {
 		if cases := repairCaseIDs(input.Validation); len(cases) > 0 {
 			fields["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
 		} else {
@@ -96,7 +99,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			}
 			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
 			command["not"] = map[string]any{"enum": commands}
-			if input.Handler == "engine.repair" {
+			if input.Handler == "engine.repair.v2" {
 				purpose["enum"] = []string{""}
 			}
 		}
@@ -116,6 +119,26 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				}, []string{"mode", "selected"}),
 			}}
 		}
+		for _, name := range []string{"subtasks", "dod"} {
+			delete(properties[name].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any), "reuse")
+			delete(properties[name].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any), "remove")
+		}
+		delete(properties, "reuse")
+		if input.ApprovedPlan != nil && len(input.ApprovedPlan.Batches) > 0 {
+			changed := maps.Clone(batch)
+			changed["properties"] = maps.Clone(properties)
+			changed["properties"].(map[string]any)["reuse"] = map[string]any{"type": "integer", "minimum": 1, "maximum": len(input.ApprovedPlan.Batches)}
+			for _, name := range []string{"subtasks", "dod"} {
+				array := maps.Clone(properties[name].(map[string]any))
+				changed["properties"].(map[string]any)[name] = array
+				item := array["items"].(map[string]any)
+				original := fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}, "description": map[string]any{"type": "string", "minLength": 1}, "remove": map[string]any{"type": "boolean"}}, []string{"reuse"})
+				array["items"] = map[string]any{"anyOf": []any{item, original}}
+			}
+			changed["required"] = []any{"reuse"}
+			changed["description"] = "Select an original confirmed batch and supply only changed semantics. Omitted content, identities, dependencies, checks and route are carried by the program."
+			plan["properties"].(map[string]any)["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{batch, changed}}
+		}
 	}
 	if input.Review != nil {
 		if input.Review.Action != review.StartReadiness {
@@ -128,7 +151,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["verification"] = orderedSchema(verification)
 		return body, nil
 	}
-	if input.Handler == "engine.validation.observation" {
+	if input.Handler == "engine.validation.observation.v2" {
 		if input.Validation.Observation == nil {
 			return nil, fmt.Errorf("semantic worker lacks current issued duties")
 		}
@@ -223,7 +246,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 	}
 
 	if batch := completionBatch(input); batch != nil {
-		if input.Handler == "engine.repair" {
+		if input.Handler == "engine.repair.v2" {
 			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
 			body["required"] = append(body["required"].([]any), "summary")
 		}
@@ -233,17 +256,17 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			items = append(items, map[string]any{"type": "string", "minLength": 1, "description": criterion.Description})
 		}
 		completion["dod"] = orderedSchema(items)
-	} else if !(input.Handler == "engine.repair" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+	} else if !(input.Handler == "engine.repair.v2" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
-	if input.Handler == "engine.repair.verify" {
+	if input.Handler == "engine.repair.verify.v2" {
 		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 		if err != nil {
 			return nil, err
 		}
 		fields["records"] = comparisonSchema(input.Validation.Repair.VerificationCases, item, false)
 	}
-	if input.Handler == "engine.qa.design" {
+	if input.Handler == "engine.qa.design.v2" {
 		whitebox := input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
 		if len(input.Validation.AffectedCases) > 0 {
 			cases := []any{}
@@ -253,6 +276,34 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 					return nil, err
 				}
 				item["description"] = "Change only this issued case: " + id
+				for _, family := range []struct {
+					field, selection string
+					count            int
+					change           reflect.Type
+				}{
+					{"cases", "case", len(input.Validation.Manifest.Cases), reflect.TypeOf(CaseChange{})},
+					{"sharedSteps", "step", len(input.Validation.Manifest.SharedSteps), reflect.TypeOf(SharedStepChange{})},
+				} {
+					if family.count == 0 {
+						continue
+					}
+					array := fields[family.field].(map[string]any)
+					original := array["items"].(map[string]any)
+					change, err := resultTypeSchema(family.change)
+					if err != nil {
+						return nil, err
+					}
+					properties := change["properties"].(map[string]any)
+					delete(properties, "remove")
+					properties[family.selection] = map[string]any{"type": "integer", "minimum": 1, "maximum": family.count}
+					change["required"] = []any{family.selection}
+					change["description"] = "Select an existing item and supply only changed semantic fields; omitted values retain original content."
+					if !whitebox && family.field == "cases" {
+						delete(properties, "testFile")
+						delete(properties, "testSymbol")
+					}
+					array["items"] = map[string]any{"anyOf": []any{original, change}}
+				}
 				if !whitebox {
 					delete(item["properties"].(map[string]any), "testFile")
 					delete(item["properties"].(map[string]any), "testSymbol")
@@ -274,6 +325,9 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		if !whitebox {
 			item := fields["cases"].(map[string]any)["items"].(map[string]any)
+			if branches, ok := item["anyOf"].([]any); ok {
+				item = branches[0].(map[string]any)
+			}
 			delete(item["properties"].(map[string]any), "testFile")
 			delete(item["properties"].(map[string]any), "testSymbol")
 		}
@@ -283,7 +337,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		fields["coverage"] = orderedSchema(items)
 	}
-	if input.Handler == "engine.qa.review.rationale" {
+	if input.Handler == "engine.qa.review.rationale.v2" {
 		sources, points, cases, shared := slices.Clone(input.Validation.Manifest.Sources), []string{}, []string{}, []string{}
 		for _, item := range input.Validation.Manifest.Points {
 			points = append(points, item.PointID)
@@ -303,7 +357,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
 		fields["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
 	}
-	if input.Handler == "engine.qa.execution" && len(input.Validation.CommandCases) > 0 {
+	if input.Handler == "engine.qa.execution.v2" && len(input.Validation.CommandCases) > 0 {
 		item := fields["commands"].(map[string]any)["items"]
 		items := []any{}
 		for _, id := range input.Validation.CommandCases {
@@ -315,7 +369,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["commands"] = orderedSchema(items)
 		return body, nil
 	}
-	if input.Handler == "engine.qa.execution" {
+	if input.Handler == "engine.qa.execution.v2" {
 		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 		if err != nil {
 			return nil, err
@@ -442,7 +496,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 // Completion keys come only from the issued member batch. Final-candidate
 // verification and repair planning have different evidence duties.
 func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
-	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch" && input.Handler != "engine.repair") {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v2" && input.Handler != "engine.repair.v2") {
 		return nil
 	}
 	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {

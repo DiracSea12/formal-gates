@@ -21,11 +21,8 @@ package harness
 // abandons the turn when none comes back, so respond answers that one
 // interaction from the same provisioning index -- see zcodeRequestAuth().
 //
-// Serialization uses the canonical encoder:
-// prompt schemas and embedded error bodies are rendered with the canonical
-// encoder (prompt objects present additionalProperties last; see
-// schemaForPrompt), and the ZCODE_*/RuntimeBlocked:/SessionUnavailable:
-// protocol and family prefix texts are kept verbatim.
+// Native protocol documents use the canonical encoder; family error texts
+// retain the host protocol values.
 
 import (
 	"bytes"
@@ -38,14 +35,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
 
 // The native allowlist restricts builtin and MCP tools. The registered handler
 // takes execution authority from the original issued request.
-var zcodeManagedTools = []any{"mcp__formal-gates__workspace", "AskUserQuestion"}
+var zcodeManagedTools = []any{"mcp__formal-gates__workspace", "mcp__formal-gates__submit_semantics", "AskUserQuestion"}
 
 // The handshake every snapshot carries. A different one means the app-server
 // no longer speaks the protocol this transport was accepted against.
@@ -109,10 +105,6 @@ const zcodeSettingPlansKey = "providerFamilyConnectionSelections"
 const zcodeAccessFamilyKey = "accountType"
 
 const zcodeAccessModeKey = "mode"
-
-// Result-framing failures only. Runtime and transport failures are never
-// laundered into a successful worker result.
-const zcodeResultFrameError = "RuntimeBlocked: NATIVE_RESULT:"
 
 // zcodeIsRegularFile mirrors Path.is_file(): follows symlinks, refuses
 // directories and anything unreadable.
@@ -1369,8 +1361,7 @@ func zcodeMaterializeSource(directory string) (map[string]any, error) {
 		return nil, &blockedError{message: "ZCODE_RESULT: matching native completion is missing"}
 	}
 	endPayload := objectOrEmpty(getOrOf(end, "payload", map[string]any{}))
-	response, _ := getOrOf(endPayload, "response", "").(string)
-	if err := writeNativeAnswer(directory, response, "ZCODE"); err != nil {
+	if err := writeSubmittedAnswer(directory); err != nil {
 		return nil, err
 	}
 	return evidenceSource(directory, "zcode", identity, map[string]any{
@@ -1382,93 +1373,11 @@ func zcodeMaterializeSource(directory string) (map[string]any, error) {
 	})
 }
 
-// zcodeReconcile recovers only a completed native turn that the result parser
-// rejected (reconcile_completed_output). Only a result-framing error of an
-// otherwise completed process can be replayed; a runtime or transport failure
-// is never laundered into a successful worker result.
 func zcodeReconcile(directory string, process any) (map[string]any, error) {
-	return reconcileCompletedOutput(directory, process, "ZCODE",
-		func(original string) bool { return strings.HasPrefix(original, zcodeResultFrameError) },
-		func() (map[string]any, error) { return zcodeMaterializeSource(directory) })
+	return recoverNativeSource(directory, process, "ZCODE", func() (map[string]any, error) { return zcodeMaterializeSource(directory) })
 }
 
 // --- the execute sequence (contract item 12) -----------------------------------
-
-// zcodeSchemaDirectiveKey is the one schema key whose prompt position is
-// presentation, not value: the canonical sort keeps it at the head of every
-// object that carries it.
-const zcodeSchemaDirectiveKey = "additionalProperties"
-
-// schemaForPrompt renders one decoded JSON value for embedding in a prompt:
-// the canonical encoding, except that an object's additionalProperties key,
-// when present, is written last instead of first. Arrays and nested objects
-// are handled recursively; no value is changed, only the order an object's
-// keys are presented in.
-//
-// Behavioural rationale (2026-09): GLM serving repeatedly echoed the schema's
-// leading directive keyword -- additionalProperties, which the canonical sort
-// keeps at the head of every object -- back into the answer as if it were a
-// field, and the strict answer validator rejects such answers. The validator's
-// strictness is independent of the prompt and stays exactly as it is;
-// presenting the directive key last instead of first removes the trigger
-// without touching the value.
-//
-// This ordering is for the prompt only. Identity, tool-policy, source and
-// all other evidence serialization use CanonicalJSON.
-func schemaForPrompt(value any) ([]byte, error) {
-	var out strings.Builder
-	if err := encodeSchemaForPrompt(value, &out); err != nil {
-		return nil, err
-	}
-	return []byte(out.String()), nil
-}
-
-// encodeSchemaForPrompt is schemaForPrompt's recursive worker: canonical
-// leaves, canonical key order inside objects except that
-// zcodeSchemaDirectiveKey is emitted after every other key of its object.
-func encodeSchemaForPrompt(value any, out *strings.Builder) error {
-	switch typed := value.(type) {
-	case []any:
-		out.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				out.WriteByte(',')
-			}
-			if err := encodeSchemaForPrompt(item, out); err != nil {
-				return err
-			}
-		}
-		out.WriteByte(']')
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			if key != zcodeSchemaDirectiveKey {
-				keys = append(keys, key)
-			}
-		}
-		sort.Strings(keys)
-		if _, present := typed[zcodeSchemaDirectiveKey]; present {
-			keys = append(keys, zcodeSchemaDirectiveKey)
-		}
-		out.WriteByte('{')
-		for index, key := range keys {
-			if index > 0 {
-				out.WriteByte(',')
-			}
-			writeCanonicalString(key, out)
-			out.WriteByte(':')
-			if err := encodeSchemaForPrompt(typed[key], out); err != nil {
-				return err
-			}
-		}
-		out.WriteByte('}')
-	default:
-		// Leaves keep the canonical encoding: the reorder touches key order
-		// inside objects only, never a scalar's or a value's rendering.
-		return encodeCanonical(value, out)
-	}
-	return nil
-}
 
 // zcodeExecute runs ZCode's app-server sequence for one request
 // (native_zcode.execute): parse the request, establish the session, prepare
@@ -1783,20 +1692,10 @@ func (s *zcodeSession) sendTurn(request any) error {
 	if !isString {
 		return fmt.Errorf("prompt must be a string")
 	}
-	schemaValue, err := mustEntry(request, "schema")
-	if err != nil {
-		return err
-	}
-	// The schema uses the prompt’s declared presentation order.
-	schema, err := schemaForPrompt(schemaValue)
-	if err != nil {
-		return err
-	}
-	prompt := promptText + "\nReturn ONLY one JSON object matching this schema:\n" + string(schema)
 	ack, err := s.client.request("session/send", map[string]any{
 		"sessionId": s.identity,
 		"inputId":   s.inputID,
-		"content":   prompt,
+		"content":   promptText,
 	})
 	if err != nil {
 		return err

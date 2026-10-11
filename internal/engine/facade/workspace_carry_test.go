@@ -29,8 +29,8 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution")
-			gate, gi := d.action("engine.gate")
+			qa, qi := d.action("engine.qa.execution.v2")
+			gate, gi := d.action("engine.gate.v2")
 			report := executionFor(qi)
 			tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -126,7 +126,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 				if _, executed := state.HostActionReceipts[original.ActionID]; executed {
 					t.Fatal("REDO executed the obsolete workspace")
 				}
-				_, repair := d.action("engine.repair")
+				_, repair := d.action("engine.repair.v2")
 				if repair.Binding.Task == *originalInput.Task || repair.Binding.WorkspaceID == originalInput.Resource.ID {
 					t.Fatal("replacement borrowed the original task or resource")
 				}
@@ -189,7 +189,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			if after.HostActionReceipts[original.ActionID].Digest != receipt.Digest || len(after.HostActionReceipts) != len(beforeExecution.HostActionReceipts) {
 				t.Fatal("reopen reexecuted the original workspace")
 			}
-			_, repair := d.action("engine.repair")
+			_, repair := d.action("engine.repair.v2")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}

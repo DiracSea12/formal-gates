@@ -18,6 +18,7 @@ import (
 )
 
 const nativeWorkspaceTool = "workspace"
+const nativeSemanticTool = "submit_semantics"
 const nativeToolCallsFile = "native-tool-calls.jsonl"
 const nativeToolContextFile = "native-tool-context.json"
 
@@ -39,6 +40,7 @@ type nativeWorkspaceTools struct {
 	facts                                                 []nativeToolFact
 	services                                              []ExecutionServices
 	material                                              *worker.Material
+	semanticSchema                                        map[string]any
 	materials                                             string
 }
 
@@ -105,6 +107,7 @@ func newNativeWorkspaceTools(directory string, services ...ExecutionServices) (*
 		}
 	}
 	t.services = services
+	t.semanticSchema = objectOrEmpty(getOf(request, "schema"))
 	if getOf(request, "engine") != nil {
 		materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
 		body, err := os.ReadFile(materialPath)
@@ -275,7 +278,7 @@ func (t *nativeWorkspaceTools) fact(number int, kind string) (nativeToolFact, er
 }
 
 func (t *nativeWorkspaceTools) testOwned(relative string) bool {
-	if t.material == nil || t.material.Input.Handler != "engine.gate" || t.material.Input.Validation == nil || t.material.Input.Validation.Gate == nil {
+	if t.material == nil || t.material.Input.Handler != "engine.gate.v2" || t.material.Input.Validation == nil || t.material.Input.Validation.Gate == nil {
 		return false
 	}
 	for _, owned := range t.material.Input.Validation.Gate.TestOwnedPaths {
@@ -339,6 +342,9 @@ type nativeWorkspaceArguments struct {
 	Listing       int    `json:"listing,omitempty"`
 	Entry         int    `json:"entry,omitempty"`
 	Read          int    `json:"read,omitempty"`
+	SourceRead    int    `json:"sourceRead,omitempty"`
+	SourceFrom    int    `json:"sourceFrom,omitempty"`
+	SourceTo      int    `json:"sourceTo,omitempty"`
 	From          int    `json:"from,omitempty"`
 	To            int    `json:"to,omitempty"`
 	Name          string `json:"name,omitempty"`
@@ -347,7 +353,7 @@ type nativeWorkspaceArguments struct {
 	TargetEntry   int    `json:"targetEntry,omitempty"`
 }
 
-func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
+func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, error) {
 	request, err := readJSONFile(filepath.Join(t.directory, "native-request.json"))
 	if err != nil {
 		return nil, err
@@ -362,6 +368,21 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 	if err := t.refreshFacts(); err != nil {
 		return nil, err
 	}
+	switch name {
+	case nativeWorkspaceTool:
+		return t.workspaceOperation(raw)
+	case nativeSemanticTool:
+		return t.submitSemantics(raw)
+	default:
+		return nil, fmt.Errorf("unknown native tool")
+	}
+}
+
+func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
+	return t.invoke(nativeWorkspaceTool, raw)
+}
+
+func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, error) {
 	var a nativeWorkspaceArguments
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -567,7 +588,35 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return t.publishRead(relative, body)
-	case "replace":
+	case "replace", "copy-range":
+		if a.Action == "copy-range" {
+			if a.Content != "" {
+				return nil, fmt.Errorf("copy-range takes original read bytes, not supplied content")
+			}
+			source, err := t.fact(a.SourceRead, "read")
+			if err != nil {
+				return nil, err
+			}
+			path, err := t.path(source.Paths[0], true)
+			if err != nil {
+				return nil, err
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			if string(body) != source.Content {
+				return nil, fmt.Errorf("source changed after the selected read")
+			}
+			lines := strings.SplitAfter(source.Content, "\n")
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			if a.SourceFrom < 1 || a.SourceTo < a.SourceFrom || a.SourceTo > len(lines) {
+				return nil, fmt.Errorf("select source lines from the original read")
+			}
+			a.Content = strings.Join(lines[a.SourceFrom-1:a.SourceTo], "")
+		}
 		if t.readOnly {
 			return nil, fmt.Errorf("issued action is read-only")
 		}
@@ -594,7 +643,7 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 			lines = lines[:len(lines)-1]
 		}
 		empty := len(lines) == 0 && a.From == 1 && a.To == 0
-		if !empty && (a.From < 1 || a.To < a.From || a.To > len(lines)) {
+		if !empty && (a.From < 1 || a.To < a.From-1 || a.From > len(lines)+1 || a.To > len(lines)) {
 			return nil, fmt.Errorf("select a line range from the original read")
 		}
 		result := a.Content
@@ -651,7 +700,10 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		if a.Listing == 0 {
 			return nil, fmt.Errorf("file transfer selects an original published entry")
 		}
-		if a.Content != "" || a.Name == "" || filepath.Base(a.Name) != a.Name || a.Name == "." || a.Name == ".." {
+		if a.Name == "" {
+			a.Name = filepath.Base(relative)
+		}
+		if a.Content != "" || filepath.Base(a.Name) != a.Name || a.Name == "." || a.Name == ".." {
 			return nil, fmt.Errorf("file transfer supplies only a new filename and original selections")
 		}
 		targetRelative := "."
@@ -736,6 +788,44 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 	}
 }
 
+// Semantic submissions are original tool evidence, scoped to this invocation.
+func (t *nativeWorkspaceTools) submitSemantics(raw json.RawMessage) (any, error) {
+	value, err := decodeUniqueKeys(raw)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return nil, fmt.Errorf("semantic submission requires an object")
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if t.material != nil {
+		if err := worker.ValidateSemanticBody(t.material.Input, body); err != nil {
+			return nil, err
+		}
+	}
+	for i, fact := range t.facts {
+		if fact.Kind == "semantics" && fact.Job == t.directory && fact.RequestDigest == t.requestDigest {
+			if fact.Content != string(body) {
+				return nil, fmt.Errorf("current invocation already submitted different semantics")
+			}
+			return map[string]any{"submitted": true, "fact": i + 1}, nil
+		}
+	}
+	number, err := t.publish(nativeToolFact{Kind: "semantics", Content: string(body)})
+	return map[string]any{"submitted": true, "fact": number}, err
+}
+
+func (t *nativeWorkspaceTools) schemas() []any {
+	schema := t.semanticSchema
+	if t.material != nil {
+		schema = t.material.ResultSchema
+	}
+	return []any{nativeWorkspaceToolSchema(t.readOnly, t.material), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": schema}}
+}
+
 func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map[string]any {
 	var material *worker.Material
 	if len(materials) > 0 {
@@ -755,9 +845,9 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 		description += " Comparison reads the issued native versions."
 	}
 	if !readOnly {
-		actions = append(actions, "replace", "create", "mkdir", "remove", "copy", "move")
-		description += " Replace uses an original read and from/to line range (empty: 1/0). Copy/move use source listing/entry and targetListing/targetEntry (omit for root) with a new name."
-		for _, key := range []string{"read", "from", "targetListing", "targetEntry"} {
+		actions = append(actions, "replace", "copy-range", "create", "mkdir", "remove", "copy", "move")
+		description += " Replace uses an original read and from/to line range (empty: 1/0). Copy-range takes sourceRead/sourceFrom/sourceTo and target read/from/to; to=from-1 inserts original bytes. Copy/move use source listing/entry and targetListing/targetEntry (omit for root); omit name to retain the original basename."
+		for _, key := range []string{"read", "from", "sourceRead", "sourceFrom", "sourceTo", "targetListing", "targetEntry"} {
 			properties[key] = map[string]any{"type": "integer", "minimum": 1}
 		}
 		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
@@ -809,19 +899,19 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, services
 			err = json.Unmarshal(request.Params, &params)
 			result = map[string]any{"protocolVersion": params.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "formal-gates", "version": "1"}}
 		case "tools/list":
-			result = map[string]any{"tools": []any{nativeWorkspaceToolSchema(tools.readOnly, tools.material)}}
+			result = map[string]any{"tools": tools.schemas()}
 		case "tools/call":
 			var params struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
 			err = json.Unmarshal(request.Params, &params)
-			if err == nil && params.Name != nativeWorkspaceTool {
+			if err == nil && params.Name != nativeWorkspaceTool && params.Name != nativeSemanticTool {
 				err = fmt.Errorf("unknown native tool")
 			}
 			var value any
 			if err == nil {
-				value, err = tools.call(params.Arguments)
+				value, err = tools.invoke(params.Name, params.Arguments)
 			}
 			text := ""
 			if err != nil {
@@ -859,4 +949,42 @@ func nativeToolServer(directory string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"name": "formal-gates", "command": executable, "args": []any{"harness", "native-tools", directory}, "env": []any{}, "isolation": "session"}, nil
+}
+
+// The accepted payload must occur in a successful original native tool call.
+func verifySemanticCall(directory string, body []byte) error {
+	file, err := os.Open(filepath.Join(directory, nativeToolCallsFile))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	scan := bufio.NewScanner(file)
+	scan.Buffer(make([]byte, 4096), int(^uint(0)>>1))
+	for scan.Scan() {
+		value, err := decodeUniqueKeys(scan.Bytes())
+		if err != nil {
+			return err
+		}
+		request, result := getOf(value, "request"), getOf(value, "result")
+		params := getOf(request, "params")
+		name := getOf(params, "name")
+		success := getOf(result, "isError") == false
+		if getOf(request, "method") == "item/tool/call" {
+			name, success = getOf(params, "tool"), getOf(result, "success") == true
+		}
+		if name != nativeSemanticTool || !success {
+			continue
+		}
+		canonical, err := json.Marshal(getOf(params, "arguments"))
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(canonical, body) {
+			return nil
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("semantic payload has no successful original native tool call")
 }

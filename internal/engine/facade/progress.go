@@ -15,6 +15,7 @@ import (
 // Progress is a read-only view of authoritative state and original job evidence.
 // Durations include waits and remain individual intervals, never parallel sums.
 type Progress struct {
+	Root                string              `json:"root"`
 	Failed              int                 `json:"failed"`
 	Retired             int                 `json:"retired"`
 	CountScope          string              `json:"countScope"`
@@ -75,7 +76,7 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 	if after > revision {
 		return Progress{}, fmt.Errorf("progress cursor exceeds current revision")
 	}
-	p := Progress{RunID: f.runID, Revision: revision, AfterRevision: after, TimeSource: "unavailable: run start not recorded", NativeCallSource: "native-process.json: observed native invocations, not billable model requests", CountScope: "issued worker actions; accepted completion, failed result, retired/replaced action and native calls are distinct", Blocked: map[string]string{}, Current: []OperationProgress{}, NewResults: []ResultProgress{}, RepeatedExecutions: []RepeatProgress{}}
+	p := Progress{Root: f.root, RunID: f.runID, Revision: revision, AfterRevision: after, TimeSource: "unavailable: run start not recorded", NativeCallSource: "native-process.json: observed native invocations, not billable model requests", CountScope: "issued worker actions; accepted completion, failed result, retired/replaced action and native calls are distinct", Blocked: map[string]string{}, Current: []OperationProgress{}, NewResults: []ResultProgress{}, RepeatedExecutions: []RepeatProgress{}}
 	if state == nil {
 		return p, nil
 	}

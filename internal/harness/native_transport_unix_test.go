@@ -27,15 +27,17 @@ import (
 // the On substring. In Send, the token "@ID@" (bare, unquoted) is replaced by
 // the received frame's id, so one script answers whatever id the client used.
 type peerStep struct {
-	Params    any        `json:"params,omitempty"`
-	On        string     `json:"on,omitempty"`
-	Send      string     `json:"send,omitempty"`
-	Garbage   string     `json:"garbage,omitempty"`
-	Stderr    string     `json:"stderr,omitempty"`
-	SleepSecs float64    `json:"sleep,omitempty"`
-	Close     bool       `json:"close,omitempty"`
-	IgnoreEOF bool       `json:"ignore_eof,omitempty"`
-	Files     []peerFile `json:"files,omitempty"`
+	Semantics   any        `json:"semantics,omitempty"`
+	SemanticJob string     `json:"semanticJob,omitempty"`
+	Params      any        `json:"params,omitempty"`
+	On          string     `json:"on,omitempty"`
+	Send        string     `json:"send,omitempty"`
+	Garbage     string     `json:"garbage,omitempty"`
+	Stderr      string     `json:"stderr,omitempty"`
+	SleepSecs   float64    `json:"sleep,omitempty"`
+	Close       bool       `json:"close,omitempty"`
+	IgnoreEOF   bool       `json:"ignore_eof,omitempty"`
+	Files       []peerFile `json:"files,omitempty"`
 }
 
 // peerFile is a file the peer writes into the evidence directory when its step
@@ -162,6 +164,9 @@ func applyPeerStep(step peerStep, line string) {
 		if err := os.WriteFile(file.Path, []byte(file.Body), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "peer cannot write %s: %v\n", file.Path, err)
 		}
+	}
+	if step.Semantics != nil {
+		peerSubmitSemantics(step.SemanticJob, step.Semantics)
 	}
 	send := step.Send
 	if strings.Contains(send, "@ID@") && line != "" {

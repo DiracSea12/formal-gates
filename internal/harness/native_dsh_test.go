@@ -1,7 +1,7 @@
 package harness
 
 // DSH adapter tests that need no host process: selection parsing, the patch
-// shape, observe's evidence contract, reconcile's three ways, the lifecycle
+// shape, observe's evidence contract, recovery eligibility, the lifecycle
 // operations (capture/validate/verify-source) and the narrow entry command's
 // failure shapes. The ACP execute sequence over a scripted peer lives in
 // native_dsh_unix_test.go.
@@ -143,15 +143,15 @@ func readTestFileBytes(t *testing.T, path string) []byte {
 }
 
 // TestObserveNative pins the evidence contract of observe: session/turn
-// binding, compaction and other-turn skipping, the answer text join, usage
+// binding, compaction and other-turn skipping, semantic submission, usage
 // evidence from message and attempt events, turn/end completion and the
 // receipt shape (合同 observe 全表).
 func TestObserveNative(t *testing.T) {
 	messageContent := []any{
-		map[string]any{"type": "text", "text": "```json\n"},
+		map[string]any{"type": "text", "text": "Review completed. "},
 		map[string]any{"type": "tool_use", "id": "t-1"},
-		map[string]any{"type": "text", "text": `{"status": "PASS"}`},
-		map[string]any{"type": "text", "text": "\n```"},
+		map[string]any{"type": "text", "text": "Semantic result submitted."},
+		map[string]any{"type": "text", "text": " Finished."},
 	}
 	events := []string{
 		peerEvent("s-1", "compaction/summary", map[string]any{"turn": 1}),
@@ -165,18 +165,20 @@ func TestObserveNative(t *testing.T) {
 		peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}),
 	}
 
-	directory := t.TempDir()
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	value := map[string]any{"status": "PASS"}
+	peerSubmitSemantics(directory, value)
 	writeEvidence(t, directory,
 		`{"sessionId": "s-1", "turn": 1, "transcriptPath": "/t/root.jsonl"}`, events)
 	receipt, err := observeNative(directory, "s-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body := readTestFileBytes(t, filepath.Join(directory, "answer.raw.txt")); string(body) != "```json\n{\"status\": \"PASS\"}\n```" {
-		t.Fatalf("answer.raw.txt = %q", body)
-	}
 	if answer := readTestFileBytes(t, filepath.Join(directory, "answer.json")); string(answer) != `{"status":"PASS"}` {
 		t.Fatalf("answer.json = %s", answer)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "answer.raw.txt")); !os.IsNotExist(err) {
+		t.Fatal("terminal prose became semantic evidence")
 	}
 	// usage evidence: the message usage (an object, empty or not) and the
 	// attempt whose usage object has entries; the usage-less attempt records
@@ -193,7 +195,7 @@ func TestObserveNative(t *testing.T) {
 	if turn := textOf(receipt["native_turn"]); turn != "1" {
 		t.Fatalf("native_turn = %v", turn)
 	}
-	if !valuesEqual(receipt["files"], proofsOf(t, directory, nativeSourceFiles)) {
+	if !valuesEqual(receipt["files"], proofsOf(t, directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile))) {
 		t.Fatalf("files = %v", receipt["files"])
 	}
 }
@@ -262,37 +264,30 @@ func TestObserveNativeRefusals(t *testing.T) {
 	}
 }
 
-// TestObserveNativeSavedOutputDiffers pins the pre-existing answer boundary:
-// different bytes are refused, identical bytes are kept (write_answer 幂等).
-func TestObserveNativeSavedOutputDiffers(t *testing.T) {
-	directory := t.TempDir()
+// TestObserveNativeRejectsChangedSavedSemantics checks the saved semantic payload
+// against the original successful submission.
+func TestObserveNativeRejectsChangedSavedSemantics(t *testing.T) {
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS"})
 	writeEvidence(t, directory,
 		`{"sessionId": "s-1", "turn": 1, "transcriptPath": ""}`,
-		[]string{`{"sessionId": "s-1", "event": {"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}}`})
-	// No assistant/message: the answer is the empty string; a stale saved
-	// output with other bytes must be refused.
-	if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), []byte("stale"), 0o644); err != nil {
+		[]string{peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}})})
+	if err := os.WriteFile(filepath.Join(directory, "answer.json"), []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := observeNative(directory, "s-1")
-	if err == nil || err.Error() != "DSH_RESULT: saved output differs" {
+	if err == nil || err.Error() != "NATIVE_RESULT: saved semantics differ from original tool submission" {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// TestDSHReconcile checks qualified NATIVE_RESULT failures and their recovery receipts,
-// ineligible failures are refused, and workspace/model selection changes are
-// refused (合同 reconcile 全表).
+// TestDSHReconcile retains original successful process, session, workspace,
+// selection and semantic tool evidence without replaying a model call.
 func TestDSHReconcile(t *testing.T) {
-	const resultPrefixed = "RuntimeBlocked: NATIVE_RESULT: multiple candidate objects"
-	raw := "Already implemented.\n\n```json\n{\"status\": \"PASS\", \"summary\": \"ok\"}\n```"
-
-	fixture := func(t *testing.T, originalError, workspaceOverride, configuredModel string) string {
+	fixture := func(t *testing.T, workspaceOverride, configuredModel string) string {
 		t.Helper()
 		directory := t.TempDir()
 		workspace := filepath.Join(directory, "ws")
-		// The identity records what the original run used; the request keeps
-		// the current workspace, so an override makes the two differ.
 		identityWorkspace := workspace
 		if workspaceOverride != "" {
 			identityWorkspace = workspaceOverride
@@ -300,70 +295,61 @@ func TestDSHReconcile(t *testing.T) {
 		if err := os.MkdirAll(workspace, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		writeAtomicJSON(filepath.Join(directory, "native-error.json"), map[string]any{"error": originalError})
-		writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
+		if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
 			"identity": "s-1", "workspace": identityWorkspace,
-			"selection": map[string]any{"model": configuredModel, "reasoning_effort": "high"}})
-		writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{
-			"provider": "dsh", "workspace": workspace,
-			"model": "test-model", "reasoning_effort": "high"})
-		if err := os.WriteFile(filepath.Join(directory, "native-source.json"),
-			[]byte(`{"sessionId": "s-1", "turn": 1, "transcriptPath": "retained-native-log"}`), 0o644); err != nil {
+			"selection": map[string]any{"model": configuredModel, "reasoning_effort": "high"}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), []byte(strings.Join([]string{
-			`{"sessionId": "s-1", "event": {"type": "assistant/message", "data": {"turn": 1, "step": 0, "usage": {"inputTokens": 12}, "message": {"content": [{"type": "text", "text": ` + mustCanonical(t, raw) + `}]}}}}`,
-			`{"sessionId": "s-1", "event": {"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}}`,
-		}, "\n")+"\n"), 0o644); err != nil {
+		if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{
+			"provider": "dsh", "workspace": workspace, "read_only": true,
+			"model": "test-model", "reasoning_effort": "high", "schema": map[string]any{"type": "object"}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), []byte(raw), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		peerSubmitSemantics(directory, map[string]any{"status": "PASS", "summary": "ok"})
+		writeEvidence(t, directory,
+			`{"sessionId": "s-1", "turn": 1, "transcriptPath": "retained-native-log"}`,
+			[]string{
+				peerEvent("s-1", "assistant/message", map[string]any{"turn": 1, "step": 0, "usage": map[string]any{"inputTokens": 12}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "Semantics submitted."}}}}),
+				peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}),
+			})
 		return directory
 	}
-
-	original := resultPrefixed
-	directory := fixture(t, original, "", "test-model")
-	source, err := dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
-	if err != nil {
-		t.Fatalf("eligible %q: %v", original, err)
+	directory := fixture(t, "", "test-model")
+	names := []string{"native-source.json", "native-events.jsonl", nativeToolCallsFile, nativeToolContextFile}
+	originalProofs := proofsOf(t, directory, names)
+	source, err := dshReconcile(directory, map[string]any{"exit_code": 0, "error": ""})
+	if err != nil || source["identity"] != "s-1" || !valuesEqual(source["selection"], map[string]any{"model": "test-model", "reasoning_effort": "high"}) {
+		t.Fatalf("successful original process: %v %v", source, err)
 	}
-	if !valuesEqual(source["reconciliation"], map[string]any{
-		"kind":               "completed-output-format",
-		"original_exit_code": 1,
-		"original_error":     original,
-		"new_model_calls":    0,
-	}) {
-		t.Fatalf("reconciliation = %v", source["reconciliation"])
+	if !valuesEqual(originalProofs, proofsOf(t, directory, names)) || string(readTestFileBytes(t, filepath.Join(directory, "answer.json"))) != `{"status":"PASS","summary":"ok"}` {
+		t.Fatal("recovery changed original native or semantic evidence")
 	}
-	if body := readTestFileBytes(t, filepath.Join(directory, "source.json")); !bytes.Contains(body, []byte(`"reconciliation":`)) {
-		t.Fatalf("source.json missing the reconciliation block: %s", body)
+	stored, err := readJSONFile(filepath.Join(directory, "source.json"))
+	if err != nil || !valuesEqual(stored, source) {
+		t.Fatal("recovered receipt differs from original source", err)
 	}
-	// The original error record is never rewritten.
-	if record := readTestFileBytes(t, filepath.Join(directory, "native-error.json")); !bytes.Contains(record, []byte(mustCanonical(t, original))) {
-		t.Fatalf("native-error.json rewritten: %s", record)
+	for _, process := range []map[string]any{{"exit_code": 1, "error": ""}, {"exit_code": 0, "error": "interrupted"}} {
+		other := fixture(t, "", "test-model")
+		_, err := dshReconcile(other, process)
+		if err == nil || err.Error() != "DSH_RECONCILE: original native process did not complete successfully" {
+			t.Fatalf("failed original process: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(other, "source.json")); !os.IsNotExist(err) {
+			t.Fatal("failed original process became a recovered success")
+		}
 	}
-
-	directory = fixture(t, "RuntimeBlocked: DSH_TRANSPORT: native ACP process closed its output", "", "test-model")
-	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
-	if err == nil || err.Error() != "DSH_RECONCILE: not a completed formatting-only failure" {
-		t.Fatalf("ineligible: %v", err)
-	}
-
-	directory = fixture(t, resultPrefixed, filepath.Join(t.TempDir(), "elsewhere"), "test-model")
-	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
-	if err == nil || err.Error() != "DSH_RECONCILE: workspace changed" {
-		t.Fatalf("workspace changed: %v", err)
-	}
-
-	directory = fixture(t, resultPrefixed, "", "other-model")
-	_, err = dshReconcile(directory, map[string]any{"exit_code": 1, "error": ""})
-	if err == nil || err.Error() != "DSH_RECONCILE: original model selection differs" {
-		t.Fatalf("selection changed: %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(directory, "source.json")); !os.IsNotExist(statErr) {
-		t.Fatal("a refused reconcile must not land source.json")
+	for _, item := range []struct{ workspace, model, want string }{
+		{filepath.Join(t.TempDir(), "elsewhere"), "test-model", "DSH_RECONCILE: workspace changed"},
+		{"", "other-model", "DSH_RECONCILE: original model selection differs"},
+	} {
+		other := fixture(t, item.workspace, item.model)
+		_, err := dshReconcile(other, map[string]any{"exit_code": 0, "error": ""})
+		if err == nil || err.Error() != item.want {
+			t.Fatalf("changed original binding: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(other, "source.json")); !os.IsNotExist(err) {
+			t.Fatal("changed original binding became a recovered success")
+		}
 	}
 }
 
@@ -452,24 +438,25 @@ func TestDSHValidateBinding(t *testing.T) {
 }
 
 // TestDSHVerifySource pins verify_source's refusal ladder: NATIVE_BINDING,
-// EVIDENCE_MISSING (the proof set must be exactly the four files),
+// EVIDENCE_MISSING for the complete original native and tool proof set,
 // EVIDENCE_CHANGED per file, and acceptance.
 func TestDSHVerifySource(t *testing.T) {
-	directory := t.TempDir()
-	for _, name := range nativeSourceFiles {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS"})
+	writeEvidence(t, directory, `{"sessionId":"s-1","turn":1}`, []string{peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}})})
+	receipt, err := observeNative(directory, "s-1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	proofs := proofsOf(t, directory, nativeSourceFiles)
+	proofs := objectOrEmpty(receipt["files"])
 
 	source := map[string]any{"provider": "zcode", "identity": "s-1", "files": proofs}
-	err := dshVerifySource(directory, source)
+	err = dshVerifySource(directory, source)
 	if err == nil || err.Error() != "NATIVE_BINDING: missing or different provider/identity" {
 		t.Fatalf("foreign provider: %v", err)
 	}
 	source = map[string]any{"provider": "dsh", "identity": "", "files": proofs}
-	if err := dshVerifySource(directory, source); err == nil || err.Error() != "NATIVE_BINDING: missing or different provider/identity" {
+	if err = dshVerifySource(directory, source); err == nil || err.Error() != "NATIVE_BINDING: missing or different provider/identity" {
 		t.Fatalf("empty identity: %v", err)
 	}
 
@@ -478,22 +465,22 @@ func TestDSHVerifySource(t *testing.T) {
 		short[name] = proofs[name]
 	}
 	source = map[string]any{"provider": "dsh", "identity": "s-1", "files": short}
-	if err := dshVerifySource(directory, source); err == nil || err.Error() != "EVIDENCE_MISSING: native source proofs absent" {
+	if err = dshVerifySource(directory, source); err == nil || err.Error() != "EVIDENCE_MISSING: native source proofs absent" {
 		t.Fatalf("missing proof: %v", err)
 	}
 
 	changed := map[string]any{}
-	for _, name := range nativeSourceFiles {
-		changed[name] = proofs[name]
+	for name, proof := range proofs {
+		changed[name] = proof
 	}
-	changed["answer.raw.txt"] = map[string]any{"sha256": strings.Repeat("0", 64), "size": 1}
+	changed[nativeToolCallsFile] = map[string]any{"sha256": strings.Repeat("0", 64), "size": 1}
 	source = map[string]any{"provider": "dsh", "identity": "s-1", "files": changed}
-	if err := dshVerifySource(directory, source); err == nil || err.Error() != "EVIDENCE_CHANGED: answer.raw.txt" {
+	if err = dshVerifySource(directory, source); err == nil || err.Error() != "EVIDENCE_CHANGED: "+nativeToolCallsFile {
 		t.Fatalf("changed proof: %v", err)
 	}
 
 	source = map[string]any{"provider": "dsh", "identity": "s-1", "files": proofs}
-	if err := dshVerifySource(directory, source); err != nil {
+	if err = dshVerifySource(directory, source); err != nil {
 		t.Fatalf("valid source: %v", err)
 	}
 }

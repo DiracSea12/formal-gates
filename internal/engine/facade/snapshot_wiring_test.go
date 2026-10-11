@@ -184,8 +184,8 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	runner := vcs.ExecRunner{}
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution")
-	gate, gi := d.action("engine.gate")
+	qa, qi := d.action("engine.qa.execution.v2")
+	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -317,8 +317,8 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution")
-	gate, gi := d.action("engine.gate")
+	qa, qi := d.action("engine.qa.execution.v2")
+	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -361,8 +361,8 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	base := snapshotRepoCommits(t, root, "dev commit")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution")
-	gate, gi := d.action("engine.gate")
+	qa, qi := d.action("engine.qa.execution.v2")
+	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -556,8 +556,8 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	}
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution")
-	gate, gi := d.action("engine.gate")
+	qa, qi := d.action("engine.qa.execution.v2")
+	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -608,8 +608,8 @@ func completePromotionPipeline(t *testing.T, runner vcs.Runner, root, base strin
 	t.Helper()
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, runner, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution")
-	gate, gi := d.action("engine.gate")
+	qa, qi := d.action("engine.qa.execution.v2")
+	gate, gi := d.action("engine.gate.v2")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -1864,7 +1864,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	}
 	confirmValidationDocument(d, development, nil, validationDocument+strings.Repeat("\n", revision))
 	advance()
-	id, input := d.action("engine.development.batch")
+	id, input := d.action("engine.development.batch.v2")
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -1880,11 +1880,11 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	advance()
 	for id, input := range d.run.ValidationInputs {
 		switch input.Handler {
-		case "engine.qa.execution":
+		case "engine.qa.execution.v2":
 			report := executionFor(input)
 			tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
-		case "engine.gate":
+		case "engine.gate.v2":
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		}
 	}

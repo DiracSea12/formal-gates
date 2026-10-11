@@ -286,5 +286,5 @@ func workflowProgressView(progress facade.Progress, run facade.Run) map[string]a
 		blocked = append(blocked, reason)
 	}
 	sort.Strings(blocked)
-	return map[string]any{"elapsedMillis": progress.ElapsedMillis, "timeSource": progress.TimeSource, "revision": progress.Revision, "completed": progress.Completed, "failed": progress.Failed, "retired": progress.Retired, "running": progress.Running, "notStarted": progress.NotStarted, "blocked": blocked, "current": current, "newResults": progress.NewResults, "preparationReused": progress.PreparationReused, "preparationExecuted": progress.PreparationExecuted, "observedNativeCalls": progress.NativeCalls, "nativeCallSource": progress.NativeCallSource}
+	return map[string]any{"root": progress.Root, "runId": progress.RunID, "elapsedMillis": progress.ElapsedMillis, "timeSource": progress.TimeSource, "revision": progress.Revision, "completed": progress.Completed, "failed": progress.Failed, "retired": progress.Retired, "running": progress.Running, "notStarted": progress.NotStarted, "blocked": blocked, "current": current, "newResults": progress.NewResults, "preparationReused": progress.PreparationReused, "preparationExecuted": progress.PreparationExecuted, "observedNativeCalls": progress.NativeCalls, "nativeCallSource": progress.NativeCallSource}
 }

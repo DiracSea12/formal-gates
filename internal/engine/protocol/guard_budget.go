@@ -224,7 +224,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		return nil
 	}
 	if input := state.validationObservationInput(); input != nil {
-		if _, registered := pipelineStep(e.cfg.Definition, "engine.validation.observation"); registered {
+		if _, registered := pipelineStep(e.cfg.Definition, "engine.validation.observation.v2"); registered {
 			if err := declare(observationTask(e.cfg.Definition, input)); err != nil {
 				return guard.Basis{}, err
 			}
@@ -254,7 +254,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	}
 	if state.Validation != nil {
 		if p, ready := state.nextIntegrationParameters(e.cfg.Definition); ready && p.Integration.StartAction != "" && len(state.conflictInput(p.Integration.StartAction).Evidence.Conflicts) > 0 {
-			if err := declare(pipelineTask(e.cfg.Definition, "engine.merge.resolve", p.Integration.StartAction)); err != nil {
+			if err := declare(pipelineTask(e.cfg.Definition, "engine.merge.resolve.v2", p.Integration.StartAction)); err != nil {
 				return guard.Basis{}, err
 			}
 		}
@@ -303,7 +303,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			set := state.Validation.Sets[mode]
 			if set == nil {
 				if mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge || state.Validation.AuthoringWorkspace != "" {
-					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v2", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
 						return guard.Basis{}, err
 					}
 				}
@@ -311,11 +311,11 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			}
 			switch set.Status {
 			case "DRAFT", "THAWED":
-				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v2", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
 					return guard.Basis{}, err
 				}
 			case "REVIEW":
-				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.review.rationale", state.reviewTask(mode, state.Validation.Generation, set.Version, e.cfg.Definition).Scope)); err != nil {
+				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.review.rationale.v2", state.reviewTask(mode, state.Validation.Generation, set.Version, e.cfg.Definition).Scope)); err != nil {
 					return guard.Basis{}, err
 				}
 			}
@@ -453,7 +453,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		maxAttempts = attempt.MaxAttempts
 	}
 	switch role {
-	case "engine.validation.observation":
+	case "engine.validation.observation.v2":
 		if input := state.validationObservationInput(); input != nil && source == observationTask(e.cfg.Definition, input) {
 			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
 		}
@@ -468,13 +468,13 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			}
 		}
 		return guard.Provenance{}, 0, false
-	case "engine.merge.resolve":
+	case "engine.merge.resolve.v2":
 		input := state.conflictInput(source.Scope)
 		if input == nil || len(input.Evidence.Conflicts) == 0 {
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.development.batch":
+	case "engine.development.batch.v2":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
 			return guard.Provenance{}, 0, false
@@ -489,7 +489,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		}
 		digest := planContractDigest(plan)
 		return guard.Provenance{Kind: guard.BatchSource, Identity: guard.Identity{ID: "development-plan", Revision: digest}}, maxAttempts, true
-	case "engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution":
+	case "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}
@@ -509,7 +509,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		// 首个 QA design 派发先于 case-set 存在：路线选择（所选门决定的 QA
 		// mode 集）是其授权来源。
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.gate":
+	case "engine.gate.v2":
 		if _, target := state.repairGateTarget(source); target != nil {
 			return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
 		}
@@ -526,7 +526,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			}
 		}
 		return guard.Provenance{}, 0, false
-	case "engine.repair.verify":
+	case "engine.repair.verify.v2":
 		context, ok := state.repairComparisonContext(task, e.cfg.Definition)
 		if !ok {
 			context, ok = state.repairComparisonContext(source, e.cfg.Definition)
@@ -545,7 +545,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
-	case "engine.repair":
+	case "engine.repair.v2":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}

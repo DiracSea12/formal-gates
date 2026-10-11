@@ -16,7 +16,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch": {"summary"}, "engine.repair": {"summary", "granularityReview"}, "engine.merge.resolve": {"summary"}, "engine.qa.design": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution": {"records", "findings"}, "engine.gate": {"findings"},
+		"engine.development.batch.v2": {"summary"}, "engine.repair.v2": {"summary", "granularityReview"}, "engine.merge.resolve.v2": {"summary"}, "engine.qa.design.v2": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v2": {"records", "findings"}, "engine.gate.v2": {"findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -109,9 +109,9 @@ func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t
 func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "start-readiness"}}}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		handler := "engine.review.worker"
+		handler := "engine.review.worker.v2"
 		if action == review.StartReadiness {
-			handler = "engine.readiness.plan"
+			handler = "engine.readiness.plan.v2"
 		}
 		input := protocol.WorkerInput{RunID: "run", Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: action, RequirementRevision: "revision"}}
 		material, err := Render(input, catalog)
@@ -159,13 +159,13 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 		kind    coverage.ReviewKind
 		author  bool
 	}{
-		{"engine.development.batch", "", true},
-		{"engine.repair", "", true},
-		{"engine.merge.resolve", "", true},
-		{"engine.qa.design", coverage.ReviewWhitebox, true},
-		{"engine.qa.design", coverage.ReviewBlackbox, false},
-		{"engine.qa.execution", "", false},
-		{"engine.qa.review.rationale", "", false},
+		{"engine.development.batch.v2", "", true},
+		{"engine.repair.v2", "", true},
+		{"engine.merge.resolve.v2", "", true},
+		{"engine.qa.design.v2", coverage.ReviewWhitebox, true},
+		{"engine.qa.design.v2", coverage.ReviewBlackbox, false},
+		{"engine.qa.execution.v2", "", false},
+		{"engine.qa.review.rationale.v2", "", false},
 	} {
 		t.Run(role.handler+string(role.kind), func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: role.handler, Provider: "zcode", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: role.kind}}}}
@@ -174,10 +174,10 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			contracts := []string{"Deliver only actual authorized artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"}
-			if role.handler == "engine.qa.design" && role.author {
+			if role.handler == "engine.qa.design.v2" && role.author {
 				contracts = []string{"Associate only actual test material files", "Remove temporary build and test outputs", "produce them outside the workspace", "Do not return a separate development path declaration"}
 			}
-			if role.handler == "engine.merge.resolve" {
+			if role.handler == "engine.merge.resolve.v2" {
 				contracts = []string{"Report only the semantic resolution summary", "program supplies the exact original conflict paths", "Remove your temporary build and test outputs", "produce them outside the workspace"}
 			}
 			for _, contract := range contracts {
@@ -185,19 +185,19 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
 				}
 			}
-			if role.handler == "engine.qa.design" && role.author {
+			if role.handler == "engine.qa.design.v2" && role.author {
 				fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 				if fields["paths"] != nil || strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
 				}
-			} else if role.handler == "engine.merge.resolve" {
+			} else if role.handler == "engine.merge.resolve.v2" {
 				if strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") || strings.Contains(material.Prompt, "exact changed paths") {
 					t.Fatal("conflict resolution requests issued paths")
 				}
 			} else if role.author && !strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 				t.Fatal("development author lost its artifact declaration")
 			}
-			if role.handler == "engine.qa.execution" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
+			if role.handler == "engine.qa.execution.v2" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
 				t.Fatal("execution runtime contract lost")
 			}
 		})
@@ -205,7 +205,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 }
 
 func TestQASchemaExcludesIssuedFacts(t *testing.T) {
-	for _, handler := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution"} {
+	for _, handler := range []string{"engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2"} {
 		input := protocol.WorkerInput{Handler: handler, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}, PendingCases: []string{"case"}, RequiredCases: []string{"case"}}}
 		input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case"}}
 		schema, err := ResultSchema(input)
@@ -213,7 +213,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 		fields := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
-		if handler == "engine.qa.design" {
+		if handler == "engine.qa.design.v2" {
 			m := fields
 			for _, key := range []string{"binding", "sources", "points", "edges"} {
 				if m[key] != nil {
@@ -225,7 +225,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 				t.Fatal("case semantics differ")
 			}
 		}
-		if handler == "engine.qa.review.rationale" {
+		if handler == "engine.qa.review.rationale.v2" {
 			r := fields
 			for _, key := range []string{"binding", "scope", "setStatus", "unboundSources"} {
 				if r[key] != nil {
@@ -233,7 +233,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 				}
 			}
 		}
-		if handler == "engine.qa.execution" {
+		if handler == "engine.qa.execution.v2" {
 			e := fields
 			if e["binding"] != nil || e["notExecuted"] != nil {
 				t.Fatal("model owns execution facts")
@@ -251,7 +251,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}, {ID: "interface", Description: "declared interface"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop the issued duty"}}}
-	for _, role := range []string{"engine.development.batch", "engine.repair"} {
+	for _, role := range []string{"engine.development.batch.v2", "engine.repair.v2"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			before, _ := json.Marshal(input)
@@ -282,7 +282,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	}
 	for _, name := range []string{"no-batch", "empty-batch", "unfrozen-repair", "final-verification", "other-role"} {
 		t.Run(name, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			switch name {
 			case "empty-batch":
 				input.Validation.Development = &protocol.DevelopmentInput{}
@@ -292,7 +292,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
 				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "final"}}
 			case "other-role":
-				input.Handler = "engine.qa.design"
+				input.Handler = "engine.qa.design.v2"
 				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
 			}
 			schema, err := ResultSchema(input)
@@ -334,7 +334,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 }
 
 func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 }
 
 func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v2", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -427,10 +427,10 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 }
 
 func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
-	for _, handler := range []string{"engine.readiness.plan", "engine.repair"} {
+	for _, handler := range []string{"engine.readiness.plan.v2", "engine.repair.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
-			if handler == "engine.readiness.plan" {
+			if handler == "engine.readiness.plan.v2" {
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			} else {
 				input.Validation = &protocol.ValidationInput{Repair: &protocol.RepairInput{}}
@@ -484,7 +484,7 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 }
 
 func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{Handler: "engine.repair.v2", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	for _, scenario := range []string{"proposed", "issued"} {
 		t.Run(scenario, func(t *testing.T) {
 			if scenario == "issued" {
@@ -540,7 +540,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch", nil}, {"engine.repair", nil}, {"engine.merge.resolve", nil}, {"engine.qa.design", nil}, {"engine.gate", nil}, {"engine.qa.review.rationale", nil}, {"engine.qa.execution", nil}} {
+	}{{"engine.development.batch.v2", nil}, {"engine.repair.v2", nil}, {"engine.merge.resolve.v2", nil}, {"engine.qa.design.v2", nil}, {"engine.gate.v2", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v2", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
 			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)
@@ -568,7 +568,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 		})
 	}
 	t.Run("whitebox-design-vcs-owner", func(t *testing.T) {
-		input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+		input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v2", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 		material, err := Render(input, catalog)
 		if err != nil {
 			t.Fatal(err)
@@ -581,7 +581,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 
 func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.qa.execution"
+	input.Handler = "engine.qa.execution.v2"
 	input.RequirementDocument.Content = "confirmed requirement"
 	input.Validation.Execution = &coverage.ExecutionBinding{Candidate: coverage.ValidationCandidate{Identity: "candidate"}}
 	input.Validation.RequiredCases = []string{"new", "prior"}

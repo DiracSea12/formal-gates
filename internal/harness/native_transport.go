@@ -50,7 +50,7 @@ const nativeUnsupportedMethod = -32601
 
 // nativeSourceFiles is the evidence a native run must leave behind, in the
 // order the receipt proofs them (native_transport.SOURCE_FILES).
-var nativeSourceFiles = []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"}
+var nativeSourceFiles = []string{"native-source.json", "native-events.jsonl", "answer.json"}
 
 // --- typed errors (the reference exception families) ---------------------------
 
@@ -409,7 +409,7 @@ func verifyNativeSource(directory string, source any, provider string) error {
 	if err := verifyNativeToolEvidence(directory); err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	raw, err := submittedSemantics(directory)
 	if err != nil {
 		return err
 	}
@@ -481,58 +481,56 @@ func handleSessionLine(path, line string, identity any, handle func(map[string]a
 	return handle(record)
 }
 
-// writeNativeAnswer is write_answer: keep the native bytes, then decode them
-// into the business result. Saved and native text are compared after line-ending
-// normalisation (CRLF and a lone CR both read as LF), so a byte difference a
-// text read cannot observe is not a refusal. A framing refusal is a
-// blockedError whose text already carries the NATIVE_RESULT prefix.
-func writeNativeAnswer(directory, text, prefix string) error {
-	return writeNativeAnswerProjected(directory, text, prefix, nil)
-}
-
-// Host transport projection changes decoded values only; raw evidence and the
-// shared framing contract retain the native message exactly.
-func writeNativeAnswerProjected(directory, text, prefix string, project func(map[string]any) (map[string]any, error)) error {
-	raw := filepath.Join(directory, "answer.raw.txt")
-	originalRaw := text
-	if _, statErr := os.Stat(raw); statErr == nil {
-		body, err := os.ReadFile(raw)
-		if err != nil {
-			return err
-		}
-		if normalizeNewlines(string(body)) != normalizeNewlines(text) {
-			return &blockedError{message: prefix + "_RESULT: saved output differs"}
-		}
-		originalRaw = string(body)
-	} else if os.IsNotExist(statErr) {
-		if _, err := nativePathEvidence(directory, text, true); err != nil {
-			return err
-		}
-		if err := os.WriteFile(raw, []byte(text), 0o644); err != nil {
-			return err
-		}
-	} else {
-		return statErr
-	}
-	if _, err := nativePathEvidence(directory, originalRaw, false); err != nil {
+// Submitted semantics are payload evidence; native events still prove completion.
+func writeSubmittedAnswer(directory string) error {
+	body, err := submittedSemantics(directory)
+	if err != nil {
 		return err
 	}
-	result, refusal := FrameResult(text)
-	if refusal != "" {
-		return &blockedError{message: refusal}
-	}
-	if project != nil {
-		var err error
-		result, err = project(result)
-		if err != nil {
-			return err
+	path := filepath.Join(directory, "answer.json")
+	original, err := os.ReadFile(path)
+	if err == nil {
+		if !bytes.Equal(original, body) {
+			return &blockedError{message: "NATIVE_RESULT: saved semantics differ from original tool submission"}
 		}
+		return nil
 	}
-	return writeAtomicJSON(filepath.Join(directory, "answer.json"), result)
+	if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := nativePathEvidence(directory, string(body), true); err != nil {
+		return err
+	}
+	return os.WriteFile(path, body, 0600)
 }
 
-// normalizeNewlines maps every line ending (LF, CRLF or a lone CR) to LF: the
-// saved answer is compared as text, not as bytes.
+func submittedSemantics(directory string) ([]byte, error) {
+	if err := verifyNativeToolEvidence(directory); err != nil {
+		return nil, err
+	}
+	proof, err := fileProofOf(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		return nil, err
+	}
+	facts, err := nativeToolFacts(directory)
+	if err != nil {
+		return nil, err
+	}
+	for _, fact := range facts {
+		if fact.Kind == "semantics" && resolveNativePath(fact.Job) == resolveNativePath(directory) && fact.RequestDigest == textOf(proof["sha256"]) {
+			if err := verifyNativeToolFact(fact, directory, fact.Action, fact.Workspace); err != nil {
+				return nil, err
+			}
+			if err := verifySemanticCall(directory, []byte(fact.Content)); err != nil {
+				return nil, err
+			}
+			return []byte(fact.Content), nil
+		}
+	}
+	return nil, &blockedError{message: "NATIVE_RESULT: current invocation has no submitted semantic tool evidence"}
+}
+
+// normalizeNewlines splits native diagnostic streams with LF, CRLF or CR endings.
 func normalizeNewlines(text string) string {
 	if !strings.ContainsRune(text, '\r') {
 		return text
@@ -575,7 +573,7 @@ func evidenceSource(directory, provider string, identity any, extra map[string]a
 		files[name] = proof
 	}
 	receipt["files"] = files
-	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	raw, err := submittedSemantics(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -597,43 +595,14 @@ func evidenceSource(directory, provider string, identity any, extra map[string]a
 	return receipt, nil
 }
 
-// reconcileCompletedOutput recovers only a completed native turn whose
-// result framing was refused. The
-// original process record is never rewritten; the caller-supplied recover
-// re-observes the evidence.
-func reconcileCompletedOutput(directory string, process any, prefix string,
-	eligible func(original string) bool, recover func() (map[string]any, error)) (map[string]any, error) {
-	errorPath := filepath.Join(directory, "native-error.json")
-	exists := true
-	original := ""
-	if _, statErr := os.Stat(errorPath); statErr == nil {
-		record, err := readJSONFile(errorPath)
-		if err != nil {
-			return nil, err
-		}
-		original, _ = getOrOf(record, "error", "").(string)
-	} else if os.IsNotExist(statErr) {
-		exists = false
-	} else {
-		return nil, statErr
+// recoverNativeSource observes the original successful process without replay.
+func recoverNativeSource(directory string, process any, prefix string, observe func() (map[string]any, error)) (map[string]any, error) {
+	if !valuesEqual(getOf(process, "exit_code"), 0) || textOf(getOrOf(process, "error", "")) != "" {
+		return nil, &blockedError{message: prefix + "_RECONCILE: original native process did not complete successfully"}
 	}
-	// Only a result-framing failure of an otherwise completed process can be
-	// replayed. A runtime or transport failure is never laundered into a result.
-	// The process record's error is a text that is empty when the supervisor
-	// recorded no message.
-	processError, _ := getOf(process, "error").(string)
-	if !valuesEqual(getOf(process, "exit_code"), 1) || processError != "" || !exists || !eligible(original) {
-		return nil, &blockedError{message: prefix + "_RECONCILE: not a completed formatting-only failure"}
-	}
-	source, err := recover()
+	source, err := observe()
 	if err != nil {
 		return nil, err
-	}
-	source["reconciliation"] = map[string]any{
-		"kind":               "completed-output-format",
-		"original_exit_code": 1,
-		"original_error":     original,
-		"new_model_calls":    0,
 	}
 	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
 		return nil, err

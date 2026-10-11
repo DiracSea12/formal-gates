@@ -181,7 +181,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		t.Fatal(err)
 	}
 	s.request["binding"] = binding
-	s.peer.Answer = codexPeerAnswer(codexPlain(t, s.request["schema"]), map[string]any{"interruptionReason": "The local peer needs an explicit user decision"}).(map[string]any)
+	s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The local peer needs an explicit user decision"}).(map[string]any)
 	s.peer.StrictSchema = true
 	s.runtime = filepath.Join(admission.Target, "bin", "formal-gates")
 	s.save(t)
@@ -681,7 +681,7 @@ func stageNativeDevelopment(t *testing.T, f *facade.Facade, s *codexScenario) (f
 		t.Fatal(err)
 	}
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.development.batch" {
+		if input.Handler == "engine.development.batch.v2" {
 			ref := run.WorkerMaterials[id]
 			body, err := os.ReadFile(ref.Path)
 			if err != nil {
@@ -732,7 +732,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 			t.Fatal(err)
 		}
 		for id, input := range run.ValidationInputs {
-			if input.Handler == "engine.gate" {
+			if input.Handler == "engine.gate.v2" {
 				gate = id
 			}
 		}
@@ -756,7 +756,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	var ref facade.WorkerMaterial
 	var observation *protocol.ObservationInput
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.validation.observation" {
+		if input.Handler == "engine.validation.observation.v2" {
 			ref, observation = run.WorkerMaterials[id], input.Observation
 		}
 	}
@@ -1217,7 +1217,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				s.request = request
 				s.directory = directory
 				s.peer.Mode = ""
-				s.peer.Answer = codexPeerAnswer(codexPlain(t, request["schema"]), map[string]any{"interruptionReason": "The original resumed task needs another user decision"}).(map[string]any)
+				s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The original resumed task needs another user decision"}).(map[string]any)
 				s.save(t)
 			}
 			out := call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")

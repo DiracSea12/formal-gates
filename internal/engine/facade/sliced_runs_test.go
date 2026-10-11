@@ -651,7 +651,7 @@ func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
 				t.Fatalf("selected gates did not complete: %+v", waves)
 			}
 			for _, input := range child.run.ValidationInputs {
-				if input.Handler == "engine.qa.execution" || input.Handler == "engine.qa.design" {
+				if input.Handler == "engine.qa.execution.v2" || input.Handler == "engine.qa.design.v2" {
 					t.Fatalf("QA-free route dispatched QA work: %+v", input)
 				}
 			}

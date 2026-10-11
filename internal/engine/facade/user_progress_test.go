@@ -26,7 +26,7 @@ func workerNumberForAction(run Run, action string) int {
 }
 func TestSupplementaryMessageKeepsOriginalActionAndUncertainDeliveryAcrossReopen(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch")
+	action, _ := d.action("engine.development.batch.v2")
 	d.receipt(action)
 	before, err := d.f.engine.Load()
 	if err != nil {
@@ -93,7 +93,7 @@ func TestSupplementaryMessageKeepsOriginalActionAndUncertainDeliveryAcrossReopen
 }
 func TestProgressUsesActualProcessesAndCursorWithoutCallingOrWriting(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch")
+	action, _ := d.action("engine.development.batch.v2")
 	initial, err := d.f.ProgressSince(0, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -15,7 +15,7 @@ func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
 			key := runtime.TaskKey{Node: "qa", Step: "design", Scope: "current-duty"}
 			pending := PendingAction{ActionID: "retry", Task: key, AttemptID: "current-attempt"}
 			binding := WorkBinding{Task: key, Generation: 2, RequirementRevision: "confirmed"}
-			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design"}}}}
+			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v2"}}}}
 			state := &State{DispatchBindings: map[string]WorkBinding{"retry": binding, "rejected": binding}, Attempts: map[runtime.TaskKey]Attempt{key: {PreviousAction: "rejected"}}, RejectedResults: map[string]RejectedResult{"rejected": {ActionID: "rejected", Task: key, AttemptID: "original-attempt", Status: "REJECTED_INVALID_RESULT", Reason: "original semantic defect", Payload: WorkerResult{Outcome: OutcomePass}}}, RecoveryRecords: []RecoveryRecord{{ActionID: "rejected", Task: key, AttemptID: "original-attempt", Detail: "original semantic defect"}}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
 			switch changed {
 			case "task":
@@ -40,7 +40,7 @@ func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
 func TestValidationInputIssuesReviewScopeFromBaseline(t *testing.T) {
 	key := runtime.TaskKey{Node: "qa", Step: "review", Scope: "1:BLACKBOX:case-version"}
 	pending := PendingAction{ActionID: "review-action", Task: key}
-	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale"}}}}
+	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
 	set := &CaseSet{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}
 	state := &State{RunID: "run", SelectedGates: []string{"blackbox"}, DispatchBindings: map[string]WorkBinding{pending.ActionID: {Task: key, RequirementRevision: "issued-revision"}}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: set}}}
 	if input := state.validationInput(pending, cd); input.ReviewScope != coverage.ScopeFull || input.Binding.RequirementRevision != "issued-revision" {

@@ -506,7 +506,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 		finding = id
 	}
 	resolveGateFinding(child, finding, wave.ID)
-	repair, input := child.action("engine.repair")
+	repair, input := child.action("engine.repair.v2")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\n// documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
 			key := runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID}
 			basis.Definition.ExternalSteps = append(basis.Definition.ExternalSteps, key)
-			if payload.Handler == "engine.qa.design" {
+			if payload.Handler == "engine.qa.design.v2" {
 				if payload.Retry != nil {
 					attempts = payload.Retry.MaxAttempts
 				}

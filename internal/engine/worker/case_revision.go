@@ -66,26 +66,15 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 				manifest.RemoveCases = append(manifest.RemoveCases, original.CaseID)
 				continue
 			}
-			sharedChoices := change.SharedSteps
-			change.SharedSteps = nil
-			raw, err := json.Marshal(change)
-			if err != nil {
-				return nil, err
+			ids := []string{}
+			for _, step := range input.Manifest.SharedSteps {
+				ids = append(ids, step.ID)
 			}
-			if err := json.Unmarshal(raw, &item); err != nil {
+			if err := applyCaseChange(&item, change, ids); err != nil {
 				return nil, err
-			}
-			if sharedChoices != nil {
-				ids := []string{}
-				for _, step := range input.Manifest.SharedSteps {
-					ids = append(ids, step.ID)
-				}
-				item.SharedSteps, err = selectIDs(*sharedChoices, ids)
-				if err != nil {
-					return nil, err
-				}
 			}
 		}
+
 		manifest.Cases = append(manifest.Cases, item)
 	}
 	for _, original := range input.Manifest.SharedSteps {
@@ -99,14 +88,11 @@ func reviseCases(input *protocol.ValidationInput, changes *CaseRevisions) (*Mani
 				manifest.RemoveSharedSteps = append(manifest.RemoveSharedSteps, original.ID)
 				continue
 			}
-			raw, err := json.Marshal(changes.SharedSteps[index])
-			if err != nil {
-				return nil, err
-			}
-			if err := json.Unmarshal(raw, &item); err != nil {
+			if err := applySharedStepChange(&item, changes.SharedSteps[index]); err != nil {
 				return nil, err
 			}
 		}
+
 		manifest.SharedSteps = append(manifest.SharedSteps, item)
 	}
 	return manifest, nil
@@ -125,4 +111,53 @@ func validateRemoval(change any) error {
 		return fmt.Errorf("a removed QA item cannot also modify semantic content")
 	}
 	return nil
+}
+
+// Presence in the semantic input controls inheritance for both design entries
+// and affected-case revisions; no retained text is supplied by the model.
+func (item *DesignedCase) UnmarshalJSON(raw []byte) error {
+	type body DesignedCase
+	if err := decodeObject(raw, (*body)(item)); err != nil {
+		return err
+	}
+	var change CaseChange
+	if err := json.Unmarshal(raw, &change); err != nil {
+		return err
+	}
+	item.changes = &change
+	return nil
+}
+func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
+	type body DesignedSharedStep
+	if err := decodeObject(raw, (*body)(item)); err != nil {
+		return err
+	}
+	var change SharedStepChange
+	if err := json.Unmarshal(raw, &change); err != nil {
+		return err
+	}
+	item.changes = &change
+	return nil
+}
+func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
+	selected := change.SharedSteps
+	change.SharedSteps = nil
+	raw, err := json.Marshal(change)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, item); err != nil {
+		return err
+	}
+	if selected != nil {
+		item.SharedSteps, err = selectIDs(*selected, stepIDs)
+	}
+	return err
+}
+func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
+	raw, err := json.Marshal(change)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, item)
 }

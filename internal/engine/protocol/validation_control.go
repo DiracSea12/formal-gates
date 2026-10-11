@@ -279,7 +279,7 @@ func (e *Engine) ensureRetryAsks(s *State, nextRevision uint64) bool {
 	for key, a := range s.EndedAttempts {
 		if s.endedWorkCurrent(a, e.cfg.Definition) && a.RetryExhausted && !a.AwaitingResult {
 			request := ValidationRequest{Kind: "RETRY", Target: key.String()}
-			if a.Work != nil && a.Work.WaveID == "" && (s.validationRole(key, e.cfg.Definition) == "engine.qa.design" || s.validationRole(key, e.cfg.Definition) == "engine.qa.review.rationale") {
+			if a.Work != nil && a.Work.WaveID == "" && (s.validationRole(key, e.cfg.Definition) == "engine.qa.design.v2" || s.validationRole(key, e.cfg.Definition) == "engine.qa.review.rationale.v2") {
 				request.Mode = s.validationMode(key)
 			}
 			changed = s.ensureValidationAsk(request, nextRevision) || changed

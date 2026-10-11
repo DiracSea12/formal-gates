@@ -52,6 +52,7 @@ type WorkerInput struct {
 	Handler                  string                                  `json:"handler"`
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
 	Scope                    *WorkerScope                            `json:"scope,omitempty"`
+	ApprovedPlan             *GranularityReview                      `json:"approvedPlan,omitempty"`
 	ApprovedChecks           []DevelopmentCheck                      `json:"approvedChecks,omitempty"`
 	Review                   *WorkerReviewInput                      `json:"review,omitempty"`
 	Validation               *ValidationInput                        `json:"validation,omitempty"`
@@ -96,7 +97,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if _, rejected := s.RejectedResults[id]; rejected {
 		return WorkerInput{}, false
 	}
-	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch" || s.validationRole(pending.Task, cd) == "engine.repair") && !s.developmentContinuation(id, cd) {
+	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v2" || s.validationRole(pending.Task, cd) == "engine.repair.v2") && !s.developmentContinuation(id, cd) {
 		return WorkerInput{}, false
 	}
 	input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
@@ -123,13 +124,13 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	} else {
 		return WorkerInput{}, false
 	}
-	if input.Handler == "engine.qa.execution" {
+	if input.Handler == "engine.qa.execution.v2" {
 		wave := s.validationWave(input.Validation.Binding.WaveID)
 		if wave == nil || !s.qaComparisonReady(wave.Targets[pending.Task.String()], cd) {
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair" {
+	if input.Handler == "engine.repair.v2" {
 		input.ApprovedChecks = s.fullProjectChecks()
 		_, plan, _ := s.confirmedDevelopmentPlan()
 		if plan != nil {
@@ -142,6 +143,9 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 				}
 			}
 		}
+	}
+	if input.Handler == "engine.repair.v2" || input.Review != nil && input.Review.Action == review.StartReadiness {
+		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
 	}
 	return input, true
 }

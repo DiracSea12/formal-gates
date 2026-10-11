@@ -92,6 +92,11 @@ func TestClaudeCLI(t *testing.T) {
 	}
 	fmt.Fprint(os.Stderr, peer.Stderr)
 	for _, event := range peer.Events {
+		if getOf(event, "type") == "result" && getOf(event, "is_error") == false && getOf(event, "structured_output") != nil {
+			peerSubmitSemantics(textOf(listOf(getOf(getOf(getOf(decodeTestJSON(t, argsFlag(peer.Args, "--mcp-config")), "mcpServers"), "formal-gates"), "args"))[2]), getOf(event, "structured_output"))
+		}
+	}
+	for _, event := range peer.Events {
 		body, _ := json.Marshal(event)
 		os.Stdout.Write(append(body, '\n'))
 	}
@@ -142,7 +147,7 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 	script := filepath.Join(root, "peer.json")
 	binding["environment"] = map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config, "CLAUDE_PEER_SCRIPT": script}
 	prompt := "Review the bound task for " + identity
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,8 +176,7 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 
 func (s *claudeScenario) save(t *testing.T, toolExecutable ...string) {
 	t.Helper()
-	schema := mustCanonical(t, s.request["schema"])
-	s.peer.Args = []string{"-p", textOf(s.request["prompt"]), "--output-format", "stream-json", "--verbose", "--include-hook-events", "--json-schema", schema}
+	s.peer.Args = []string{"-p", textOf(s.request["prompt"]), "--output-format", "stream-json", "--verbose", "--include-hook-events"}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +258,7 @@ func TestClaudeNativeCompletionAndObservation(t *testing.T) {
 				t.Fatalf("root answer = %v", answer)
 			}
 			body, _ := json.Marshal(answer)
-			if _, err := worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil); err != nil {
+			if _, err := worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			before := proofsOf(t, s.directory, nativeSourceFiles)
@@ -439,7 +443,7 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 		}
 		answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
 		body, _ := json.Marshal(answer)
-		_, err = worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil)
+		_, err = worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil)
 		if (err != nil) != invalidRole {
 			t.Fatalf("role acceptance = %v, invalid=%t", err, invalidRole)
 		}

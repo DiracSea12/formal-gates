@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "15",
+  "version": "16",
   "stateSchemaVersion": "2",
   "writer": "engine",
   "transactionOwner": "engine",
@@ -22,7 +22,7 @@
       "nodeId": "children",
       "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -48,7 +48,7 @@
       "nodeId": "children",
       "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "children.prepare"
       ],
@@ -78,7 +78,7 @@
       "nodeId": "children",
       "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "children.workspace"
       ],
@@ -104,7 +104,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -120,7 +120,7 @@
       "nodeId": "entry",
       "ordinal": 1,
       "kind": "DURABLE",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "entry.parse"
       ],
@@ -153,7 +153,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "entry.persist"
       ],
@@ -176,7 +176,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.review.worker",
+        "handler": "engine.review.worker.v2",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "product-review",
         "timeoutNs": 0
@@ -187,7 +187,7 @@
       "nodeId": "review",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.worker"
       ],
@@ -210,7 +210,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.readiness.plan",
+        "handler": "engine.readiness.plan.v2",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "start-readiness",
         "timeoutNs": 0
@@ -221,7 +221,7 @@
       "nodeId": "validation",
       "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -251,7 +251,7 @@
       "nodeId": "validation",
       "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -281,7 +281,7 @@
       "nodeId": "validation",
       "ordinal": 9,
       "kind": "HOST_ACTION",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -311,7 +311,7 @@
       "nodeId": "validation",
       "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -334,7 +334,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.repair",
+        "handler": "engine.repair.v2",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -347,7 +347,7 @@
       "nodeId": "validation",
       "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -370,7 +370,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.development.batch",
+        "handler": "engine.development.batch.v2",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -383,7 +383,7 @@
       "nodeId": "validation",
       "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -406,7 +406,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.merge.resolve",
+        "handler": "engine.merge.resolve.v2",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -419,7 +419,7 @@
       "nodeId": "validation",
       "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -442,7 +442,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.qa.design",
+        "handler": "engine.qa.design.v2",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -455,7 +455,7 @@
       "nodeId": "validation",
       "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -478,7 +478,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.qa.execution",
+        "handler": "engine.qa.execution.v2",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -491,7 +491,7 @@
       "nodeId": "validation",
       "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -514,7 +514,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.qa.review.rationale",
+        "handler": "engine.qa.review.rationale.v2",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "unaffiliated",
         "timeoutNs": 0,
@@ -528,7 +528,7 @@
       "nodeId": "validation",
       "ordinal": 16,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -551,7 +551,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.repair.verify",
+        "handler": "engine.repair.verify.v2",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -564,7 +564,7 @@
       "nodeId": "validation",
       "ordinal": 17,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -587,7 +587,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.gate",
+        "handler": "engine.gate.v2",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "unaffiliated",
         "timeoutNs": 0,
@@ -601,7 +601,7 @@
       "nodeId": "validation",
       "ordinal": 18,
       "kind": "AGENT",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],
@@ -624,7 +624,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.validation.observation",
+        "handler": "engine.validation.observation.v2",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -637,7 +637,7 @@
       "nodeId": "validation",
       "ordinal": 19,
       "kind": "HOST_ACTION",
-      "definitionVersion": "15",
+      "definitionVersion": "16",
       "dependencies": [
         "review.readiness"
       ],

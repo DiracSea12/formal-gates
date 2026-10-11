@@ -28,7 +28,7 @@ func (s *State) addChildValidationTargets(w *ValidationWave, cd *compiler.Compil
 				continue
 			}
 			target := &ValidationTarget{SliceID: sliceID, Kind: "GATE", Gate: gate, Status: "PENDING"}
-			target.Task = pipelineTask(cd, "engine.gate", w.ID+":slice:"+sliceID+":"+gate)
+			target.Task = pipelineTask(cd, "engine.gate.v2", w.ID+":slice:"+sliceID+":"+gate)
 			gateView := view.Gates[gate]
 			if view.ReceiptDigest == receipt.Digest && view.BaseSnapshot == s.BaseSnapshot && gateView.SourceDigest != "" && gateView.SourceDigest == gateView.CandidateDigest && gateView.Equal {
 				target.Status = "PASS"

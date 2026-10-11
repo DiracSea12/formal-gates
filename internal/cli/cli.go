@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"formal-gates/internal/engine/definition"
@@ -91,6 +92,12 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runInstall(args[1:], streams)
 	case "uninstall":
 		return runUninstall(args[1:], streams)
+	case "requirement":
+		return runCurrentRequirement(args[1:], streams)
+	case "native":
+		return runNativeInteraction(args[1:], streams)
+	case "settings":
+		return runSettings(args[1:], streams)
 	case "workflow":
 		return runWorkflow(program, args[1:], streams)
 	case "hook":
@@ -317,7 +324,7 @@ func runUninstall(args []string, streams IO) (int, error) {
 
 func runWorkflow(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") && !isHelpArg(args[0]) {
-		return 1, fmt.Errorf("workflow subcommand is required (start|drive|submit|show|status|next|diagnose|guard-preview)")
+		return 1, fmt.Errorf("workflow subcommand is required (start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan)")
 	}
 	if isHelpArg(args[0]) {
 		printWorkflowUsage(streams.Stdout, program)
@@ -470,8 +477,9 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "program integration: exact engine run id")
 	runChoice := fs.Int("run", 0, "select a run by its displayed number")
-	draftPath := fs.String("decision", "", "semantic control choices JSON; - reads stdin")
+	draftPath := fs.String("decision", "", "program integration: typed control input file; - reads stdin")
 	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated control confirmation")
+	arguments := registerControlArguments(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -485,9 +493,16 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	if f == nil {
 		return 1, fmt.Errorf("workflow next is UNSUPPORTED_RUN_VERSION: current engine run not found; use workflow diagnose")
 	}
-	if *draftPath == "" {
+	input, provided, err := arguments.input()
+	if err != nil {
+		return 1, err
+	}
+	if provided && *draftPath != "" {
+		return 1, fmt.Errorf("select semantic flags or machine decision input")
+	}
+	if *draftPath == "" && !provided {
 		if *saveCandidate != "" {
-			return 1, fmt.Errorf("--save-candidate requires --decision")
+			return 1, fmt.Errorf("--save-candidate requires semantic choice flags or program decision input")
 		}
 		if *machine {
 			next, err := f.Next()
@@ -495,9 +510,10 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 		}
 		return printCurrentWorkflowRun(streams, f, nil)
 	}
-	var input facade.ControlInput
-	if err := readWorkflowInput(*draftPath, streams.Stdin, &input); err != nil {
-		return 1, err
+	if !provided {
+		if err := readWorkflowInput(*draftPath, streams.Stdin, &input); err != nil {
+			return 1, err
+		}
 	}
 	prepare := f.PrepareCurrentControl
 	if *machine {
@@ -560,8 +576,16 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	sourcePath := fs.String("native-source", "", "original native source receipt JSON")
 	confirmationPath := fs.String("confirmation", "", "complete control candidate saved by workflow next after the user confirms its displayed content")
 	singleStep := fs.Bool("single-step", false, "diagnostic: accept this event without consuming subsequent native workers")
+	arguments := registerControlArguments(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	input, provided, err := arguments.input()
+	if err != nil {
+		return 1, err
+	}
+	if provided && (*confirmationPath != "" || *materialPath != "") {
+		return 1, fmt.Errorf("semantic flags cannot modify a saved confirmation or worker result")
 	}
 	var saved *facade.ControlCandidate
 	if *confirmationPath != "" && *materialPath == "" {
@@ -623,12 +647,13 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if saved != nil {
 		event = saved.Event
 	} else {
-		var input facade.ControlInput
-		if err := readWorkflowInput("-", streams.Stdin, &input); err != nil {
-			return 1, fmt.Errorf("workflow submit requires semantic control choices, not a manually assembled event: %w", err)
+		if !provided {
+			if err := readWorkflowInput("-", streams.Stdin, &input); err != nil {
+				return 1, fmt.Errorf("workflow submit requires semantic request flags or program input: %w", err)
+			}
 		}
 		if input.Request == "" {
-			return 1, fmt.Errorf("user decisions require the complete candidate saved by workflow next --decision --save-candidate, then submit --confirmation after confirmation")
+			return 1, fmt.Errorf("user decisions require the complete candidate saved by workflow next with semantic choice flags and --save-candidate, then submit --confirmation after confirmation")
 		}
 		prepare := f.PrepareCurrentControl
 		if *machine {
@@ -723,7 +748,7 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		vcs := fs.String("vcs", "git", "external VCS name")
 		scope := fs.String("scope", "", "optional logical review scope")
-		contextPath := fs.String("save-context", "", "save original review comparison and numeric location evidence; defaults to a temporary file")
+		contextPath := fs.String("save-context", "", "save original review comparison and numeric location evidence; defaults to a program-selected review payload")
 		ids, code, err, done := parseFlagSetAllowPositional(fs, args, streams.Stdout)
 		if done {
 			return code, err
@@ -750,7 +775,11 @@ func runGate(program string, args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		if *contextPath == "" {
-			file, err := os.CreateTemp("", "formal-gates-review-*.json")
+			directory := filepath.Join(*root, ".gates", "tmp", "gate-review")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				return 1, err
+			}
+			file, err := os.CreateTemp(directory, "review-*.json")
 			if err != nil {
 				return 1, err
 			}
@@ -775,20 +804,38 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		return 0, nil
 	case "report":
 		fs := newFlagSet("gate report", streams)
-		contextPath := fs.String("context", "", "original review context file saved by gate run")
+		contextPath := fs.String("context", "", "program integration: original review context file")
+		root := fs.String("root", ".", "project root")
+		reviewChoice := fs.Int("review", 0, "select original standalone review by displayed number")
+		arguments := registerStandaloneResultArguments(fs)
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
 		if *contextPath == "" {
-			return 1, fmt.Errorf("gate report requires the original --context from gate run")
+			selected, done, err := selectStandaloneContext(*root, *reviewChoice, streams.Stdout)
+			if err != nil {
+				return 1, err
+			}
+			if !done {
+				return 0, nil
+			}
+			*contextPath = selected
+		} else if *reviewChoice != 0 {
+			return 1, fmt.Errorf("select original review number or program context file")
 		}
 		var reviewContext validate.StandaloneGateContext
 		if err := readJSONFileInto(*contextPath, &reviewContext); err != nil {
 			return 1, err
 		}
-		payload, err := io.ReadAll(streams.Stdin)
+		payload, provided, err := arguments.input()
 		if err != nil {
 			return 1, err
+		}
+		if !provided {
+			payload, err = io.ReadAll(streams.Stdin)
+			if err != nil {
+				return 1, err
+			}
 		}
 		result, err := validate.ValidateStandaloneGateResult(payload, reviewContext)
 		if err != nil {
@@ -1170,7 +1217,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|set|remove\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -1182,11 +1229,11 @@ func printRegistryUsage(w io.Writer, program string) {
 }
 
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printGateUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s gate <subcommand>\n\nSubcommands:\n  run <ids...>  assemble one detached review prompt per gate id (outside any run)\n  report        validate and display a standalone gate review result from stdin\n\nRun `%s gate <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s gate <subcommand>\n\nSubcommands:\n  run <ids...>  assemble one detached review prompt per gate id (outside any run)\n  report        construct and display a standalone gate result from semantic flags\n\nRun `%s gate <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printHookUsage(w io.Writer, program string) {
@@ -1258,18 +1305,52 @@ func readJSONFileInto(path string, value any) error {
 func runWorkflowProgress(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow progress", streams)
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "current run")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	machine := fs.Bool("machine", false, "print complete evidence projection")
-	after := fs.Uint64("after-revision", 0, "last observed progress revision")
+	after := fs.Uint64("after-revision", 0, "program integration: last observed progress revision")
+	afterFile := fs.String("after-file", "", "read the revision from original saved progress output")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("current engine run not found")
+	}
+	if *afterFile != "" {
+		if *after != 0 {
+			return 1, fmt.Errorf("select original progress file or exact revision")
+		}
+		var cursor struct {
+			Revision uint64 `json:"revision"`
+			RunID    string `json:"runId"`
+			Root     string `json:"root"`
+		}
+		var fields map[string]json.RawMessage
+		if err := readJSONFileInto(*afterFile, &fields); err != nil {
+			return 1, err
+		}
+		for _, field := range []struct {
+			name  string
+			value any
+		}{{"revision", &cursor.Revision}, {"root", &cursor.Root}, {"runId", &cursor.RunID}} {
+			if err := json.Unmarshal(fields[field.name], field.value); err != nil {
+				return 1, fmt.Errorf("original progress %s: %w", field.name, err)
+			}
+		}
+		if cursor.RunID != *runID {
+			return 1, fmt.Errorf("progress cursor belongs to another run")
+		}
+		if cursor.Root == "" || !vcs.SamePath(cursor.Root, *root) {
+			return 1, fmt.Errorf("progress cursor belongs to another project")
+		}
+		*after = cursor.Revision
 	}
 	progress, err := f.ProgressSince(*after, harness.NativeJobAlive)
 	if err != nil || *machine {
@@ -1285,18 +1366,33 @@ func runWorkflowProgress(args []string, streams IO) (int, error) {
 func runWorkflowMessage(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow message", streams)
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "current run")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	worker := fs.Int("worker", 0, "current worker number from show")
-	text := fs.String("text", "", "supplementary user text")
+	text := fs.String("text", "", "new supplementary text")
+	textFile := fs.String("text-file", "", "read original supplementary text bytes from a file")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("current engine run not found")
+	}
+	if *textFile != "" {
+		if *text != "" {
+			return 1, fmt.Errorf("choose authored text or original text file")
+		}
+		body, err := os.ReadFile(*textFile)
+		if err != nil {
+			return 1, err
+		}
+		*text = string(body)
 	}
 	message, err := f.QueueWorkerMessage(*worker, *text)
 	return printValue(streams.Stdout, message, err)
@@ -1305,17 +1401,21 @@ func runWorkflowMessage(args []string, streams IO) (int, error) {
 func runWorkflowHandoff(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow handoff", streams)
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "current run")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	worker := fs.Int("worker", 0, "current developer number from show")
 	reason := fs.String("reason", "", "actual user reason")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("current engine run not found")
 	}
 	_, err = f.RequestWorkerHandoff(*worker, *reason)
@@ -1324,21 +1424,38 @@ func runWorkflowHandoff(args []string, streams IO) (int, error) {
 func runWorkflowReplan(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow replan", streams)
 	root := fs.String("root", ".", "repository root")
-	runID := fs.String("run-id", "", "current run")
-	inputPath := fs.String("decision", "", "semantic carry/redo and impact choices JSON")
+	runID := fs.String("run-id", "", "program integration: exact engine run id")
+	runChoice := fs.Int("run", 0, "select a run by its displayed number")
+	inputPath := fs.String("decision", "", "program integration: typed requirement change input file")
 	save := fs.String("save-candidate", "", "save original control candidate for confirmation")
+	arguments := registerControlArguments(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, selected, err := selectWorkflowRun(*root, runID, *runChoice, streams.Stdout)
 	if err != nil {
 		return 1, err
 	}
-	if !ok {
+	if !selected {
+		return 0, nil
+	}
+	if f == nil {
 		return 1, fmt.Errorf("current engine run not found")
 	}
+	control, provided, err := arguments.input()
+	if err != nil {
+		return 1, err
+	}
+	if provided && *inputPath != "" {
+		return 1, fmt.Errorf("select semantic flags or machine decision input")
+	}
 	var input facade.RequirementChangeInput
-	if err := readWorkflowInput(*inputPath, streams.Stdin, &input); err != nil {
+	if provided {
+		if control.Requirement == nil {
+			return 1, fmt.Errorf("replan requires requirement semantic fields")
+		}
+		input = *control.Requirement
+	} else if err := readWorkflowInput(*inputPath, streams.Stdin, &input); err != nil {
 		return 1, err
 	}
 	candidate, err := f.PrepareReplan(input)
@@ -1351,4 +1468,34 @@ func runWorkflowReplan(args []string, streams IO) (int, error) {
 		}
 	}
 	return printValue(streams.Stdout, workflowConfirmationView(candidate), nil)
+}
+
+func runCurrentRequirement(args []string, streams IO) (int, error) {
+	if workflowFlag(args, "file", "") != "" {
+		return runRequirement(args, streams)
+	}
+	root := workflowFlag(args, "root", ".")
+	id := workflowFlag(args, "run-id", "")
+	position, err := strconv.Atoi(workflowFlag(args, "run", "0"))
+	if err != nil {
+		return 1, err
+	}
+	f, selected, err := selectWorkflowRun(root, &id, position, streams.Stdout)
+	if err != nil {
+		return 1, err
+	}
+	if !selected {
+		return 0, nil
+	}
+	source := ""
+	if f != nil {
+		run, err := f.Show()
+		if err != nil {
+			return 1, err
+		}
+		if run.IntakeConfirmationReceipt != nil {
+			source = run.IntakeConfirmationReceipt.RequirementSource
+		}
+	}
+	return runRequirementWithSource(args, streams, source)
 }

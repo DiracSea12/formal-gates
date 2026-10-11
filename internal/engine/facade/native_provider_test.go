@@ -209,8 +209,8 @@ func nativeIncompleteState(t *testing.T, d *validationDriver, operation string) 
 
 func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	t.Helper()
-	dev, di := d.action("engine.development.batch")
-	design, qi := d.action("engine.qa.design")
+	dev, di := d.action("engine.development.batch.v2")
+	design, qi := d.action("engine.qa.design.v2")
 	if len(d.run.PendingActions) != 2 {
 		t.Fatal("development and blackbox design are not concurrent")
 	}
@@ -226,7 +226,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
-	id, in := d.action("engine.qa.review.rationale")
+	id, in := d.action("engine.qa.review.rationale.v2")
 	review := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &review})
 	d.drive()
@@ -235,7 +235,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	d.drive()
-	id, in = d.action("engine.qa.design")
+	id, in = d.action("engine.qa.design.v2")
 	if in.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox {
 		t.Fatal("whitebox authoring not selected")
 	}
@@ -250,7 +250,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.drive()
-	id, in = d.action("engine.qa.review.rationale")
+	id, in = d.action("engine.qa.review.rationale.v2")
 	review = approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &review})
 	d.drive()
@@ -261,7 +261,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		t.Fatal("blackbox/whitebox/quality did not issue together")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution" || input.Handler == "engine.gate" {
+		if input.Handler == "engine.qa.execution.v2" || input.Handler == "engine.gate.v2" {
 			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +271,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		var id string
 		var input protocol.ValidationInput
 		for action, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
+			if in.Handler == "engine.qa.execution.v2" || in.Handler == "engine.gate.v2" {
 				id, input = action, in
 				break
 			}
@@ -280,7 +280,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 			t.Fatalf("unexpected native validation task: %+v", d.run.ValidationInputs)
 		}
 		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-		if input.Handler == "engine.qa.execution" {
+		if input.Handler == "engine.qa.execution.v2" {
 			report := executionFor(input)
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -531,7 +531,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command removal"}})
 			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 			d.drive()
-			action, input := d.action("engine.development.batch")
+			action, input := d.action("engine.development.batch.v2")
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
 				t.Fatal(err)
 			}
@@ -550,7 +550,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 					t.Fatalf("frozen snapshot retained deleted content: %q %v", entry, err)
 				}
 			}
-			gate, gateInput := d.action("engine.gate")
+			gate, gateInput := d.action("engine.gate.v2")
 			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
@@ -677,7 +677,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				if !reflect.DeepEqual(before, installationFiles(t, master.f.root)) {
 					t.Fatal("released join replay changed retained material")
 				}
-				design, input := master.action("engine.qa.design")
+				design, input := master.action("engine.qa.design.v2")
 				manifest := simpleManifest(input)
 				for i := range manifest.Cases {
 					manifest.Cases[i].Mode = coverage.CaseMerge
@@ -692,7 +692,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				}
 				master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				master.drive()
-				id, input := master.action("engine.qa.review.rationale")
+				id, input := master.action("engine.qa.review.rationale.v2")
 				review := approvedReview(manifest)
 				master.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &review})
 				master.drive()

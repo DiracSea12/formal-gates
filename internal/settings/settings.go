@@ -72,85 +72,95 @@ func Load(root, home string) (Effective, error) {
 		if err != nil {
 			return e, err
 		}
-		var raw map[string]json.RawMessage
-		if err = json.Unmarshal(data, &raw); err != nil || raw == nil {
-			return e, fmt.Errorf("%s: expected a JSON object: %v", path, err)
-		}
-		for field, value := range raw {
-			if _, ok := e.Sources[field]; !ok {
-				return e, fmt.Errorf("%s: unknown configuration field %q; see references/user-configuration.md", path, field)
-			}
-			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-				return e, fmt.Errorf("%s: %s: null is invalid; remove the field to inherit its default", path, field)
-			}
-		}
-		var in input
-		dec := json.NewDecoder(bytes.NewReader(data))
-		// Exact names (including platform fields) were checked against the one registry above.
-		if err = dec.Decode(&in); err != nil {
-			return e, fmt.Errorf("%s: %w; see references/user-configuration.md for supported fields", path, err)
-		}
-		if err = dec.Decode(new(any)); err != io.EOF {
-			return e, fmt.Errorf("%s: trailing JSON data", path)
-		}
-		if in.TokenCap != nil {
-			if *in.TokenCap < 0 {
-				return e, fmt.Errorf("%s: tokenCap: use a non-negative integer in tokens", path)
-			}
-			if !(path == e.Files[0] && e.Sources["tokenCap"] == legacy) {
-				e.Values.TokenCap = in.TokenCap
-			}
-		}
-		if in.QACapacity != nil {
-			if *in.QACapacity < 1 || *in.QACapacity > 64 {
-				return e, fmt.Errorf("%s: qaCapacity must be 1..64", path)
-			}
-			e.Values.QACapacity = *in.QACapacity
-		}
-
-		if in.Capacity != nil {
-			if *in.Capacity < 1 || *in.Capacity > 64 {
-				return e, fmt.Errorf("%s: capacity: use an integer from 1 to 64", path)
-			}
-			e.Values.Capacity = *in.Capacity
-		}
-		for name, field := range nativeFields {
-			value, present := raw[name]
-			if !present {
-				continue
-			}
-			var decoded string
-			if err := json.Unmarshal(value, &decoded); err != nil {
-				return e, fmt.Errorf("%s: %s: %w", path, name, err)
-			}
-			if field.Validate != nil {
-				if err := field.Validate(decoded); err != nil {
-					return e, fmt.Errorf("%s: %w", path, err)
-				}
-			}
-			e.Values.Native[name] = decoded
-		}
-		if in.Model != nil {
-			if strings.TrimSpace(*in.Model) == "" {
-				return e, fmt.Errorf("%s: model: use a nonempty model identifier or remove the field", path)
-			}
-			e.Values.Model = *in.Model
-		}
-		if in.ReasoningEffort != nil {
-			switch *in.ReasoningEffort {
-			case "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
-			default:
-				return e, fmt.Errorf("%s: reasoningEffort: expected minimal, low, medium, high, xhigh, max, or ultra", path)
-			}
-			e.Values.ReasoningEffort = *in.ReasoningEffort
-		}
-		for field := range raw {
-			if field != "tokenCap" || path != e.Files[0] || e.Sources[field] != legacy {
-				e.Sources[field] = path
-			}
+		if err := applyOverlay(&e, path, data, path == e.Files[0] && e.Sources["tokenCap"] == legacy); err != nil {
+			return e, err
 		}
 	}
 	return e, nil
+}
+
+// applyOverlay is the single-file parser and validator for persisted and edited
+// configuration. A project cap can retain precedence over the user cap field.
+func applyOverlay(e *Effective, path string, data []byte, preserveTokenCap bool) error {
+	nativeFields := host.Configuration()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || raw == nil {
+		return fmt.Errorf("%s: expected a JSON object: %v", path, err)
+	}
+	for field, value := range raw {
+		if _, ok := e.Sources[field]; !ok {
+			return fmt.Errorf("%s: unknown configuration field %q; see references/user-configuration.md", path, field)
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("%s: %s: null is invalid; remove the field to inherit its default", path, field)
+		}
+	}
+	var in input
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// Exact names (including platform fields) were checked against the one registry above.
+	if err := dec.Decode(&in); err != nil {
+		return fmt.Errorf("%s: %w; see references/user-configuration.md for supported fields", path, err)
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("%s: trailing JSON data", path)
+	}
+	if in.TokenCap != nil {
+		if *in.TokenCap < 0 {
+			return fmt.Errorf("%s: tokenCap: use a non-negative integer in tokens", path)
+		}
+		if !preserveTokenCap {
+			e.Values.TokenCap = in.TokenCap
+		}
+	}
+	if in.QACapacity != nil {
+		if *in.QACapacity < 1 || *in.QACapacity > 64 {
+			return fmt.Errorf("%s: qaCapacity must be 1..64", path)
+		}
+		e.Values.QACapacity = *in.QACapacity
+	}
+
+	if in.Capacity != nil {
+		if *in.Capacity < 1 || *in.Capacity > 64 {
+			return fmt.Errorf("%s: capacity: use an integer from 1 to 64", path)
+		}
+		e.Values.Capacity = *in.Capacity
+	}
+	for name, field := range nativeFields {
+		value, present := raw[name]
+		if !present {
+			continue
+		}
+		var decoded string
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			return fmt.Errorf("%s: %s: %w", path, name, err)
+		}
+		if field.Validate != nil {
+			if err := field.Validate(decoded); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+		}
+		e.Values.Native[name] = decoded
+	}
+	if in.Model != nil {
+		if strings.TrimSpace(*in.Model) == "" {
+			return fmt.Errorf("%s: model: use a nonempty model identifier or remove the field", path)
+		}
+		e.Values.Model = *in.Model
+	}
+	if in.ReasoningEffort != nil {
+		switch *in.ReasoningEffort {
+		case "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		default:
+			return fmt.Errorf("%s: reasoningEffort: expected minimal, low, medium, high, xhigh, max, or ultra", path)
+		}
+		e.Values.ReasoningEffort = *in.ReasoningEffort
+	}
+	for field := range raw {
+		if field != "tokenCap" || !preserveTokenCap {
+			e.Sources[field] = path
+		}
+	}
+	return nil
 }
 
 // NativeString reads an adapter-owned option. Load freezes all configured defaults

@@ -8,8 +8,8 @@ package definition
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。
-	WorkflowDefinitionVersion = "15"
+	WorkflowDefinitionVersion = "16"
 	// WorkflowDefinitionDigest 是 canonical 制品字节的 SHA-256 摘要
 	// （sha256: 前缀，与仓库现行格式一致）。
-	WorkflowDefinitionDigest = "sha256:fe4072cc4a9127c08661968b362dfb56b89d3593ee3f1ef5a0f8389ff53ba3b5"
+	WorkflowDefinitionDigest = "sha256:2689521cb511af8cf2ff5de08844dbcdc25dff97f5ceeffd60faaf5eaa7f4017"
 )

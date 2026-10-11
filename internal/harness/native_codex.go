@@ -6,6 +6,7 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, 
 		defer release()
 	}
 	output := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Use the managed workspace interface instead of " + input.Tool}}
-	if getOf(request, "provider") == "codex" && input.Event == "PreToolUse" && resolveNativePath(input.Cwd) == tools.workspace && (input.Tool == nativeWorkspaceTool || input.Tool == "exec" || input.Tool == "wait") {
+	if getOf(request, "provider") == "codex" && input.Event == "PreToolUse" && resolveNativePath(input.Cwd) == tools.workspace && (input.Tool == nativeWorkspaceTool || input.Tool == nativeSemanticTool || input.Tool == "exec" || input.Tool == "wait") {
 		output = map[string]any{}
 	}
 	if err := json.NewEncoder(out).Encode(output); err != nil {
@@ -76,14 +77,14 @@ func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, 
 func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn string) (*nativeReply, error) {
 	callID, _ := getOf(params, "callId").(string)
 	namespace := getOf(params, "namespace")
-	if getOf(params, "threadId") != thread || getOf(params, "turnId") != turn || callID == "" || getOf(params, "tool") != nativeWorkspaceTool || (namespace != nil && namespace != "") {
+	if getOf(params, "threadId") != thread || getOf(params, "turnId") != turn || callID == "" || (getOf(params, "tool") != nativeWorkspaceTool && getOf(params, "tool") != nativeSemanticTool) || (namespace != nil && namespace != "") {
 		return nil, &blockedError{message: "CODEX_BINDING: dynamic tool differs from original thread/turn/registration"}
 	}
 	raw, err := json.Marshal(getOf(params, "arguments"))
 	if err != nil {
 		return nil, err
 	}
-	value, callErr := tools.call(raw)
+	value, callErr := tools.invoke(textOf(getOf(params, "tool")), raw)
 	content := ""
 	if callErr != nil {
 		content = callErr.Error()
@@ -142,24 +143,16 @@ func codexVerifySource(directory string, source any) error {
 	if err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(filepath.Join(directory, "answer.raw.txt"))
+	expectedAnswer, err := submittedSemantics(directory)
 	if err != nil {
 		return err
 	}
-	result, refusal := FrameResult(string(raw))
-	if refusal != "" {
-		return &blockedError{message: refusal}
-	}
-	decoded, err := readJSONFile(filepath.Join(directory, "answer.json"))
+	decoded, err := os.ReadFile(filepath.Join(directory, "answer.json"))
 	if err != nil {
 		return err
 	}
-	projected, err := codexDomainResult(getOf(request, "schema"), result)
-	if err != nil {
-		return err
-	}
-	if !valuesEqual(projected, decoded) {
-		return &blockedError{message: "CODEX_BINDING: domain result differs from original answer"}
+	if !bytes.Equal(expectedAnswer, decoded) {
+		return &blockedError{message: "CODEX_BINDING: result differs from original semantic submission"}
 	}
 	original, err := readJSONFile(filepath.Join(directory, "native-source.json"))
 	if err != nil {
@@ -449,7 +442,7 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 		params["excludeTurns"] = true
 	} else {
 		params["ephemeral"] = false
-		params["dynamicTools"] = []any{nativeWorkspaceToolSchema(readOnly, tools.material)}
+		params["dynamicTools"] = tools.schemas()
 	}
 	opened, err := client.request(method, params)
 	if err != nil {
@@ -646,7 +639,6 @@ func codexObserve(directory string) (map[string]any, error) {
 	defer file.Close()
 	reader := bufio.NewReaderSize(file, 64*1024)
 	var terminal, usage any
-	items := []any{}
 	for {
 		line, readErr := readNativeLine(reader)
 		if line != "" || readErr == nil {
@@ -664,9 +656,6 @@ func codexObserve(directory string) (map[string]any, error) {
 					terminal = getOf(p, "turn")
 				}
 				if valuesEqual(getOf(p, "turnId"), turn) {
-					if valuesEqual(method, "item/completed") {
-						items = append(items, getOf(p, "item"))
-					}
 					if valuesEqual(method, "thread/tokenUsage/updated") {
 						usage = getOf(p, "tokenUsage")
 					}
@@ -689,51 +678,12 @@ func codexObserve(directory string) (map[string]any, error) {
 	if !valuesEqual(getOf(terminal, "status"), "completed") {
 		return nil, &blockedError{message: "CODEX_RESULT: original turn did not complete: " + textOf(terminal)}
 	}
-	items = append(items, listOf(getOf(terminal, "items"))...)
-	var final, unknown any
-	for _, item := range items {
-		if valuesEqual(getOf(item, "type"), "agentMessage") {
-			if valuesEqual(getOf(item, "phase"), "final_answer") {
-				final = item
-			} else if getOf(item, "phase") == nil {
-				unknown = item
-			}
-		}
-	}
-	if final == nil {
-		final = unknown
-	}
-	if final == nil {
-		return nil, &blockedError{message: "CODEX_RESULT: completed turn has no final agent message"}
-	}
-	answer, ok := getOf(final, "text").(string)
-	if !ok {
-		return nil, &blockedError{message: "CODEX_RESULT: final agent message text is missing"}
-	}
-	if err = writeNativeAnswerProjected(directory, answer, "CODEX", func(result map[string]any) (map[string]any, error) {
-		projected, err := codexDomainResult(getOf(request, "schema"), result)
-		if err != nil {
-			return nil, err
-		}
-		return projected.(map[string]any), nil
-	}); err != nil {
+	if err := writeSubmittedAnswer(directory); err != nil {
 		return nil, err
 	}
 	return evidenceSource(directory, "codex", thread, map[string]any{"native_turn": turn, "native_result": terminal, "selection": getOf(source, "selection"), "selection_evidence": map[string]any{"configuration": getOf(source, "configuration"), "turn_request": getOf(source, "turn_request")}, "transcript": getOf(getOf(source, "thread"), "path"), "usage_evidence": usage})
 }
 
 func codexReconcile(directory string, process any) (map[string]any, error) {
-	// A supervisor may stop after the native terminal landed but before the
-	// receipt was written. Observation needs no process or prompt replay.
-	if valuesEqual(getOf(process, "exit_code"), 0) {
-		source, err := codexObserve(directory)
-		if err != nil {
-			return nil, err
-		}
-		if err = writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
-			return nil, err
-		}
-		return source, nil
-	}
-	return reconcileCompletedOutput(directory, process, "CODEX", func(original string) bool { return strings.HasPrefix(original, "RuntimeBlocked: NATIVE_RESULT:") }, func() (map[string]any, error) { return codexObserve(directory) })
+	return recoverNativeSource(directory, process, "CODEX", func() (map[string]any, error) { return codexObserve(directory) })
 }

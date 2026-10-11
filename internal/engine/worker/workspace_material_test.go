@@ -31,13 +31,13 @@ func TestRoleMaterialsKeepObservationsWithoutPhysicalWorkspaceBindings(t *testin
 	record := coverage.ExecutionRecord{CaseID: fact.CaseID, Procedure: procedure, Observation: observation, Comparison: "actual comparison", Result: coverage.ExecutedFail}
 	report := &coverage.ExecutionReport{Records: []coverage.ExecutionRecord{record}}
 	finding := protocol.ObservationFinding{Target: protocol.ValidationTarget{Execution: report}, Evidence: protocol.WorkerResult{Validation: &protocol.ValidationResult{Execution: report}}, FailedCases: []coverage.ExecutionRecord{record}}
-	for _, handler := range []string{"engine.development.batch", "engine.qa.execution", "engine.repair", "engine.repair.verify", "engine.validation.observation", "engine.qa.design", "engine.qa.review.rationale", "engine.gate"} {
+	for _, handler := range []string{"engine.development.batch.v2", "engine.qa.execution.v2", "engine.repair.v2", "engine.repair.verify.v2", "engine.validation.observation.v2", "engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "issued attempt"
 			input.RequirementDocument.Content = "confirmed requirement"
-			if handler == "engine.repair" {
+			if handler == "engine.repair.v2" {
 				input.AvailableRouteCandidates = slices.DeleteFunc(catalog.RouteCandidates(), func(id string) bool { return id == "blackbox" || id == "whitebox" })
 			}
 			v := input.Validation
@@ -64,14 +64,14 @@ func TestRoleMaterialsKeepObservationsWithoutPhysicalWorkspaceBindings(t *testin
 					t.Fatalf("%s actively sent a mechanical binding %q", handler, physical)
 				}
 			}
-			if handler == "engine.development.batch" || handler == "engine.qa.execution" || handler == "engine.repair" || handler == "engine.repair.verify" || handler == "engine.validation.observation" {
+			if handler == "engine.development.batch.v2" || handler == "engine.qa.execution.v2" || handler == "engine.repair.v2" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
 				for _, needed := range []string{"actual execution error", "actual stderr", "stdout proof", "actual executable sha256:tool", "actual environment", "original invocation", "actual output mentions /semantic/path"} {
 					if !strings.Contains(material.Prompt, needed) {
 						t.Fatalf("%s lost actual failure evidence %q", handler, needed)
 					}
 				}
 			}
-			if handler == "engine.qa.execution" || handler == "engine.repair" || handler == "engine.repair.verify" || handler == "engine.validation.observation" {
+			if handler == "engine.qa.execution.v2" || handler == "engine.repair.v2" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
 				if !strings.Contains(material.Prompt, command) {
 					// JSON escaping does not alter the approved value.
 					encoded, _ := json.Marshal(command)

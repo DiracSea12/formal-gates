@@ -21,13 +21,15 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确模式时再选择 lightweight 或 regular；full/custom 在拆分决定之后确认。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
 <formal-gates:host-instructions:end>
 
-正式文件写完整目标、边界、方案、需求块、验收条目与来源。新条目只写内容，预检分配编号；已有外部 ID 保留。
+正式文件包含完整目标、边界、方案、需求块、验收条目与来源。通过 requirement 入口输入新语义，程序构造固定章节与编号并保留未修改的原文及已有 ID。
 
 ```bash
 formal-gates workflow start --precheck --root <project> --requirement <file> --save-candidate <candidate>
 ```
 
 展示程序返回的全部 materials 全文及精确 revisions，取得真实确认后将原 candidate 文件交给 `start --intake-receipt`。不抄取或重拼身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，记录 unverified；不把它当验证通过。
+
+需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 的原字段序号入口，不编写固定 JSON 外壳。
 
 ## 活动任务
 

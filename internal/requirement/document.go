@@ -63,7 +63,19 @@ var (
 	acceptancePartsPattern     = regexp.MustCompile(`^AC-([0-9]+)：(.*)$`)
 )
 
+type documentLayout struct {
+	end   int
+	items []requirementLayout
+}
+
+type requirementLayout struct {
+	heading int
+	end     int
+	fields  map[string]int
+}
+
 type parsedRequirement struct {
+	heading     int
 	requirement FrozenRequirement
 	field       string
 	fieldLines  map[string]int
@@ -77,11 +89,18 @@ type parsedRequirement struct {
 // without changing the source content or its confirmation digest.
 // It intentionally makes no semantic judgment about the prose.
 func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProjection, error) {
+	return parseRequirementProjection(path, data, nil)
+}
+
+func parseRequirementProjection(path string, data []byte, layout *documentLayout) (FrozenRequirementProjection, error) {
 	if !utf8.Valid(data) {
 		return FrozenRequirementProjection{}, &RequirementPrecheckError{Issues: []RequirementPrecheckIssue{{Path: path, Line: 1, Rule: "document is not valid UTF-8 Markdown"}}}
 	}
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(normalized, "\n")
+	if layout != nil {
+		layout.end = len(lines)
+	}
 	issues := []RequirementPrecheckIssue{}
 	addIssue := func(line int, reqID, rule string) {
 		if line < 1 {
@@ -131,6 +150,13 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 		current.requirement.Requirement = requirementText
 		current.requirement.Source = sourceText
 		requirements = append(requirements, current.requirement)
+		if layout != nil {
+			fields := map[string]int{}
+			for name, line := range current.fieldLines {
+				fields[name] = line - 1
+			}
+			layout.items = append(layout.items, requirementLayout{heading: current.heading, end: boundaryLine - 1, fields: fields})
+		}
 		current = nil
 	}
 
@@ -152,6 +178,9 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 		level, heading, isHeading := markdownHeading(raw)
 		if isHeading && level == 2 {
 			if inSection {
+				if layout != nil {
+					layout.end = index
+				}
 				finishRequirement(lineNo)
 			}
 			inSection = heading == "需求点"
@@ -191,6 +220,7 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 				}
 			}
 			current = &parsedRequirement{
+				heading:     index,
 				requirement: FrozenRequirement{ID: reqID, Title: title},
 				fieldLines:  map[string]int{},
 				fieldText:   map[string][]string{},
@@ -260,6 +290,9 @@ func ParseRequirementProjection(path string, data []byte) (FrozenRequirementProj
 		}
 	}
 	finishRequirement(len(lines))
+	if layout != nil && inSection && len(layout.items) > 0 {
+		layout.items[len(layout.items)-1].end = len(lines)
+	}
 	if sectionCount == 0 {
 		addIssue(1, "", "document must contain exactly one ## 需求点 section")
 	}

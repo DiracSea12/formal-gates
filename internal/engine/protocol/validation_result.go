@@ -294,23 +294,23 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
-	if p.Status == "CONTINUE" && role != "engine.development.batch" && role != "engine.repair" {
+	if p.Status == "CONTINUE" && role != "engine.development.batch.v2" && role != "engine.repair.v2" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair" {
+	if p.GranularityReview != nil && role != "engine.repair.v2" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
-	if p.DesignChange != nil && role != "engine.qa.design" {
+	if p.DesignChange != nil && role != "engine.qa.design.v2" {
 		return validationError("only QA design can change its manifest")
 	}
-	if len(p.QACommands) > 0 && role != "engine.qa.execution" {
+	if len(p.QACommands) > 0 && role != "engine.qa.execution.v2" {
 		return validationError("only QA execution can bind a missing invocation")
 	}
-	if p.Checkpoint && role != "engine.qa.design" && role != "engine.qa.execution" {
+	if p.Checkpoint && role != "engine.qa.design.v2" && role != "engine.qa.execution.v2" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
 	mode := s.validationMode(b.Task)
-	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution" && p.Checkpoint && p.Execution != nil) {
+	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution.v2" && p.Checkpoint && p.Execution != nil) {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
@@ -319,16 +319,16 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			count++
 		}
 	}
-	if len(p.Observations) > 0 && role != "engine.validation.observation" {
+	if len(p.Observations) > 0 && role != "engine.validation.observation.v2" {
 		return validationError("observation duties belong to the semantic observation worker")
 	}
 	switch role {
-	case "engine.validation.observation":
+	case "engine.validation.observation.v2":
 		if count != 1 || p.Status != "PASS" || p.Observations == nil {
 			return validationError("semantic observation requires only its complete issued judgments")
 		}
 		return e.acceptWorkerObservations(s, record, nextRevision)
-	case "engine.merge.resolve":
+	case "engine.merge.resolve.v2":
 		input := s.conflictInput(b.Task.Scope)
 		if count != 1 || p.Status != "PASS" || p.Resolution == nil || input == nil || p.Resolution.Summary == "" {
 			return validationError("conflict resolution requires the original conflict input and complete manifest")
@@ -343,15 +343,15 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if len(expected) == 0 || !slices.Equal(actual, expected) {
 			return validationError("resolution manifest must cover exactly the original conflict paths")
 		}
-	case "engine.repair.verify":
+	case "engine.repair.verify.v2":
 		return s.acceptRepairComparison(record, e.cfg.Definition)
-	case "engine.repair":
+	case "engine.repair.v2":
 		return s.acceptRepairResult(record)
-	case "engine.development.batch":
+	case "engine.development.batch.v2":
 		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {
 			return validationError("development requires declared paths and summary")
 		}
-		if role == "engine.development.batch" {
+		if role == "engine.development.batch.v2" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
 			if !ok {
 				return validationError("development task is not a confirmed batch")
@@ -372,7 +372,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 
 		}
-	case "engine.qa.design":
+	case "engine.qa.design.v2":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}
@@ -417,7 +417,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 		}
 		s.Validation.Sets[mode] = set
-	case "engine.qa.review.rationale":
+	case "engine.qa.review.rationale.v2":
 		set := s.Validation.Sets[mode]
 		if set == nil || count != 1 || p.Review == nil || set.Status != "REVIEW" || b.CaseVersion != set.Version {
 			return validationError("review does not bind an open case-set version")
@@ -448,7 +448,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if p.Review.Verdict() == coverage.StatusFail {
 			set.reopen(nil)
 		}
-	case "engine.qa.execution", "engine.gate":
+	case "engine.qa.execution.v2", "engine.gate.v2":
 		w := s.validationWave(b.WaveID)
 		_, repairTarget := s.repairGateTarget(b.Task)
 		if w == nil || w.Status != "COLLECTING" && repairTarget == nil && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
@@ -458,7 +458,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if target == nil || target.Status == "DISPOSED" || target.Status == "PASS" || target.Status == "FAIL" {
 			return validationError("validation target is already settled or unknown")
 		}
-		if role == "engine.qa.execution" {
+		if role == "engine.qa.execution.v2" {
 			if len(p.QACommands) > 0 {
 				if count != 1 || !p.Checkpoint || p.Status != "PASS" || len(p.Findings) != 0 {
 					return validationError("QA command binding records only a checkpoint, not a verdict")
@@ -494,7 +494,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}{w.ID, b.Task.String(), i, raw})
 			s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), Raw: &raw}
 		}
-		if role == "engine.qa.execution" {
+		if role == "engine.qa.execution.v2" {
 			for _, row := range target.Execution.Records {
 				if row.Result != coverage.ExecutedFail {
 					continue

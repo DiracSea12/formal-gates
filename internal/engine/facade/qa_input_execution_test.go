@@ -32,12 +32,12 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native QA inputs"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch")
-	design, qi := d.action("engine.qa.design")
+	development, di := d.action("engine.development.batch.v2")
+	design, qi := d.action("engine.qa.design.v2")
 	manifest := simpleManifest(qi)
 	configure(&manifest)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
-	review, ri := d.action("engine.qa.review.rationale")
+	review, ri := d.action("engine.qa.review.rationale.v2")
 	approved := approvedReview(manifest)
 	for _, step := range manifest.SharedSteps {
 		approved.SharedStepDecisions = append(approved.SharedStepDecisions, coverage.ReviewDecision{ID: step.ID, Status: coverage.StatusPass, Reason: "The public preparation, declared products and independence match the approved case prerequisites"})
@@ -55,7 +55,7 @@ func awaitQAInput(t *testing.T, d *validationDriver, ready func(protocol.Validat
 	for {
 		d.drive()
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.qa.execution" && ready(input) {
+			if input.Handler == "engine.qa.execution.v2" && ready(input) {
 				return id, input
 			}
 		}

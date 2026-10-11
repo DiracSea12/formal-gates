@@ -11,10 +11,10 @@ func TestFirstReviewRequiresFullBaseline(t *testing.T) {
 	for _, order := range []string{"normal", "result-first", "held"} {
 		t.Run(order, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			id, in := d.action("engine.qa.design")
+			id, in := d.action("engine.qa.design.v2")
 			m := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
-			id, in = d.action("engine.qa.review.rationale")
+			id, in = d.action("engine.qa.review.rationale.v2")
 			r := approvedReview(m)
 			r.Scope = coverage.ScopeAffected
 			var request protocol.Event
@@ -48,7 +48,7 @@ func TestFirstReviewRequiresFullBaseline(t *testing.T) {
 			if rejected.Payload.Validation == nil || rejected.Payload.Validation.Review.Scope != coverage.ScopeAffected || rejected.Payload.PayloadDigest != "original-incremental-without-baseline" {
 				t.Fatal("invalid original review facts were lost")
 			}
-			next, input := d.action("engine.qa.review.rationale")
+			next, input := d.action("engine.qa.review.rationale.v2")
 			if next == id || input.Binding.Task != in.Binding.Task {
 				t.Fatal("invalid scope did not retain finite original task")
 			}

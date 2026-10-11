@@ -7,10 +7,10 @@ import (
 )
 
 func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
-	for _, role := range []string{"engine.development.batch", "engine.repair", "engine.validation.observation"} {
+	for _, role := range []string{"engine.development.batch.v2", "engine.repair.v2", "engine.validation.observation.v2"} {
 		t.Run(role, func(t *testing.T) {
 			e, state, pending := unfinishedDevelopmentState(t, role)
-			if role == "engine.validation.observation" {
+			if role == "engine.validation.observation.v2" {
 				e, state, pending, _ = adjudicationWorkerState(t)
 			}
 			want := state.WorkerInputs(e.cfg.Definition)[pending.ActionID]

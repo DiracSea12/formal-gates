@@ -16,13 +16,13 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality"}))
 	d.drive()
-	dev, di := d.action("engine.development.batch")
+	dev, di := d.action("engine.development.batch.v2")
 	if err := os.WriteFile(filepath.Join(di.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) > 1 }\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	d.drive()
-	design, in := d.action("engine.qa.design")
+	design, in := d.action("engine.qa.design.v2")
 	manifest := in.Manifest
 	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "Valid accepts the actual word", Files: []string{"app_test.go"}}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "MISUSE", TestRef: "app_test.go::TestInvalid", Oracle: "Valid rejects empty input", Files: []string{"app_test.go"}}}
 	manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "invalid"}}
@@ -32,7 +32,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 	}
 	d.business(design, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.drive()
-	review, before := d.action("engine.qa.review.rationale")
+	review, before := d.action("engine.qa.review.rationale.v2")
 	if before.ReviewArtifact == nil {
 		t.Fatal("first actual test artifact is absent")
 	}
@@ -41,7 +41,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 	suggestion := d.run.Validation.Sets[coverage.ReviewWhitebox].Suggestions[0]
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "oracle clarification", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewWhitebox, SuggestionID: suggestion.ID, Decision: "ACCEPT", Reason: "Specify the actual tested word", AffectedCases: []string{"valid"}}}})
 	d.drive()
-	design, in = d.action("engine.qa.design")
+	design, in = d.action("engine.qa.design.v2")
 	if in.Workspace.ID != before.Workspace.ID || in.Workspace.Source != before.ReviewBase || in.Workspace.Identity != before.ReviewArtifact.Identity {
 		t.Fatalf("semantic reopening discarded actual source/material identity: %+v; original=%+v", in.Workspace, before.Workspace)
 	}
@@ -50,7 +50,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 		t.Fatal("issued revision lacks original test bytes", err)
 	}
 	reopenNativeProviderDriver(t, d, "svn", runner)
-	sameDesign, reopened := d.action("engine.qa.design")
+	sameDesign, reopened := d.action("engine.qa.design.v2")
 	if sameDesign != design || !reflect.DeepEqual(reopened, in) {
 		t.Fatal("recovery changed issued revision materials")
 	}
@@ -62,7 +62,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 	manifest.Cases[0].Oracle += ": word"
 	d.business(design, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: paths}})
 	d.drive()
-	review, after := d.action("engine.qa.review.rationale")
+	review, after := d.action("engine.qa.review.rationale.v2")
 	if after.ReviewArtifact == nil || after.Binding.Candidate != before.Binding.Candidate || after.Workspace.ID != before.Workspace.ID || after.ReviewBase != before.ReviewBase || !reflect.DeepEqual(after.ReviewArtifact.Changes, before.ReviewArtifact.Changes) {
 		t.Fatalf("semantic revision lost exact candidate test diff: %+v", after)
 	}
@@ -82,7 +82,7 @@ func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
 		t.Fatalf("bound failed review was rejected: %+v", d.run.RejectedResults)
 	}
 	d.drive()
-	_, unapproved := d.action("engine.qa.design")
+	_, unapproved := d.action("engine.qa.design.v2")
 	if unapproved.Workspace.ID != after.Workspace.ID || unapproved.Workspace.Identity != after.ReviewArtifact.Identity {
 		t.Fatal("failed review discarded written test material source", unapproved.Workspace)
 	}

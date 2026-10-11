@@ -23,7 +23,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"},
 			}
 			d.reviewReady()
-			id, in := d.action("engine.qa.execution")
+			id, in := d.action("engine.qa.execution.v2")
 			report := executionFor(in)
 			for i := range report.Records {
 				report.Records[i].Result = coverage.ExecutedFail
@@ -128,7 +128,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.reopen()
 			d.drive()
-			repair, ri := d.action("engine.repair")
+			repair, ri := d.action("engine.repair.v2")
 			if len(ri.Repair.Problems) != 1 || len(ri.Repair.ExecutionFailures) != 2 || ri.Repair.Obligation.PureP2 {
 				t.Fatalf("wrong repair diagnosis: %+v", ri.Repair)
 			}
@@ -163,10 +163,10 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				}
 				for action, input := range d.run.ValidationInputs {
 					switch input.Handler {
-					case "engine.qa.execution":
+					case "engine.qa.execution.v2":
 						r := executionFor(input)
 						d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &r}))
-					case "engine.gate":
+					case "engine.gate.v2":
 						d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 					}
 				}
@@ -186,7 +186,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d, finding, origin := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, origin)
-	action, input := d.action("engine.repair")
+	action, input := d.action("engine.repair.v2")
 	originalTask := input.Binding.Task
 	repairResult := gateRepairResult(input)
 	d.business(action, repairResult)
@@ -194,7 +194,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-	action, input = d.action("engine.qa.execution")
+	action, input = d.action("engine.qa.execution.v2")
 	execution := executionFor(input)
 	d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &execution}))
 	d.drive()
@@ -218,7 +218,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: origin, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{correction}}}})
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair")
+	_, repair := d.action("engine.repair.v2")
 	if repair.Binding.Task == originalTask || repair.Binding.Candidate != completed.Candidate.Identity || repair.Repair == nil {
 		t.Fatal("new problem did not follow the repaired candidate's unique duty")
 	}
@@ -240,18 +240,18 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 
 func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.qa.design")
+	id, in := d.action("engine.qa.design.v2")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
-	id, in = d.action("engine.qa.review.rationale")
+	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-	id, in = d.action("engine.development.batch")
+	id, in = d.action("engine.development.batch.v2")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	d.materialize()
 	d.materialize()
-	id, in = d.action("engine.qa.design")
+	id, in = d.action("engine.qa.design.v2")
 	m = in.Manifest
 	for _, item := range []struct{ id, scenario string }{{"normal", "SUCCESS"}, {"invalid", "MISUSE"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: "white-" + item.id, Scenario: item.scenario, Mode: coverage.CaseWhitebox, TestRef: "app_test.go::Test" + map[string]string{"normal": "Normal", "invalid": "Invalid"}[item.id], Oracle: "specified input outcome"})
@@ -259,7 +259,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 	d.materialize()
-	id, in = d.action("engine.qa.review.rationale")
+	id, in = d.action("engine.qa.review.rationale.v2")
 	r = approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
 	d.drive()
@@ -270,7 +270,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d.materialize()
 	actions := map[coverage.ReviewKind]string{}
 	for action, input := range d.run.ValidationInputs {
-		if input.Handler != "engine.qa.execution" {
+		if input.Handler != "engine.qa.execution.v2" {
 			continue
 		}
 		report := executionFor(input)
@@ -299,7 +299,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	}
 	d.drive()
-	_, repair := d.action("engine.repair")
+	_, repair := d.action("engine.repair.v2")
 	if len(repair.Repair.Problems) != 2 || len(repair.Repair.ExecutionFailures) != 2 {
 		t.Fatal("independent mode diagnoses lost their responsibilities")
 	}
@@ -315,7 +315,7 @@ func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 	d.reviewReady()
-	id, in := d.action("engine.qa.execution")
+	id, in := d.action("engine.qa.execution.v2")
 	report := executionFor(in)
 	report.Records[0].Result = coverage.ExecutedFail
 	report.Records[0].Comparison = "actual input outcome violates requirement"
@@ -338,7 +338,7 @@ func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	}
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair")
+	_, repair := d.action("engine.repair.v2")
 	problem := d.run.Validation.Findings[caseID].History[0].ProblemID
 	if len(repair.Repair.Obligation.Problems) != 1 || repair.Repair.Obligation.Problems[0] != problem {
 		t.Fatal("independent advisory was promoted into mandatory repair")

@@ -22,12 +22,12 @@ func NativeResultEvidence(provider, directory string, source map[string]any) ([]
 	if textOf(source["provider"]) != provider || textOf(source["identity"]) == "" {
 		return nil, "", "", fmt.Errorf("native result provider/session is missing or different")
 	}
-	proof := getOf(getOf(source["files"], "answer.raw.txt"), "sha256")
+	proof := getOf(getOf(source["files"], nativeToolCallsFile), "sha256")
 	digest, ok := proof.(string)
 	if !ok || digest == "" {
 		return nil, "", "", fmt.Errorf("native result original output proof is missing")
 	}
-	answer, err := os.ReadFile(filepath.Join(directory, "answer.json"))
+	answer, err := submittedSemantics(directory)
 	return answer, "sha256:" + digest, textOf(source["identity"]), err
 }
 

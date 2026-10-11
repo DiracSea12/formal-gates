@@ -13,7 +13,7 @@ import (
 )
 
 func observationWorkerInput() protocol.WorkerInput {
-	return protocol.WorkerInput{RunID: "run", Provider: "host", Handler: "engine.validation.observation", Pending: protocol.PendingAction{ActionID: "semantic", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "first"}}, {Finding: protocol.ValidationFinding{ID: "second"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"broken", "stable"}, MustExecute: []string{"broken"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
+	return protocol.WorkerInput{RunID: "run", Provider: "host", Handler: "engine.validation.observation.v2", Pending: protocol.PendingAction{ActionID: "semantic", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "first"}}, {Finding: protocol.ValidationFinding{ID: "second"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"broken", "stable"}, MustExecute: []string{"broken"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
 }
 
 func TestObservationSameAsSelectsOnlyIssuedRelatedCandidates(t *testing.T) {

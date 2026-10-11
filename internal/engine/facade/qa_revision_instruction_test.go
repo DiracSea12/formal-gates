@@ -40,7 +40,7 @@ func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
 	}
 	reason := "Replace the setup with the documented command; retain exact stdin and original negative oracle."
 	candidate := thaw("THAW", reason)
-	id, input := d.action("engine.qa.design")
+	id, input := d.action("engine.qa.design.v2")
 	instruction := input.RevisionInstruction
 	if instruction == nil || instruction.Decision.RequestID != string(candidate.Event.Decide.Request) || instruction.Decision.Validation.Reason != reason || instruction.Request.Category != "CASE_EXECUTABILITY" || !reflect.DeepEqual(instruction.Request.AffectedCases, []string{"normal"}) || instruction.Request.Binding.RequirementRevision != input.Binding.RequirementRevision {
 		t.Fatal("revision instruction lost its original confirmed facts")
@@ -65,14 +65,14 @@ func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
 	before := input
 	d.reopen()
 	d.drive()
-	againID, again := d.action("engine.qa.design")
+	againID, again := d.action("engine.qa.design.v2")
 	if againID != id || !reflect.DeepEqual(before, again) {
 		t.Fatal("reopen changed original revision instruction")
 	}
 	manifest := input.Manifest
 	manifest.Cases[0].Preconditions += "; use the documented setup"
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
-	reviewAction, reviewInput := d.action("engine.qa.review.rationale")
+	reviewAction, reviewInput := d.action("engine.qa.review.rationale.v2")
 	if !reflect.DeepEqual(reviewInput.RevisionInstruction, instruction) {
 		t.Fatal("independent review did not receive the same confirmed instruction")
 	}
@@ -82,7 +82,7 @@ func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
 	d.drive()
 	later := "Use the new current setup and preserve its exact return code."
 	next := thaw("QA_ARTIFACT_REPAIR", later)
-	nextID, nextInput := d.action("engine.qa.design")
+	nextID, nextInput := d.action("engine.qa.design.v2")
 	if nextID == id || nextInput.RevisionInstruction == nil || nextInput.RevisionInstruction.Decision.RequestID != string(next.Event.Decide.Request) || nextInput.RevisionInstruction.Decision.Validation.Reason != later {
 		t.Fatal("later authorized revision reused the old instruction")
 	}

@@ -93,8 +93,8 @@ func claudeProbe(executable, workspace string, environment map[string]string) (m
 	}
 	return map[string]any{"provider": "claude", "executable": executable, "version": strings.TrimSpace(string(version)), "capabilities": map[string]any{"source": "cli-version", "selection_observed": false}, "selection": map[string]any{}, "model_calls": 0}, nil
 }
-func claudeArguments(request any, directory, executable, workspace string, environment map[string]string, prompt, schema string) ([]string, string, error) {
-	argv := []string{executable, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-hook-events", "--json-schema", schema}
+func claudeArguments(request any, directory, executable, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
+	argv := []string{executable, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-hook-events"}
 	server, err := nativeToolServer(directory)
 	if err != nil {
 		return nil, "", err

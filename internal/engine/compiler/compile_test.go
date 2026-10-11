@@ -36,7 +36,7 @@ var (
 	}{
 		{"engine.entry.parse", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
-		{"engine.review.worker", authoring.RunnerAgentWorker},
+		{"engine.review.worker.v2", authoring.RunnerAgentWorker},
 		{"engine.fan.slice", authoring.RunnerEngineLocal},
 		{"engine.fan.transport", authoring.RunnerHostAdapter},
 		{"engine.fan.join", authoring.RunnerEngineLocal},
@@ -159,7 +159,7 @@ func goldenSteps() []authoring.Step {
 	reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIO, authoring.AgentSpec{
-			Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	if err != nil {

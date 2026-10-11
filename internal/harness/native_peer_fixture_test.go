@@ -7,12 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -137,27 +135,14 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 	case "codex":
 		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], runtime: filepath.Join(c.installed.Targets[0].TargetPath, "bin", "formal-gates"), peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
 			StrictSchema: true, Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
-		nativeAnswer := canaryCodexNativeAnswer(request["schema"], answer)
-		nativeBody, err := json.Marshal(nativeAnswer)
-		if err != nil {
-			return err
-		}
-		plain, err := decodeNativeJSON(nativeBody)
-		if err != nil {
-			return err
-		}
-		projected, err := codexDomainResult(request["schema"], plain)
-		if err != nil || !valuesEqual(projected, answer) {
-			return fmt.Errorf("local Codex native result changed domain evidence: %v", err)
-		}
-		s.peer.Answer = objectOrEmpty(nativeAnswer)
+		s.peer.Answer = answer
 		s.configurePeerInputs(e.t)
 		if err := writeAtomicJSON(script, s.peer); err != nil {
 			return err
 		}
 	case "cursor":
 		sum := md5.Sum([]byte(workspace))
-		peer := cursorPeer{UUID: identity, Workspace: workspace, Environment: map[string]string{"HOME": c.home, "CURSOR_CONFIG_DIR": paths["config"], "CURSOR_DATA_DIR": paths["data"], "NODE_COMPILE_CACHE": paths["cache"]}, Calls: filepath.Join(dir, "peer-calls.jsonl"), Store: filepath.Join(paths["config"], "chats", hex.EncodeToString(sum[:]), identity, "store.db"),
+		peer := cursorPeer{Semantics: answer, UUID: identity, Workspace: workspace, Environment: map[string]string{"HOME": c.home, "CURSOR_CONFIG_DIR": paths["config"], "CURSOR_DATA_DIR": paths["data"], "NODE_COMPILE_CACHE": paths["cache"]}, Calls: filepath.Join(dir, "peer-calls.jsonl"), Store: filepath.Join(paths["config"], "chats", hex.EncodeToString(sum[:]), identity, "store.db"),
 			Config: map[string]any{"model": map[string]any{"modelId": "model-a", "displayModelId": "model-a", "displayName": "model-a high"}, "selectedModel": map[string]any{"modelId": "model-a", "parameters": []any{map[string]any{"id": "effort", "value": "high"}}}},
 			Events: []any{map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace, "model": "model-a high", "permissionMode": "default"}, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity, "request_id": "request-" + identity, "result": answerJSON, "usage": map[string]any{"inputTokens": len(textOf(request["prompt"])), "outputTokens": len(answerJSON)}}}}
 		s := cursorScenario{request: request, directory: dir, workspace: workspace, script: script, peer: peer}
@@ -167,12 +152,11 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		for _, key := range []string{"HOME", "DSH_HOME", "DSH_PROJECT_DIR"} {
 			peerEnvironment[key] = environment[key].(string)
 		}
-		schema := mustCanonical(e.t, request["schema"])
 		events := peerEvent(identity, "assistant/message", map[string]any{"turn": 1, "step": 0, "usage": map[string]any{"inputTokens": len(textOf(request["prompt"])), "outputTokens": len(answerJSON)}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": answerJSON}}}}) + "\n" + peerEvent(identity, "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
 		peer := peerScript{Args: []string{"--profile", "acp", "--patch", filepath.Join(dir, "profile.json")}, Environment: peerEnvironment, Workspace: workspace, Echo: filepath.Join(dir, "peer-input.jsonl"), Steps: []peerStep{
 			{On: `"method":"initialize"`, Params: map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}, Send: `{"id":"@ID@","result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{},"close":{}}}}}`},
 			{On: `"method":"session/new"`, Params: map[string]any{"cwd": workspace, "mcpServers": []any{}}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`},
-			{On: `"method":"session/prompt"`, Params: map[string]any{"sessionId": identity, "prompt": []any{map[string]any{"type": "text", "text": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this result schema:\n" + schema}}}, Files: []peerFile{{Path: filepath.Join(dir, "native-source.json"), Body: `{"sessionId":"` + identity + `","inputId":"input-` + identity + `","turn":1}`}, {Path: filepath.Join(dir, "native-events.jsonl"), Body: events}}, Send: `{"id":"@ID@","result":{"stopReason":"end_turn"}}`},
+			{On: `"method":"session/prompt"`, SemanticJob: dir, Semantics: answer, Params: map[string]any{"sessionId": identity, "prompt": []any{map[string]any{"type": "text", "text": textOf(request["prompt"])}}}, Files: []peerFile{{Path: filepath.Join(dir, "native-source.json"), Body: `{"sessionId":"` + identity + `","inputId":"input-` + identity + `","turn":1}`}, {Path: filepath.Join(dir, "native-events.jsonl"), Body: events}}, Send: `{"id":"@ID@","result":{"stopReason":"end_turn"}}`},
 			{On: `"method":"session/close"`, Params: map[string]any{"sessionId": identity}, Send: `{"id":"@ID@","result":{}}`},
 		}}
 		if err := writeAtomicJSON(script, peer); err != nil {
@@ -185,10 +169,6 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		}
 		input := "formal-gates-" + filepath.Base(dir)
 		turn := "turn-" + identity
-		schema, err := schemaForPrompt(request["schema"])
-		if err != nil {
-			return err
-		}
 		create := map[string]any{"workspace": map[string]any{"workspacePath": workspace, "workspaceKey": workspace}, "persistence": "immediate"}
 		if request["read_only"] == true {
 			create["toolAllowlist"] = zcodeManagedTools
@@ -197,7 +177,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 			{On: `"method":"runtime/capabilities"`, Params: map[string]any{}, Send: `{"id":"@ID@","result":{}}`},
 			{On: `"method":"session/create"`, Params: create, Send: zcodeSnapshotFrame(identity, zcodeSettings)},
 			{On: `"method":"session/subscribe"`, Params: map[string]any{"sessionId": identity, "deliveryKind": "desktop-continuous", "includeSnapshot": false}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `"}}`},
-			{On: `"method":"session/send"`, Params: map[string]any{"sessionId": identity, "inputId": input, "content": textOf(request["prompt"]) + "\nReturn ONLY one JSON object matching this schema:\n" + string(schema)}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","accepted":true}}` + "\n" + zcodeEventLine(identity, 1, "turn.started", turn, zcodeTurnPayload(input, "")) + "\n" + zcodeEventLine(identity, 2, "turn.completed", turn, zcodeTurnPayload(input, `,"resultType":"success","response":`+mustCanonical(e.t, answerJSON)+`,"usage":{"inputTokens":`+strconv.Itoa(len(textOf(request["prompt"])))+`,"outputTokens":`+strconv.Itoa(len(answerJSON))+`}`))},
+			{On: `"method":"session/send"`, SemanticJob: dir, Semantics: answer, Params: map[string]any{"sessionId": identity, "inputId": input, "content": textOf(request["prompt"])}, Send: `{"id":"@ID@","result":{"sessionId":"` + identity + `","accepted":true}}` + "\n" + zcodeEventLine(identity, 1, "turn.started", turn, zcodeTurnPayload(input, "")) + "\n" + zcodeEventLine(identity, 2, "turn.completed", turn, zcodeTurnPayload(input, `,"resultType":"success","response":`+mustCanonical(e.t, answerJSON)+`,"usage":{"inputTokens":`+strconv.Itoa(len(textOf(request["prompt"])))+`,"outputTokens":`+strconv.Itoa(len(answerJSON))+`}`))},
 			{On: `"method":"session/close"`, Params: map[string]any{"sessionId": identity}, Send: `{"id":"@ID@","result":{}}`},
 		}
 		if mode, _ := request["permission_mode"].(string); mode != "" {
@@ -394,54 +374,3 @@ func TestCanaryNativePeersValidateLaunchInputs(t *testing.T) {
 
 // The synthetic Codex peer emits the native spelling required by its actual
 // output schema. This runs before RPC output; original native bytes stay intact.
-func canaryCodexNativeAnswer(schema, value any) any {
-	if value == nil {
-		return nil
-	}
-	contract := objectOrEmpty(schema)
-	if codexObjectUnion(contract) {
-		return map[string]any{"result": canaryCodexNativeAnswer(codexObjectBranch(contract, value), value)}
-	}
-	branches := listOf(contract["anyOf"])
-	if len(branches) == 2 {
-		if getOf(branches[0], "type") == "null" {
-			return canaryCodexNativeAnswer(branches[1], value)
-		}
-		if getOf(branches[1], "type") == "null" {
-			return canaryCodexNativeAnswer(branches[0], value)
-		}
-	}
-	if additional, ok := codexOpenMap(contract); ok {
-		rows := []any{}
-		dictionary := objectOrEmpty(value)
-		keys := make([]string, 0, len(dictionary))
-		for key := range dictionary {
-			keys = append(keys, key)
-		}
-		slices.Sort(keys)
-		for _, key := range keys {
-			rows = append(rows, map[string]any{"key": key, "value": canaryCodexNativeAnswer(additional, dictionary[key])})
-		}
-		return rows
-	}
-	switch current := value.(type) {
-	case map[string]any:
-		out := maps.Clone(current)
-		for name, property := range objectOrEmpty(contract["properties"]) {
-			item, present := current[name]
-			if present {
-				out[name] = canaryCodexNativeAnswer(property, item)
-			} else if !slices.Contains(listOf(contract["required"]), any(name)) {
-				out[name] = nil
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, len(current))
-		for i, item := range current {
-			out[i] = canaryCodexNativeAnswer(contract["items"], item)
-		}
-		return out
-	}
-	return value
-}

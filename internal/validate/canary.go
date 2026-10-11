@@ -343,7 +343,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			return err
 		}
 		if run.Status == "COMPLETE" {
-			for _, role := range []string{"engine.development.batch", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
+			for _, role := range []string{"engine.development.batch.v2", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
 				if !checked[role] {
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
@@ -495,7 +495,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		workspace = in.Workspace.Path
 	}
 	switch in.Handler {
-	case "engine.development.batch":
+	case "engine.development.batch.v2":
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -505,7 +505,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
-	case "engine.qa.design":
+	case "engine.qa.design.v2":
 		mode := in.Manifest.Binding.ReviewKind
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
@@ -535,7 +535,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &worker.Design{DesignManifest: manifest}
 		checked["design:"+string(mode)] = true
-	case "engine.qa.review.rationale":
+	case "engine.qa.review.rationale.v2":
 		m := in.Manifest
 		r := worker.CaseReview{SourceDecisions: []*worker.Decision{}, PointDecisions: []*worker.Decision{}, CaseDecisions: []*worker.Decision{}}
 		for range m.Sources {
@@ -549,7 +549,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
-	case "engine.qa.execution":
+	case "engine.qa.execution.v2":
 		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{}}}
 		payload = result
 		seen := []string{}
@@ -570,7 +570,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 
 		checked["execution:"+string(in.Manifest.Binding.ReviewKind)] = true
-	case "engine.gate":
+	case "engine.gate.v2":
 		payload = &worker.Gate{Findings: []worker.Finding{}}
 		if in.Gate == nil {
 			return payload, fmt.Errorf("portable gate lacks issued input")

@@ -19,10 +19,10 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 			name := disposition + map[bool]string{false: "/normal", true: "/reopen"}[reopen]
 			t.Run(name, func(t *testing.T) {
 				d := newValidationDriver(t, "quality")
-				oldID, original := d.action("engine.development.batch")
+				oldID, original := d.action("engine.development.batch.v2")
 				task := original.Binding.Task
 				for i := 0; i < 2; i++ {
-					id, in := d.action("engine.development.batch")
+					id, in := d.action("engine.development.batch.v2")
 					oldID = id
 					if in.Binding.Task != task {
 						t.Fatal("mechanical retry changed duty")
@@ -67,7 +67,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 				}
 				if disposition == "CARRY" {
 					for _, in := range d.run.ValidationInputs {
-						if in.Handler == "engine.development.batch" {
+						if in.Handler == "engine.development.batch.v2" {
 							t.Fatal("CARRY reset exhausted duty by issuing new work")
 						}
 					}
@@ -91,7 +91,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 						t.Fatal("REDO kept a parallel retry authority")
 					}
 				}
-				id, in := d.action("engine.development.batch")
+				id, in := d.action("engine.development.batch.v2")
 				if disposition == "CARRY" && (in.Binding.Task != task || in.Binding.RequirementRevision != original.Binding.RequirementRevision) {
 					t.Fatal("CARRY rewrote signed original responsibility")
 				}
@@ -101,7 +101,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
 				d.materialize()
 				d.materialize()
-				gate, gi := d.action("engine.gate")
+				gate, gi := d.action("engine.gate.v2")
 				d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 				d.reopen()
 				d.drive()
@@ -129,15 +129,15 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 // Failed executions remain decisions about the same duty across both pre-wave
 // authoring and frozen validation targets, including a carried invalidated wave.
 func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T) {
-	for _, role := range []string{"engine.qa.design", "engine.qa.review.rationale", "engine.qa.execution", "engine.gate"} {
+	for _, role := range []string{"engine.qa.design.v2", "engine.qa.review.rationale.v2", "engine.qa.execution.v2", "engine.gate.v2"} {
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
 				retainNativeEvidence(t, d.f)
-				if role == "engine.qa.execution" || role == "engine.gate" {
+				if role == "engine.qa.execution.v2" || role == "engine.gate.v2" {
 					d.reviewReady()
-				} else if role == "engine.qa.review.rationale" {
-					id, in := d.action("engine.qa.design")
+				} else if role == "engine.qa.review.rationale.v2" {
+					id, in := d.action("engine.qa.design.v2")
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 					d.drive()
@@ -175,10 +175,10 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					selected = id
 				}
 				var candidate coverage.ValidationCandidate
-				if role == "engine.qa.execution" || role == "engine.gate" {
+				if role == "engine.qa.execution.v2" || role == "engine.gate.v2" {
 					candidate = *d.run.Validation.Candidate
 				}
-				if role == "engine.qa.execution" && !redo {
+				if role == "engine.qa.execution.v2" && !redo {
 					// A different target's REDO invalidates the wave, while this
 					// exhausted QA duty is explicitly carried with its old binding.
 					selected, _ = d.gateAction("quality")
@@ -206,8 +206,8 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 						}
 					}
 				}
-				if redo && role == "engine.qa.review.rationale" {
-					design, di := d.action("engine.qa.design")
+				if redo && role == "engine.qa.review.rationale.v2" {
+					design, di := d.action("engine.qa.design.v2")
 					m := di.Manifest
 					d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &m})
 				}
@@ -223,28 +223,28 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					}
 				}
 				switch role {
-				case "engine.qa.design":
+				case "engine.qa.design.v2":
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
-				case "engine.qa.review.rationale":
+				case "engine.qa.review.rationale.v2":
 					r := approvedReview(in.Manifest)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-				case "engine.qa.execution":
+				case "engine.qa.execution.v2":
 					r := executionFor(in)
 					tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
-				case "engine.gate":
+				case "engine.gate.v2":
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 				}
 				if candidate.Identity == "" {
-					dev, di := d.action("engine.development.batch")
+					dev, di := d.action("engine.development.batch.v2")
 					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input behavior"}})
 					d.drive()
 					d.materialize()
 					d.drive()
 				}
-				if role == "engine.qa.design" {
-					rid, ri := d.action("engine.qa.review.rationale")
+				if role == "engine.qa.design.v2" {
+					rid, ri := d.action("engine.qa.review.rationale.v2")
 					r := approvedReview(ri.Manifest)
 					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
 				}
@@ -253,13 +253,13 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					d.materialize()
 				}
 				d.drive()
-				if role != "engine.qa.execution" {
-					qa, qi := d.action("engine.qa.execution")
+				if role != "engine.qa.execution.v2" {
+					qa, qi := d.action("engine.qa.execution.v2")
 					r := executionFor(qi)
 					tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 					d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &r, Tool: tool, Environment: environment})
 				}
-				if role != "engine.gate" {
+				if role != "engine.gate.v2" {
 					gate, gi := d.gateAction("quality")
 					d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 				}
@@ -288,9 +288,9 @@ func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replace=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")
-			_, original := d.action("engine.development.batch")
+			_, original := d.action("engine.development.batch.v2")
 			fail := func() string {
-				id, in := d.action("engine.development.batch")
+				id, in := d.action("engine.development.batch.v2")
 				if in.Binding != original.Binding {
 					t.Fatal("same duty changed binding")
 				}
@@ -317,7 +317,7 @@ func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
 			d.reopen()
 			d.drive()
 			if redo {
-				id, in := d.action("engine.development.batch")
+				id, in := d.action("engine.development.batch.v2")
 				if in.Binding.Task == original.Binding.Task {
 					t.Fatal("redo retained old duty")
 				}
@@ -341,7 +341,7 @@ func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
 					}
 				}
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.development.batch" {
+					if in.Handler == "engine.development.batch.v2" {
 						t.Fatal("exhausted carried work was auto-issued")
 					}
 				}
@@ -355,9 +355,9 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 		t.Run(fmt.Sprintf("thaw=%t", thaw), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, wave)
-			_, original := d.action("engine.repair")
+			_, original := d.action("engine.repair.v2")
 			for i := 0; i < 2; i++ {
-				id, _ := d.action("engine.repair")
+				id, _ := d.action("engine.repair.v2")
 				d.receipt(id)
 				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: string(d.eventID())}})
 			}
@@ -404,11 +404,11 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 					}
 				}
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.repair" {
+					if in.Handler == "engine.repair.v2" {
 						t.Fatal("THAW revived previously carried repair")
 					}
 				}
-				d.action("engine.qa.design")
+				d.action("engine.qa.design.v2")
 				return
 			}
 			if len(d.run.AdapterIntents) != 0 {
@@ -420,7 +420,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 			}
 			raw, _ := json.Marshal(before.State.RejectedResults)
 			decideValidation(d, ask, "approve")
-			id, in := d.action("engine.repair")
+			id, in := d.action("engine.repair.v2")
 			if in.Binding != original.Binding || d.run.Attempts[in.Binding.Task].Attempts != 2 || d.run.Attempts[in.Binding.Task].MaxAttempts != 3 {
 				t.Fatal("carried repair changed signed duty or allowance")
 			}
@@ -438,7 +438,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 				t.Fatal("carried repair discharged explicitly redone gate")
 			}
 			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
-			qa, qi := d.action("engine.qa.execution")
+			qa, qi := d.action("engine.qa.execution.v2")
 			if qi.Execution.Scope != coverage.ScopeAffected {
 				t.Fatal("repair changed its required affected scope")
 			}
@@ -476,10 +476,10 @@ func TestRequirementBarrierSettlesFailedAttemptByItsDecision(t *testing.T) {
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("redo=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")
-			first, original := d.action("engine.development.batch")
+			first, original := d.action("engine.development.batch.v2")
 			d.receipt(first)
 			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: first, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "first execution interrupted"}})
-			id, in := d.action("engine.development.batch")
+			id, in := d.action("engine.development.batch.v2")
 			d.receipt(id)
 			var choices []protocol.RequirementWorkDecision
 			for _, w := range d.run.RequirementWork {
@@ -527,7 +527,7 @@ func TestRequirementBarrierSettlesFailedAttemptByItsDecision(t *testing.T) {
 				}
 				decideValidation(d, d.validationAsk("RETRY"), "approve")
 			}
-			dev, di := d.action("engine.development.batch")
+			dev, di := d.action("engine.development.batch.v2")
 			if !redo && di.Binding != original.Binding || redo && di.Binding.Task == original.Binding.Task {
 				t.Fatal("barrier decision lost duty identity")
 			}

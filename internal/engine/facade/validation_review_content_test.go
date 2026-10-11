@@ -41,14 +41,14 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 					t.Fatal("fixture did not establish the original negative-test behavior")
 				}
 			}
-			id, input := d.action("engine.development.batch")
+			id, input := d.action("engine.development.batch.v2")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\nfunc Validate(input string) bool { return input != \"\" }\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 			d.materialize()
 			d.materialize()
-			id, input = d.action("engine.qa.design")
+			id, input = d.action("engine.qa.design.v2")
 			m := input.Manifest
 			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestPositive", Oracle: "valid input accepted", Files: []string{"app_test.go"}}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestNegative", Oracle: "invalid input rejected", Files: []string{"app_test.go"}}}
 			for _, c := range m.Cases {
@@ -59,7 +59,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}}})
 			d.materialize()
-			id, input = d.action("engine.qa.review.rationale")
+			id, input = d.action("engine.qa.review.rationale.v2")
 			oldCandidate := input.Binding.Candidate
 			negative(input, false)
 			r := approvedReview(m)
@@ -72,13 +72,13 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			if changed {
 				testBytes = "package main\nimport \"testing\"\nfunc sharedInput() string { return \"two\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
 			}
-			id, input = d.action("engine.qa.design")
+			id, input = d.action("engine.qa.design.v2")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte(testBytes), 0600); err != nil {
 				t.Fatal(err)
 			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "Changed shared setup in app_test.go used by both tests"}})
 			d.materialize()
-			id, input = d.action("engine.qa.review.rationale")
+			id, input = d.action("engine.qa.review.rationale.v2")
 			if (read(oldCandidate, "app_test.go") == read(input.Binding.Candidate, "app_test.go")) == changed || read(oldCandidate, "app.go") != read(input.Binding.Candidate, "app.go") {
 				t.Fatal("fixture did not isolate a real test-only shared-helper content change")
 			}
@@ -101,7 +101,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 					t.Fatal("changed test implementation inherited stale approval")
 				}
 				d.drive()
-				id, input = d.action("engine.qa.review.rationale")
+				id, input = d.action("engine.qa.review.rationale.v2")
 				fresh := approvedReview(m)
 				fresh.SetStatus = coverage.StatusFail
 				fresh.SourceDecisions[0].Status = coverage.StatusFail

@@ -33,7 +33,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
-			id, in := d.action("engine.qa.design")
+			id, in := d.action("engine.qa.design.v2")
 			m := simpleManifest(in)
 			for i := range m.Cases {
 				argument := "valid"
@@ -44,11 +44,11 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			}
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			d.drive()
-			id, in = d.action("engine.qa.review.rationale")
+			id, in = d.action("engine.qa.review.rationale.v2")
 			approved := approvedReview(m)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 			d.drive()
-			id, in = d.action("engine.development.batch")
+			id, in = d.action("engine.development.batch.v2")
 			app := "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"
 			for name, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": app} {
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, name), []byte(body), 0644); err != nil {
@@ -69,7 +69,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 			}
-			id, in = wait("engine.qa.execution")
+			id, in = wait("engine.qa.execution.v2")
 			report := executionFor(in)
 			tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -86,7 +86,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid", Module: "command", RootCause: "diagnostic", Consequence: "wrong output", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "command", Severity: "limited output", Causality: "diagnostic", Reproduction: "normal command", Classification: "implementation"}, Reason: "observed command output"}
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.drive()
-			id, in = d.action("engine.repair")
+			id, in = d.action("engine.repair.v2")
 			if in.Development != nil {
 				t.Fatal("small repair unexpectedly requires a batch plan")
 			}
@@ -149,7 +149,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			if actual.ExitCode != 0 {
 				t.Fatalf("passing complete suite failed: %+v", actual)
 			}
-			verification, input := wait("engine.repair.verify")
+			verification, input := wait("engine.repair.verify.v2")
 			comparisons := []*worker.Observation{}
 			for _, caseID := range input.Repair.VerificationCases {
 				index := slices.IndexFunc(input.ExecutionFacts, func(fact protocol.ExecutionFact) bool { return fact.CaseID == caseID })

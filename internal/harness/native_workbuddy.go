@@ -83,7 +83,7 @@ func workbuddyProbe(executable, workspace string, environment map[string]string)
 	if err != nil {
 		return nil, err
 	}
-	for _, capability := range []string{"--resume", "--session-id", "--json-schema", "stream-json", "--mcp-config", "--tools", "--permission-mode", "dontAsk"} {
+	for _, capability := range []string{"--resume", "--session-id", "stream-json", "--mcp-config", "--tools", "--permission-mode", "dontAsk"} {
 		if !strings.Contains(string(output), capability) {
 			return nil, &blockedError{message: "WORKBUDDY_CAPABILITY: native CLI lacks " + capability}
 		}
@@ -113,7 +113,7 @@ func workbuddyReconcile(directory string, process any) (map[string]any, error) {
 	}
 	return streamReconcile(workbuddyStream, directory, process)
 }
-func workbuddyArguments(request any, directory, executable, workspace string, environment map[string]string, prompt, schema string) ([]string, string, error) {
+func workbuddyArguments(request any, directory, executable, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
 	effort, _ := getOf(request, "reasoning_effort").(string)
 	switch effort {
 	case "", "minimal", "low", "medium", "high", "xhigh", "max":
@@ -168,7 +168,7 @@ func workbuddyArguments(request any, directory, executable, workspace string, en
 	if getOf(request, "read_only") == true {
 		permission = "dontAsk"
 	}
-	argv := []string{executable, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--json-schema", schema, "--tools", "StructuredOutput", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", "StructuredOutput,mcp__formal-gates__workspace"}
+	argv := []string{executable, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics"}
 	if model, _ := getOf(request, "model").(string); model != "" {
 		argv = append(argv, "--model", model)
 	}

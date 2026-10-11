@@ -1,4 +1,4 @@
 interface:
   display_name: "Formal Gates"
-  short_description: "Runtime-neutral formal gate workflow with bundled Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode install targets."
+  short_description: "Runtime-neutral formal gate workflow using the registered native platform adapters."
   default_prompt: "读取并遵循 SKILL.md。主代理只负责需求语义、事实核实、完整材料展示和真实用户决定；推进使用程序当前 workflow CLI。"

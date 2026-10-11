@@ -12,7 +12,7 @@ import (
 )
 
 func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker", "engine.gate", "engine.qa.execution"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.gate.v2", "engine.qa.execution.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -20,7 +20,7 @@ func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
 			input.RequirementDocument.Content = "# Original requirement\nRequired behavior.\n"
 			finding := Finding{Severity: "P3", Message: "The original source needs clarification", Locations: []Location{{Read: 2, Line: 2}, {Listing: 1, Entry: 1}, {RequirementLine: 2}}}
 			var value any = Gate{Findings: []Finding{finding}}
-			if handler == "engine.review.worker" {
+			if handler == "engine.review.worker.v2" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
 				body := Review{Findings: []Finding{finding}, Verification: []string{}}
@@ -28,7 +28,7 @@ func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
 					body.Verification = append(body.Verification, "Original requirement evidence inspected")
 				}
 				value = body
-			} else if handler == "engine.qa.execution" {
+			} else if handler == "engine.qa.execution.v2" {
 				input.Validation.Execution = &coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull}
 				input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 				value = ExecutionJudgments{Execution: Execution{Records: []*Observation{}}, Findings: []Finding{finding}}

@@ -52,7 +52,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.drive()
-	design, input := master.action("engine.qa.design")
+	design, input := master.action("engine.qa.design.v2")
 	if input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
 		t.Fatal("retained master did not start merge QA design")
 	}
@@ -62,7 +62,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	}
 	master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	master.drive()
-	reviewer, reviewInput := master.action("engine.qa.review.rationale")
+	reviewer, reviewInput := master.action("engine.qa.review.rationale.v2")
 	review := approvedReview(manifest)
 	master.business(reviewer, protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &review})
 	master.drive()
@@ -256,7 +256,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	var id string
 	var input protocol.ValidationInput
 	for action, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution" || in.Handler == "engine.gate" {
+		if in.Handler == "engine.qa.execution.v2" || in.Handler == "engine.gate.v2" {
 			id, input = action, in
 			break
 		}
@@ -265,7 +265,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 		t.Fatalf("unexpected mainline task: %+v", master.run.ValidationInputs)
 	}
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution" {
+	if input.Handler == "engine.qa.execution.v2" {
 		report := executionFor(input)
 		result.Execution = &report
 		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -287,7 +287,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 		if input.Binding.Candidate != wave.Candidate.Identity {
 			t.Fatal("mixed candidate validation")
 		}
-		if input.Handler == "engine.gate" && (input.Gate == nil || input.Gate.BaseSnapshot != state.BaseSnapshot || input.Gate.Candidate != wave.Candidate) {
+		if input.Handler == "engine.gate.v2" && (input.Gate == nil || input.Gate.BaseSnapshot != state.BaseSnapshot || input.Gate.Candidate != wave.Candidate) {
 			t.Fatal("gate lost original FULL range")
 		}
 	}
@@ -354,7 +354,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 
 func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 	master, _ := mainlineChildren(t, "text")
-	id, input := master.action("engine.merge.resolve")
+	id, input := master.action("engine.merge.resolve.v2")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "app.go" {
 		t.Fatal("conflict did not carry exact native stages")
 	}
@@ -399,7 +399,7 @@ func TestConflictContextRejectsNonConflictEdits(t *testing.T) {
 
 func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution" {
+	if input.Handler == "engine.qa.execution.v2" {
 		report := executionFor(input)
 		result.Execution = &report
 		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -429,11 +429,11 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			break
 		}
 		result := mainlineResult(input)
-		if input.Handler == "engine.gate" && master.run.Validation.Waves[0].Targets[input.Binding.Task.String()].SliceID == "" {
+		if input.Handler == "engine.gate.v2" && master.run.Validation.Waves[0].Targets[input.Binding.Task.String()].SliceID == "" {
 			result.Status = "FAIL"
 			result.Findings = []review.Finding{{Severity: "P2", Message: "Combined command output differs from the confirmed oracle"}}
 		}
-		if input.Handler == "engine.qa.execution" {
+		if input.Handler == "engine.qa.execution.v2" {
 			result.Status = "FAIL"
 			result.Execution.Records[0].Result = coverage.ExecutedFail
 			failedCase = result.Execution.Records[0].CaseID
@@ -473,7 +473,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{item}}}})
 	}
 	master.drive()
-	repair, input := master.action("engine.repair")
+	repair, input := master.action("engine.repair.v2")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 || len(input.Repair.ExecutionFailures) != 1 {
 		t.Fatal("simultaneous merge failures did not join one repair")
 	}
@@ -506,10 +506,10 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	// their original event identities without changing the native candidate.
 	var events []protocol.Event
 	for id, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
+		if in.Handler == "engine.qa.execution.v2" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
 			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
 		}
-		if in.Handler == "engine.gate" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
+		if in.Handler == "engine.gate.v2" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
 			t.Fatal("QA scope narrowed the ordinary gate")
 		}
 		master.receipt(id)
@@ -617,7 +617,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 	for _, kind := range []string{"binary", "delete"} {
 		t.Run(kind, func(t *testing.T) {
 			master, _ := mainlineChildren(t, kind)
-			id, input := master.action("engine.merge.resolve")
+			id, input := master.action("engine.merge.resolve.v2")
 			if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 {
 				t.Fatal("native conflict inventory is incomplete")
 			}
@@ -708,7 +708,7 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 				releaseRequirement(t, master, request)
 			} else {
 				master.drive()
-				id, in := master.action("engine.merge.resolve")
+				id, in := master.action("engine.merge.resolve.v2")
 				master.receipt(id)
 				workerWorkspace = in.Workspace.Path
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\n// resolution in flight\nfunc main() {}\n"), 0644); err != nil {
@@ -926,7 +926,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 
 func TestMainlineTextSeparatorsResolveAndReopen(t *testing.T) {
 	master, _ := mainlineChildren(t, "markdown")
-	id, input := master.action("engine.merge.resolve")
+	id, input := master.action("engine.merge.resolve.v2")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "README.md" {
 		t.Fatal("native Markdown conflict is absent")
 	}

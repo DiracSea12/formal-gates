@@ -114,13 +114,6 @@ type DevelopmentInput struct {
 // GranularityVerificationTiers is the finite proposal tier domain; empty uses FINAL.
 func GranularityVerificationTiers() []string { return []string{"", "FINAL", "CHECKPOINT"} }
 
-// GranularityResultContract describes the existing proposal admission rules.
-func GranularityResultContract() string {
-	return "granularityReview requires a non-empty reason and at least one batch. verificationTier is FINAL (or empty) or CHECKPOINT. FINAL omits checkpointGroups/checkpointReason or supplies [] and an empty string; put explanations in reason, never checkpointReason. CHECKPOINT requires a non-empty structural checkpointReason and at least two non-empty groups covering every batch ID exactly once; dependencies may not point to a later group. Each batch needs a unique non-empty ID; non-empty deliverable, publicEntry, interfaces, stateBoundary, risk, rollback, recovery, handoff and contextCost; non-empty subtasks, artifacts, dod and checks. Subtask IDs are globally unique and each description is non-empty. DoD IDs/descriptions and check IDs/commands are non-empty and unique within their batch. Check purpose is empty, FULL_BUILD or FULL_TESTS. The confirmed project plan requires at least one FULL_BUILD and one FULL_TESTS command covering the complete project; purpose is an explicit approved meaning, never inferred from command text. A proposed split assigns every batch an explicit owner naming a proposed slice or master-merge. These proposed slice identifiers are displayed in the original readiness plan and must match the topology identifiers the user confirms; never guess a future topology identifier. Each slice's batches must form a complete independently executable plan, with its own FULL_BUILD and FULL_TESTS checks and no dependencies on another owner. master-merge batches separately carry complete integrated project checks. Omit owner for an unsplit plan. The program projects the original batches by owner; it never guesses ownership from names, paths or commands. dependsOn names existing batch IDs without duplicates or cycles. A spike may only be the first batch, and every later batch must transitively depend on it. artifacts contain actual repository-relative paths, not descriptions. Propose work only; user confirmation owns plan/route authorization."
-}
-
-// ValidateGranularity checks the shared development-plan contract for readiness
-// and repair proposals before they are accepted or submitted.
 func ValidateGranularity(p *GranularityReview) error {
 	if p == nil || strings.TrimSpace(p.Reason) == "" || len(p.Batches) == 0 {
 		return validationError("readiness requires a granularity review with batches and rationale")
@@ -284,7 +277,7 @@ func (s *State) ReadinessProposal() *GranularityReview {
 	return proposal
 }
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return pipelineTask(cd, "engine.development.batch", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
+	return pipelineTask(cd, "engine.development.batch.v2", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
 }
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
 	id, p := s.readinessProposal()

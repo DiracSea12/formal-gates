@@ -60,42 +60,11 @@ func TestZcodeReference(t *testing.T) {
 // rule: canonical encoding with each object's additionalProperties key moved
 // last (recursively; array order untouched), and the value unchanged. A value
 // without the directive key is byte-identical to the canonical encoding.
-func TestZcodeSchemaForPrompt(t *testing.T) {
-	cases := []struct{ value, want string }{
-		{`{"type": "string"}`, `{"type":"string"}`},
-		{`{"additionalProperties": false, "type": "object"}`,
-			`{"type":"object","additionalProperties":false}`},
-		{`{"additionalProperties": false, "items": {"additionalProperties": true, "type": "object"}, "type": "array"}`,
-			`{"items":{"type":"object","additionalProperties":true},"type":"array","additionalProperties":false}`},
-		// A directive inside an array element is reordered without touching
-		// the array's own order.
-		{`[{"additionalProperties": false, "type": "object"}, 3]`,
-			`[{"type":"object","additionalProperties":false},3]`},
-		// The directive's own value is rendered as-is, whatever it is.
-		{`{"additionalProperties": {"type": "string"}, "type": "object"}`,
-			`{"type":"object","additionalProperties":{"type":"string"}}`},
-	}
-	for _, tc := range cases {
-		encoded, err := schemaForPrompt(decodeTestJSON(t, tc.value))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(encoded) != tc.want {
-			t.Fatalf("%s:\n got %s\nwant %s", tc.value, encoded, tc.want)
-		}
-		if decoded := decodeTestJSON(t, string(encoded)); !valuesEqual(decoded, decodeTestJSON(t, tc.value)) {
-			t.Fatalf("%s: the value changed", tc.value)
-		}
-	}
-	plain := decodeTestJSON(t, `{"properties": {"status": {"type": "string"}}, "type": "object"}`)
-	encoded, err := schemaForPrompt(plain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := mustCanonical(t, plain); string(encoded) != want {
-		t.Fatalf("directive-free schema:\n got %s\nwant %s", encoded, want)
-	}
-}
+
+// A directive inside an array element is reordered without touching
+// the array's own order.
+
+// The directive's own value is rendered as-is, whatever it is.
 
 // zcodeTestSnapshot is one host snapshot with a current selection, an
 // advertised list carrying reasoning levels, a thought level and a mode.
@@ -557,9 +526,10 @@ func zcodeWriteEvidence(t *testing.T, directory, source string, events []string)
 
 // TestZcodeMaterializeSource pins the event contract (合同 materialize 事件
 // 合同): inputId/turnId association, monotonic seq, success-only completion,
-// the ZCODE answer prefix and the receipt shape.
+// the original semantic submission and the receipt shape.
 func TestZcodeMaterializeSource(t *testing.T) {
-	directory := t.TempDir()
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS", "summary": "observed"})
 	zcodeWriteEvidence(t, directory,
 		`{"sessionId": "s-1", "inputId": "in-1", "selection": {"model": "ref", "reasoning_effort": "low"}}`,
 		zcodeSuccessEvents())
@@ -577,11 +547,11 @@ func TestZcodeMaterializeSource(t *testing.T) {
 	if !valuesEqual(receipt["usage_evidence"], map[string]any{"inputTokens": jsonNumber("9"), "outputTokens": jsonNumber("2")}) {
 		t.Fatalf("usage = %v", receipt["usage_evidence"])
 	}
-	if !valuesEqual(receipt["files"], proofsOf(t, directory, nativeSourceFiles)) {
+	if !valuesEqual(receipt["files"], proofsOf(t, directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile))) {
 		t.Fatalf("files = %v", receipt["files"])
 	}
-	if body := readTestFileBytes(t, filepath.Join(directory, "answer.raw.txt")); string(body) != zcodeTestResponse {
-		t.Fatalf("answer.raw.txt = %q", body)
+	if _, err := os.Stat(filepath.Join(directory, "answer.raw.txt")); !os.IsNotExist(err) {
+		t.Fatal("terminal prose became semantic evidence")
 	}
 	if body := readTestFileBytes(t, filepath.Join(directory, "answer.json")); string(body) != `{"status":"PASS","summary":"observed"}` {
 		t.Fatalf("answer.json = %s", body)
@@ -643,60 +613,54 @@ func TestZcodeMaterializeSourceRefusals(t *testing.T) {
 	}
 }
 
-// TestZcodeMaterializeSourceSavedAnswer pins the ZCODE write_answer boundary:
-// different saved bytes are refused, identical bytes are kept.
-func TestZcodeMaterializeSourceSavedAnswer(t *testing.T) {
-	directory := t.TempDir()
+// TestZcodeMaterializeSourceRejectsChangedSavedSemantics verifies the materialized
+// payload against the original successful semantic submission.
+func TestZcodeMaterializeSourceRejectsChangedSavedSemantics(t *testing.T) {
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS", "summary": "observed"})
 	zcodeWriteEvidence(t, directory,
 		`{"sessionId": "s-1", "inputId": "in-1", "selection": {}}`, zcodeSuccessEvents())
-	if err := os.WriteFile(filepath.Join(directory, "answer.raw.txt"), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "answer.json"), []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := zcodeMaterializeSource(directory)
-	if err == nil || err.Error() != "ZCODE_RESULT: saved output differs" {
+	if err == nil || err.Error() != "NATIVE_RESULT: saved semantics differ from original tool submission" {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// TestZcodeReconcileEligibility pins reconcile: only a NATIVE_RESULT-framed
-// failure of a completed process is replayed (合同 reconcile 资格).
+// TestZcodeReconcileEligibility recovers only original successful process and
+// source evidence, without submitting another semantic result.
 func TestZcodeReconcileEligibility(t *testing.T) {
-	directory := t.TempDir()
-	zcodeWriteEvidence(t, directory,
-		`{"sessionId": "s-1", "inputId": "in-1", "selection": {"model": "ref", "reasoning_effort": "low"}}`,
-		zcodeSuccessEvents())
-	if err := writeAtomicJSON(filepath.Join(directory, "native-error.json"),
-		map[string]any{"error": "RuntimeBlocked: NATIVE_RESULT: multiple candidate objects"}); err != nil {
-		t.Fatal(err)
+	fixture := func() string {
+		directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+		peerSubmitSemantics(directory, map[string]any{"status": "PASS", "summary": "observed"})
+		zcodeWriteEvidence(t, directory,
+			`{"sessionId": "s-1", "inputId": "in-1", "selection": {"model": "ref", "reasoning_effort": "low"}}`,
+			zcodeSuccessEvents())
+		return directory
 	}
-	process := map[string]any{"exit_code": 1, "error": ""}
-	source, err := zcodeReconcile(directory, process)
-	if err != nil {
-		t.Fatal(err)
+	directory := fixture()
+	names := []string{"native-source.json", "native-events.jsonl", nativeToolCallsFile, nativeToolContextFile}
+	originalProofs := proofsOf(t, directory, names)
+	source, err := zcodeReconcile(directory, map[string]any{"exit_code": 0, "error": ""})
+	if err != nil || source["identity"] != "s-1" || source["native_turn"] != "t-1" || source["input_id"] != "in-1" {
+		t.Fatalf("recovered source = %v %v", source, err)
 	}
-	if !valuesEqual(source["reconciliation"], map[string]any{
-		"kind": "completed-output-format", "original_exit_code": 1,
-		"original_error": "RuntimeBlocked: NATIVE_RESULT: multiple candidate objects", "new_model_calls": 0,
-	}) {
-		t.Fatalf("reconciliation = %v", source["reconciliation"])
+	if !valuesEqual(source["selection"], map[string]any{"model": "ref", "reasoning_effort": "low"}) || !valuesEqual(originalProofs, proofsOf(t, directory, names)) {
+		t.Fatal("recovery changed original selection or semantic evidence")
 	}
-	if textOf(source["native_turn"]) != "t-1" {
-		t.Fatalf("recovered turn = %v", source["native_turn"])
+	if string(readTestFileBytes(t, filepath.Join(directory, "answer.json"))) != `{"status":"PASS","summary":"observed"}` {
+		t.Fatal("recovery changed canonical semantic bytes")
 	}
-
-	for _, original := range []string{
-		"RuntimeBlocked: ZCODE_TRANSPORT: native ACP process closed its output",
-		"RuntimeBlocked: ZCODE_BINDING: event from another session",
-	} {
-		other := t.TempDir()
-		zcodeWriteEvidence(t, other,
-			`{"sessionId": "s-1", "inputId": "in-1", "selection": {}}`, zcodeSuccessEvents())
-		if err := writeAtomicJSON(filepath.Join(other, "native-error.json"), map[string]any{"error": original}); err != nil {
-			t.Fatal(err)
-		}
+	for _, process := range []map[string]any{{"exit_code": 1, "error": ""}, {"exit_code": 0, "error": "interrupted"}} {
+		other := fixture()
 		_, err := zcodeReconcile(other, process)
-		if err == nil || err.Error() != "ZCODE_RECONCILE: not a completed formatting-only failure" {
-			t.Fatalf("%s: err = %v", original, err)
+		if err == nil || err.Error() != "ZCODE_RECONCILE: original native process did not complete successfully" {
+			t.Fatalf("failed original process: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(other, "source.json")); !os.IsNotExist(err) {
+			t.Fatal("failed original process became a recovered success")
 		}
 	}
 }
@@ -1026,7 +990,7 @@ func TestZcodeEventsReleasedUnderLongStream(t *testing.T) {
 }
 
 // TestZcodeValidateBindingAndVerifySource pins zcode's registry operations:
-// the provider check, the proof ladder and the four-file source set.
+// the provider check and the complete original native and tool proof set.
 func TestZcodeValidateBindingAndVerifySource(t *testing.T) {
 	root := t.TempDir()
 	node := filepath.Join(root, "node")
@@ -1061,13 +1025,14 @@ func TestZcodeValidateBindingAndVerifySource(t *testing.T) {
 		t.Fatalf("valid binding: %v", err)
 	}
 
-	directory := t.TempDir()
-	for _, name := range nativeSourceFiles {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS", "summary": "observed"})
+	zcodeWriteEvidence(t, directory, `{"sessionId":"s-1","inputId":"in-1","selection":{}}`, zcodeSuccessEvents())
+	receipt, err := zcodeMaterializeSource(directory)
+	if err != nil {
+		t.Fatal(err)
 	}
-	proofs := proofsOf(t, directory, nativeSourceFiles)
+	proofs := objectOrEmpty(receipt["files"])
 	if err := zcodeVerifySource(directory, map[string]any{"provider": "zcode", "identity": "s-1", "files": proofs}); err != nil {
 		t.Fatalf("valid source: %v", err)
 	}
@@ -1076,7 +1041,7 @@ func TestZcodeValidateBindingAndVerifySource(t *testing.T) {
 		t.Fatalf("foreign source: %v", err)
 	}
 	if err := zcodeVerifySource(directory, map[string]any{"provider": "zcode", "identity": "s-1",
-		"files": map[string]any{"answer.raw.txt": proofs["answer.raw.txt"]}}); err == nil ||
+		"files": map[string]any{nativeToolCallsFile: proofs[nativeToolCallsFile]}}); err == nil ||
 		err.Error() != "EVIDENCE_MISSING: native source proofs absent" {
 		t.Fatalf("short proof set: %v", err)
 	}
