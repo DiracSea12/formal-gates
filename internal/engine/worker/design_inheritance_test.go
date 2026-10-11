@@ -40,3 +40,17 @@ func TestDesignSelectedItemsRetainOmittedSemantics(t *testing.T) {
 		t.Fatal("new case lacks its required scenario")
 	}
 }
+
+func TestSharedInstructionSelectionAfterEditingOriginal(t *testing.T) {
+	input := retainedDesignInput()
+	input.Validation.Manifest.SharedSteps = []coverage.SharedStep{input.Validation.Manifest.SharedSteps[0]}
+	raw := []byte(`{"sharedSteps":[{"step":1,"procedure":"edited original setup"},{"procedure":"new setup"}],"cases":[{"case":2,"sharedSteps":[2]}],"coverage":[null,null]}`)
+	result, err := DecodeResultWithPaths(input, "observation", raw, "original-semantic-output", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := result.Result.Validation.Manifest
+	if len(manifest.SharedSteps) != 2 || manifest.SharedSteps[0].ID != input.Validation.Manifest.SharedSteps[0].ID || manifest.SharedSteps[0].Procedure != "edited original setup" || manifest.Cases[1].SharedSteps[0] != manifest.SharedSteps[1].ID {
+		t.Fatalf("original+new instruction choice resolved incorrectly: %#v", manifest)
+	}
+}

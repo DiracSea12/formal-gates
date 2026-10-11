@@ -271,7 +271,7 @@ func TestZcodeExecuteReadOnly(t *testing.T) {
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+			{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -436,7 +436,7 @@ func TestZcodeExecuteSetModeBoundary(t *testing.T) {
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 					zcodeTurnPayload(inputID, ""))},
-				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+				{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 					zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 			}
@@ -480,7 +480,7 @@ func TestZcodeExecuteSetModeBoundary(t *testing.T) {
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-9",
 					zcodeTurnPayload(inputID, ""))},
-				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-9",
+				{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-9",
 					zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 			}
@@ -537,7 +537,7 @@ func TestZcodeExecuteSelection(t *testing.T) {
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 					zcodeTurnPayload(inputID, ""))},
-				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+				{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 					zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 			}
@@ -708,7 +708,7 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 				{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 					zcodeTurnPayload(inputID, ""))},
-				{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+				{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 					zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 				{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 			}

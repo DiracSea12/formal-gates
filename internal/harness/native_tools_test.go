@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -346,8 +347,21 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 		if id == 1 && getOf(reply["result"], "protocolVersion") != "2024-11-05" {
 			t.Fatalf("changed MCP protocol: %v", reply)
 		}
-		if id == 2 && len(listOf(getOf(reply["result"], "tools"))) != 1 {
-			t.Fatalf("tool surface: %v", reply)
+		if id == 2 {
+			declared := listOf(getOf(reply["result"], "tools"))
+			if len(declared) != 2 || getOf(declared[0], "name") != nativeWorkspaceTool || getOf(declared[1], "name") != nativeSemanticTool {
+				t.Fatalf("tool surface: %v", reply)
+			}
+			for _, tool := range declared {
+				schema := objectOrEmpty(getOf(tool, "inputSchema"))
+				if schema["type"] != "object" {
+					t.Fatalf("tool has no valid object declaration: %v", tool)
+				}
+			}
+			actions := listOf(getOf(getOf(getOf(getOf(declared[0], "inputSchema"), "properties"), "action"), "enum"))
+			if !slices.Contains(actions, any("replace")) {
+				t.Fatal("writable workspace lost its original operation declaration")
+			}
 		}
 	}
 	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})

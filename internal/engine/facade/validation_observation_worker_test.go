@@ -92,29 +92,93 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 			if err != nil || !reflect.DeepEqual(accepted, repeated) {
 				t.Fatalf("repeat changed original acceptance: %#v %v", repeated, err)
 			}
-			// The same result completion first releases the approved native recipe.
-			released := false
-			for _, intent := range after.State.ExecutableHostActions(d.f.definition) {
-				if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
-					continue
+			order := []string{"invalid"}
+			if scenario == "mandatory-and-selected" {
+				order = []string{"normal", "invalid"}
+			}
+			executed := map[string]protocol.ExecutionOperationFact{}
+			for _, caseID := range order {
+				var intent protocol.HostActionIntent
+				var params protocol.CheckParameters
+				for _, available := range after.State.ExecutableHostActions(d.f.definition) {
+					if available.Adapter == nil || available.Adapter.Operation != "op.check" {
+						continue
+					}
+					raw, err := json.Marshal(available.Adapter.Params)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var candidate protocol.CheckParameters
+					if err := json.Unmarshal(raw, &candidate); err != nil {
+						t.Fatal(err)
+					}
+					if candidate.QA == nil || candidate.Binding.WaveID != wave.ID {
+						continue
+					}
+					if intent.ActionID != "" {
+						t.Fatal("multiple checks released before the original receipt")
+					}
+					intent, params = available, candidate
 				}
-				raw, err := json.Marshal(intent.Adapter.Params)
+				manifest := after.State.Validation.Sets[coverage.ReviewBlackbox].Manifest
+				item := manifest.Cases[slices.IndexFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == caseID })]
+				if intent.ActionID == "" || params.QA.CaseID != caseID || params.QA.Ordinal != 0 || params.QA.Source != "case:"+caseID || !reflect.DeepEqual(params.QA.Operation, item.Operations[0]) {
+					t.Fatalf("released check lost its original case order or recipe: want=%s params=%+v", caseID, params)
+				}
+				if params.QA.Execution.Candidate != issued.Candidate || params.QA.Execution.Scope != coverage.ScopeAffected || !slices.Equal(params.QA.Execution.ExpectedCaseIDs, issued.Scopes[0].ApprovedCases) {
+					t.Fatal("released check changed the approved execution scope", params.QA.Execution)
+				}
+				if params.Binding.Candidate != issued.Candidate.Identity || params.Binding.RequirementRevision != wave.RequirementRevision || params.Binding.Generation != wave.Generation || params.SourceIdentity != issued.Candidate.Identity || params.SourceDigest != issued.Candidate.Digest {
+					t.Fatal("released check changed its current work binding", params)
+				}
+				if !d.observeFixtureAdapter() {
+					t.Fatal("released native recipe was not observed")
+				}
+				after, err = d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)
 				}
-				var params protocol.CheckParameters
-				if err := json.Unmarshal(raw, &params); err != nil {
+				receipt := after.State.HostActionReceipts[intent.ActionID]
+				var evidence protocol.CheckEvidence
+				if receipt.AdapterEvidence == nil {
+					t.Fatal("original check receipt has no native evidence")
+				}
+				values, err := json.Marshal(receipt.AdapterEvidence.Values)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if params.QA != nil && params.QA.CaseID == "invalid" && params.QA.Execution.Candidate == issued.Candidate {
-					released = true
+				if err := json.Unmarshal(values, &evidence); err != nil {
+					t.Fatal(err)
 				}
+				invocation, _ := json.Marshal(item.Operations[0].Argv)
+				code := 0
+				stdout := "completed approved operation: " + string(invocation)
+				if caseID == "invalid" {
+					code = 2
+					stdout = "rejected invalid input"
+				}
+				if receipt.Status != protocol.HostActionStatusExecuted || receipt.PayloadDigest != intent.PayloadDigest || evidence.ParametersDigest != intent.PayloadDigest || evidence.SourceIdentity != params.SourceIdentity || evidence.SourceDigest != params.SourceDigest || evidence.WorkspaceID != params.WorkspaceID {
+					t.Fatalf("native receipt lost its original inputs: %+v %+v", receipt, evidence)
+				}
+				if evidence.Invocation != string(invocation) || evidence.ExitCode != code || evidence.StdoutText != stdout || evidence.StderrText != "" || evidence.Error != "" || evidence.WorkingDirectory != filepath.Join(params.QA.WorkspaceRoot, params.QA.Directory) {
+					t.Fatal("native receipt changed its observed invocation or outcome", evidence)
+				}
+				executed[caseID] = protocol.ExecutionOperationFact{ActionID: intent.ActionID, Parameters: params, Evidence: evidence}
+				raw, _ := json.Marshal(executed[caseID])
+				t.Logf("approved case receipt: %s", raw)
 			}
-			if !released {
-				t.Fatal("semantic completion did not refill the original approved native recipe")
-			}
+			d.reopen()
 			d.drive()
 			_, qa := d.action("engine.qa.execution.v2")
+			if len(qa.ExecutionFacts) != len(required) {
+				t.Fatal("comparison did not receive every required native case")
+			}
+			for _, fact := range qa.ExecutionFacts {
+				original, found := executed[fact.CaseID]
+				if !found || len(fact.Operations) != 1 || !reflect.DeepEqual(fact.Operations[0], original) {
+					t.Fatal("comparison changed the original execution receipt", fact)
+				}
+			}
 			if !slices.Equal(qa.RequiredCases, required) {
 				t.Fatal("scope dropped required or selected case")
 			}

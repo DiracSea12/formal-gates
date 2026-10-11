@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"reflect"
 	"testing"
 )
 
@@ -60,6 +61,14 @@ func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
 	for _, diagnostic := range []bool{true, false} {
 		t.Run(fmt.Sprintf("diagnostic=%t", diagnostic), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
+			preparation := [][]string{
+				{"", "initialize the valid input fixture before invocation", "clear captured output before invocation", "invoke from the clean project root"},
+				{"restore the valid input fixture after prior execution", "resolve the app executable from the project root", "provide empty standard input", "use the isolated project environment"},
+			}
+			failureReasons := [][]string{
+				{"Valid input fixture initialization is unspecified", "Captured output from earlier execution can contaminate the oracle", "The invocation working directory is unspecified"},
+				{"Executable resolution is unspecified", "Standard input is unspecified", "Execution environment is unspecified"},
+			}
 			for sequence := 0; sequence < 2; sequence++ {
 				for index := 0; index < 4; index++ {
 					if index == 3 {
@@ -73,7 +82,19 @@ func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
 					if len(m.Cases) == 0 {
 						m = simpleManifest(in)
 					}
+					previousPreconditions := m.Cases[0].Preconditions
+					unaffected := m.Cases[1]
+					if preparation[sequence][index] != "" {
+						m.Cases[0].Preconditions += "; " + preparation[sequence][index]
+					}
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
+					set := d.run.Validation.Sets[coverage.ReviewBlackbox]
+					if len(d.run.RejectedResults) != 0 || len(set.Manifest.Cases) != 2 || set.Manifest.Cases[0].CaseID != "normal" || set.Manifest.Cases[0].Preconditions != m.Cases[0].Preconditions || !reflect.DeepEqual(set.Manifest.Cases[1], unaffected) {
+						t.Fatal("accepted revision changed case identity or untouched rejection case", d.run.RejectedResults, set.Manifest)
+					}
+					if preparation[sequence][index] != "" && set.Manifest.Cases[0].Preconditions == previousPreconditions {
+						t.Fatal("reopened design did not correct its executable preparation")
+					}
 					d.drive()
 
 					for _, ask := range d.run.PendingAsks {
@@ -89,6 +110,7 @@ func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
 					if index < 3 {
 						r.SetStatus = coverage.StatusFail
 						r.CaseDecisions[0].Status = coverage.StatusFail
+						r.CaseDecisions[0].Reason = failureReasons[sequence][index]
 						r.PointDecisions[0].Status = coverage.StatusFail
 						r.SourceDecisions[0].Status = coverage.StatusFail
 					}
@@ -99,7 +121,7 @@ func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: string(status), Review: &r})
 					d.reopen()
 					d.drive()
-					set := d.run.Validation.Sets[coverage.ReviewBlackbox]
+					set = d.run.Validation.Sets[coverage.ReviewBlackbox]
 					if len(set.ReviewHistory) != sequence*4+index+1 || len(d.run.RejectedResults) != 0 {
 						t.Fatal("review history differs from accepted results")
 					}

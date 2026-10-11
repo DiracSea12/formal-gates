@@ -22,8 +22,8 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runCLI(t, "gate", "run", "--root", root, "--package-root", pkg, "--vcs", "git", "--save-context", context, "quality")
-	if strings.Contains(prompt, "first line") || strings.Contains(prompt, "second line") || !strings.Contains(prompt, `"read": 1`) || !strings.Contains(prompt, `"path": "example.txt"`) || !strings.Contains(prompt, context) {
-		t.Fatal("gate task repeated source content or lost original location/context indexes", prompt)
+	if !strings.Contains(prompt, "first line") || !strings.Contains(prompt, "second line") || !strings.Contains(prompt, `"read": 1`) || !strings.Contains(prompt, `"path": "example.txt"`) || strings.Contains(prompt, context) || !strings.Contains(prompt, "[Native comparison]") {
+		t.Fatal("gate task lost program-provided original comparison/location facts or required a copied context path", prompt)
 	}
 	data, err := os.ReadFile(context)
 	if err != nil {
@@ -102,14 +102,14 @@ func TestStandaloneGateStartupSelectsPublishedCatalogPositions(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &choices); err != nil || len(choices) != 2 {
 		t.Fatal("original catalog was not published", out.String(), err)
 	}
-	for _, choice := range choices {
+	for index, choice := range choices {
 		out.Reset()
 		errout.Reset()
 		if code := Run("formal-gates", []string{"gate", "run", "--root", root, "--package-root", pkg, "--gate", strconv.Itoa(choice.Gate)}, IO{Stdout: &out, Stderr: &errout}); code != 0 {
 			t.Fatal(errout.String())
 		}
-		if !strings.Contains(out.String(), "[Gate: "+choice.Name+"]") {
-			t.Fatal("selected position rebound catalog", out.String())
+		if !strings.Contains(out.String(), "[Gate: "+choice.Name+"]") || !strings.Contains(out.String(), "Original review position: "+strconv.Itoa(index+1)) || strings.Contains(out.String(), "Original report context") {
+			t.Fatal("selected position rebound catalog or original review", out.String())
 		}
 	}
 	contexts, _ := filepath.Glob(filepath.Join(root, ".gates", "tmp", "gate-review", "review-*.json"))

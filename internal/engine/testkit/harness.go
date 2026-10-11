@@ -739,8 +739,7 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	// 推进 revision 用一个真实协议事件（lifecycle observation buffer），
-	// 不再借用 operator observation 伪造任意入账。
+	// 生命周期观测事件沿原协议接纳路径推进 revision。
 	bump, _ := protocol.NewCorrelatedLifecycleEvent("freshness-bump", "fake-host", "freshness-agent", "freshness-agent", protocol.LifecycleStart)
 	if _, err := submit(fixture.Engine, bump); err != nil {
 		return err
@@ -1472,13 +1471,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 	if _, err := ensureReady(report, fixture); err != nil {
 		return err
 	}
-	// 驱动循环（审阅 P1-3 修复）：每个决策边界都由真实协议事件推进——
-	// AGENT 步走 spawn 回执 + worker result，HUMAN_ASK 走两阶段 request/
-	// decide，HOST_ACTION 走 intent 持久化 + adapter 执行 + EXECUTED 回执，
-	// LOCAL/DURABLE/PARALLEL 步由引擎自身的 completeResult 路径完成
-	// （PASS result → CompleteStep → refill），与 agent 步完全同一条接纳
-	// 面。不再手工 CompleteStep、不手工清空 Expected/Attempts/PendingActions、
-	// 不绕过 Engine 直连 Store.Save。
+	// 各决策边界由原协议事件推进；副作用仍经过 intent、执行和 receipt 接纳。
 	seq := 0
 	nextEventID := func(prefix string) protocol.EventID {
 		seq++

@@ -54,27 +54,32 @@ formal-gates requirement edit --root <repo> --item <原需求序号> \
 代码边界与未来约束留在方案正文，不伪装为 QA 的 AC。
 
 **次序固定为：结构预检 → 展示完整文件与精确 revision → 用户明确确认 → start。**
-启动前预检使用现有 start 的只读模式：
+启动前预检使用 start 的材料准备模式，保存载荷，不创建 run：
 
 ```bash
-formal-gates workflow start --precheck --root <repo> --requirement <requirement-file>
+formal-gates workflow start --precheck --document <原需求文档序号>
 ```
 
 输出 `content` 全文、`revision` 精确内容摘要、`requirementDocument` 结构投影，以及
-程序准备的 `intakeCandidate`。`materials` 含全部选定材料的规范化全文和各自 revision；
-`--solution <path>` 选择独立方案文件，缺省使用正式文件本身；可重复 `--artifact <path>`
-添加需确认的材料。路径、内容摘要、方案绑定与固定 transport 均由程序组装，无需手抄。
-不创建 run 或确认 receipt，不读取或写入 admission/registry。可加 `--save-candidate <文件>`
-由程序保存同一完整 `intakeCandidate`；保存候选不代表确认。材料选择 flags 仅供
-precheck；正常 start 只接收已确认 receipt。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
+程序准备的 `intakeCandidate`。在项目目录执行时 root 缺省为当前目录，不做项目发现。
+`--document` 复用 requirement show 发布的原需求文档序号；唯一文档可自动选取。
+`start --precheck --materials` 只读发布项目普通文件的材料序号，`--solution-document <序号>`
+选择独立方案，缺省使用正式文件；可重复 `--artifact-document <序号>` 添加确认材料。
+`materials` 含全部选定材料的规范化全文和各自 revision。路径、内容摘要、方案绑定与
+固定 transport 均由程序组装，无需手抄。预检默认把完整 candidate 存入项目所属的
+`.gates/tmp/intake` 载荷目录，返回 `intake` 序号；保存候选不代表确认，不创建 run，
+不读取或写入 admission/registry。材料选择 flags 仅供 precheck；正常 start 只接收
+已获真实用户确认的原载荷。精确 `--requirement/--solution/--artifact` 与
+`--save-candidate` 文件接口仅供人工或程序集成。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
 展示和确认。确认前不启动开发 run、不选择后续路线、不派发后续代理。结构预检的通过
 不是产品审、技术审或 QA 的 PASS。
 
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
-精确 revisions。预检的 `--save-candidate <文件>` 已由程序保存完整对象；等待用户明确
-确认后，将原文件交给 `start --intake-receipt`。代理不抽取 JSON、不抄写字段、路径、
+精确 revisions。预检已由程序保存完整原对象；等待用户明确确认后，使用
+`start --intake <原序号>`，只有一个载荷时可省略序号，多个时程序只展示原位置供选择。
+精确 `--intake-receipt` 保留给人工或程序集成。代理不抽取 JSON、不抄写字段、路径、
 摘要或全文。保存候选不会启动 run；确认 receipt 是受理材料，不是模型调用记录。
 
 程序固定 `source/authority=stable-driver` 与 `transport=stable-launcher`，登记
@@ -92,42 +97,41 @@ precheck；正常 start 只接收已确认 receipt。预检只核结构、字段
 ## 启动与 run 控制
 
 ```bash
-formal-gates workflow start --root <repo> --package-root <installed-package> \
-  --run-id <id> --route regular --vcs <git|svn|p4> \
-  [--base-snapshot <native-base-identity>] --intake-receipt <receipt.json>
+formal-gates workflow start --run-id <新名称> --route regular --vcs <git|svn|p4> \
+  --intake <原载荷序号>
 
-formal-gates workflow start --root <repo> --package-root <installed-package> \
-  --run-id <id> --route lightweight --intake-receipt <receipt.json>
+formal-gates workflow start --run-id <新名称> --route lightweight --intake <原载荷序号>
 
-formal-gates workflow drive --root <repo>
-formal-gates workflow show --root <repo>
-formal-gates workflow status --root <repo>
-formal-gates workflow next --root <repo>
-formal-gates workflow submit --root <repo> --request <当前控制类型>
-formal-gates workflow next --root <repo> --ask <原序号> --choice <真实选择> \
-  --save-candidate <confirmation.json>
+formal-gates workflow drive
+formal-gates workflow show
+formal-gates workflow status
+formal-gates workflow next
+formal-gates workflow submit --request <当前控制类型>
+formal-gates workflow next --ask <原序号> --choice <真实选择>
 # 展示程序返回的当前确认内容，获得用户明确确认后：
-formal-gates workflow submit --confirmation <confirmation.json>
+formal-gates workflow submit --confirmation-candidate <原载荷序号>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
 
-show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。`submit --confirmation` 仍从原候选自动绑定项目和 run。
+show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。精确 `submit --confirmation` 供人工或程序集成，仍从原候选自动绑定目标。
 
 start/show/status/next/drive/submit 默认展示当前语义问题、短选择、必要确认材料及实际执行边界，
 不输出内部派发材料或 adapter 指令。程序调用者需要完整原投影时显式使用 `--machine`；
-`--save-candidate` 文件仍保存完整原对象，默认展示不改变其接纳绑定。precheck 的完整材料与 revision 输出不裁减。
+语义 next/replan 默认在原 run 的 payloads/control 目录保存完整原对象并公布
+`confirmationCandidate` 序号；纯 show/status/next 不写载荷。默认展示不改变接纳绑定。precheck 的完整材料与 revision 输出不裁减。
 
-regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
+regular 未显式提供 `--base-snapshot` 时，由原 VCS provider Resolve 取得实际不可变基线，
+再交既有 Start 强校验；显式精确 base 仍供人工或程序集成。regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
 单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。未选 mode 时先取得用户选择，
 lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
 在开发中降为 lightweight。
 
 `submit --request` 选择当前控制类型；程序创建 REQUEST Ask，不直接授权。
-决定使用 `next --ask --choice --save-candidate`：默认展示的 `ask` 先编号当前 run
+决定使用 `next --ask --choice`：默认展示的 `ask` 先编号当前 run
 未决 Ask，再按子 run 的稳定顺序编号已建立的当前子流程 Ask；程序绑定原目标，`--machine` 保留本地投影。
 `choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
-Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation`
+Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation-candidate`
 接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
@@ -261,20 +265,22 @@ PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ac
 “投递结果未知”原因与原文，不表示宿主确定没有收到，也不自动重发。动作关闭、替换
 或取消时，未投递消息明确结束并留证；任务 PASS 不能删除这些消息。
 
-`workflow progress --after-file <原进度输出文件>` 只读派生经过时间、真实运行/未启动/
+`workflow progress` 只读派生经过时间、真实运行/未启动/
 受阻、当前准备/命令/原生等待/结果处理及区间、新结果、准备执行/复用和实际原生调用。
 完成、失败和取消/替代分开；没有 pending 本身不证明完成。native-process 的调用数不是
 计费模型请求数。缺时钟/用量源显示 unavailable，不填零或相加并行区间。`--machine`
-保留完整原事实定位，普通显示不输出整份 workflow 材料。设置见[用户与项目设置](user-configuration.md)。
+保留完整原事实定位，普通显示不输出整份 workflow 材料。`--save-progress` 显式保存原
+完整进度载荷并公布 `progress` 序号，后续 `--after <原序号>` 读取原 revision；
+`--after 0` 选唯一载荷，多个则展示原位置，`--cursors` 只读列出原载荷。
+原文件/API 的 `--after-file/--after-revision` 保留。设置见[用户与项目设置](user-configuration.md)。
 
 ## 原需求内调整计划与转交
 
 `workflow replan --work <原序号> --work-disposition <CARRY|REDO> --work-reason <理由>
---changed-item <实际改变> --transitive-impact <影响> --carry-reason <保留理由>
---save-candidate <确认文件>` 只准备当前未终结
+--changed-item <实际改变> --transitive-impact <影响> --carry-reason <保留理由>` 只准备当前未终结
 regular 的计划重审：正式需求字节/revision 不变，product/topology 结论保留，逐项 work
 仍由用户选择 carry/redo 并给理由。按各子命令帮助选择原 work/child 的序号和新的影响解释，不写固定 JSON 外壳；
-程序保存完整 RequirementChangeInput，省略 classification/redo。原 `submit --confirmation` 确认后才重做
+程序保存完整 RequirementChangeInput，省略 classification/redo。原 `submit --confirmation-candidate` 确认后才重做
 start-readiness；优化或增加 Batch 必须由新技审生成完整计划并经 route/plan 再确认。
 不能通过自由任务正文绕过。普通相同需求的重复提交继续拒绝。
 
@@ -309,15 +315,31 @@ CLI 会话的短 cwd 只承载原生存储，文件操作仍在已绑定的实�
 续用使用其当前 material 和执行实例；恢复观察原事实，不重新提交。原会话、轮次、
 权限和费用继续由原 owner 持有。
 
-`native show --root <repo>` 展示原问题，`native respond --root <repo>` 只选择原问题/选项序号，
-使用 `--response-question`、`--response-choice`、`--response-text` 或 `--response-text-file`；
-表单以 `--form-field` 加 `--form-choice`/`--form-value`/`--form-value-file` 输入语义。
-程序生成完整候选，原 `--save-decision` 后须明确确认原 `--decision-file`，不能重填身份。
-`workflow message --text` 是新创作的语义转达；原文转发用 `--text-file` 读取原字节。
-没有原 chat API 的源证明时，不能将模型转述声称为原文零复制。
+`native show` 展示原问题，`native respond` 选择原问题/选项序号，使用
+`--question`、`--choice`、`--response-question`、`--response-choice` 或新 `--response-text`；
+表单以 `--form-field` 加 `--form-choice`/`--form-value` 输入新语义。程序默认保存完整
+原候选并公布 `decision` 序号；获得真实确认后 `native respond --question <原问题序号>
+--decision <原载荷序号>`，唯一载荷可用 `--confirm`。`--decisions` 只读列原问题候选。
+候选和原输入属于原项目、run、native job 与 request，不选最新、不跨请求搬运。
+
+已有原文由程序直接读取 stdin：`native respond --question <原序号> --prepare-text`
+保存原输入问题的 bytes；表单同时选 `--form-field`，多输入问题选 `--response-question`。
+随后 `--text-payload <原序号>` 读取同一原问题/字段的 bytes 准备候选，确认仍沿原
+NativeRespond 接纳。`--texts` 只读列原文本。精确 `--save-decision/--decision-file`、
+`--response-text-file/--form-value-file` 保留给人工或程序集成。
+
+`workflow message --text` 输入新创作的语义转达；原文使用 `--worker <原序号>
+--prepare-text` 从 stdin 保存原 bytes，不投递。`--texts` 列同一原 action/attempt 载荷，
+`--text-payload <原序号>` 沿既有消息队列投递所选原文。`--text-payload 0` 可选唯一载荷，
+多个则展示原位置。精确 `--text-file` 保留给人工或程序集成。没有原 chat API 的源证明时，
+不能将模型转述声称为原文零复制。
 
 `gate run --root <repo>` 发布当前包发现的门序号；`gate run --gate <原序号>` 选原门，
 精确 gate ID 仅供人工或程序集成。脱离 run 的 `gate report --root <repo> --review <原序号>` 以具体 finding、证据和位置 flags
 构造结果，例如 `--review-complete` 或 `--finding-severity`/`--finding-message`；原比较、
-路径和总体状态由程序取得。`--decision`、stdin typed JSON、精确 ID/path 接口保留给
+路径和总体状态由程序取得。gate run 由原 VCS provider Resolve 和 CompareWorkingTree
+捕获实际 base、before/after 原内容、mode、未跟踪与删除文件，并直接发布
+`[Native comparison]` 与 `locationFacts` 序号。正文行定位使用 after，删除项使用 before；
+binary 以明确 base64 表达原 bytes。reviewer 不执行固定 VCS 命令或抄随机 context 路径；
+原 context 文件仅作为同一结果接纳的身份材料保存。`--decision`、stdin typed JSON、精确 ID/path 接口保留给
 人工或程序集成，不是模型编写模板的入口。完整参数见各命令 `--help`。

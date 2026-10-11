@@ -1034,7 +1034,7 @@ func freshnessToken(revision uint64, request RequestID) string {
 	return encoder.Digest(data)
 }
 
-// canonicalJSON 是本包统一的 canonical 编码（与 decision/shadow 同形态）。
+// canonicalJSON 是本包统一的 canonical 编码。
 func canonicalJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

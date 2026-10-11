@@ -106,7 +106,7 @@ func TestSemanticControlPublicInputModesRejectMixturesBeforeWrite(t *testing.T) 
 	}
 }
 
-func TestSemanticReentryMessageReadsOriginalBytesForSelectedRunAndWorker(t *testing.T) {
+func TestSemanticReentryMessageSelectsOriginalBytesForRunAndWorker(t *testing.T) {
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"))
@@ -145,10 +145,28 @@ func TestSemanticReentryMessageReadsOriginalBytesForSelectedRunAndWorker(t *test
 	}
 	untouched := snapshotEngineRunTree(t, root, "another-target")
 	text := "保留 \"原文\"\r\n\n  中间缩进\t与尾随空格  "
-	path := filepath.Join(t.TempDir(), "original-message.txt")
-	mustWriteCLI(t, path, text)
 	var out, stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "message", "--root", root, "--run", "2", "--worker", "1", "--text-file", path}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := Run("formal-gates", []string{"workflow", "message", "--root", root, "--run", "2", "--worker", "1", "--prepare-text"}, IO{Stdin: strings.NewReader(text), Stdout: &out, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	prepared, err := f.Show()
+	if err != nil || len(prepared.TaskMessages) != 0 {
+		t.Fatal("saving original input sent a message", prepared.TaskMessages, err)
+	}
+	directory, err := workerTextDirectory(f, root, "writer-exclusive", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := originalPayloadPaths(directory)
+	if err != nil || len(paths) != 1 {
+		t.Fatal(paths, err)
+	}
+	body, err = os.ReadFile(paths[0])
+	if err != nil || string(body) != text {
+		t.Fatal("stored original text bytes changed", err)
+	}
+	out.Reset()
+	if code := Run("formal-gates", []string{"workflow", "message", "--root", root, "--run", "2", "--worker", "1", "--text-payload", "1"}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	var message protocol.TaskMessage

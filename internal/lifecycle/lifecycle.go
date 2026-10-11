@@ -25,7 +25,7 @@ type CaptureResult struct {
 	Identity  string `json:"identity"`
 	Duplicate bool   `json:"duplicate"`
 	// Roots 是本次事件实际落盘的仓库根路径（宿主载荷派生的 project roots 或显式 --root），
-	// 供生命周期触发面定位活动 run 以运行并行检查。
+	// 供原生执行观测面定位其活动 run。
 	Roots []string `json:"roots,omitempty"`
 }
 
@@ -190,9 +190,7 @@ func activeRunRoot(candidate string) (string, bool, error) {
 	}
 }
 
-// ActiveRunIDs returns the ids of runs currently active at root (those whose
-// lifecycle active marker exists). Used by the parallel-check trigger on
-// the lifecycle hook path to locate the run state to read.
+// ActiveRunIDs resolves active run markers for native workspace observation.
 func ActiveRunIDs(root string) ([]string, error) {
 	return activeRuns(root)
 }

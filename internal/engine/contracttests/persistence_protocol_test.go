@@ -273,7 +273,7 @@ func TestEngineEveryDurableCrashWindowConverges(t *testing.T) {
 				names = append(names, entry.Name())
 			}
 			sort.Strings(names)
-			if !reflect.DeepEqual(names, qaP2StateArtifacts) {
+			if !reflect.DeepEqual(names, persistenceFixtureStateArtifacts) {
 				t.Fatalf("recovery left protocol artifacts: %v", names)
 			}
 		})
@@ -534,7 +534,7 @@ func TestEngineCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 		names = append(names, entry.Name())
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, qaP2StateArtifacts) {
+	if !reflect.DeepEqual(names, persistenceFixtureStateArtifacts) {
 		t.Fatalf("revision conflict left protocol artifacts: %v", names)
 	}
 }
@@ -613,7 +613,7 @@ func TestEngineRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 	if snapshot.Revision != 1 || !reflect.DeepEqual(content, map[string]string{"value": "baseline"}) {
 		t.Fatalf("foreign staged envelope replaced committed state: revision=%d content=%v", snapshot.Revision, content)
 	}
-	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+	if names := persistenceFixtureArtifactNames(t, dir); !reflect.DeepEqual(names, persistenceFixtureStateArtifacts) {
 		t.Fatalf("residual recovery did not clean protocol artifacts: %v", names)
 	}
 }
@@ -1032,7 +1032,7 @@ func TestEngineIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
 	if !reflect.DeepEqual(after, corrupt) {
 		t.Fatal("integrity failure path rewrote authoritative state")
 	}
-	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+	if names := persistenceFixtureArtifactNames(t, dir); !reflect.DeepEqual(names, persistenceFixtureStateArtifacts) {
 		t.Fatalf("integrity failure left protocol artifacts: %v", names)
 	}
 }
@@ -1120,7 +1120,7 @@ func TestEngineFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testin
 	if snapshot.Revision != 2 || content["value"] != "candidate" {
 		t.Fatalf("post-write state = revision %d content %v", snapshot.Revision, content)
 	}
-	if names := qaP2ArtifactNames(t, dir); !reflect.DeepEqual(names, qaP2StateArtifacts) {
+	if names := persistenceFixtureArtifactNames(t, dir); !reflect.DeepEqual(names, persistenceFixtureStateArtifacts) {
 		t.Fatalf("post-write fingerprint path left protocol artifacts: %v", names)
 	}
 }

@@ -212,7 +212,7 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			if entry.Name() == ".git" || entry.Name() == ".gates" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -234,4 +234,88 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 		return nil
 	})
 	return documents, err
+}
+
+// Intake materials are the project's ordinary files, excluding repository and runtime metadata.
+func intakeMaterials(root string) ([]requirementDocumentChoice, error) {
+	materials := []requirementDocumentChoice{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == ".gates" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		materials = append(materials, requirementDocumentChoice{Position: len(materials) + 1, Path: filepath.ToSlash(relative)})
+		return nil
+	})
+	return materials, err
+}
+
+func printIntakeMaterials(root string, out io.Writer) (int, error) {
+	materials, err := intakeMaterials(root)
+	return printValue(out, materials, err)
+}
+
+func selectIntakeDocuments(root string, requirementPath *string, document int, solutionPath *string, solution int, artifacts *stringListFlag, artifactPositions []int, out io.Writer) (bool, error) {
+	if document != 0 && *requirementPath != "" {
+		return false, fmt.Errorf("select a document position or exact requirement file")
+	}
+	if *requirementPath == "" {
+		documents, err := requirementDocuments(root)
+		if err != nil {
+			return false, err
+		}
+		if document == 0 && len(documents) == 1 {
+			document = 1
+		}
+		if document == 0 {
+			_, err := printJSON(out, documents)
+			return false, err
+		}
+		if document < 1 || document > len(documents) {
+			return false, fmt.Errorf("select an original displayed requirement document")
+		}
+		*requirementPath = documents[document-1].Path
+	}
+	if solution != 0 && *solutionPath != "" || len(artifactPositions) != 0 && len(*artifacts) != 0 {
+		return false, fmt.Errorf("select confirmation material positions or exact material files")
+	}
+	if solution == 0 && len(artifactPositions) == 0 {
+		return true, nil
+	}
+	materials, err := intakeMaterials(root)
+	if err != nil {
+		return false, err
+	}
+	selectPath := func(position int) (string, error) {
+		if position < 1 || position > len(materials) {
+			return "", fmt.Errorf("select an original displayed confirmation material")
+		}
+		return materials[position-1].Path, nil
+	}
+	if solution != 0 {
+		*solutionPath, err = selectPath(solution)
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, position := range artifactPositions {
+		path, err := selectPath(position)
+		if err != nil {
+			return false, err
+		}
+		*artifacts = append(*artifacts, path)
+	}
+	return true, nil
 }

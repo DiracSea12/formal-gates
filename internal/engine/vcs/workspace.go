@@ -135,6 +135,18 @@ func (p *Provider) ChangedPathsFrom(base string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	current, err := p.workingTreeEntries()
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, change := range entryChanges(source, current) {
+		paths = append(paths, change.Path)
+	}
+	return paths, nil
+}
+
+func (p *Provider) workingTreeEntries() (map[string]string, error) {
 	head, err := p.Resolve()
 	if err != nil {
 		return nil, err
@@ -185,11 +197,7 @@ func (p *Provider) ChangedPathsFrom(base string) ([]string, error) {
 		value.Content, value.Action, value.Resolve = body, "", nil
 		current[path] = entryValue(value)
 	}
-	var paths []string
-	for _, change := range entryChanges(source, current) {
-		paths = append(paths, change.Path)
-	}
-	return paths, nil
+	return current, nil
 }
 
 // ValidateDeclaredChanges admits only declared workspace changes and native
@@ -382,7 +390,12 @@ func (p *Provider) Changes(base, identity string) ([]Change, error) {
 	if p.name != "git" {
 		return p.nativeChanges(base, identity)
 	}
-	out, err := p.runner.Run(p.root, "git", "diff", "--raw", "--no-abbrev", "--no-renames", "-z", base, identity, "--")
+	args := []string{"diff", "--raw", "--no-abbrev", "--no-renames", "-z", base}
+	if identity != "" {
+		args = append(args, identity)
+	}
+	args = append(args, "--")
+	out, err := p.runner.Run(p.root, "git", args...)
 	if err != nil {
 		return nil, err
 	}

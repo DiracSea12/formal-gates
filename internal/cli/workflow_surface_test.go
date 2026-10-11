@@ -34,7 +34,7 @@ func TestWorkflowPublicSurface(t *testing.T) {
 	}
 }
 
-func TestWorkflowPrecheckIsReadOnlyAndShowsExactConfirmationContent(t *testing.T) {
+func TestWorkflowPrecheckSavesOriginalPayloadAndShowsExactConfirmationContent(t *testing.T) {
 	root := t.TempDir()
 	body := cliStructuredRequirement("Implement the documented command behavior.") + "\n## 方案\n\nImplement only the confirmed behavior and verify its public entry.\n"
 	path := filepath.Join(root, "requirements.md")
@@ -65,9 +65,7 @@ func TestWorkflowPrecheckIsReadOnlyAndShowsExactConfirmationContent(t *testing.T
 	if len(report.Materials) != 1 || report.Materials[0].Content != report.Content || report.Materials[0].Revision != report.Revision || report.Candidate.RequirementRevision != report.Revision || report.Candidate.SolutionRevision != report.Revision || report.Candidate.Digest == "" {
 		t.Fatal("precheck did not prepare its exact single-file intake candidate")
 	}
-	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
-		t.Fatal("precheck created runtime or bootstrap state")
-	}
+	assertIntakePayloadWithoutRun(t, root, report.Candidate)
 	after, err := os.ReadFile(path)
 	if err != nil || string(after) != body {
 		t.Fatal("precheck changed the source bytes")
@@ -99,9 +97,7 @@ func TestWorkflowPrecheckAssignsMissingIdentitiesWithoutChangingMaterial(t *test
 	if err != nil || string(after) != body {
 		t.Fatal("precheck rewrote the source material", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
-		t.Fatal("precheck started a run or wrote runtime state")
-	}
+	assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 }
 
 func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
@@ -123,13 +119,10 @@ func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
 	}
 	out.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "unconfirmed", "--route", "lightweight"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --intake-receipt") {
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", t.TempDir(), "--run-id", "unconfirmed", "--route", "lightweight", "--intake", "1"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "select an original displayed payload") {
 		t.Fatalf("preview substituted for explicit confirmation receipt: %s", stderr.String())
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 3 {
-		t.Fatal("unconfirmed material selection wrote receipt, registry or runtime state", err)
-	}
+	assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 }
 
 func TestWorkflowUnsupportedStateIsDiagnosticOnly(t *testing.T) {

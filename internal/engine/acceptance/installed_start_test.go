@@ -319,8 +319,13 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	}
 	assertRejected("uninstalled", p.startArgs("uninstalled", "regular"), "UNREGISTERED_INSTALL")
 	p.install(t, "zcode", "global")
-	missingBase := p.startArgs("missing-base", "regular")
-	assertRejected("missing-base", missingBase[:len(missingBase)-2], "requires an immutable native base snapshot")
+	resolvedBase := p.startArgs("resolved-base", "regular")
+	p.call(t, nil, resolvedBase[:len(resolvedBase)-2]...)
+	request, _ := p.bindings(t, "resolved-base", "zcode")
+	if request.BaseSnapshot != p.base {
+		t.Fatalf("program resolved base=%q want native HEAD %q", request.BaseSnapshot, p.base)
+	}
+	t.Logf("isolated home=%s project=%s resolved original native HEAD=%s", p.home, p.project, request.BaseSnapshot)
 	wrongBase := p.startArgs("wrong-base", "regular")
 	wrongBase[len(wrongBase)-1] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")

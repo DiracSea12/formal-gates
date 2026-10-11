@@ -345,7 +345,9 @@ func assembleDesign(input protocol.WorkerInput, value *Design) (*Manifest, error
 			return nil, fmt.Errorf("new shared step requires a procedure")
 		}
 		result.SharedSteps = append(result.SharedSteps, step)
-		stepIDs = append(stepIDs, id)
+		if !slices.Contains(stepIDs, id) {
+			stepIDs = append(stepIDs, id)
+		}
 	}
 	selectedCaseIDs := slices.Clone(caseIDs)
 	if value.Replace {

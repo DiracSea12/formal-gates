@@ -85,7 +85,7 @@ func Supervise(directory string, services ...ExecutionServices) int {
 
 	// Owner lock: O_CREAT|O_EXCL|O_WRONLY, mode 0600. A pre-existing owner means
 	// another supervisor already owns this job, so back off without writing
-	// anything (Store.job's poll loop will read the existing receipt).
+	// anything; the native execution consumer observes the original receipt.
 	if err := claimJob(dir, request); err != nil {
 		if os.IsExist(err) {
 			return 2

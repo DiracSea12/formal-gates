@@ -24,16 +24,16 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 正式文件包含完整目标、边界、方案、需求块、验收条目与来源。通过 requirement 入口输入新语义，程序构造固定章节与编号并保留未修改的原文及已有 ID。
 
 ```bash
-formal-gates workflow start --precheck --root <project> --requirement <file> --save-candidate <candidate>
+formal-gates workflow start --precheck --document <原文档序号>
 ```
 
-展示程序返回的全部 materials 全文及精确 revisions，取得真实确认后将原 candidate 文件交给 `start --intake-receipt`。不抄取或重拼身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，记录 unverified；不把它当验证通过。
+在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认后使用 `start --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，记录 unverified；不把它当验证通过。
 
 需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 的原字段序号入口，不编写固定 JSON 外壳。
 
 ## 活动任务
 
-`workflow drive` 消费原签发职责；主代理不另建任务、补排步骤或手工恢复。遇用户决定时，核实并展示程序当前候选与原因，只提交语义选择和必要理由；程序保存完整确认对象，确认后沿原文件提交。选择方式见[公共控制入口](references/formal-flow.md#启动与-run-控制)。
+`workflow drive` 消费原签发职责；主代理不另建任务、补排步骤或手工恢复。遇用户决定时，核实并展示程序当前候选与原因，只提交语义选择和必要理由；程序在语义准备时保存完整确认载荷并公布 `confirmationCandidate` 序号，确认后用 `submit --confirmation-candidate <原序号>` 提交；唯一载荷可用 `submit --confirm`。选择方式见[公共控制入口](references/formal-flow.md#启动与-run-控制)。
 
 请求用户处置 finding 前，逐项展示问题、正常路径错误、后果、建议、等级及定级理由；原身份由程序候选携带。按[审查契约](prompts/reviewer-base.md)独立核真实性、范围、严重度、因果和复现，不能把候选或未执行项当正式 PASS。
 需求变化先按当前 Ask 冻结受影响工作，再修同一正式文件、重新预检、完整展示和确认。只澄清影响范围、公开行为、验收或主要架构的未决选择。

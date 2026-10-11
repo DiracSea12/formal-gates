@@ -298,15 +298,15 @@ func qaStepCompleted(state *protocol.State, wanted authoring.StepID) bool {
 }
 
 const (
-	qaP2PackageDigest = "sha256:qa-persistence-package"
-	qaP2Fingerprint   = "sha256:qa-persistence-facts"
-	qaP2Provider      = "qa-persistence-host"
+	persistenceFixturePackageDigest = "sha256:persistence-fixture-package"
+	persistenceFixtureFingerprint   = "sha256:persistence-fixture-facts"
+	persistenceFixtureProvider      = "persistence-fixture-host"
 )
 
-func qaP2Store(t *testing.T, dir string, injector func(persistence.FaultPoint) error) *persistence.Store {
+func persistenceFixtureStore(t *testing.T, dir string, injector func(persistence.FaultPoint) error) *persistence.Store {
 	t.Helper()
 	store, err := persistence.NewStore(dir, persistence.Config{
-		PackageDigest: qaP2PackageDigest,
+		PackageDigest: persistenceFixturePackageDigest,
 		FaultInjector: injector,
 	})
 	if err != nil {
@@ -315,11 +315,11 @@ func qaP2Store(t *testing.T, dir string, injector func(persistence.FaultPoint) e
 	return store
 }
 
-func qaP2Save(t *testing.T, store *persistence.Store, revision uint64, content any, collect func() (string, error)) persistence.SaveResult {
+func persistenceFixtureSave(t *testing.T, store *persistence.Store, revision uint64, content any, collect func() (string, error)) persistence.SaveResult {
 	t.Helper()
 	result, err := store.Save(persistence.Transaction{
 		ExpectedRevision:    revision,
-		ExpectedFingerprint: qaP2Fingerprint,
+		ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint:  collect,
 		Content:             content,
 	})
@@ -329,9 +329,9 @@ func qaP2Save(t *testing.T, store *persistence.Store, revision uint64, content a
 	return result
 }
 
-func qaP2Engine(t *testing.T, collect func() (string, error)) *protocol.Engine {
+func persistenceFixtureEngine(t *testing.T, collect func() (string, error)) *protocol.Engine {
 	t.Helper()
-	store := qaP2Store(t, t.TempDir(), nil)
+	store := persistenceFixtureStore(t, t.TempDir(), nil)
 	compiled, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -348,31 +348,31 @@ func qaP2Engine(t *testing.T, collect func() (string, error)) *protocol.Engine {
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
-	if err := engine.Init(view, qaP2Provider, qaP2Fingerprint); err != nil {
+	if err := engine.Init(view, persistenceFixtureProvider, persistenceFixtureFingerprint); err != nil {
 		t.Fatalf("Engine.Init: %v", err)
 	}
 	return engine
 }
 
-func qaP2Submit(t *testing.T, engine *protocol.Engine, event protocol.Event) protocol.Acceptance {
+func persistenceFixtureSubmit(t *testing.T, engine *protocol.Engine, event protocol.Event) protocol.Acceptance {
 	t.Helper()
-	acceptance, err := engine.Submit(event, qaP2Fingerprint)
+	acceptance, err := engine.Submit(event, persistenceFixtureFingerprint)
 	if err != nil {
 		t.Fatalf("Submit %s: %v", event.ID, err)
 	}
 	return acceptance
 }
 
-func qaP2Lifecycle(t *testing.T, id protocol.EventID, identity, eventName string) protocol.Event {
+func persistenceFixtureLifecycle(t *testing.T, id protocol.EventID, identity, eventName string) protocol.Event {
 	t.Helper()
-	event, err := protocol.NewLifecycleEventEvent(id, qaP2Provider, identity, eventName)
+	event, err := protocol.NewLifecycleEventEvent(id, persistenceFixtureProvider, identity, eventName)
 	if err != nil {
 		t.Fatalf("NewLifecycleEventEvent: %v", err)
 	}
 	return event
 }
 
-func qaP2RejectCode(t *testing.T, err error, want string) {
+func persistenceFixtureRejectCode(t *testing.T, err error, want string) {
 	t.Helper()
 	var rejected *protocol.RejectedError
 	if !errors.As(err, &rejected) || rejected.Code != want {
@@ -380,7 +380,7 @@ func qaP2RejectCode(t *testing.T, err error, want string) {
 	}
 }
 
-func qaP2Unchanged(t *testing.T, before protocol.Snapshot, engine *protocol.Engine) {
+func persistenceFixtureUnchanged(t *testing.T, before protocol.Snapshot, engine *protocol.Engine) {
 	t.Helper()
 	after, err := engine.Load()
 	if err != nil {
@@ -391,7 +391,7 @@ func qaP2Unchanged(t *testing.T, before protocol.Snapshot, engine *protocol.Engi
 	}
 }
 
-func qaP2LiveLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey, attempt protocol.Attempt, pending protocol.PendingAction, status runtime.TaskStatus, revision uint64) {
+func persistenceFixtureLiveLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey, attempt protocol.Attempt, pending protocol.PendingAction, status runtime.TaskStatus, revision uint64) {
 	t.Helper()
 	snapshot, err := engine.Load()
 	if err != nil {
@@ -413,11 +413,11 @@ func qaP2LiveLedger(t *testing.T, engine *protocol.Engine, task runtime.TaskKey,
 	}
 }
 
-// qaP2StateArtifacts 是状态目录的期望常驻集合：state.json 之外，
+// persistenceFixtureStateArtifacts 是状态目录的期望常驻集合：state.json 之外，
 // write.lock 是持久的目录互斥工件（内核文件锁永不删除）。
-var qaP2StateArtifacts = []string{"state.json", "write.lock"}
+var persistenceFixtureStateArtifacts = []string{"state.json", "write.lock"}
 
-func qaP2ArtifactNames(t *testing.T, dir string) []string {
+func persistenceFixtureArtifactNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -433,8 +433,8 @@ func qaP2ArtifactNames(t *testing.T, dir string) []string {
 
 func TestPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
 	seedDir := t.TempDir()
-	stable := func() (string, error) { return qaP2Fingerprint, nil }
-	qaP2Save(t, qaP2Store(t, seedDir, nil), 0, map[string]string{"value": "trusted"}, stable)
+	stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+	persistenceFixtureSave(t, persistenceFixtureStore(t, seedDir, nil), 0, map[string]string{"value": "trusted"}, stable)
 	statePath := filepath.Join(seedDir, "state.json")
 	seedBytes, err := os.ReadFile(statePath)
 	if err != nil {
@@ -488,11 +488,11 @@ func TestPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *test
 				t.Fatalf("read invalid state: %v", err)
 			}
 			collectorCalls := 0
-			_, err = qaP2Store(t, dir, nil).Save(persistence.Transaction{
-				ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+			_, err = persistenceFixtureStore(t, dir, nil).Save(persistence.Transaction{
+				ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 				CollectFingerprint: func() (string, error) {
 					collectorCalls++
-					return qaP2Fingerprint, nil
+					return persistenceFixtureFingerprint, nil
 				},
 				Content: map[string]string{"value": "must-not-write"},
 			})
@@ -507,8 +507,8 @@ func TestPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *test
 			if err != nil {
 				t.Fatalf("read state after rejection: %v", err)
 			}
-			if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-				t.Fatalf("rejected envelope changed bytes or artifacts: names=%v", qaP2ArtifactNames(t, dir))
+			if !bytes.Equal(before, after) || !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+				t.Fatalf("rejected envelope changed bytes or artifacts: names=%v", persistenceFixtureArtifactNames(t, dir))
 			}
 		})
 	}
@@ -536,22 +536,22 @@ func TestPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.point), func(t *testing.T) {
 			dir := t.TempDir()
-			stable := func() (string, error) { return qaP2Fingerprint, nil }
-			qaP2Save(t, qaP2Store(t, dir, nil), 0, map[string]string{"value": "baseline"}, stable)
-			faulted := qaP2Store(t, dir, func(point persistence.FaultPoint) error {
+			stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+			persistenceFixtureSave(t, persistenceFixtureStore(t, dir, nil), 0, map[string]string{"value": "baseline"}, stable)
+			faulted := persistenceFixtureStore(t, dir, func(point persistence.FaultPoint) error {
 				if point == tc.point {
 					return &persistence.InjectedCrashError{Point: point}
 				}
 				return nil
 			})
 			_, err := faulted.Save(persistence.Transaction{
-				ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+				ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 				CollectFingerprint: stable, Content: map[string]string{"value": "candidate"},
 			})
 			if !errors.Is(err, persistence.ErrInjectedCrash) {
 				t.Fatalf("faulted Save error = %v, want injected crash", err)
 			}
-			clean := qaP2Store(t, dir, nil)
+			clean := persistenceFixtureStore(t, dir, nil)
 			report, err := clean.Recover()
 			if err != nil {
 				t.Fatalf("Recover: %v", err)
@@ -570,8 +570,8 @@ func TestPersistenceProtocolEveryDurableCrashWindowConverges(t *testing.T) {
 			if snapshot.Revision != tc.revision || content["value"] != tc.value {
 				t.Fatalf("recovered snapshot = revision %d content=%v", snapshot.Revision, content)
 			}
-			if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-				t.Fatalf("recovery artifacts = %v", qaP2ArtifactNames(t, dir))
+			if !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+				t.Fatalf("recovery artifacts = %v", persistenceFixtureArtifactNames(t, dir))
 			}
 		})
 	}
@@ -685,8 +685,8 @@ func TestPersistenceProtocolProviderAndAttemptRejectionsAreZeroWrite(t *testing.
 			if err == nil {
 				t.Fatalf("event %s was accepted", tc.event.ID)
 			}
-			qaP2RejectCode(t, err, tc.code)
-			qaP2Unchanged(t, baseline, fixture.Engine)
+			persistenceFixtureRejectCode(t, err, tc.code)
+			persistenceFixtureUnchanged(t, baseline, fixture.Engine)
 		})
 	}
 }
@@ -733,7 +733,7 @@ func TestPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *testi
 		t.Fatalf("engine state was not written inside the isolation root: %+v", changes)
 	}
 	for _, dir := range []string{project.HostConfig, project.State, project.Resources, project.StableState, project.StableRun} {
-		if names := qaP2ArtifactNames(t, dir); len(names) != 0 {
+		if names := persistenceFixtureArtifactNames(t, dir); len(names) != 0 {
 			t.Fatalf("engine wrote namespace %s: %v", dir, names)
 		}
 	}
@@ -741,19 +741,19 @@ func TestPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot(t *testi
 
 func TestPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	stable := func() (string, error) { return qaP2Fingerprint, nil }
-	qaP2Save(t, qaP2Store(t, dir, nil), 0, map[string]string{"value": "committed"}, stable)
+	stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+	persistenceFixtureSave(t, persistenceFixtureStore(t, dir, nil), 0, map[string]string{"value": "committed"}, stable)
 	path := filepath.Join(dir, "state.json")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read committed state: %v", err)
 	}
 	collectorCalls := 0
-	_, err = qaP2Store(t, dir, nil).Save(persistence.Transaction{
-		ExpectedRevision: 0, ExpectedFingerprint: qaP2Fingerprint,
+	_, err = persistenceFixtureStore(t, dir, nil).Save(persistence.Transaction{
+		ExpectedRevision: 0, ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint: func() (string, error) {
 			collectorCalls++
-			return qaP2Fingerprint, nil
+			return persistenceFixtureFingerprint, nil
 		},
 		Content: map[string]string{"value": "stale"},
 	})
@@ -768,23 +768,23 @@ func TestPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts(t *testing.T
 	if err != nil {
 		t.Fatalf("read state after conflict: %v", err)
 	}
-	if !bytes.Equal(before, after) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-		t.Fatalf("CAS conflict changed bytes or artifacts: %v", qaP2ArtifactNames(t, dir))
+	if !bytes.Equal(before, after) || !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+		t.Fatalf("CAS conflict changed bytes or artifacts: %v", persistenceFixtureArtifactNames(t, dir))
 	}
 }
 
 func TestPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 	dir := t.TempDir()
-	stable := func() (string, error) { return qaP2Fingerprint, nil }
-	qaP2Save(t, qaP2Store(t, dir, nil), 0, map[string]string{"value": "baseline"}, stable)
-	faulted := qaP2Store(t, dir, func(point persistence.FaultPoint) error {
+	stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+	persistenceFixtureSave(t, persistenceFixtureStore(t, dir, nil), 0, map[string]string{"value": "baseline"}, stable)
+	faulted := persistenceFixtureStore(t, dir, func(point persistence.FaultPoint) error {
 		if point == persistence.FaultIntentAfter {
 			return &persistence.InjectedCrashError{Point: point}
 		}
 		return nil
 	})
 	_, err := faulted.Save(persistence.Transaction{
-		ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+		ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint: stable, Content: map[string]string{"value": "staged"},
 	})
 	if !errors.Is(err, persistence.ErrInjectedCrash) {
@@ -816,14 +816,14 @@ func TestPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testing
 	if err := os.WriteFile(stagedPath, append(stagedBytes, '\n'), 0o600); err != nil {
 		t.Fatalf("write foreign staged document: %v", err)
 	}
-	report, err := qaP2Store(t, dir, nil).Recover()
+	report, err := persistenceFixtureStore(t, dir, nil).Recover()
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	if report.Outcome != persistence.RecoveryResidual || report.Revision != 1 {
 		t.Fatalf("recovery report = %+v, want residual revision 1", report)
 	}
-	snapshot, err := qaP2Store(t, dir, nil).Load()
+	snapshot, err := persistenceFixtureStore(t, dir, nil).Load()
 	if err != nil {
 		t.Fatalf("Load after recovery: %v", err)
 	}
@@ -834,8 +834,8 @@ func TestPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch(t *testing
 	if snapshot.Revision != 1 || content["value"] != "baseline" {
 		t.Fatalf("foreign staged document replaced baseline: revision=%d content=%v", snapshot.Revision, content)
 	}
-	if !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-		t.Fatalf("recovery left artifacts: %v", qaP2ArtifactNames(t, dir))
+	if !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+		t.Fatalf("recovery left artifacts: %v", persistenceFixtureArtifactNames(t, dir))
 	}
 }
 
@@ -851,18 +851,18 @@ func mustReadDir(t *testing.T, dir string) []os.DirEntry {
 func TestPersistenceProtocolReplaySkipsFingerprintRevalidation(t *testing.T) {
 	collectorCalls := 0
 	var collectorErr error
-	engine := qaP2Engine(t, func() (string, error) {
+	engine := persistenceFixtureEngine(t, func() (string, error) {
 		collectorCalls++
 		if collectorErr != nil {
 			return "", collectorErr
 		}
-		return qaP2Fingerprint, nil
+		return persistenceFixtureFingerprint, nil
 	})
 	request, err := protocol.NewRequestEvent("qa-replay-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
-	first := qaP2Submit(t, engine, request)
+	first := persistenceFixtureSubmit(t, engine, request)
 	before, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load before replay: %v", err)
@@ -886,17 +886,17 @@ func TestPersistenceProtocolReplaySkipsFingerprintRevalidation(t *testing.T) {
 }
 
 func TestPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
-	engine := qaP2Engine(t, func() (string, error) { return qaP2Fingerprint, nil })
+	engine := persistenceFixtureEngine(t, func() (string, error) { return persistenceFixtureFingerprint, nil })
 	request, err := protocol.NewRequestEvent("qa-duplicate-source", protocol.ControlAbort, protocol.AskOption{ID: "keep", Label: "keep"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
-	qaP2Submit(t, engine, request)
-	firstLifecycle, err := protocol.NewLifecycleEventEvent("qa-lifecycle-original", qaP2Provider, "qa-agent", protocol.LifecycleStart)
+	persistenceFixtureSubmit(t, engine, request)
+	firstLifecycle, err := protocol.NewLifecycleEventEvent("qa-lifecycle-original", persistenceFixtureProvider, "qa-agent", protocol.LifecycleStart)
 	if err != nil {
 		t.Fatalf("first lifecycle: %v", err)
 	}
-	qaP2Submit(t, engine, firstLifecycle)
+	persistenceFixtureSubmit(t, engine, firstLifecycle)
 	token, err := engine.Freshness("qa-duplicate-source")
 	if err != nil {
 		t.Fatalf("Freshness: %v", err)
@@ -905,11 +905,11 @@ func TestPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testi
 	if err != nil {
 		t.Fatalf("Load before duplicate payload: %v", err)
 	}
-	duplicate, err := protocol.NewLifecycleEventEvent("qa-lifecycle-new-id", qaP2Provider, "qa-agent", protocol.LifecycleStart)
+	duplicate, err := protocol.NewLifecycleEventEvent("qa-lifecycle-new-id", persistenceFixtureProvider, "qa-agent", protocol.LifecycleStart)
 	if err != nil {
 		t.Fatalf("duplicate lifecycle: %v", err)
 	}
-	acceptance := qaP2Submit(t, engine, duplicate)
+	acceptance := persistenceFixtureSubmit(t, engine, duplicate)
 	if acceptance.Status != "DUPLICATE" || acceptance.Revision != before.Revision+1 {
 		t.Fatalf("new-ID duplicate acceptance = %+v", acceptance)
 	}
@@ -923,23 +923,23 @@ func TestPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testi
 	if _, recorded := after.State.Events[string(duplicate.ID)]; !recorded {
 		t.Fatal("new event ID was not durably occupied")
 	}
-	conflicting, err := protocol.NewLifecycleEventEvent(duplicate.ID, qaP2Provider, "qa-agent", protocol.LifecycleStop)
+	conflicting, err := protocol.NewLifecycleEventEvent(duplicate.ID, persistenceFixtureProvider, "qa-agent", protocol.LifecycleStop)
 	if err != nil {
 		t.Fatalf("conflicting lifecycle: %v", err)
 	}
-	if _, err := engine.Submit(conflicting, qaP2Fingerprint); err == nil {
+	if _, err := engine.Submit(conflicting, persistenceFixtureFingerprint); err == nil {
 		t.Fatal("occupied event ID accepted different payload")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeDuplicateEventMismatch)
+		persistenceFixtureRejectCode(t, err, protocol.CodeDuplicateEventMismatch)
 	}
 	stale, err := protocol.NewDecideEvent("qa-duplicate-stale-decision", "qa-duplicate-source", token, "keep")
 	if err != nil {
 		t.Fatalf("stale decision: %v", err)
 	}
-	if _, err := engine.Submit(stale, qaP2Fingerprint); err == nil {
+	if _, err := engine.Submit(stale, persistenceFixtureFingerprint); err == nil {
 		t.Fatal("duplicate payload failed to rotate freshness")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeStaleFreshness)
+		persistenceFixtureRejectCode(t, err, protocol.CodeStaleFreshness)
 	}
 	fresh, err := engine.Freshness("qa-duplicate-source")
 	if err != nil {
@@ -949,7 +949,7 @@ func TestPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied(t *testi
 	if err != nil {
 		t.Fatalf("fresh decision: %v", err)
 	}
-	if acceptance := qaP2Submit(t, engine, decisionEvent); acceptance.Status != "ACCEPTED" {
+	if acceptance := persistenceFixtureSubmit(t, engine, decisionEvent); acceptance.Status != "ACCEPTED" {
 		t.Fatalf("fresh decision acceptance = %+v", acceptance)
 	}
 }
@@ -1150,9 +1150,9 @@ func TestPersistenceProtocolRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 
 func TestPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *testing.T) {
 	dir := t.TempDir()
-	stable := func() (string, error) { return qaP2Fingerprint, nil }
-	store := qaP2Store(t, dir, nil)
-	qaP2Save(t, store, 0, map[string]string{"value": "trusted"}, stable)
+	stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+	store := persistenceFixtureStore(t, dir, nil)
+	persistenceFixtureSave(t, store, 0, map[string]string{"value": "trusted"}, stable)
 	path := filepath.Join(dir, "state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1186,10 +1186,10 @@ func TestPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *testin
 	assertMismatch("Load", err)
 	collectorCalls := 0
 	_, err = store.Save(persistence.Transaction{
-		ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+		ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint: func() (string, error) {
 			collectorCalls++
-			return qaP2Fingerprint, nil
+			return persistenceFixtureFingerprint, nil
 		},
 		Content: map[string]string{"value": "replacement"},
 	})
@@ -1203,16 +1203,16 @@ func TestPersistenceProtocolIntegrityMismatchFencesEveryStateOperation(t *testin
 	if err != nil {
 		t.Fatalf("read corrupt state after operations: %v", err)
 	}
-	if !bytes.Equal(after, corrupt) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-		t.Fatalf("integrity fence changed bytes or artifacts: %v", qaP2ArtifactNames(t, dir))
+	if !bytes.Equal(after, corrupt) || !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+		t.Fatalf("integrity fence changed bytes or artifacts: %v", persistenceFixtureArtifactNames(t, dir))
 	}
 }
 
 func TestPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testing.T) {
 	dir := t.TempDir()
-	stable := func() (string, error) { return qaP2Fingerprint, nil }
-	store := qaP2Store(t, dir, nil)
-	qaP2Save(t, store, 0, map[string]string{"value": "baseline"}, stable)
+	stable := func() (string, error) { return persistenceFixtureFingerprint, nil }
+	store := persistenceFixtureStore(t, dir, nil)
+	persistenceFixtureSave(t, store, 0, map[string]string{"value": "baseline"}, stable)
 	path := filepath.Join(dir, "state.json")
 	baseline, err := os.ReadFile(path)
 	if err != nil {
@@ -1220,7 +1220,7 @@ func TestPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWri
 	}
 	beforeCalls := 0
 	_, err = store.Save(persistence.Transaction{
-		ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+		ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint: func() (string, error) {
 			beforeCalls++
 			return "sha256:changed-before", nil
@@ -1235,16 +1235,16 @@ func TestPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWri
 	if err != nil {
 		t.Fatalf("read state after pre-write change: %v", err)
 	}
-	if !bytes.Equal(afterRejected, baseline) || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-		t.Fatalf("pre-write change modified state/artifacts: %v", qaP2ArtifactNames(t, dir))
+	if !bytes.Equal(afterRejected, baseline) || !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+		t.Fatalf("pre-write change modified state/artifacts: %v", persistenceFixtureArtifactNames(t, dir))
 	}
 	afterCalls := 0
 	result, err := store.Save(persistence.Transaction{
-		ExpectedRevision: 1, ExpectedFingerprint: qaP2Fingerprint,
+		ExpectedRevision: 1, ExpectedFingerprint: persistenceFixtureFingerprint,
 		CollectFingerprint: func() (string, error) {
 			afterCalls++
 			if afterCalls == 1 {
-				return qaP2Fingerprint, nil
+				return persistenceFixtureFingerprint, nil
 			}
 			return "sha256:changed-after", nil
 		},
@@ -1262,22 +1262,22 @@ func TestPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWri
 	if err := json.Unmarshal(snapshot.Content, &content); err != nil {
 		t.Fatalf("decode candidate: %v", err)
 	}
-	if snapshot.Revision != 2 || content["value"] != "candidate" || !reflect.DeepEqual(qaP2ArtifactNames(t, dir), qaP2StateArtifacts) {
-		t.Fatalf("post-write state = revision %d content=%v artifacts=%v", snapshot.Revision, content, qaP2ArtifactNames(t, dir))
+	if snapshot.Revision != 2 || content["value"] != "candidate" || !reflect.DeepEqual(persistenceFixtureArtifactNames(t, dir), persistenceFixtureStateArtifacts) {
+		t.Fatalf("post-write state = revision %d content=%v artifacts=%v", snapshot.Revision, content, persistenceFixtureArtifactNames(t, dir))
 	}
 }
 
 func TestPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	collectorCalls := 0
-	engine := qaP2Engine(t, func() (string, error) {
+	engine := persistenceFixtureEngine(t, func() (string, error) {
 		collectorCalls++
-		return qaP2Fingerprint, nil
+		return persistenceFixtureFingerprint, nil
 	})
 	first, err := protocol.NewRequestEvent("qa-event-key", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
-	qaP2Submit(t, engine, first)
+	persistenceFixtureSubmit(t, engine, first)
 	before, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load before conflict: %v", err)
@@ -1287,10 +1287,10 @@ func TestPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T) 
 	if err != nil {
 		t.Fatalf("conflicting request: %v", err)
 	}
-	if _, err := engine.Submit(conflicting, qaP2Fingerprint); err == nil {
+	if _, err := engine.Submit(conflicting, persistenceFixtureFingerprint); err == nil {
 		t.Fatal("same event ID with different digest was accepted")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeDuplicateEventMismatch)
+		persistenceFixtureRejectCode(t, err, protocol.CodeDuplicateEventMismatch)
 	}
 	if collectorCalls != callsBefore {
 		t.Fatalf("conflicting event collected fingerprint: %d -> %d", callsBefore, collectorCalls)
@@ -1305,21 +1305,21 @@ func TestPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite(t *testing.T) 
 }
 
 func TestPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
-	engine := qaP2Engine(t, func() (string, error) { return qaP2Fingerprint, nil })
+	engine := persistenceFixtureEngine(t, func() (string, error) { return persistenceFixtureFingerprint, nil })
 	request, err := protocol.NewRequestEvent("qa-freshness-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	qaP2Submit(t, engine, request)
+	persistenceFixtureSubmit(t, engine, request)
 	staleToken, err := engine.Freshness("qa-freshness-request")
 	if err != nil {
 		t.Fatalf("Freshness before intervening commit: %v", err)
 	}
-	observation, err := protocol.NewCorrelatedLifecycleEvent("qa-intervening-observation", qaP2Provider, "qa-correlation", "qa-identity", protocol.LifecycleStart)
+	observation, err := protocol.NewCorrelatedLifecycleEvent("qa-intervening-observation", persistenceFixtureProvider, "qa-correlation", "qa-identity", protocol.LifecycleStart)
 	if err != nil {
 		t.Fatalf("observation: %v", err)
 	}
-	qaP2Submit(t, engine, observation)
+	persistenceFixtureSubmit(t, engine, observation)
 	intervening, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load after intervening commit: %v", err)
@@ -1331,12 +1331,12 @@ func TestPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *testin
 	if err != nil {
 		t.Fatalf("stale decision: %v", err)
 	}
-	if _, err := engine.Submit(stale, qaP2Fingerprint); err == nil {
+	if _, err := engine.Submit(stale, persistenceFixtureFingerprint); err == nil {
 		t.Fatal("stale freshness token was accepted")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeStaleFreshness)
+		persistenceFixtureRejectCode(t, err, protocol.CodeStaleFreshness)
 	}
-	qaP2Unchanged(t, intervening, engine)
+	persistenceFixtureUnchanged(t, intervening, engine)
 	freshToken, err := engine.Freshness("qa-freshness-request")
 	if err != nil || freshToken == staleToken {
 		t.Fatalf("freshness after intervening commit = %q err=%v, stale=%q", freshToken, err, staleToken)
@@ -1345,7 +1345,7 @@ func TestPersistenceProtocolInterveningCommitInvalidatesFreshnessToken(t *testin
 	if err != nil {
 		t.Fatalf("fresh decision: %v", err)
 	}
-	if acceptance := qaP2Submit(t, engine, fresh); acceptance.Status != "ACCEPTED" {
+	if acceptance := persistenceFixtureSubmit(t, engine, fresh); acceptance.Status != "ACCEPTED" {
 		t.Fatalf("fresh decision acceptance = %+v", acceptance)
 	}
 }
@@ -1724,8 +1724,8 @@ func TestPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites(t *test
 			if err == nil {
 				t.Fatal("invalid HostAction intent was accepted")
 			}
-			qaP2RejectCode(t, err, tc.code)
-			qaP2Unchanged(t, baseline, fixture.Engine)
+			persistenceFixtureRejectCode(t, err, tc.code)
+			persistenceFixtureUnchanged(t, baseline, fixture.Engine)
 		})
 	}
 	intent, revision, err := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"stage": "qa-schema", "generation": 2}, fingerprint)
@@ -1752,9 +1752,9 @@ func TestPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites(t *test
 	if _, err := fixture.Engine.Submit(invalidReceipt, fingerprint); err == nil {
 		t.Fatal("receipt with undeclared evidence was accepted")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeOperationSchemaInvalid)
+		persistenceFixtureRejectCode(t, err, protocol.CodeOperationSchemaInvalid)
 	}
-	qaP2Unchanged(t, afterIntent, fixture.Engine)
+	persistenceFixtureUnchanged(t, afterIntent, fixture.Engine)
 	wantEvidence := map[string]any{"identity": "qa-receipt", "digest": "sha256:receipt"}
 	validReceipt, err := protocol.NewAdapterHostActionReceiptEvent("qa-valid-host-receipt", intent.ActionID, intent.Adapter.Operation, "fake-host", "qa-correlation", intent.PayloadDigest, protocol.HostActionStatusExecuted, "", wantEvidence)
 	if err != nil {
@@ -1803,7 +1803,7 @@ func TestPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testin
 	if !ok || pending.Task != action.Task || pending.Step != string(attempt.Step) || pending.AttemptID != attempt.ID {
 		t.Fatalf("pending action = %+v present=%v", pending, ok)
 	}
-	qaP2LiveLedger(t, fixture.Engine, action.Task, attempt, pending, runtime.TaskIssued, baseline.Revision)
+	persistenceFixtureLiveLedger(t, fixture.Engine, action.Task, attempt, pending, runtime.TaskIssued, baseline.Revision)
 	fingerprint, err := fixture.Engine.ObserveFingerprint()
 	if err != nil {
 		t.Fatalf("ObserveFingerprint: %v", err)
@@ -1815,9 +1815,9 @@ func TestPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testin
 	if _, err := fixture.Engine.Submit(notCurrent, fingerprint); err == nil {
 		t.Fatal("not-current task progress was accepted")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeEventNotCurrent)
+		persistenceFixtureRejectCode(t, err, protocol.CodeEventNotCurrent)
 	}
-	qaP2Unchanged(t, baseline, fixture.Engine)
+	persistenceFixtureUnchanged(t, baseline, fixture.Engine)
 	illegal, err := protocol.NewTaskEvent("qa-task-illegal", action.Task, attempt.ID, runtime.TaskValidating)
 	if err != nil {
 		t.Fatalf("illegal transition event: %v", err)
@@ -1825,9 +1825,9 @@ func TestPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testin
 	if _, err := fixture.Engine.Submit(illegal, fingerprint); err == nil {
 		t.Fatal("ISSUED to VALIDATING was accepted")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeIllegalTransition)
+		persistenceFixtureRejectCode(t, err, protocol.CodeIllegalTransition)
 	}
-	qaP2Unchanged(t, baseline, fixture.Engine)
+	persistenceFixtureUnchanged(t, baseline, fixture.Engine)
 	statuses := []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal}
 	for index, status := range statuses {
 		event, err := protocol.NewTaskEvent(protocol.EventID("qa-task-progress-"+string(status)), action.Task, attempt.ID, status)
@@ -1839,7 +1839,7 @@ func TestPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger(t *testin
 			t.Fatalf("progress %s = %+v err=%v", status, acceptance, err)
 		}
 		if status != runtime.TaskTerminal {
-			qaP2LiveLedger(t, fixture.Engine, action.Task, attempt, pending, status, acceptance.Revision)
+			persistenceFixtureLiveLedger(t, fixture.Engine, action.Task, attempt, pending, status, acceptance.Revision)
 		}
 	}
 	final, err := fixture.Engine.Load()
@@ -1913,7 +1913,7 @@ func TestPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly(t *testin
 	if _, err := testkit.RunHarness(testkit.HarnessOptions{ProjectRoot: root, Scenario: "terminal-replay", PayloadDigest: "sha256:wrong"}); err == nil {
 		t.Fatal("terminal replay accepted a different digest")
 	} else {
-		qaP2RejectCode(t, err, protocol.CodeDuplicateEventMismatch)
+		persistenceFixtureRejectCode(t, err, protocol.CodeDuplicateEventMismatch)
 	}
 	if _, err := testkit.RunHarness(testkit.HarnessOptions{ProjectRoot: root, Scenario: "submit-request", EventID: "qa-after-terminal"}); err == nil {
 		t.Fatal("terminal path recreated active state")
@@ -2061,8 +2061,8 @@ func TestPersistenceProtocolRawDiagnoseIsReadOnlyForUnsupportedInputs(t *testing
 			if !bytes.Equal(before, after) || beforeInfo.Mode() != afterInfo.Mode() || beforeInfo.Size() != afterInfo.Size() || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
 				t.Fatalf("raw diagnose changed input: before=%+v after=%+v", beforeInfo, afterInfo)
 			}
-			if !reflect.DeepEqual(qaP2ArtifactNames(t, root), []string{"state.json"}) {
-				t.Fatalf("raw diagnose created artifacts: %v", qaP2ArtifactNames(t, root))
+			if !reflect.DeepEqual(persistenceFixtureArtifactNames(t, root), []string{"state.json"}) {
+				t.Fatalf("raw diagnose created artifacts: %v", persistenceFixtureArtifactNames(t, root))
 			}
 		})
 	}

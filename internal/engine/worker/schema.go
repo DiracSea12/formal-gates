@@ -62,7 +62,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		delete(fields, "completion")
 		alternatives = append(alternatives, completed)
 	}
-	return map[string]any{"anyOf": alternatives}, nil
+	return map[string]any{"type": "object", "anyOf": alternatives}, nil
 }
 
 func completedSchema(input protocol.WorkerInput) (map[string]any, error) {

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"formal-gates/internal/prompts"
 	"io"
-	"os"
-	"path/filepath"
 
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
@@ -24,42 +22,37 @@ func gateResultContract() string {
 
 // StandaloneGateContext is original comparison evidence, outside run state.
 type StandaloneGateContext struct {
-	Root          string                `json:"root"`
-	VCS           string                `json:"vcs"`
-	Base          string                `json:"base"`
-	Scope         string                `json:"scope,omitempty"`
-	LocationFacts []worker.LocationFact `json:"locationFacts"`
+	Root          string                   `json:"root"`
+	VCS           string                   `json:"vcs"`
+	Base          string                   `json:"base"`
+	Scope         string                   `json:"scope,omitempty"`
+	Comparison    []vcs.SnapshotComparison `json:"comparison"`
+	LocationFacts []worker.LocationFact    `json:"locationFacts"`
 }
 
 func CaptureStandaloneGateContext(root, provider, scope string) (StandaloneGateContext, error) {
 	root = lifecycle.CleanRoot(root)
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	resolver, err := resolverForVCS(provider, nil)
+	native := vcs.NewNative(root, provider, nil)
+	provider = native.Name()
+	base, err := native.Resolve()
 	if err != nil {
 		return StandaloneGateContext{}, err
 	}
-	base, err := resolver.Resolve(root)
+	rows, err := native.CompareWorkingTree(base)
 	if err != nil {
 		return StandaloneGateContext{}, err
 	}
-	paths, err := vcs.NewNative(root, provider, nil).ChangedPaths()
-	if err != nil {
-		return StandaloneGateContext{}, err
-	}
-	context := StandaloneGateContext{Root: root, VCS: provider, Base: base, Scope: scope, LocationFacts: []worker.LocationFact{}}
-	for _, path := range paths {
-		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
-		if os.IsNotExist(err) {
-			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "listing", Paths: []string{path}})
-			continue
+	context := StandaloneGateContext{Root: root, VCS: provider, Base: base, Scope: scope, Comparison: rows, LocationFacts: []worker.LocationFact{}}
+	for _, row := range rows {
+		content, mode := row.Content, row.Mode
+		if mode == "000000" {
+			content, mode = row.BaseContent, row.BaseMode
 		}
-		if err != nil {
-			return StandaloneGateContext{}, err
-		}
-		if utf8.Valid(content) {
-			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "read", Paths: []string{path}, Content: string(content)})
+		if mode != "040000" && utf8.Valid(content) {
+			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "read", Paths: []string{row.Path}, Content: string(content)})
 		} else {
-			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "listing", Paths: []string{path}})
+			context.LocationFacts = append(context.LocationFacts, worker.LocationFact{Kind: "listing", Paths: []string{row.Path}})
 		}
 	}
 	return context, nil
@@ -90,11 +83,36 @@ func ComposeStandaloneGatePrompt(catalog prompts.PromptCatalog, gateID string, c
 	if err != nil {
 		return "", err
 	}
+	comparison := make([]map[string]any, 0, len(context.Comparison))
+	for _, row := range context.Comparison {
+		value := map[string]any{"path": row.Path, "kind": row.Kind, "baseMode": row.BaseMode, "mode": row.Mode, "before": row.BaseContent, "after": row.Content}
+		for _, side := range []struct {
+			key     string
+			content []byte
+		}{{"before", row.BaseContent}, {"after", row.Content}} {
+			if utf8.Valid(side.content) {
+				value[side.key] = string(side.content)
+			} else {
+				value[side.key+"Encoding"] = "base64"
+			}
+		}
+		for _, side := range []struct{ key, raw string }{{"baseMetadata", row.BaseMetadata}, {"metadata", row.Metadata}} {
+			if side.raw != "" {
+				value[side.key] = json.RawMessage(side.raw)
+			}
+		}
+		comparison = append(comparison, value)
+	}
+	changes, err := json.MarshalIndent(comparison, "", "  ")
+	if err != nil {
+		return "", err
+	}
 	parts := []string{
 		"[Shared reviewer contract]\n" + catalog.Base,
 		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
 		standaloneChangeBlock(context.Root, context.VCS, context.Base, context.Scope),
-		"[Source locations]\nOriginal locationFacts indexes; source content remains in the original report context named in Current change:\n" + string(facts),
+		"[Native comparison]\nProgram-captured original before/after bytes and native modes, including untracked additions and deletions. Text is UTF-8; binary sides carry an explicit base64 encoding.\n" + string(changes),
+		"[Source locations]\nOriginal locationFacts indexes for the comparison above. Read lines select the after content; a deletion selects the before content.\n" + string(facts),
 		gateResultContract(),
 	}
 	return strings.Join(parts, "\n\n") + "\n", nil
@@ -102,20 +120,12 @@ func ComposeStandaloneGatePrompt(catalog prompts.PromptCatalog, gateID string, c
 
 func standaloneChangeBlock(root, vcs, base, scope string) string {
 	lines := []string{"[Current change]", "worktree: " + absPath(root), "vcs: " + vcs, "base snapshot: " + base, "current: working tree (uncommitted changes)"}
-	switch vcs {
-	case "git":
-		lines = append(lines, "Inspect the complete working-tree changes vs HEAD with: git status + git diff (default includes untracked new files).")
-	case "svn":
-		lines = append(lines, "Inspect the complete working-tree changes with: svn status + svn diff.")
-	case "p4":
-		lines = append(lines, "Inspect the complete working-tree changes with: p4 opened + p4 diff.")
-	}
 	if scope = strings.TrimSpace(scope); scope != "" {
 		lines = append(lines, "Review scope (user-specified): "+scope)
 	}
 	// 单跑脱离 run、无需需求文档，故本提示词不含需求
 	// 块。这是设计意图，零上下文审查者不应因缺需求块而报 RUNTIME_ERROR。
-	lines = append(lines, "This standalone gate run intentionally has no requirement block: it reviews the working tree vs HEAD without a requirement document. A missing requirement block is by design and must not be reported as RUNTIME_ERROR.")
+	lines = append(lines, "This standalone gate run intentionally has no requirement block: it reviews the working tree vs the base snapshot without a requirement document. A missing requirement block is by design and must not be reported as RUNTIME_ERROR.")
 	return strings.Join(lines, "\n")
 }
 

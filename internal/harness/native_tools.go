@@ -820,8 +820,11 @@ func (t *nativeWorkspaceTools) submitSemantics(raw json.RawMessage) (any, error)
 
 func (t *nativeWorkspaceTools) schemas() []any {
 	schema := t.semanticSchema
-	if t.material != nil {
+	if t.material != nil && t.material.ResultSchema != nil {
 		schema = t.material.ResultSchema
+	}
+	if len(schema) == 0 {
+		schema = map[string]any{"type": "object"}
 	}
 	return []any{nativeWorkspaceToolSchema(t.readOnly, t.material), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": schema}}
 }

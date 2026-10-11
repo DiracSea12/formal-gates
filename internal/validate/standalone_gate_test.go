@@ -1,7 +1,13 @@
 package validate
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,7 +48,7 @@ func TestComposeStandaloneGatePrompt(t *testing.T) {
 	if !strings.Contains(prompt, "no requirement block") || !strings.Contains(prompt, "must not be reported as RUNTIME_ERROR") {
 		t.Fatalf("standalone prompt must state the missing requirement block is by design: %s", prompt)
 	}
-	if !strings.Contains(prompt, "base snapshot: "+standaloneGateHead(t, root)) || !strings.Contains(prompt, "git status + git diff") {
+	if !strings.Contains(prompt, "base snapshot: "+standaloneGateHead(t, root)) || !strings.Contains(prompt, "[Native comparison]") {
 		t.Fatalf("standalone prompt missing the working-tree comparison: %s", prompt)
 	}
 	// 复用共享契约块使污染检查自动生效（契约文本本身由
@@ -155,4 +161,156 @@ func runGit(t *testing.T, root string, args ...string) string {
 		t.Fatal(err)
 	}
 	return value
+}
+
+// Captured values remain bound to the review after the live workspace changes.
+func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
+	root, pkg := standaloneGateFixture(t)
+	originals := map[string][]byte{
+		"removed.txt":   []byte(" deleted original \n\n"),
+		"binary.dat":    {0, 255, '\n'},
+		"executable.sh": []byte("#!/bin/sh\necho mode\n"),
+	}
+	for path, body := range originals {
+		if err := os.WriteFile(filepath.Join(root, path), body, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "--no-verify", "--no-gpg-sign", "-m", "Native comparison materials")
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "index value\n")
+	runGit(t, root, "add", "delivery.txt")
+	after := map[string][]byte{
+		"delivery.txt": []byte(" actual working value \n\n"),
+		"binary.dat":   {0, 254, '\n'},
+		"new.txt":      []byte(" untracked original \n\n"),
+		"empty.txt":    {},
+	}
+	for path, body := range after {
+		if err := os.WriteFile(filepath.Join(root, path), body, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, "removed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "executable.sh"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	head := standaloneGateHead(t, root)
+	status := runGit(t, root, "status", "--porcelain=v1", "--untracked-files=all")
+	index, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, err := CaptureStandaloneGateContext(root, "git", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := CaptureStandaloneGateContext(root, "git", "")
+	if err != nil || !reflect.DeepEqual(context, repeated) {
+		t.Fatalf("repeated original capture changed: %v", err)
+	}
+	actualIndex, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil || !bytes.Equal(index, actualIndex) || standaloneGateHead(t, root) != head || runGit(t, root, "status", "--porcelain=v1", "--untracked-files=all") != status {
+		t.Fatalf("comparison modified native index/head/workspace: %v", err)
+	}
+	if len(context.Comparison) != 6 || len(context.LocationFacts) != 6 {
+		t.Fatalf("complete comparison inventory: %+v", context)
+	}
+	for _, row := range context.Comparison {
+		original := originals[row.Path]
+		if row.Path == "delivery.txt" {
+			original = []byte("delivery\n")
+		}
+		if !bytes.Equal(row.BaseContent, original) {
+			t.Fatalf("%s original bytes: %q", row.Path, row.BaseContent)
+		}
+		current := after[row.Path]
+		if row.Path == "executable.sh" {
+			current = original
+		}
+		if !bytes.Equal(row.Content, current) {
+			t.Fatalf("%s working bytes: %q", row.Path, row.Content)
+		}
+		switch row.Path {
+		case "removed.txt":
+			if row.Kind != "D" || row.Mode != "000000" {
+				t.Fatalf("deleted native entry: %+v", row)
+			}
+		case "new.txt", "empty.txt":
+			if row.Kind != "A" || row.BaseMode != "000000" {
+				t.Fatalf("untracked native entry: %+v", row)
+			}
+		case "executable.sh":
+			if row.BaseMode != "100644" || row.Mode != "100755" {
+				t.Fatalf("mode-only native entry: %+v", row)
+			}
+		}
+	}
+	saved, err := json.Marshal(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured StandaloneGateContext
+	if err := json.Unmarshal(saved, &captured); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "later unrelated contents\n")
+	catalog, err := prompts.LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := ComposeStandaloneGatePrompt(catalog, "quality", captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"git status", "git diff", "svn status", "p4 opened", "Original report context", "later unrelated contents"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("review delegates or rediscovers mechanical material: %s", forbidden)
+		}
+	}
+	rawComparison := strings.Split(strings.Split(prompt, "[Native comparison]\n")[1], "\n\n[Source locations]")[0]
+	rawComparison = rawComparison[strings.Index(rawComparison, "\n[")+1:]
+	var published []map[string]any
+	if err := json.Unmarshal([]byte(rawComparison), &published); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range published {
+		path := row["path"].(string)
+		if path == "binary.dat" {
+			for key, want := range map[string][]byte{"before": originals[path], "after": after[path]} {
+				got, err := base64.StdEncoding.DecodeString(row[key].(string))
+				if err != nil || row[key+"Encoding"] != "base64" || !bytes.Equal(got, want) {
+					t.Fatalf("binary %s original bytes: %+v %v", key, row, err)
+				}
+			}
+		} else if path == "delivery.txt" && row["after"] != string(after[path]) {
+			t.Fatalf("rendered after bytes changed: %+v", row)
+		}
+	}
+	for i, fact := range captured.LocationFacts {
+		selector := worker.Location{Read: i + 1, Line: 1}
+		if fact.Kind == "listing" {
+			selector = worker.Location{Listing: i + 1, Entry: 1}
+		}
+		if fact.Kind == "read" && fact.Content == "" {
+			selector.Line = 0
+		}
+		wire, err := json.Marshal(map[string]any{"findings": []worker.Finding{{Severity: "P2", Message: "captured source", Locations: []worker.Location{selector}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := ValidateStandaloneGateResult(wire, captured)
+		want := append([]string(nil), fact.Paths...)
+		if selector.Line != 0 {
+			want[0] = fmt.Sprintf("%s:%d", want[0], selector.Line)
+		}
+		if err != nil || len(result.Findings) != 1 || !reflect.DeepEqual(result.Findings[0].Locations, want) {
+			t.Fatalf("original source selector %d: %+v %v", i+1, result, err)
+		}
+	}
+	if _, err := CaptureStandaloneGateContext(t.TempDir(), "git", ""); err == nil {
+		t.Fatal("native comparison failure was accepted")
+	}
 }
