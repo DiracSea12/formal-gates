@@ -481,6 +481,11 @@ func (e *Engine) qaCommandIntents(s *State, result ValidationResult, revision ui
 			if err != nil {
 				return nil, err
 			}
+			// A compound binding signs distinct effects at one state revision.
+			// Each existing payload identity qualifies its own native effect.
+			if len(result.QACommands) > 1 {
+				intent.ActionID += ":" + strings.TrimPrefix(intent.PayloadDigest, "sha256:")
+			}
 			intents = append(intents, intent)
 		}
 	}

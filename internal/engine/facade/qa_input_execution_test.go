@@ -260,3 +260,117 @@ func TestIndependentPreparationActuallyRunsInEachPrivateEnvironment(t *testing.T
 		}
 	}
 }
+
+func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
+	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
+		for index := range m.Cases {
+			m.Cases[index].Operations = nil
+			m.Cases[index].PublicEntry = "/bin/sh fixture"
+			m.Cases[index].Steps = "Print this case's fixed streams and exit, and append its private invocation proof"
+		}
+		m.Cases[0].Oracle = "stdout alpha, stderr one, exit zero"
+		m.Cases[1].Oracle = "stdout beta, stderr two, exit seven"
+	})
+	action, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.CommandCases) == 2 })
+	commands := worker.CommandBindings{}
+	for _, id := range input.CommandCases {
+		command := `printf alpha; printf one >&2; printf x >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"`
+		if id == "invalid" {
+			command = `printf beta; printf two >&2; printf y >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"; exit 7`
+		}
+		commands.Commands = append(commands.Commands, []coverage.Operation{{Kind: coverage.OperationShell, Command: command}})
+	}
+	body, _ := json.Marshal(commands)
+	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &input}, d.eventID(), body, "original-two-case-commands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.receipt(action)
+	if result := d.submit(event); result.Status != "ACCEPTED" {
+		t.Fatal("dual command binding rejected", result)
+	}
+	state := driverState(t, d)
+	var revision uint64
+	bound := 0
+	for _, intent := range state.PendingHostActions {
+		if intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
+			continue
+		}
+		var p protocol.CheckParameters
+		if err := decodeNativeParams(intent, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.QA == nil || p.Binding != input.Binding || len(p.QA.Recipe) == 0 {
+			continue
+		}
+		bound++
+		if revision != 0 && revision != intent.Revision {
+			t.Fatal("one command checkpoint invented multiple state revisions")
+		}
+		revision = intent.Revision
+	}
+	d.reopen()
+	_, completed := awaitQAInput(t, d, func(in protocol.ValidationInput) bool {
+		return len(in.ExecutionFacts) == bound
+	})
+	for _, fact := range completed.ExecutionFacts {
+		op := fact.Operations[0]
+		raw, _ := json.Marshal(op)
+		t.Logf("original executed case %s: %s", fact.CaseID, raw)
+		if root := os.Getenv("QA_INPUT_REUSE_EVIDENCE"); root != "" {
+			if err := os.MkdirAll(filepath.Join(root, fact.CaseID), 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"request.json", "process.json", "exit.json", "stdout.log", "stderr.log"} {
+				data, err := os.ReadFile(filepath.Join(op.Evidence.Directory, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, fact.CaseID, name), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	if bound != 2 || len(completed.ExecutionFacts) != 2 || len(completed.CommandCases) != 0 {
+		t.Fatalf("same-revision intent overwrite: bound=%d executed=%d still missing=%v", bound, len(completed.ExecutionFacts), completed.CommandCases)
+	}
+	seen := map[string]bool{}
+	for _, fact := range completed.ExecutionFacts {
+		op := fact.Operations[0]
+		if seen[op.ActionID] {
+			t.Fatal("different cases share an execution identity")
+		}
+		seen[op.ActionID] = true
+		out, stderr, exit := "alpha", "one", 0
+		if fact.CaseID == "invalid" {
+			out, stderr, exit = "beta", "two", 7
+		}
+		if op.Evidence.StdoutText != out || op.Evidence.StderrText != stderr || op.Evidence.ExitCode != exit {
+			t.Fatal("case lost its own actual streams or exit", op.Evidence)
+		}
+	}
+	before, _ := d.f.engine.Load()
+	d.submit(event)
+	after, _ := d.f.engine.Load()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("command event replay changed completed native effects")
+	}
+	d.reopen()
+	_, recovered := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if !reflect.DeepEqual(completed.ExecutionFacts, recovered.ExecutionFacts) {
+		t.Fatal("recovery changed either original execution")
+	}
+	for _, fact := range recovered.ExecutionFacts {
+		var request struct {
+			Environment map[string]string `json:"environment"`
+		}
+		if err := readCheckDocument(filepath.Join(fact.Operations[0].Evidence.Directory, "request.json"), &request); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(request.Environment["FORMAL_GATES_QA_OUTPUT_DIR"], "executed"))
+		if err != nil || len(data) != 1 {
+			t.Fatal("replay or recovery repeated a case command", string(data), err)
+		}
+	}
+}
