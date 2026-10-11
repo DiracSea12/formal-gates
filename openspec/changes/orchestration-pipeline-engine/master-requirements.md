@@ -273,3 +273,29 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - 当前稳定安装仅保障 `orch-engine-003` 开发完成；最终候选隔离验证并在 Seal/全部 canary PASS 后安装。
 - 步骤模型采用 typed Go authoring（封闭变体 + constructor + 显式表）→ 小型 closed-world compiler → 单一 canonical encoder → compiler 生成 `definitions/workflow.json` 与身份常量的形态（ADR-001）；拒绝扁平万能 StepSpec、通用 DSL/schema 解释层、完全删除定义编译器与定义制品，以及为实现对照建两套架构。
 - HandlerID 只在执行合同或恢复兼容边界变化时晋升，合同兼容的实现变化保持 ID、由 PackageDigest 标识；executable definition 与二进制 registry 锁步激活；packageDigest 是 owning-runtime 执行绑定而非审计附注。
+
+## 使用能力与原生材料约束
+
+- 活动用户补充消息归同一已签发 action/attempt 的原队列，保留原文与真实投递状态；
+  不新增任务/轮次、不改变确认范围。Codex 使用原 thread/turn steer，其他宿主下一次
+  合法同身份调用消费。缺 ack 留未知投递事实、不得自动重发；终态/替换也明确处置。
+- 可解释进度由唯一 state 和原生 process/exit/source/cost/receipt 派生：经过时间、
+  完成/失败/取消替代、真实运行/未启动/受阻、当前环节时长、revision 增量结果、
+  准备复用、实际调用及重复理由。取消/退出 pending 不冒称完成；并行区间不相加，
+  缺源 unavailable。准备复用只读取原批准 CheckEvidence，不新建缓存或计数账。
+- 用户与项目设置统一手改入口、字段覆盖与有效来源；模型、effort、总/QA 并发、
+  token cap 和原生路径在启动一次冻结到 state，child 继承，恢复不重读也不清预算。
+  动态费用/授权仍归既有 cost/guard；适配器只消费本平台路径与参数，不能改全局环境。
+- 不变需求的优化/新增 Batch 使用显式用户主动计划重审：精确原 revision 保持，
+  product/topology 保留，原完整确认与 carry/redo 仍生效；新 start-readiness 生成新
+  计划，route/plan 确认后开发。普通重复提交不开放，不接受自拟自由任务定义。
+- 同宿主主动开发交接沿原 recovery 的观察、terminate receipt 与 fresh 路径；原
+  工作区、TaskKey、未完成工作和历史费用保留，不制造故障、不增加业务返修/retry。
+  原 token guard 和 UNKNOWN 先对账继续约束新执行，不设第二个交接状态机。
+- 所有角色的规则、动态输入、结果 schema 和工具说明只交当前职责必需内容；黑白
+  专用规则不串角色，QA 比较不灌入已保留结果或无关用例。完整原需求与证据仍在原
+  绑定材料可得，可由现有读操作按需读取；无新索引、强制读取闸门或第二材料系统。
+- WorkBuddy 提供安装、可编程原生启动/续用、等待、采集、取消、身份观察恢复和
+  原用量，沿共用生命周期/工具/费用核心，只在薄 adapter 保留平台差异。session store
+  不存在先离线拒绝；不可由帮助或模拟推断付费现场通过。真实调用只用用户授权额度
+  与原模型选择；所有执行无总 deadline。

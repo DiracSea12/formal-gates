@@ -43,7 +43,11 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		req.NativeHandle = parent.NativeResources[plan.ResourceID].Handle
 		req.VCS = parent.NativeVCS()
 		req.RunID, req.MasterRunID, req.SliceID = plan.RunID, parent.RunID, plan.SliceID
-		child, _, err = startRun(StartOptions{Root: f.root, Request: req, Admission: &f.admission, Capacity: f.capacity, VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
+		options := StartOptions{Root: f.root, Request: req, Admission: &f.admission, Settings: stateSettings(parent), VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}
+		if parent.Settings == nil {
+			options.Capacity = f.capacity
+		}
+		child, _, err = startRun(options, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
 		if err != nil {
 			return nil, err
 		}
@@ -67,10 +71,11 @@ func (f *Facade) finishChildBootstrap(child *Facade) error {
 		return err
 	}
 	if snap.Revision == 1 {
-		tokenCap, err := readTokenCap(f.root)
+		parent, err := f.engine.Load()
 		if err != nil {
 			return err
 		}
+		tokenCap := parent.State.TokenCapMaxTokens
 		if err := child.engine.BindCostSources(protocol.OwnerCostBinding{}, tokenCap, emptyFingerprint()); err != nil {
 			return err
 		}

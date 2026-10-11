@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,37 +28,6 @@ type OwnerBinding struct {
 // Lock order is interval coordination before the run store transaction.
 func lockOwnerCost(root string) (func(), error) {
 	return coordination.AcquirePathWaiting(filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp", "owner-cost.lock"), "owner cost")
-}
-
-// tokenCapConfigPath 是项目级 token cap 配置的固定位置（3.5b：只接受项目/安装
-// 级维护配置，不按任务临场估算）。
-func tokenCapConfigPath(root string) string {
-	return filepath.Join(root, ".gates", "token-cap.json")
-}
-
-// readTokenCap 读取项目级 token cap：缺文件＝不可用（nil）；文件存在但非法
-// （坏 JSON、缺字段、负数）＝明确报错，不静默。
-func readTokenCap(root string) (*int64, error) {
-	data, err := os.ReadFile(tokenCapConfigPath(root))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var doc struct {
-		EngineDispatchMaxTotalTokens *int64 `json:"engineDispatchMaxTotalTokens"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("token cap config %s is invalid: %w", tokenCapConfigPath(root), err)
-	}
-	if doc.EngineDispatchMaxTotalTokens == nil {
-		return nil, fmt.Errorf("token cap config %s is invalid: engineDispatchMaxTotalTokens is required", tokenCapConfigPath(root))
-	}
-	if *doc.EngineDispatchMaxTotalTokens < 0 {
-		return nil, fmt.Errorf("token cap config %s is invalid: engineDispatchMaxTotalTokens must be non-negative", tokenCapConfigPath(root))
-	}
-	return doc.EngineDispatchMaxTotalTokens, nil
 }
 
 // engineOverlapPeers 返回同 root 下与本 run 共享 owner transcript 且区间无法

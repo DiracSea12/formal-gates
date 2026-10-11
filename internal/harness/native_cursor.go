@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/settings"
 	"io"
 	"os"
 	"os/exec"
@@ -22,7 +23,11 @@ import (
 )
 
 func cursorCaptureBinding() (map[string]any, error) {
-	executable, err := exec.LookPath("cursor-agent")
+	return cursorConfiguredBinding(settings.Values{})
+}
+
+func cursorConfiguredBinding(config settings.Values) (map[string]any, error) {
+	executable, err := exec.LookPath(config.NativeString("cursorExecutable"))
 	if err != nil {
 		return nil, &blockedError{message: "CURSOR_UNAVAILABLE: cursor-agent is not on PATH"}
 	}
@@ -44,20 +49,23 @@ func cursorCaptureBinding() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := os.Getenv("CURSOR_CONFIG_DIR")
-	if config == "" {
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-			config = filepath.Join(xdg, "cursor")
+	if override := config.NativeString("cursorHome"); override != "" {
+		home = override
+	}
+	nativeHome := os.Getenv("CURSOR_CONFIG_DIR")
+	if nativeHome == "" || config.NativeString("cursorHome") != "" {
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && config.NativeString("cursorHome") == "" {
+			nativeHome = filepath.Join(xdg, "cursor")
 		} else {
-			config = filepath.Join(home, ".cursor")
+			nativeHome = filepath.Join(home, ".cursor")
 		}
 	}
 	data := os.Getenv("CURSOR_DATA_DIR")
-	if data == "" {
+	if data == "" || config.NativeString("cursorHome") != "" {
 		data = filepath.Join(home, ".cursor")
 	}
 	cache := os.Getenv("NODE_COMPILE_CACHE")
-	if cache == "" {
+	if cache == "" || config.NativeString("cursorHome") != "" {
 		if runtime.GOOS == "darwin" {
 			cache = filepath.Join(home, "Library", "Caches", "cursor-compile-cache")
 		} else {
@@ -68,7 +76,7 @@ func cursorCaptureBinding() (map[string]any, error) {
 	if store != "file" && store != "memory" {
 		store = "default"
 	}
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CURSOR_CONFIG_DIR": resolveNativePath(config), "CURSOR_DATA_DIR": resolveNativePath(data), "NODE_COMPILE_CACHE": resolveNativePath(cache), "AGENT_CLI_CREDENTIAL_STORE": store}
+	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CURSOR_CONFIG_DIR": resolveNativePath(nativeHome), "CURSOR_DATA_DIR": resolveNativePath(data), "NODE_COMPILE_CACHE": resolveNativePath(cache), "AGENT_CLI_CREDENTIAL_STORE": store}
 	return binding, nil
 }
 func cursorValidateBinding(binding any) error { return validateNativeBinding(binding, "cursor") }
@@ -229,7 +237,7 @@ func cursorToolPlugin(directory string) (string, error) {
 
 // CursorToolPermission checks original hook facts against the issued native
 // request. Actual workspace operations remain with NativeTools and its admission.
-func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {
 	var input struct {
 		Event  string `json:"hook_event_name"`
 		Tool   string `json:"tool_name"`
@@ -240,7 +248,7 @@ func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer,
 		fmt.Fprintln(errout, err)
 		return 1
 	}
-	tools, err := newNativeWorkspaceTools(directory, admissions...)
+	tools, err := newNativeWorkspaceTools(directory, services...)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 1
@@ -254,7 +262,7 @@ func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer,
 		fmt.Fprintln(errout, "Cursor hook requires its original provider request")
 		return 1
 	}
-	release, err := admitExecution(directory, objectOrEmpty(request), admissions)
+	release, err := admitExecution(directory, objectOrEmpty(request), services)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 1
@@ -280,7 +288,7 @@ func CursorToolPermission(directory string, in io.Reader, out, errout io.Writer,
 	return 0
 }
 
-func cursorExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
+func cursorExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}

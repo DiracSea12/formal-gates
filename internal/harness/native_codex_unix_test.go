@@ -39,6 +39,7 @@ type codexPeerInput struct {
 	TurnParams     map[string]any `json:"turn_params"`
 	Configuration  map[string]any `json:"configuration"`
 	Mode           string         `json:"mode"`
+	MessageText    string         `json:"message_text,omitempty"`
 	StrictSchema   bool           `json:"strict_schema,omitempty"`
 	Reverse        []any          `json:"reverse"`
 	Answer         map[string]any `json:"answer,omitempty"`
@@ -267,6 +268,14 @@ func TestCodexRPCPeer(t *testing.T) {
 				panic(err)
 			}
 			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if peer.Mode == "steer" || peer.Mode == "steer-unacknowledged" {
+		frame = read()
+		check(getOf(frame, "method"), "turn/steer")
+		check(getOf(frame, "params"), map[string]any{"threadId": thread, "expectedTurnId": turn, "input": []any{map[string]any{"type": "text", "text": peer.MessageText, "text_elements": []any{}}}})
+		if peer.Mode == "steer" {
+			reply(frame, map[string]any{"turnId": turn})
 		}
 	}
 	status := "completed"
@@ -545,7 +554,16 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 		s.peer.ThreadParams["excludeTurns"] = true
 	} else {
 		s.peer.ThreadParams["ephemeral"] = false
-		s.peer.ThreadParams["dynamicTools"] = []any{nativeWorkspaceToolSchema(s.request["read_only"] == true)}
+		var material *worker.Material
+		if path := textOf(getOf(getOf(getOf(s.request, "engine"), "workerMaterial"), "path")); path != "" && path != "null" {
+			if body, err := os.ReadFile(path); err == nil {
+				var original worker.Material
+				if json.Unmarshal(body, &original) == nil {
+					material = &original
+				}
+			}
+		}
+		s.peer.ThreadParams["dynamicTools"] = []any{nativeWorkspaceToolSchema(s.request["read_only"] == true, material)}
 	}
 	params, err := codexTurnParameters(s.request, "")
 	if err != nil {
@@ -1434,6 +1452,60 @@ func TestCodexNativePeerRejectsWrongLaunchInputs(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(s.config, "rpc.jsonl")); !os.IsNotExist(err) {
 					t.Fatal("wrong launch processed RPC")
 				}
+			}
+		})
+	}
+}
+
+func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutcome(t *testing.T) {
+	for _, mode := range []string{"steer", "steer-unacknowledged"} {
+		t.Run(mode, func(t *testing.T) {
+			scenario := newCodexScenario(t)
+			scenario.peer.Mode = mode
+			scenario.peer.MessageText = "Correct current detail"
+			scenario.request["read_only"] = true
+			materialPath := filepath.Join(scenario.directory, "material.json")
+			material := worker.Material{ReadOnly: scenario.request["read_only"] == true, Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "issued-attempt"}}}
+			if err := writeAtomicJSON(materialPath, material); err != nil {
+				t.Fatal(err)
+			}
+			scenario.request["engine"] = map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": "issued-action", "attemptId": "issued-attempt"}}
+			scenario.save(t)
+			claims := 0
+			var receipts []protocol.TaskMessage
+			services := ExecutionServices{ClaimMessage: func(directory, identity string, begin bool) (*protocol.TaskMessage, error) {
+				if directory != scenario.directory || identity == "" || begin {
+					t.Errorf("wrong original message owner: %s %s %t", directory, identity, begin)
+				}
+				if claims > 0 {
+					return nil, nil
+				}
+				claims++
+				return &protocol.TaskMessage{ID: "message-source", ActionID: "issued-action", AttemptID: "issued-attempt", Identity: identity, Text: scenario.peer.MessageText, Status: "SENDING"}, nil
+			}, ReceiptMessage: func(directory string, message protocol.TaskMessage) error {
+				receipts = append(receipts, message)
+				return nil
+			}}
+			source, err := codexExecute(scenario.request, scenario.directory, false, services)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(receipts) != 1 || receipts[0].Identity != getOf(source, "identity") || receipts[0].Text != scenario.peer.MessageText {
+				t.Fatalf("delivery facts=%+v source=%v", receipts, source)
+			}
+			expected := "ACCEPTED"
+			if mode == "steer-unacknowledged" {
+				expected = "FAILED"
+			}
+			if receipts[0].Status != expected || expected == "FAILED" && !strings.Contains(receipts[0].Reason, "outcome unknown") {
+				t.Fatalf("delivery outcome=%+v", receipts[0])
+			}
+			raw, err := os.ReadFile(filepath.Join(scenario.config, "rpc.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(raw), `"method":"turn/start"`) != 1 || strings.Count(string(raw), `"method":"turn/steer"`) != 1 {
+				t.Fatalf("steer created another turn: %s", raw)
 			}
 		})
 	}

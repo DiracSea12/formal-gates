@@ -10,6 +10,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/harness"
 )
 
 // Workflow views present current semantic duties; engine projections remain
@@ -27,6 +28,41 @@ func workflowRunView(run facade.Run) map[string]any {
 		view["summaryPath"] = run.SummaryPath
 	}
 	view["availableActions"] = run.AvailableActions
+	workers := []map[string]any{}
+	ids := []string{}
+	for id := range run.WorkerMaterials {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for index, id := range ids {
+		pending := run.PendingActions[id]
+		workers = append(workers, map[string]any{"worker": index + 1, "step": pending.Step, "task": pending.Task})
+	}
+	view["workers"] = workers
+	if len(run.TaskMessages) != 0 {
+		ordered := make([]protocol.TaskMessage, 0, len(run.TaskMessages))
+		for _, message := range run.TaskMessages {
+			ordered = append(ordered, message)
+		}
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].Revision < ordered[j].Revision })
+		messages := []map[string]any{}
+		for index, message := range ordered {
+			item := map[string]any{"message": index + 1, "text": message.Text, "status": message.Status}
+			if message.Reason != "" {
+				item["reason"] = message.Reason
+			}
+			for worker, action := range ids {
+				if action == message.ActionID {
+					item["worker"] = worker + 1
+				}
+			}
+			messages = append(messages, item)
+		}
+		view["messages"] = messages
+	}
+	if run.Settings != nil {
+		view["settings"] = run.Settings
+	}
 	questions := []map[string]any{}
 	for index, ask := range run.PendingAsks {
 		options := []map[string]any{}
@@ -96,6 +132,11 @@ func printCurrentWorkflowRun(streams IO, f *facade.Facade, executionErr error) (
 		children = append(children, map[string]any{"child": index + 1, "run": views[run.RunID]})
 	}
 	view["children"] = children
+	progress, err := f.ProgressSince(runs[0].Revision, harness.NativeJobAlive)
+	if err != nil {
+		return 1, err
+	}
+	view["progress"] = workflowProgressView(progress, runs[0])
 	return printJSON(streams.Stdout, view)
 }
 
@@ -229,4 +270,21 @@ func printWorkflowView(streams IO, value workflowConsumption, machine bool, exec
 		return 1, nil
 	}
 	return 0, nil
+}
+
+func workflowProgressView(progress facade.Progress, run facade.Run) map[string]any {
+	current := []map[string]any{}
+	for _, operation := range progress.Current {
+		item := map[string]any{"stage": operation.Stage, "status": operation.Status, "durationMillis": operation.DurationMillis, "evidence": operation.Evidence}
+		if pending, ok := run.PendingActions[operation.ActionID]; ok {
+			item["step"] = pending.Step
+		}
+		current = append(current, item)
+	}
+	blocked := []string{}
+	for _, reason := range progress.Blocked {
+		blocked = append(blocked, reason)
+	}
+	sort.Strings(blocked)
+	return map[string]any{"elapsedMillis": progress.ElapsedMillis, "timeSource": progress.TimeSource, "revision": progress.Revision, "completed": progress.Completed, "failed": progress.Failed, "retired": progress.Retired, "running": progress.Running, "notStarted": progress.NotStarted, "blocked": blocked, "current": current, "newResults": progress.NewResults, "preparationReused": progress.PreparationReused, "preparationExecuted": progress.PreparationExecuted, "observedNativeCalls": progress.NativeCalls, "nativeCallSource": progress.NativeCallSource}
 }

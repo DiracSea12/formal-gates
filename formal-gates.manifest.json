@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, ZCode, and WorkBuddy. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
@@ -56,6 +56,17 @@
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
       "caveat": "ZCode hooks are configured at user level because current ZCode ignores project-level hook configuration; Agent/Task lifecycle observations use documented PreToolUse/PostToolUse/PostToolUseFailure events and require a same-host canary before claiming child-completion semantics."
+    },
+    {
+      "name": "WorkBuddy",
+      "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "supported",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "native-action-tools-without-global-hooks",
+        "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
+      },
+      "caveat": "WorkBuddy uses its native print-mode CLI, persistent session store and engine MCP tool boundary. Installation adds its skill and CODEBUDDY.md instructions without global hooks. Paid native workflow verification requires confirmed available quota."
     },
     {
       "name": "Gemini",

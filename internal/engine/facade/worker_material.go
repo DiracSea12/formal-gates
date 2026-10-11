@@ -191,6 +191,10 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 		workspace = value.Input.Validation.Workspace.Path
 	}
 	known := map[string]any{"provider": provider, "prompt": value.Prompt, "schema": value.ResultSchema, "read_only": value.ReadOnly, "workspace": workspace}
+	if snap.State.Settings != nil {
+		known["model"] = snap.State.Settings.Values.Model
+		known["reasoning_effort"] = snap.State.Settings.Values.ReasoningEffort
+	}
 	for key, expected := range known {
 		if actual, supplied := request[key]; supplied && !jsonValuesEqual(actual, expected) {
 			return release, fmt.Errorf("worker execution %s differs from issued material", key)

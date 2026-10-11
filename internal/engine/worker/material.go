@@ -133,7 +133,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				}
 			}
 		}
-		blocks = append(blocks, "[Shared reviewer contract]\n"+base)
+		blocks = append(blocks, "[Shared reviewer contract]\n"+roleRules(base, input))
 	}
 	if input.Handler == "engine.gate" {
 		if input.Validation.Gate == nil {
@@ -143,16 +143,17 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		if !ok {
 			return Material{}, fmt.Errorf("gate %s has no bound prompt", input.Validation.Gate.Gate)
 		}
-		blocks = append(blocks, "[Gate]\n"+gate.Content)
+		blocks = append(blocks, "[Gate]\n"+roleRules(gate.Content, input))
 	} else if actionID != "" {
 		action, ok := catalog.Action(actionID)
 		if !ok {
 			return Material{}, fmt.Errorf("worker action %s has no bound prompt", actionID)
 		}
-		blocks = append(blocks, "[Action]\n"+action.Content)
+		blocks = append(blocks, "[Action]\n"+roleRules(action.Content, input))
 	}
 	document := input.RequirementDocument
 	document.Content = ""
+	document.Requirements = nil
 	contextValue := map[string]any{"requirementDocument": document}
 	if input.Scope != nil {
 		contextValue["scope"] = input.Scope
@@ -187,7 +188,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.qa.review.rationale":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
 		case "engine.qa.execution":
-			names = []string{"manifest", "commandCases", "executionFacts", "requiredCases", "pendingCases", "completed", "inherited"}
+			names = []string{"manifest", "commandCases", "executionFacts", "requiredCases", "pendingCases"}
 		case "engine.repair.verify":
 			names = []string{"repair", "contract", "executionFacts"}
 		case "engine.validation.observation":
@@ -221,6 +222,32 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				return Material{}, err
 			}
 			validation["development"], err = json.Marshal(map[string]any{"batch": development.Batch, "dependencies": dependencies, "result": result, "checks": promptChecks(development.Checks)})
+			if err != nil {
+				return Material{}, err
+			}
+		}
+		if input.Handler == "engine.qa.execution" {
+			manifest := input.Validation.Manifest
+			manifest.Cases = nil
+			manifest.SharedSteps = nil
+			manifest.Edges = nil
+			manifest.Points = nil
+			manifest.Sources = nil
+			shared := map[string]bool{}
+			for _, item := range input.Validation.Manifest.Cases {
+				if slices.Contains(input.Validation.PendingCases, item.CaseID) {
+					manifest.Cases = append(manifest.Cases, item)
+					for _, id := range item.SharedSteps {
+						shared[id] = true
+					}
+				}
+			}
+			for _, step := range input.Validation.Manifest.SharedSteps {
+				if shared[step.ID] {
+					manifest.SharedSteps = append(manifest.SharedSteps, step)
+				}
+			}
+			validation["manifest"], err = json.Marshal(manifest)
 			if err != nil {
 				return Material{}, err
 			}
@@ -312,7 +339,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if err != nil {
 		return Material{}, err
 	}
-	blocks = append(blocks, "[Current requirement]\n"+input.RequirementDocument.Content, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
+	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
 	if planRole || input.Handler == "engine.development.batch" || input.Handler == "engine.repair" || input.Handler == "engine.qa.design" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
@@ -321,6 +348,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL checks are supplied automatically; optional checks reuse a number or author a new local command."
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}
+	instructions += " The workspace requirement operation reads the complete original confirmed document (optional from/to line range); its path and contentDigest are in Action input. Keep the full requirement and acceptance scope; read the relevant original sections as your role requires."
 	blocks = append(blocks, "[Result contract]\n"+instructions+"\nReturn exactly one JSON object matching the supplied semantic schema, using only its direct body or allowed inability/continuation alternative. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted.\n")
 	value.Prompt = strings.Join(blocks, "\n\n") + "\n"
 	return value, nil

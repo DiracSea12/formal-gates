@@ -122,6 +122,11 @@ func nativeEvidenceFiles(directory string) ([]string, error) {
 		return nil, err
 	}
 	files := append([]string{}, nativeSourceFiles...)
+	if _, err := os.Stat(filepath.Join(directory, "native-messages.json")); err == nil {
+		files = append(files, "native-messages.json")
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 	if writable {
 		files = append(files, nativePathsFile)
 	}

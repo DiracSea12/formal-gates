@@ -54,10 +54,12 @@ See the [example](references/example-run.md), [slicing](references/sliced-runs.m
 After installation, tell your AI: “Use formal-gates for this change.” Respond to actual unresolved
 choices and confirm at the required human nodes. The exhaustive public workflow surface is:
 
-`start` / `drive` / `submit` / `show` / `status` / `next` / `diagnose` / `guard-preview`.
+`start` / `drive` / `submit` / `show` / `status` / `next` / `progress` / `message` /
+`replan` / `handoff` / `diagnose` / `guard-preview`.
 
-Start bootstraps, drive advances deterministically and recovers, and submit is the only external
-event writer. The other operations are read-only. Requirement changes, route changes, reset, abort,
+Start bootstraps, drive advances and recovers, and submit accepts business results and confirmed
+user decisions. Message adds temporary text to an existing action; handoff requests the original
+recovery Ask; replan prepares the original confirmation. Other operations are read-only. Requirement changes, route changes, reset, abort,
 waiver/skip, and HUMAN legal-node jumps use availableActions and typed Ask decisions. Reconcile
 UNKNOWN before another spawn or VCS side effect.
 
@@ -78,7 +80,7 @@ arbitrary dynamic plugin SDK; a new control semantic still needs an explicit des
 Host adapters own native launch, execution, observation, recovery, and evidence transport. The
 engine and user typed Ask own business decisions. Installation and execution capabilities are
 separate. Doctor, fixtures, or configuration presence do not prove a real canary. Release and
-global cutover each require their own acceptance evidence. Five-host and Git/SVN/P4
+global cutover each require their own acceptance evidence. Six-host and Git/SVN/P4
 unsliced/sliced acceptance must bind the same candidate and actual installed copy;
 unexecuted cells are reported as unverified or skipped.
 
@@ -118,8 +120,9 @@ On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only 
 | Cursor | `~/.cursor/formal-gates` | corresponding directory under the selected project |
 | DeepSeek Harness | `~/.dsh/skills/formal-gates` (under `$DSH_HOME`) | `.dsh/skills/formal-gates` under the selected project |
 | ZCode | `~/.zcode/skills/formal-gates` | `.zcode/skills/formal-gates` under the selected project |
+| WorkBuddy | `~/.codebuddy/skills/formal-gates` | `.codebuddy/skills/formal-gates` under the selected project |
 
-Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch); a ZCode global install writes `~/.zcode/cli/config.json`, while a project install writes only the skill and `AGENTS.md` instructions (current ZCode ignores project-level hook configuration). Existing non-formal-gates hooks and plugin rows are preserved; when multiple hosts share a project `AGENTS.md`, the managed marker is cleaned only after the last active owner is uninstalled.
+Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch); a ZCode global install writes `~/.zcode/cli/config.json`, while a project install writes only the skill and `AGENTS.md` instructions (current ZCode ignores project-level hook configuration). WorkBuddy installs its skill and CODEBUDDY.md instructions without global hooks; native actions use the engine tool and lifecycle boundary. Existing non-formal-gates hooks and plugin rows are preserved; when multiple hosts share a project `AGENTS.md`, the managed marker is cleaned only after the last active owner is uninstalled.
 
 Installation also manages the intake rule: Claude Code uses global `~/.claude/CLAUDE.md` or project
 `CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, project Cursor
@@ -168,3 +171,5 @@ Gate review prose lives in `gates/*.md`; executable tasks still require registra
 in the current definition. Update CHANGELOG for behavior changes and use GitHub issues for reports.
 
 [MIT](LICENSE) · [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases)
+
+Editable user/project model, effort, concurrency, token cap and native path settings are frozen at start; recovery preserves their sources and budgets. See [configuration](references/user-configuration.md) and the [public feedback, progress, replan and handoff contract](references/formal-flow.md).

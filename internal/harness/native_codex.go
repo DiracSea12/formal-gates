@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/settings"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Codex reads session hooks from its original config overrides. The thread's
@@ -31,7 +34,7 @@ func codexToolArguments(directory string) ([]string, error) {
 	return []string{"-c", `hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`}, nil
 }
 
-func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {
 	var input struct {
 		Event string `json:"hook_event_name"`
 		Tool  string `json:"tool_name"`
@@ -41,7 +44,7 @@ func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, 
 		fmt.Fprintln(errout, err)
 		return 2
 	}
-	tools, err := newNativeWorkspaceTools(directory, admissions...)
+	tools, err := newNativeWorkspaceTools(directory, services...)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 2
@@ -51,7 +54,7 @@ func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, 
 		fmt.Fprintln(errout, err)
 		return 2
 	}
-	release, err := admitExecution(directory, objectOrEmpty(request), admissions)
+	release, err := admitExecution(directory, objectOrEmpty(request), services)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 2
@@ -102,8 +105,10 @@ func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn s
 	return &nativeReply{payload: map[string]any{"result": result}, status: "tool-result"}, nil
 }
 
-func codexCaptureBinding() (map[string]any, error) {
-	executable, err := exec.LookPath("codex")
+func codexCaptureBinding() (map[string]any, error) { return codexConfiguredBinding(settings.Values{}) }
+
+func codexConfiguredBinding(config settings.Values) (map[string]any, error) {
+	executable, err := exec.LookPath(config.NativeString("codexExecutable"))
 	if err != nil {
 		return nil, &blockedError{message: "CODEX_UNAVAILABLE: codex is not on PATH"}
 	}
@@ -115,13 +120,16 @@ func codexCaptureBinding() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := os.Getenv("CODEX_HOME")
-	if config == "" {
-		config = filepath.Join(home, ".codex")
+	if override := config.NativeString("codexHome"); override != "" {
+		home = override
+	}
+	nativeHome := os.Getenv("CODEX_HOME")
+	if nativeHome == "" || config.NativeString("codexHome") != "" {
+		nativeHome = filepath.Join(home, ".codex")
 	}
 	// Native config/auth resolution stays with app-server. Only its path is
 	// pinned; credentials are never copied into an evidence record.
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CODEX_HOME": resolveNativePath(config)}
+	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CODEX_HOME": resolveNativePath(nativeHome)}
 	return binding, nil
 }
 
@@ -157,7 +165,11 @@ func codexVerifySource(directory string, source any) error {
 	if err != nil {
 		return err
 	}
-	expected, err := codexTurnParameters(request, textOf(getOf(source, "identity")))
+	effective, err := requestWithNativeMessages(directory, request)
+	if err != nil {
+		return err
+	}
+	expected, err := codexTurnParameters(effective, textOf(getOf(source, "identity")))
 	if err != nil {
 		return err
 	}
@@ -332,7 +344,7 @@ func codexCheckConfiguration(request, configuration any, thread string) error {
 	return nil
 }
 
-func codexExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (map[string]any, error) {
+func codexExecute(request any, directory string, probe bool, services ...ExecutionServices) (source map[string]any, resultErr error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
@@ -417,7 +429,7 @@ func codexExecute(request any, directory string, probe bool, admissions ...Execu
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	tools, err = newNativeWorkspaceTools(directory, admissions...)
+	tools, err = newNativeWorkspaceTools(directory, services...)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +449,7 @@ func codexExecute(request any, directory string, probe bool, admissions ...Execu
 		params["excludeTurns"] = true
 	} else {
 		params["ephemeral"] = false
-		params["dynamicTools"] = []any{nativeWorkspaceToolSchema(readOnly)}
+		params["dynamicTools"] = []any{nativeWorkspaceToolSchema(readOnly, tools.material)}
 	}
 	opened, err := client.request(method, params)
 	if err != nil {
@@ -502,9 +514,50 @@ func codexExecute(request any, directory string, probe bool, admissions ...Execu
 	if err = writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 		return nil, err
 	}
+	var inflight *protocol.TaskMessage
+	defer func() {
+		if inflight != nil && len(services) > 0 && services[0].ReceiptMessage != nil {
+			message := *inflight
+			message.Status = "FAILED"
+			message.Reason = "native turn ended before delivery acknowledgement; delivery outcome unknown; not automatically resent"
+			resultErr = errors.Join(resultErr, services[0].ReceiptMessage(directory, message))
+		}
+	}()
+	poll := 100 * time.Millisecond
 	for !valuesEqual(getOf(terminal, "threadId"), thread) || !valuesEqual(getOf(getOf(terminal, "turn"), "id"), turn) {
-		if _, err = client.receive(nil); err != nil {
-			return nil, err
+		if inflight == nil && len(services) > 0 && services[0].ClaimMessage != nil && services[0].ReceiptMessage != nil && getOf(request, "engine") != nil {
+			message, err := services[0].ClaimMessage(directory, thread, false)
+			if err != nil {
+				return nil, err
+			}
+			if message != nil {
+				inflight = message
+				if err := client.send(client.frame("message:"+message.ID, "turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": []any{map[string]any{"type": "text", "text": message.Text, "text_elements": []any{}}}})); err != nil {
+					return nil, err
+				}
+			}
+		}
+		message, receiveErr := client.receive(&poll)
+		if errors.Is(receiveErr, errNativeTimedOut) {
+			continue
+		}
+		if receiveErr != nil {
+			return nil, receiveErr
+		}
+		if inflight != nil && getOf(message, "id") == "message:"+inflight.ID {
+			receipt := *inflight
+			receipt.Status = "ACCEPTED"
+			if getOf(message, "error") != nil {
+				receipt.Status = "FAILED"
+				receipt.Reason = textOf(getOf(message, "error"))
+			} else if getOf(getOf(message, "result"), "turnId") != turn {
+				receipt.Status = "FAILED"
+				receipt.Reason = "native delivery acknowledgement differs from original turn"
+			}
+			if err := services[0].ReceiptMessage(directory, receipt); err != nil {
+				return nil, err
+			}
+			inflight = nil
 		}
 		if recordErr != nil {
 			return nil, recordErr
@@ -531,7 +584,7 @@ func codexExecute(request any, directory string, probe bool, admissions ...Execu
 	if recordErr != nil {
 		return nil, recordErr
 	}
-	source, err := codexObserve(directory)
+	source, err = codexObserve(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -561,7 +614,11 @@ func codexObserve(directory string) (map[string]any, error) {
 	if wanted, _ := getOf(request, "identity").(string); wanted != "" && wanted != thread {
 		return nil, &blockedError{message: "CODEX_BINDING: original request thread differs"}
 	}
-	expected, err := codexTurnParameters(request, thread)
+	effective, err := requestWithNativeMessages(directory, request)
+	if err != nil {
+		return nil, err
+	}
+	expected, err := codexTurnParameters(effective, thread)
 	if err != nil {
 		return nil, err
 	}

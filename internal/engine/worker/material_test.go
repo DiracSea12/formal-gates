@@ -134,7 +134,7 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 	}
 }
 
-func TestMaterialProvidesRequirementBodyOnceWithoutChangingIssuedInput(t *testing.T) {
+func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *testing.T) {
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", ContentDigest: "confirmed-digest", Content: "Complete confirmed requirement body.", Requirements: []requirement.FrozenRequirement{{ID: "REQ-001", Title: "behavior", Requirement: "required behavior"}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "qa-design"}}}
 	for _, handler := range []string{"engine.review.worker", "engine.qa.design"} {
@@ -153,8 +153,8 @@ func TestMaterialProvidesRequirementBodyOnceWithoutChangingIssuedInput(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(material.Prompt, document.Content) != 1 || !strings.Contains(material.Prompt, "[Current requirement]\n"+document.Content) {
-				t.Fatal("model material must supply the complete requirement body exactly once")
+			if strings.Contains(material.Prompt, document.Content) || !strings.Contains(material.Prompt, "workspace requirement operation") {
+				t.Fatal("initial message must retain the complete requirement reader and omit its repeated body")
 			}
 			actionInput := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
 			var projection protocol.WorkerInput
@@ -163,6 +163,7 @@ func TestMaterialProvidesRequirementBodyOnceWithoutChangingIssuedInput(t *testin
 			}
 			wantProjection := document
 			wantProjection.Content = ""
+			wantProjection.Requirements = nil
 			if !reflect.DeepEqual(projection.RequirementDocument, wantProjection) || projection.Validation != nil && projection.Validation.RequirementDocument.Content != "" {
 				t.Fatal("model action context must retain requirement identity and coverage without repeating its body")
 			}
@@ -212,6 +213,7 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 			v.Gate = &protocol.GateInput{Gate: catalog.Gates[0].ID, BaseSnapshot: "issued-base", Candidate: coverage.ValidationCandidate{Identity: "issued-candidate"}}
 			v.RequiredCases, v.PendingCases = []string{"new", "prior"}, []string{"prior", "new"}
 			v.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "prior"}, {CaseID: "new"}}
+			v.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "prior", Oracle: "prior oracle"}, {CaseID: "new", Oracle: "new oracle"}, {CaseID: "done", Oracle: "unrelated completed oracle"}}
 			v.Completed = []coverage.ExecutionRecord{{CaseID: "done", Comparison: "accepted comparison", Result: coverage.ExecutedFail}}
 			v.Inherited = []coverage.ExecutionRecord{{CaseID: "inherited", Comparison: "accepted inherited comparison", Result: coverage.ExecutedPass}}
 			before, _ := json.Marshal(input)
@@ -236,8 +238,8 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 				if !reflect.DeepEqual(context.Validation.Gate, v.Gate) || len(context.Validation.Manifest.Cases) != 0 || len(context.Validation.ExecutionFacts) != 0 {
 					t.Fatal("gate lost its native range or received QA content")
 				}
-			} else if context.Validation.Gate != nil || !reflect.DeepEqual(context.Validation.Manifest, v.Manifest) || !reflect.DeepEqual(context.Validation.ExecutionFacts, v.ExecutionFacts) || !reflect.DeepEqual(context.Validation.RequiredCases, v.RequiredCases) || !reflect.DeepEqual(context.Validation.PendingCases, v.PendingCases) || !reflect.DeepEqual(context.Validation.Completed, v.Completed) || !reflect.DeepEqual(context.Validation.Inherited, v.Inherited) {
-				t.Fatal("comparison lost oracle, original order or accepted evidence, or received a gate duty")
+			} else if context.Validation.Gate != nil || !reflect.DeepEqual(context.Validation.Manifest.Cases, v.Manifest.Cases[:2]) || !reflect.DeepEqual(context.Validation.ExecutionFacts, v.ExecutionFacts) || !reflect.DeepEqual(context.Validation.RequiredCases, v.RequiredCases) || !reflect.DeepEqual(context.Validation.PendingCases, v.PendingCases) || len(context.Validation.Completed) != 0 || len(context.Validation.Inherited) != 0 {
+				t.Fatal("comparison lost pending oracle/original fact order, repeated retained results, or received a gate duty")
 			}
 			after, _ := json.Marshal(input)
 			internal, _ := json.Marshal(material.Input)

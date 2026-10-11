@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	ProviderClaude   = host.Claude
-	ProviderCodex    = host.Codex
-	ProviderCursor   = host.Cursor
-	ProviderDeepSeek = host.DeepSeek
-	ProviderZCode    = host.ZCode
-	ProviderDefault  = host.Default
+	ProviderClaude    = host.Claude
+	ProviderCodex     = host.Codex
+	ProviderCursor    = host.Cursor
+	ProviderDeepSeek  = host.DeepSeek
+	ProviderZCode     = host.ZCode
+	ProviderWorkBuddy = host.WorkBuddy
+	ProviderDefault   = host.Default
 
 	eventStart = "subagent_start"
 	eventStop  = "subagent_stop"
@@ -54,12 +55,13 @@ type HookDefinition struct {
 // host only registers its payload adapter once; event names and requiredness
 // still come from internal/host's descriptor registry.
 var adapterFactories = map[string]func() providerAdapter{
-	ProviderClaude:   claudeAdapter,
-	ProviderCodex:    codexAdapter,
-	ProviderCursor:   cursorAdapter,
-	ProviderDeepSeek: deepseekAdapter,
-	ProviderZCode:    zcodeAdapter,
-	ProviderDefault:  defaultAdapter,
+	ProviderClaude:    claudeAdapter,
+	ProviderWorkBuddy: workbuddyAdapter,
+	ProviderCodex:     codexAdapter,
+	ProviderCursor:    cursorAdapter,
+	ProviderDeepSeek:  deepseekAdapter,
+	ProviderZCode:     zcodeAdapter,
+	ProviderDefault:   defaultAdapter,
 }
 
 type registeredAdapter struct {

@@ -37,6 +37,7 @@ var requiredFiles = []string{
 	"agents/openai.yaml",
 	"prompts/reviewer-base.md",
 	"references/install-and-hooks.md",
+	"references/user-configuration.md",
 	"references/local-validation.md",
 	"references/vcs-snapshots.md",
 	"internal/harness/native_dsh.mjs",

@@ -163,12 +163,18 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 		s.PendingHostActions[intent.ActionID] = intent
 		return nil
 	}
+	record, _ := s.recoveryRequest(correlation)
+	handoff := record.Handoff
 	// Fresh execution follows observed termination and retains the original
 	// finite policy and binding when the normal retry owner signs a replacement.
 	// 一次宿主效果执行的统一预算判定（retry 余量＋token cap 两维，与公开
 	// ResumeAgent 同一函数）；治理任务的换新仍经派发 guard（与 issueInto 漏斗
 	// 同一单任务判定）。
-	if e.guardEffectBudget(s, pending.ActionID, revision) != nil {
+	if handoff {
+		if e.guardTokenBudget(s, pending.Task.String(), revision) != nil {
+			return nil
+		}
+	} else if e.guardEffectBudget(s, pending.ActionID, revision) != nil {
 		return nil
 	}
 	if s.validationRole(pending.Task, e.cfg.Definition) != "" && e.guardEngaged(s) {
@@ -180,14 +186,20 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 			return err
 		}
 	}
-	attempt.Attempts++
-	attempt.RetryExhausted = attempt.Attempts >= attempt.MaxAttempts
+	if !handoff {
+		attempt.Attempts++
+		attempt.RetryExhausted = attempt.Attempts >= attempt.MaxAttempts
+	}
 	attempt.AwaitingResult = false
-	if attempt.Business {
+	if attempt.Business && !handoff {
 		s.endBusinessAttempt(pending, attempt, fmt.Sprintf("interrupted execution resolved by %s", correlation), revision)
 		return nil
 	}
-	retired, _ := s.retireAction(pending.ActionID, "", "interrupted execution resolved by "+correlation)
+	reason := "interrupted execution resolved by " + correlation
+	if handoff {
+		reason = "user requested same-host handoff: " + record.Detail
+	}
+	retired, _ := s.retireAction(pending.ActionID, "", reason)
 	if attempt.RetryExhausted {
 		s.EndedAttempts[pending.Task] = attempt
 		s.Tasks[pending.Task] = runtime.TaskQueued

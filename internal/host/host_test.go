@@ -13,6 +13,7 @@ func TestRegistryExposesFiniteInstallableHostCapabilities(t *testing.T) {
 		{"cursor", Cursor, "cursor"},
 		{"dsh", DeepSeek, "dsh"},
 		{"z-code", ZCode, "zcode"},
+		{"cbc", WorkBuddy, "workbuddy"},
 	} {
 		descriptor, err := Lookup(want.value)
 		if err != nil {
@@ -44,10 +45,10 @@ func TestZCodeDescriptorCapturesGlobalOnlyHookAndToolLifecycle(t *testing.T) {
 }
 
 func TestInstallableListsComeFromRegistry(t *testing.T) {
-	if got, want := InstallableNames(), []string{"claude", "codex", "cursor", "dsh", "zcode"}; !equalStrings(got, want) {
+	if got, want := InstallableNames(), []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy"}; !equalStrings(got, want) {
 		t.Fatalf("InstallableNames()=%v, want %v", got, want)
 	}
-	if got, want := InstallableIDs(), []string{Claude, Codex, Cursor, DeepSeek, ZCode}; !equalStrings(got, want) {
+	if got, want := InstallableIDs(), []string{Claude, Codex, Cursor, DeepSeek, ZCode, WorkBuddy}; !equalStrings(got, want) {
 		t.Fatalf("InstallableIDs()=%v, want %v", got, want)
 	}
 }
@@ -62,4 +63,14 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func TestWorkBuddyDescriptorProvidesNativeInstallationWithoutGlobalHooks(t *testing.T) {
+	descriptor, err := Lookup(WorkBuddy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.Paths.GlobalBase != ".codebuddy/skills" || descriptor.Paths.ProjectManaged != "CODEBUDDY.md" || descriptor.Paths.GlobalHookConfig != "" || descriptor.Paths.ProjectHookConfig != "" || !descriptor.LifecycleRequired {
+		t.Fatalf("native WorkBuddy install contract=%+v", descriptor)
+	}
 }

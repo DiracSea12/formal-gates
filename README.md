@@ -45,10 +45,12 @@ lightweight 只留下明确“本 run 未经任何验证”的 unverified 记录
 装好后，对 AI 说：“帮我用 formal-gates 处理这次改动。”用户只需回答实际未决选择，
 并在规定节点确认。公开 workflow 入口穷举为：
 
-`start` / `drive` / `submit` / `show` / `status` / `next` / `diagnose` / `guard-preview`。
+`start` / `drive` / `submit` / `show` / `status` / `next` / `progress` / `message` /
+`replan` / `handoff` / `diagnose` / `guard-preview`。
 
-start 是 bootstrap，drive 执行确定性推进与恢复，submit 是唯一外部事件写入口；其余
-只读。需求变化、路线调整、reset、abort、waiver/skip 和 HUMAN 合法节点跳转通过当前
+start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与用户确认；
+message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 只读准备计划重审确认。
+其他入口只读。设置见[用户与项目设置](references/user-configuration.md)。需求变化、路线调整、reset、abort、waiver/skip 和 HUMAN 合法节点跳转通过当前
 availableActions 的 typed Ask 提交。UNKNOWN 先对账，不能盲目重派或重做 VCS 副作用。
 
 版本、定义/包摘要或安装身份不匹配时拒绝正常读取与写入；diagnose 可原始只读检查。
@@ -64,7 +66,7 @@ run、不认证用户确认或任务合法性。[输入与算法](references/gua
 
 宿主适配器只持有原生启动、执行、观测、恢复与证据传输，业务决策由 engine 与用户
 typed Ask 管理。安装支持和执行支持分别核对；doctor、模拟与配置存在不能替代真实
-canary。发布与全局切换分别保留独立验收证据；五宿主与 Git/SVN/P4 非分片/分片
+canary。发布与全局切换分别保留独立验收证据；六宿主与 Git/SVN/P4 非分片/分片
 的完整验收须绑定同一候选和实际安装副本，未运行项如实标记未验证或 skip。
 
 
@@ -104,8 +106,9 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | Cursor | `~/.cursor/formal-gates` | 所选项目下的对应目录 |
 | DeepSeek Harness | `~/.dsh/skills/formal-gates`（`$DSH_HOME` 下） | 所选项目 `.dsh/skills/formal-gates` |
 | ZCode | `~/.zcode/skills/formal-gates` | 所选项目 `.zcode/skills/formal-gates` |
+| WorkBuddy | `~/.codebuddy/skills/formal-gates` | 所选项目 `.codebuddy/skills/formal-gates` |
 
-安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装只装 skill 与 `AGENTS.md` 指令（当前 ZCode 忽略项目级 hook 配置）。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
+安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装只装 skill 与 `AGENTS.md` 指令（当前 ZCode 忽略项目级 hook 配置）。WorkBuddy 只安装 skill 与 CODEBUDDY.md，原生工具/生命周期由 engine 接入，不写 global hook。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
 
 安装还会维护受理规则：Claude Code 使用全局 `~/.claude/CLAUDE.md` 或项目
 `CLAUDE.md`，Codex 使用全局 `~/.codex/AGENTS.md` 或项目 `AGENTS.md`，Cursor 项目

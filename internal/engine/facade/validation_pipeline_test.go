@@ -24,6 +24,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/settings"
 )
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
@@ -319,7 +320,7 @@ func (d *validationDriver) completeWorkerTerminations() {
 			}
 			d.submit(event)
 		}
-		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("termination-receipt:"+id), id, intent.Operation, d.host(), id, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
+		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("termination-receipt:"+id), id, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 		if err != nil {
 			d.t.Fatal(err)
 		}
@@ -1157,7 +1158,12 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err != nil {
 		return nil, Run{}, err
 	}
-	tokenCap, err := readTokenCap(root)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, Run{}, err
+	}
+	effective, err := settings.Load(root, home)
+	tokenCap := effective.Values.TokenCap
 	if err != nil {
 		return nil, Run{}, err
 	}

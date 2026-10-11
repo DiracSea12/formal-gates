@@ -330,7 +330,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 }
 
 var workflowSubcommands = map[string]func([]string, IO) (int, error){
-	"start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
+	"replan": runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
 }
 
 func workflowFlag(args []string, name, fallback string) string {
@@ -1170,7 +1170,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -1253,4 +1253,102 @@ func readJSONFileInto(path string, value any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(value)
+}
+
+func runWorkflowProgress(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow progress", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "current run")
+	machine := fs.Bool("machine", false, "print complete evidence projection")
+	after := fs.Uint64("after-revision", 0, "last observed progress revision")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, fmt.Errorf("current engine run not found")
+	}
+	progress, err := f.ProgressSince(*after, harness.NativeJobAlive)
+	if err != nil || *machine {
+		return printValue(streams.Stdout, progress, err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		return 1, err
+	}
+	return printValue(streams.Stdout, workflowProgressView(progress, run), nil)
+}
+
+func runWorkflowMessage(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow message", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "current run")
+	worker := fs.Int("worker", 0, "current worker number from show")
+	text := fs.String("text", "", "supplementary user text")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, fmt.Errorf("current engine run not found")
+	}
+	message, err := f.QueueWorkerMessage(*worker, *text)
+	return printValue(streams.Stdout, message, err)
+}
+
+func runWorkflowHandoff(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow handoff", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "current run")
+	worker := fs.Int("worker", 0, "current developer number from show")
+	reason := fs.String("reason", "", "actual user reason")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, fmt.Errorf("current engine run not found")
+	}
+	_, err = f.RequestWorkerHandoff(*worker, *reason)
+	return printCurrentWorkflowRun(streams, f, err)
+}
+func runWorkflowReplan(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow replan", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "current run")
+	inputPath := fs.String("decision", "", "semantic carry/redo and impact choices JSON")
+	save := fs.String("save-candidate", "", "save original control candidate for confirmation")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, fmt.Errorf("current engine run not found")
+	}
+	var input facade.RequirementChangeInput
+	if err := readWorkflowInput(*inputPath, streams.Stdin, &input); err != nil {
+		return 1, err
+	}
+	candidate, err := f.PrepareReplan(input)
+	if err != nil {
+		return 1, err
+	}
+	if *save != "" {
+		if err := saveWorkflowCandidate(*save, candidate); err != nil {
+			return 1, err
+		}
+	}
+	return printValue(streams.Stdout, workflowConfirmationView(candidate), nil)
 }

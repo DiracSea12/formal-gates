@@ -51,7 +51,7 @@ const defpath = "/bin:/usr/bin"
 //   - 2 when an owner already exists (no exit.json, no process.json, no child);
 //   - any other non-zero when the supervisor itself cannot proceed
 //     (missing/malformed request.json) - again with no receipt written.
-func Supervise(directory string, admissions ...ExecutionAdmission) int {
+func Supervise(directory string, services ...ExecutionServices) int {
 	dir := directory
 
 	requestRaw, err := os.ReadFile(filepath.Join(dir, "request.json"))
@@ -71,7 +71,7 @@ func Supervise(directory string, admissions ...ExecutionAdmission) int {
 	} else if !os.IsNotExist(err) {
 		return 1
 	}
-	release, err := admitExecution(dir, request, admissions)
+	release, err := admitExecution(dir, request, services)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "supervise: %v\n", err)
 		return 1

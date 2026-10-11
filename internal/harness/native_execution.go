@@ -38,6 +38,11 @@ func StopNativeJob(directory string) error {
 	if !response.OK {
 		return fmt.Errorf("native cancellation: %s", response.Error)
 	}
+	if request, err := readJSONFile(filepath.Join(directory, "native-request.json")); err == nil {
+		if impl, err := nativeImplementationFor(textOf(getOf(request, "provider"))); err == nil && impl.cleanup != nil {
+			return impl.cleanup(directory)
+		}
+	}
 	return nil
 }
 

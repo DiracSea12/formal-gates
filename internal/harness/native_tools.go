@@ -36,7 +36,7 @@ type nativeWorkspaceTools struct {
 	directory, workspace, action, requestDigest, evidence string
 	readOnly                                              bool
 	facts                                                 []nativeToolFact
-	admissions                                            []ExecutionAdmission
+	services                                              []ExecutionServices
 	material                                              *worker.Material
 	materials                                             string
 }
@@ -78,7 +78,7 @@ func verifyNativeToolFact(fact nativeToolFact, directory, action, workspace stri
 	return nil
 }
 
-func newNativeWorkspaceTools(directory string, admissions ...ExecutionAdmission) (*nativeWorkspaceTools, error) {
+func newNativeWorkspaceTools(directory string, services ...ExecutionServices) (*nativeWorkspaceTools, error) {
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func newNativeWorkspaceTools(directory string, admissions ...ExecutionAdmission)
 			return nil, fmt.Errorf("current materials must belong to their issued workspace")
 		}
 	}
-	t.admissions = admissions
+	t.services = services
 	if getOf(request, "engine") != nil {
 		materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
 		body, err := os.ReadFile(materialPath)
@@ -331,7 +331,7 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	release, err := admitExecution(t.directory, objectOrEmpty(request), t.admissions)
+	release, err := admitExecution(t.directory, objectOrEmpty(request), t.services)
 	if err != nil {
 		return nil, err
 	}
@@ -359,6 +359,26 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 		relative = fact.Paths[a.Entry-1]
 	}
 	switch a.Action {
+	case "requirement":
+		if t.material == nil {
+			return nil, fmt.Errorf("action has no confirmed requirement material")
+		}
+		document := t.material.Input.RequirementDocument
+		lines := strings.SplitAfter(document.Content, "\n")
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		from, to := a.From, a.To
+		if from == 0 {
+			from = 1
+		}
+		if to == 0 {
+			to = len(lines)
+		}
+		if from < 1 || to < from || to > len(lines) {
+			return nil, fmt.Errorf("requirement line range is outside the bound original document")
+		}
+		return map[string]any{"path": document.Path, "contentDigest": document.ContentDigest, "from": from, "to": to, "lines": lines[from-1 : to]}, nil
 	case "comparison":
 		if t.material == nil || t.material.Input.Validation == nil || t.material.Input.Validation.Workspace == nil {
 			return nil, fmt.Errorf("action has no issued native comparison")
@@ -630,18 +650,43 @@ func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
 	}
 }
 
-func nativeWorkspaceToolSchema(readOnly bool) map[string]any {
-	actions := []any{"list", "read", "comparison"}
+func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map[string]any {
+	var material *worker.Material
+	if len(materials) > 0 {
+		material = materials[0]
+	}
+	actions := []any{"list", "read"}
+	properties := map[string]any{"listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}}
+	description := "Select existing files by original listing and entry numbers. Numbers remain bound across continuation and resume."
+	if material != nil && material.Input.RequirementDocument.Content != "" {
+		actions = append(actions, "requirement")
+		description += " Requirement reads the bound original confirmed document, optionally by from/to lines."
+		properties["from"] = map[string]any{"type": "integer", "minimum": 1}
+		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
+	}
+	if material != nil && material.Input.Validation != nil && (material.Input.Validation.Gate != nil || material.Input.Validation.ReviewArtifact != nil) {
+		actions = append(actions, "comparison")
+		description += " Comparison reads the issued native versions."
+	}
 	if !readOnly {
 		actions = append(actions, "replace", "create", "mkdir", "remove", "copy", "move")
+		description += " Replace uses an original read and from/to line range (empty: 1/0). Copy/move use source listing/entry and targetListing/targetEntry (omit for root) with a new name."
+		for _, key := range []string{"read", "from", "targetListing", "targetEntry"} {
+			properties[key] = map[string]any{"type": "integer", "minimum": 1}
+		}
+		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
+		properties["name"] = map[string]any{"type": "string"}
+		properties["content"] = map[string]any{"type": "string"}
 	}
-	return map[string]any{"name": nativeWorkspaceTool, "description": "Select existing files by original listing and entry numbers. Replace selects an original read and one-based line range (empty: from=1,to=0) and supplies new content. Copy/move select the source listing/entry, a target directory listing/entry (omit for workspace root), and a new filename; the program transfers original bytes. Comparison uses issued versions. Read publishes Go testSymbols from the original full source for result selection. Numbers remain bound across continuation and resume.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": actions}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}, "read": map[string]any{"type": "integer", "minimum": 1}, "from": map[string]any{"type": "integer", "minimum": 1}, "to": map[string]any{"type": "integer", "minimum": 0}, "targetListing": map[string]any{"type": "integer", "minimum": 1}, "targetEntry": map[string]any{"type": "integer", "minimum": 1}, "name": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []any{"action"}, "additionalProperties": false}}
+	description += " Read publishes Go testSymbols from the original full source for result selection."
+	properties["action"] = map[string]any{"type": "string", "enum": actions}
+	return map[string]any{"name": nativeWorkspaceTool, "description": description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": []any{"action"}, "additionalProperties": false}}
 }
 
 // NativeTools serves only MCP's handshake, discovery and tool-call methods.
 // The signed native request supplies physical execution parameters.
-func NativeTools(directory string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
-	tools, err := newNativeWorkspaceTools(directory, admissions...)
+func NativeTools(directory string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {
+	tools, err := newNativeWorkspaceTools(directory, services...)
 	if err != nil {
 		fmt.Fprintln(errout, err)
 		return 1
@@ -678,7 +723,7 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, admissio
 			err = json.Unmarshal(request.Params, &params)
 			result = map[string]any{"protocolVersion": params.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "formal-gates", "version": "1"}}
 		case "tools/list":
-			result = map[string]any{"tools": []any{nativeWorkspaceToolSchema(tools.readOnly)}}
+			result = map[string]any{"tools": []any{nativeWorkspaceToolSchema(tools.readOnly, tools.material)}}
 		case "tools/call":
 			var params struct {
 				Name      string          `json:"name"`

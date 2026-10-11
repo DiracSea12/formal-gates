@@ -105,13 +105,14 @@ func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 	return validateWorkDecisionShape(pkg.WorkDecisions)
 }
 
-// validateRequirementDecisionPayload 校验 DECIDE 载荷的形状：包字段复用
-// validateRequirementPackage，另加 CAS 基线（非空且≠候选）与决定理由非空。
+// validateRequirementDecisionPayload validates the original package, base and
+// user reason. Equal content is limited to reset or explicit plan reconfirmation.
 func validateRequirementDecisionPayload(payload *RequirementDecisionPayload) error {
 	if strings.TrimSpace(payload.BaseRevision) == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the base revision it is decided against"}
 	}
-	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset {
+	replan := planReconfirmation(payload.Source, payload.Classification, requirementRedoScope(payload))
+	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset && !replan {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision candidate revision must differ from its base"}
 	}
 	if strings.TrimSpace(payload.Reason) == "" {
@@ -530,27 +531,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	}
 	// scope 的计算与应用对两类分类完全一致（§7.2.1：PRESERVED 保留产品含
 	// 义＋重做受影响技术审是合法组合）；唯一硬规则是上面的 P1 源两约束。
-	scope := make([]string, 0, len(requirementScopeItems))
-	for _, item := range requirementScopeItems {
-		switch item {
-		case string(review.ProductReview):
-			if payload.RedoProductReview {
-				scope = append(scope, item)
-			}
-		case string(review.StartReadiness):
-			if payload.RedoStartReadiness {
-				scope = append(scope, item)
-			}
-		case "topology":
-			if payload.RedoTopology {
-				scope = append(scope, item)
-			}
-		case "route":
-			if payload.RedoRoute {
-				scope = append(scope, item)
-			}
-		}
-	}
+	scope := requirementRedoScope(payload)
 	// 登记确认事实（新权威 revision）。
 	state.RequirementRevisions = append(state.RequirementRevisions, ConfirmedRevision{
 		Coverage: payload.Coverage,
@@ -677,7 +658,7 @@ func verifyRequirementLedger(state *State) error {
 		if entry.BaseRevision != previousRevision {
 			return fail("entry %d base revision %q breaks the confirmation chain (previous %q)", index+2, entry.BaseRevision, previousRevision)
 		}
-		if entry.Revision == "" || entry.Revision == entry.BaseRevision && entry.Source != RequirementSourceReset || entry.DeltaDigest == "" || entry.RequestID == "" {
+		if entry.Revision == "" || entry.Revision == entry.BaseRevision && entry.Source != RequirementSourceReset && !planReconfirmation(entry.Source, entry.Classification, entry.DecidedScope) || entry.DeltaDigest == "" || entry.RequestID == "" {
 			return fail("entry %d is missing its revision, delta, or ask binding", index+2)
 		}
 		if !validRequirementSource(entry.Source) || !validRequirementClassification(entry.Classification) {
@@ -716,4 +697,33 @@ func NewGuaranteeActivation(revision, solution string, document requirement.Froz
 }
 func (s *State) GuaranteeActive() bool {
 	return s.RequirementGuarantee != nil && s.RequirementGuarantee.RequirementRevision == s.RequirementRevision() && s.RequirementGuarantee.ManifestDigest != "" && s.RouteMode != "" && !s.routeHasNoQAModes() && !s.ValidationNotGuaranteed()
+}
+
+func requirementRedoScope(payload *RequirementDecisionPayload) []string {
+	var scope []string
+	for _, item := range requirementScopeItems {
+		switch item {
+		case string(review.ProductReview):
+			if payload.RedoProductReview {
+				scope = append(scope, item)
+			}
+		case string(review.StartReadiness):
+			if payload.RedoStartReadiness {
+				scope = append(scope, item)
+			}
+		case "topology":
+			if payload.RedoTopology {
+				scope = append(scope, item)
+			}
+		case "route":
+			if payload.RedoRoute {
+				scope = append(scope, item)
+			}
+		}
+	}
+
+	return scope
+}
+func planReconfirmation(source, classification string, scope []string) bool {
+	return source == RequirementSourceUserInitiated && classification == RequirementClassificationPreserved && len(scope) == 2 && slices.Contains(scope, string(review.StartReadiness)) && slices.Contains(scope, "route")
 }

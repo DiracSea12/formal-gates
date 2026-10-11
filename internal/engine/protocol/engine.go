@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/settings"
 	"io"
 	"io/fs"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -42,6 +44,7 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
+	Settings             *settings.Effective
 	RequirementGuarantee *GuaranteeActivation
 	VCSName              string
 	NativeHandle         vcs.WorkspaceHandle
@@ -165,6 +168,8 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 	}
 	state := NewState(*view)
 	state.RunProvider = provider
+	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	state.Settings = e.cfg.Settings
 	state.RunID = runID
 	state.Route = route
 	state.BaseSnapshot = baseSnapshot
@@ -252,6 +257,7 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	if err != nil {
 		return 0, nil, err
 	}
+	state.retireTaskMessages()
 	if err := e.refreshGuardBudget(state); err != nil {
 		return 0, nil, err
 	}
@@ -774,7 +780,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	if err != nil {
 		return nil, 0, err
 	}
-	issued, err := decision.SelectIssued(plan, adm, ackStore{})
+	issued, err := e.selectIssued(state, plan, adm)
 	if err != nil {
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
@@ -2394,7 +2400,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if plan.Next.Kind != decision.KindReady {
 		return nil, nil
 	}
-	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))}, ackStore{})
+	issued, err := e.selectIssued(state, plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))})
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill select: %w", err)
 	}
@@ -2920,4 +2926,33 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 	adapter := &AdapterHostAction{Operation: operation, Schema: schema, Params: normalized}
 	action := fmt.Sprintf("hact:%s:%d", HostActionExecuteAdapterOperation, nextRevision)
 	return HostActionIntent{ActionID: action, Operation: HostActionExecuteAdapterOperation, Step: step, Adapter: adapter, PayloadDigest: digestOfCanonical(adapter), Correlation: strings.TrimSpace(correlation), Revision: nextRevision}, nil
+}
+
+// selectIssued applies the configured QA admission limit to the canonical ready
+// order. Independent non-QA work still fills available total capacity.
+func (e *Engine) selectIssued(state *State, plan *decision.Plan, admission decision.Admission) (decision.IssuedSet, error) {
+	if state.Settings == nil || plan.Next.Ready == nil {
+		return decision.SelectIssued(plan, admission, ackStore{})
+	}
+	admission.Capacity = min(admission.Capacity, max(0, e.cfg.Capacity-len(state.PendingActions)))
+	slots := state.Settings.Values.QACapacity
+	for _, pending := range state.PendingActions {
+		if strings.HasPrefix(state.validationRole(pending.Task, e.cfg.Definition), "engine.qa.") {
+			slots--
+		}
+	}
+	copy := *plan
+	ready := *plan.Next.Ready
+	ready.Tasks = nil
+	for _, task := range plan.Next.Ready.Tasks {
+		if strings.HasPrefix(state.validationRole(task.Task, e.cfg.Definition), "engine.qa.") {
+			if slots <= 0 {
+				continue
+			}
+			slots--
+		}
+		ready.Tasks = append(ready.Tasks, task)
+	}
+	copy.Next.Ready = &ready
+	return decision.SelectIssued(&copy, admission, ackStore{})
 }

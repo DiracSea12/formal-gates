@@ -259,3 +259,51 @@ usage；不可计量 token 显示 null 并保留 reason，不能用零代替。g
 Codex 原生 response ID 去重，任务墙钟包含工具等待、不含 turn 间空闲。owner 终态区间
 差值只报告，不参与 in-flight guard；多 run 区间重叠或基线不可靠时不猜数字。child
 cost 按 childRunID/dispatchID 汇总，保留主线与 child 原 owner 来源。
+
+## 执行中的反馈与进度
+
+`workflow show/status` 显示当前 worker 序号、语义进度和补充消息原文/投递状态。
+`workflow message --worker <序号> --text <原文>` 只给已启动、尚未完成的同一 action
+追加临时消息，不改变确认范围、TaskKey、Attempt 或额度。Codex 使用原 thread/turn 的
+`turn/steer`；其他宿主排队到下一次合法的同身份调用，不接入第二个活动 writer。
+PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ack 的 FAILED 保留
+“投递结果未知”原因与原文，不表示宿主确定没有收到，也不自动重发。动作关闭、替换
+或取消时，未投递消息明确结束并留证；任务 PASS 不能删除这些消息。
+
+`workflow progress --after-revision <上次revision>` 只读派生经过时间、真实运行/未启动/
+受阻、当前准备/命令/原生等待/结果处理及区间、新结果、准备执行/复用和实际原生调用。
+完成、失败和取消/替代分开；没有 pending 本身不证明完成。native-process 的调用数不是
+计费模型请求数。缺时钟/用量源显示 unavailable，不填零或相加并行区间。`--machine`
+保留完整原事实定位，普通显示不输出整份 workflow 材料。设置见[用户与项目设置](user-configuration.md)。
+
+## 原需求内调整计划与转交
+
+`workflow replan --decision <语义选择文件> --save-candidate <确认文件>` 只准备当前未终结
+regular 的计划重审：正式需求字节/revision 不变，product/topology 结论保留，逐项 work
+仍由用户选择 carry/redo 并给理由。选择文件沿原 RequirementChangeInput 的 work、children
+与 impact 形状，省略 classification/redo。原 `submit --confirmation` 确认后才重做
+start-readiness；优化或增加 Batch 必须由新技审生成完整计划并经 route/plan 再确认。
+不能通过自由任务正文绕过。普通相同需求的重复提交继续拒绝。
+
+`workflow handoff --worker <开发者序号> --reason <用户理由>` 请求原 typed recovery Ask；
+用户选择 fresh 后仍须观察、原 terminate receipt 与合法新执行边界。宿主不变，保留
+原 TaskKey、工作区、已做工作、历史费用和原证据；主动转交不制造 transient failure，
+不消费业务返修或故障 retry，但实际新用量和原 token guard 继续生效。UNKNOWN 仍先
+对账，不能据请求盲目重开。确认与观察期间独立合法工作继续推进。
+
+## 当前角色材料与 WorkBuddy
+
+启动材料只含当前职责、约束、当前候选与必要语义输入。固定规则选择本角色章节，
+只声明可用的工具操作；QA 执行只交待比较用例及其共享步骤、原操作事实。完整原需求
+仍由原 immutable WorkerMaterial 绑定，通过现有 workspace 的 `requirement` 操作按需
+读取原全文或行范围；不把正文重复灌入每次启动消息，不建索引或强制读取闸门。
+原始结构化材料仍由引擎校验与接纳，模型不编写机械身份或直接改 workflow state。
+
+WorkBuddy 用原 codebuddy/cbc print-mode CLI、StructuredOutput 和同一 engine MCP 工具。
+安装提供 `.codebuddy/skills/formal-gates` 与 CODEBUDDY.md，不写 global hook。启动前
+核原 CLI 能力与原用户 product config；续用先观察原 session store，再由 `--resume`
+证明原身份。启动、等待、双流、取消、观察恢复、语义结果和费用沿共用原 owner。
+CLI 会话的短 cwd 只承载原生存储，文件操作仍在已绑定的实际 workspace，取消与恢复
+清理该原资源。用量只累计原 assistant UUID 的 input/output/cache-read，summary 不重复
+相加；缺必需类别仍 unavailable。安装/本地 peer 通过不等于付费现场整流程通过，真实
+调用须使用用户已授权的模型和额度。

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,6 +29,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/settings"
 )
 
 const (
@@ -89,6 +91,8 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	TaskMessages         map[string]protocol.TaskMessage      `json:"taskMessages,omitempty"`
+	Settings             *settings.Effective                  `json:"settings,omitempty"`
 	MasterRunID          string                               `json:"masterRunId,omitempty"`
 	ParentRequirement    *protocol.ParentRequirementAuthority `json:"parentRequirement,omitempty"`
 	RequirementGuarantee *protocol.GuaranteeActivation        `json:"requirementGuarantee,omitempty"`
@@ -361,6 +365,7 @@ type TerminalMaterial struct {
 	Digest string `json:"digest"`
 }
 type TerminalSummary struct {
+	Settings            *settings.Effective                  `json:"settings,omitempty"`
 	SliceGuarantee      *TerminalMaterial                    `json:"sliceGuarantee,omitempty"`
 	LastEvent           *protocol.EventRecord                `json:"lastEvent,omitempty"`
 	Termination         *protocol.State                      `json:"termination,omitempty"`
@@ -394,8 +399,9 @@ type startIntent struct {
 }
 
 type StartOptions struct {
-	Root    string
-	Request StartRequest
+	Settings *settings.Effective
+	Root     string
+	Request  StartRequest
 	// PackageRoot is used by the host/launcher to document which installed
 	// target was admitted.  The façade never resolves a runtime from a caller
 	// supplied identity; the launcher must provide Admission instead.
@@ -587,12 +593,29 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if options.Capacity < 0 {
 		return nil, Run{}, fmt.Errorf("engine start: capacity must be non-negative")
 	}
-	// 项目级 token cap 配置在首个状态写入前读取：非法配置立即明确报错，缺
-	// 文件＝不可用（request/attempt 硬止损继续生效）。
-	tokenCap, err := readTokenCap(root)
-	if err != nil {
-		return nil, Run{}, err
+	effective := options.Settings
+	if effective == nil {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return nil, Run{}, homeErr
+		}
+		loaded, loadErr := settings.Load(root, home)
+		if loadErr != nil {
+			return nil, Run{}, loadErr
+		}
+		effective = &loaded
 	}
+	if options.Capacity != 0 {
+		copy := *effective
+		copy.Values.Capacity = options.Capacity
+		copy.Sources = maps.Clone(effective.Sources)
+		copy.Sources["capacity"] = "start option"
+		effective = &copy
+	}
+	options.Capacity = effective.Values.Capacity
+	tokenCap := effective.Values.TokenCap
+	frozen := *effective
+	frozen.Values.TokenCap = nil
 	if strings.TrimSpace(options.Owner.Transcript) == "" && strings.TrimSpace(options.Owner.Provider) != "" ||
 		strings.TrimSpace(options.Owner.Transcript) != "" && strings.TrimSpace(options.Owner.Provider) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: owner binding requires both transcript and provider")
@@ -689,7 +712,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, err
 	}
-	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)}, nil)
+	eng, err := protocol.New(store, protocol.Config{Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)}, nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -806,12 +829,16 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 		return nil, err
 	}
 	nativeRoot := ""
+	capacity := 16
 	if stored, err := store.Load(); err == nil {
 		var state protocol.State
 		if err := json.Unmarshal(stored.Content, &state); err != nil {
 			return nil, err
 		}
 		nativeRoot = state.NativeRoot
+		if state.Settings != nil {
+			capacity = state.Settings.Values.Capacity
+		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	} else if errors.Is(err, fs.ErrNotExist) {
@@ -848,12 +875,12 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID)}, nil)
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: capacity, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID)}, nil)
 	if err != nil {
 		return nil, err
 	}
 	env := Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity}
-	f := &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: 16, vcsRunner: nil, vcs: reopenNativeProvider(root, nativeRoot, req), runtimeFiles: runtimeFiles}
+	f := &Facade{admission: admission, root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: capacity, vcsRunner: nil, vcs: reopenNativeProvider(root, nativeRoot, req), runtimeFiles: runtimeFiles}
 	if f.vcs != nil {
 		f.vcs.WithRuntimeFiles(runtimeFiles)
 	}
@@ -1522,6 +1549,8 @@ func (f *Facade) project() (Run, error) {
 		return Run{}, err
 	}
 	run := Run{
+		TaskMessages:     snap.State.TaskMessages,
+		Settings:         stateSettings(snap.State),
 		WorkerMaterials:  materials,
 		ValidationInputs: snap.State.ValidationInputs(f.definition),
 		Attempts:         snap.State.Attempts,
@@ -1709,7 +1738,7 @@ func terminalIntentPath(stateDir string) string {
 }
 
 func summaryForRun(run Run, interval ownerInterval) TerminalSummary {
-	return TerminalSummary{LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerTranscript: interval.transcript, OwnerStartedAt: interval.startedAt, OwnerEndedAt: interval.endedAt}
+	return TerminalSummary{Settings: run.Settings, LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerTranscript: interval.transcript, OwnerStartedAt: interval.startedAt, OwnerEndedAt: interval.endedAt}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -1910,8 +1939,9 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	run := Run{lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
+	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
+		run.TaskMessages = s.TaskMessages
 		run.SliceReceipt = s.SliceReceipt
 		run.BaseSnapshot = s.BaseSnapshot
 		run.PromotedSnapshot = s.PromotedSnapshot
@@ -2433,4 +2463,15 @@ func reopenNativeProvider(configRoot, root string, req StartRequest) *vcs.Provid
 		return nil
 	}
 	return p.At(root, req.NativeHandle)
+}
+
+// stateSettings adds the existing cost owner's cap only to disposable settings
+// views. The frozen state configuration never carries a second control value.
+func stateSettings(state *protocol.State) *settings.Effective {
+	if state.Settings == nil {
+		return nil
+	}
+	effective := *state.Settings
+	effective.Values.TokenCap = state.TokenCapMaxTokens
+	return &effective
 }

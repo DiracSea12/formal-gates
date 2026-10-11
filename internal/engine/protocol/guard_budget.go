@@ -754,8 +754,12 @@ func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision
 			}
 		}
 	}
+	return e.guardTokenBudget(s, pending.Task.String(), nextRevision)
+}
+
+func (e *Engine) guardTokenBudget(s *State, target string, nextRevision uint64) *RejectedError {
 	if e.tokenCapExceeded(s) && !s.budgetContinueGranted(e.cfg.Definition) {
-		s.ensureDispatchBudgetAsk(pending.Task.String(), nextRevision)
+		s.ensureDispatchBudgetAsk(target, nextRevision)
 		return &RejectedError{
 			Code:   CodeGuardAllowanceBlocked,
 			Detail: "engine dispatch token cap reached; further automatic dispatch requires a budget disposition authorization",

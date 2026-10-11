@@ -9,6 +9,7 @@ package harness
 import (
 	"fmt"
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/settings"
 	"io"
 	"os"
 	"os/exec"
@@ -389,7 +390,7 @@ func configuredIs(configured map[string]any, option, requested string) bool {
 }
 
 // dshExecute runs DSH’s ACP sequence for one request.
-func dshExecute(request any, directory string, probe bool, admissions ...ExecutionAdmission) (result map[string]any, err error) {
+func dshExecute(request any, directory string, probe bool, services ...ExecutionServices) (result map[string]any, err error) {
 	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
 		return nil, mkdirErr
 	}
@@ -573,8 +574,10 @@ func dshExecute(request any, directory string, probe bool, admissions ...Executi
 // dshCaptureBinding binds dsh to the resolved binary it will execute
 // (native_dsh.capture_binding): PATH lookup, symlink resolution, then the
 // shared launch/files proof shape.
-func dshCaptureBinding() (map[string]any, error) {
-	executable, err := exec.LookPath("dsh")
+func dshCaptureBinding() (map[string]any, error) { return dshConfiguredBinding(settings.Values{}) }
+
+func dshConfiguredBinding(config settings.Values) (map[string]any, error) {
+	executable, err := exec.LookPath(config.NativeString("dshExecutable"))
 	if err != nil {
 		return nil, &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
 	}
@@ -621,9 +624,9 @@ func sameKeySet(object map[string]any, names []string) bool {
 // native-request.json, dispatches by provider, prints the result JSON to
 // stdout as one canonical line, and on ANY execution error writes
 // native-error.json (canonical), echoes the same text to stderr and returns 1.
-func RunNative(directory string, errout io.Writer, admissions ...ExecutionAdmission) int {
+func RunNative(directory string, errout io.Writer, services ...ExecutionServices) int {
 	resolved := resolveNativePath(directory)
-	result, err := runNativeJob(resolved, admissions...)
+	result, err := runNativeJob(resolved, services...)
 	if err != nil {
 		writeNativeError(resolved, err, errout)
 		return 1
@@ -637,7 +640,7 @@ func RunNative(directory string, errout io.Writer, admissions ...ExecutionAdmiss
 	return 0
 }
 
-func runNativeJob(directory string, admissions ...ExecutionAdmission) (map[string]any, error) {
+func runNativeJob(directory string, services ...ExecutionServices) (map[string]any, error) {
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
 		return nil, err
@@ -670,7 +673,7 @@ func runNativeJob(directory string, admissions ...ExecutionAdmission) (map[strin
 			return nil, err
 		}
 	}
-	release, err := admitExecution(directory, object, admissions)
+	release, err := admitExecution(directory, object, services)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +717,18 @@ func runNativeJob(directory string, admissions ...ExecutionAdmission) (map[strin
 		release()
 		release = nil
 	}
-	source, err := impl.execute(request, directory, getOf(request, "probe") == true, admissions...)
+	if object["engine"] != nil && (len(services) == 0 || services[0].ClaimMessage == nil || services[0].ReceiptMessage == nil) {
+		return nil, fmt.Errorf("UNSUPPORTED_EXECUTION: current engine message services are unavailable")
+	}
+	prepared, messages, err := queueNativeMessages(directory, object, services)
+	if err != nil {
+		return nil, err
+	}
+	source, err := impl.execute(prepared, directory, getOf(request, "probe") == true, services...)
+	if messageErr := settleQueuedMessages(directory, messages, err, services); messageErr != nil {
+		return nil, messageErr
+	}
+
 	if _, managed := object["engine"]; managed && getOf(request, "probe") != true && err != nil {
 		return nil, &nativeInvocationError{err}
 	}
@@ -751,12 +765,17 @@ func writeNativeError(directory string, err error, errout io.Writer) {
 }
 
 // NativeBinding uses the existing host registry's capture and proof validation.
-func NativeBinding(provider string) (map[string]any, error) {
+func NativeBinding(provider string, configs ...settings.Values) (map[string]any, error) {
 	impl, err := nativeImplementationFor(provider)
 	if err != nil {
 		return nil, err
 	}
-	binding, err := impl.capture()
+	var binding map[string]any
+	if len(configs) != 0 && impl.captureConfigured != nil {
+		binding, err = impl.captureConfigured(configs[0])
+	} else {
+		binding, err = impl.capture()
+	}
 	if err != nil {
 		return nil, err
 	}

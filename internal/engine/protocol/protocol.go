@@ -40,6 +40,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/settings"
 )
 
 // RejectedError 是提交协议的全部可区分拒绝。Code 是封闭拒绝码，调用方
@@ -320,6 +321,7 @@ type ObsoleteAction struct {
 // It does not establish completion of a host effect or user authorization.
 // RequestID binds the original attempt to its actionable recovery request.
 type RecoveryRecord struct {
+	Handoff bool `json:"handoff,omitempty"`
 	// InterruptionReason is the host/worker's exact cause evidence; Detail is
 	// the engine's routing explanation. An empty cause remains unknown.
 	InterruptionReason string                 `json:"interruptionReason,omitempty"`
@@ -468,6 +470,9 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	TaskMessages         map[string]TaskMessage    `json:"taskMessages,omitempty"`
+	Settings             *settings.Effective       `json:"settings,omitempty"`
+	StartedAt            string                    `json:"startedAt,omitempty"`
 	RequirementGuarantee *GuaranteeActivation      `json:"requirementGuarantee,omitempty"`
 	VCSName              string                    `json:"vcsName,omitempty"`
 	NativeHandle         vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`

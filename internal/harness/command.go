@@ -2,16 +2,21 @@ package harness
 
 import (
 	"fmt"
+	"formal-gates/internal/engine/protocol"
 	"io"
 )
 
-// ExecutionAdmission holds the engine's existing execution window until the
-// native job or supervisor has claimed its original process evidence.
-type ExecutionAdmission func(string, map[string]any) (func(), error)
+// ExecutionServices explicitly carries the engine-owned execution boundary.
+// Native adapters receive the same services during ordinary turns and recovery.
+type ExecutionServices struct {
+	Admit          func(string, map[string]any) (func(), error)
+	ClaimMessage   func(string, string, bool) (*protocol.TaskMessage, error)
+	ReceiptMessage func(string, protocol.TaskMessage) error
+}
 
-func admitExecution(directory string, request map[string]any, admissions []ExecutionAdmission) (func(), error) {
-	if len(admissions) > 0 && admissions[0] != nil {
-		return admissions[0](directory, request)
+func admitExecution(directory string, request map[string]any, services []ExecutionServices) (func(), error) {
+	if len(services) > 0 && services[0].Admit != nil {
+		return services[0].Admit(directory, request)
 	}
 	if _, managed := request["engine"]; managed {
 		return nil, fmt.Errorf("UNSUPPORTED_EXECUTION: engine admission is unavailable")
@@ -20,27 +25,27 @@ func admitExecution(directory string, request map[string]any, admissions []Execu
 }
 
 // RunCommand serves the engine’s native subprocess and tool boundaries.
-func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions ...ExecutionAdmission) int {
+func RunCommand(args []string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {
 	if len(args) > 0 && args[0] == "codex-tool-permission" {
 		if len(args) != 2 {
 			fmt.Fprintln(errout, "harness codex-tool-permission requires the original job directory")
 			return 2
 		}
-		return CodexToolPermission(args[1], in, out, errout, admissions...)
+		return CodexToolPermission(args[1], in, out, errout, services...)
 	}
 	if len(args) > 0 && args[0] == "cursor-tool-permission" {
 		if len(args) != 2 {
 			fmt.Fprintln(errout, "harness cursor-tool-permission requires the original job directory")
 			return 2
 		}
-		return CursorToolPermission(args[1], in, out, errout, admissions...)
+		return CursorToolPermission(args[1], in, out, errout, services...)
 	}
 	if len(args) > 0 && args[0] == "native-tools" {
 		if len(args) != 2 {
 			fmt.Fprintln(errout, "harness native-tools requires the original job directory")
 			return 2
 		}
-		return NativeTools(args[1], in, out, errout, admissions...)
+		return NativeTools(args[1], in, out, errout, services...)
 	}
 	if len(args) > 0 && args[0] == "bridge" {
 		return Bridge(in, out)
@@ -50,7 +55,7 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions .
 			fmt.Fprintln(errout, "harness supervise requires a job directory")
 			return 2
 		}
-		return Supervise(args[1], admissions...)
+		return Supervise(args[1], services...)
 	}
 	if len(args) > 0 && args[0] == "native" {
 		// One native job, one process.
@@ -60,7 +65,7 @@ func RunCommand(args []string, in io.Reader, out, errout io.Writer, admissions .
 			fmt.Fprintln(errout, "harness native requires a job directory")
 			return 2
 		}
-		return RunNative(args[1], errout, admissions...)
+		return RunNative(args[1], errout, services...)
 	}
 	if len(args) > 0 && args[0] == "native-respond" {
 		return NativeRespond(args[1:], errout)

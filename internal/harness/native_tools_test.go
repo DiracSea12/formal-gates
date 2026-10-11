@@ -136,7 +136,7 @@ func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, "destination"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(continued, "native-request.json"), request, 0600); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := newNativeWorkspaceTools(continued, nativeToolAdmission)
+	resumed, err := newNativeWorkspaceTools(continued, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "file.txt"), []byte("first\nsecond\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(continued, "native-request.json"), body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := newNativeWorkspaceTools(continued, nativeToolAdmission)
+	recovered, err := newNativeWorkspaceTools(continued, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
 
 func TestNativeWorkspaceFactsRejectDifferentWorkspace(t *testing.T) {
 	directory, _ := nativeToolFixture(t)
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 	}
 	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"workspace\",\"arguments\":{\"action\":\"list\"}}}\n")
 	var output, errors bytes.Buffer
-	if code := RunCommand([]string{"native-tools", directory}, input, &output, &errors, nativeToolAdmission); code != 0 {
+	if code := RunCommand([]string{"native-tools", directory}, input, &output, &errors, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
 		t.Fatalf("MCP code %d: %s", code, &errors)
 	}
 	decoder := json.NewDecoder(&output)
@@ -350,7 +350,7 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 			t.Fatalf("tool surface: %v", reply)
 		}
 	}
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(readWorkspace, "input.txt"), []byte("original\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	readTools, err := newNativeWorkspaceTools(readDirectory, nativeToolAdmission)
+	readTools, err := newNativeWorkspaceTools(readDirectory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *tes
 	}
 	call := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"workspace","arguments":{"action":"list"},"_meta":{"original":"native-context"}}}` + "\n"
 	var output, errors bytes.Buffer
-	if code := NativeTools(directory, strings.NewReader(call), &output, &errors, nativeToolAdmission); code != 0 {
+	if code := NativeTools(directory, strings.NewReader(call), &output, &errors, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
 		t.Fatalf("original tools call: %d %s", code, &errors)
 	}
 	for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.raw.txt", "answer.json"} {
@@ -461,7 +461,7 @@ func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *tes
 	}
 	output.Reset()
 	errors.Reset()
-	if code := NativeTools(continued, strings.NewReader(call), &output, &errors, nativeToolAdmission); code != 0 {
+	if code := NativeTools(continued, strings.NewReader(call), &output, &errors, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
 		t.Fatalf("continued tools call: %d %s", code, &errors)
 	}
 	if err := verifyNativeSource(directory, source, "fixture"); err != nil {
@@ -513,7 +513,7 @@ func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true, "engine": map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": "gate-action"}}}); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,11 +547,11 @@ func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(
 		window.Lock()
 		return window.Unlock, nil
 	}
-	first, err := newNativeWorkspaceTools(directory, admit)
+	first, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: admit})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newNativeWorkspaceTools(directory, admit)
+	second, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: admit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +579,7 @@ func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(
 	if !seen[1] || !seen[2] {
 		t.Fatalf("two original calls reused a published identity: %v", seen)
 	}
-	recovered, err := newNativeWorkspaceTools(directory, admit)
+	recovered, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: admit})
 	if err != nil || len(recovered.facts) != 2 {
 		t.Fatalf("actual published facts: %+v %v", recovered, err)
 	}
@@ -592,7 +592,7 @@ func workspaceMCP(t *testing.T, directory string, args map[string]any) (map[stri
 		t.Fatal(err)
 	}
 	var output, errors bytes.Buffer
-	if code := RunCommand([]string{"native-tools", directory}, bytes.NewReader(frame), &output, &errors, nativeToolAdmission); code != 0 {
+	if code := RunCommand([]string{"native-tools", directory}, bytes.NewReader(frame), &output, &errors, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
 		t.Fatalf("public MCP: %d %s", code, &errors)
 	}
 	var reply map[string]any
@@ -782,7 +782,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				t.Helper()
 				raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "workspace", "arguments": arguments}})
 				var out, errout bytes.Buffer
-				if code := NativeTools(directory, bytes.NewReader(raw), &out, &errout, nativeToolAdmission); code != 0 {
+				if code := NativeTools(directory, bytes.NewReader(raw), &out, &errout, ExecutionServices{Admit: nativeToolAdmission}); code != 0 {
 					t.Fatalf("RPC %d: %s", code, errout.String())
 				}
 				var response map[string]any
@@ -850,7 +850,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			if failed != (role == "engine.gate") {
 				t.Fatal("resolved owned alias violates role boundary", role)
 			}
-			tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+			tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -871,7 +871,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			if failed != (role == "engine.gate") {
 				t.Fatal("resumed owned read violates role boundary")
 			}
-			resumed, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+			resumed, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -910,7 +910,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	tools, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -936,7 +936,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	if len(created["testSymbols"].([]map[string]any)) != 3 {
 		t.Fatal("new code symbol was not published")
 	}
-	resumed, err := newNativeWorkspaceTools(directory, nativeToolAdmission)
+	resumed, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -975,4 +975,43 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 		t.Fatal("actual selected test side effect differs", err)
 	}
 	t.Logf("read=%d testSymbol=2 original=%s actual Go event=pass persisted=%q", originalRead, qaCase.TestRef, value)
+}
+
+func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t *testing.T) {
+	directory, workspace := nativeToolFixture(t)
+	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var material worker.Material
+	if err := json.Unmarshal(body, &material); err != nil {
+		t.Fatal(err)
+	}
+	material.Input.RequirementDocument.Path = "requirements.md"
+	material.Input.RequirementDocument.ContentDigest = "bound-original"
+	material.Input.RequirementDocument.Content = "# Original\n完整确认正文。\n尾行。\n"
+	if err := writeAtomicJSON(path, material); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := callWorkspace(t, tools, `{"action":"requirement"}`)
+	if full["contentDigest"] != "bound-original" || strings.Join(full["lines"].([]string), "") != material.Input.RequirementDocument.Content {
+		t.Fatalf("original material missing: %v", full)
+	}
+	partial := callWorkspace(t, tools, `{"action":"requirement","from":2,"to":2}`)
+	if !reflect.DeepEqual(partial["lines"], []string{"完整确认正文。\n"}) {
+		t.Fatalf("wrong original line range: %v", partial)
+	}
+	if _, err := tools.call(json.RawMessage(`{"action":"requirement","from":2,"to":9}`)); err == nil {
+		t.Fatal("out-of-range original read accepted")
+	}
 }

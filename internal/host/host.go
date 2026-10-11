@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	Claude   = "claude-code"
-	Codex    = "codex"
-	Cursor   = "cursor"
-	DeepSeek = "deepseek-harness"
-	ZCode    = "zcode"
-	Default  = "default"
+	Claude    = "claude-code"
+	Codex     = "codex"
+	Cursor    = "cursor"
+	DeepSeek  = "deepseek-harness"
+	ZCode     = "zcode"
+	WorkBuddy = "workbuddy"
+	Default   = "default"
 )
 
 type HookKind string
@@ -58,6 +59,7 @@ type HookSpec struct {
 }
 
 type Descriptor struct {
+	Configuration     []ConfigField
 	ID                string
 	InstallName       string
 	ManifestName      string
@@ -72,11 +74,12 @@ type Descriptor struct {
 
 var descriptors = []Descriptor{
 	{
-		ID:           Claude,
-		InstallName:  "claude",
-		ManifestName: "Claude Code",
-		Aliases:      []string{"claude", "claude-code", "claude code"},
-		Installable:  true,
+		ID:            Claude,
+		Configuration: []ConfigField{StringConfig("claudeExecutable", "claude"), StringConfig("claudeHome", "")},
+		InstallName:   "claude",
+		ManifestName:  "Claude Code",
+		Aliases:       []string{"claude", "claude-code", "claude code"},
+		Installable:   true,
 		Paths: PathLayout{
 			GlobalBase: ".claude/skills", GlobalHookConfig: ".claude/settings.json", GlobalManaged: ".claude/CLAUDE.md",
 			ProjectBase: ".claude/skills", ProjectHookConfig: ".claude/settings.json", ProjectManaged: "CLAUDE.md",
@@ -85,11 +88,12 @@ var descriptors = []Descriptor{
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Claude,
 	},
 	{
-		ID:           Codex,
-		InstallName:  "codex",
-		ManifestName: "Codex",
-		Aliases:      []string{"codex"},
-		Installable:  true,
+		ID:            Codex,
+		Configuration: []ConfigField{StringConfig("codexExecutable", "codex"), StringConfig("codexHome", "")},
+		InstallName:   "codex",
+		ManifestName:  "Codex",
+		Aliases:       []string{"codex"},
+		Installable:   true,
 		Paths: PathLayout{
 			GlobalBase: ".codex/skills", GlobalHookConfig: ".codex/hooks.json", GlobalManaged: ".codex/AGENTS.md",
 			ProjectBase: ".codex/skills", ProjectHookConfig: ".codex/hooks.json", ProjectManaged: "AGENTS.md",
@@ -98,11 +102,12 @@ var descriptors = []Descriptor{
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Codex,
 	},
 	{
-		ID:           Cursor,
-		InstallName:  "cursor",
-		ManifestName: "Cursor",
-		Aliases:      []string{"cursor"},
-		Installable:  true,
+		ID:            Cursor,
+		Configuration: []ConfigField{StringConfig("cursorExecutable", "cursor-agent"), StringConfig("cursorHome", "")},
+		InstallName:   "cursor",
+		ManifestName:  "Cursor",
+		Aliases:       []string{"cursor"},
+		Installable:   true,
 		Paths: PathLayout{
 			GlobalBase: ".cursor", GlobalHookConfig: ".cursor/hooks.json",
 			ProjectBase: ".cursor", ProjectHookConfig: ".cursor/hooks.json", ProjectManaged: ".cursor/rules/formal-gates.mdc", RemoveManagedWhenEmpty: true,
@@ -112,6 +117,7 @@ var descriptors = []Descriptor{
 	},
 	{
 		ID:              DeepSeek,
+		Configuration:   []ConfigField{StringConfig("dshExecutable", "dsh")},
 		InstallName:     "dsh",
 		ManifestName:    "DeepSeek Harness",
 		Aliases:         []string{"dsh", "deepseek", "deepseek-harness", "deepseek harness"},
@@ -122,11 +128,12 @@ var descriptors = []Descriptor{
 		CostProvider: DeepSeek,
 	},
 	{
-		ID:           ZCode,
-		InstallName:  "zcode",
-		ManifestName: "ZCode",
-		Aliases:      []string{"zcode", "z-code"},
-		Installable:  true,
+		ID:            ZCode,
+		Configuration: []ConfigField{StringConfig("zcodeExecutable", "node"), StringConfig("zcodeScript", ""), StringConfig("zcodeHome", "")},
+		InstallName:   "zcode",
+		ManifestName:  "ZCode",
+		Aliases:       []string{"zcode", "z-code"},
+		Installable:   true,
 		Paths: PathLayout{
 			GlobalBase: ".zcode/skills", GlobalHookConfig: ".zcode/cli/config.json", GlobalManaged: ".zcode/AGENTS.md",
 			ProjectBase: ".zcode/skills", ProjectManaged: "AGENTS.md",
@@ -134,6 +141,13 @@ var descriptors = []Descriptor{
 		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
 		LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
 		CostProvider: ZCode,
+	},
+	{
+		ID: WorkBuddy, InstallName: "workbuddy", ManifestName: "WorkBuddy",
+		Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
+		Paths:        PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
+		CostProvider: WorkBuddy, LifecycleRequired: true,
+		Configuration: []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
 	},
 	{
 		ID:              Default,
@@ -192,4 +206,31 @@ func Lookup(value string) (Descriptor, error) {
 		}
 	}
 	return Descriptor{}, fmt.Errorf("unsupported host %q", value)
+}
+
+// ConfigField is a platform-owned editable string option. Defaults and validation
+// live with its adapter, not in the common settings struct or loader.
+type ConfigField struct {
+	Name     string
+	Default  string
+	Validate func(string) error
+}
+
+func StringConfig(name, value string) ConfigField {
+	return ConfigField{Name: name, Default: value, Validate: func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("%s: use a nonempty command/path or remove the field", name)
+		}
+		return nil
+	}}
+}
+
+func Configuration() map[string]ConfigField {
+	fields := map[string]ConfigField{}
+	for _, d := range All() {
+		for _, f := range d.Configuration {
+			fields[f.Name] = f
+		}
+	}
+	return fields
 }

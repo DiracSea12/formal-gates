@@ -65,6 +65,7 @@ launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是
 - Cursor：`~/.cursor/formal-gates`
 - DeepSeek Harness：`$DSH_HOME/skills/formal-gates`（默认 `~/.dsh`）
 - ZCode：`~/.zcode/skills/formal-gates`
+- WorkBuddy：`~/.codebuddy/skills/formal-gates`；项目级同对应目录，仅安装 CODEBUDDY.md 指令，不写 global hook。
 
 项目级安装使用所选项目下的对应目录。hook 配置始终写固定 stable launcher 的绝对路径，
 不会指向可替换 target 内的 candidate binary。

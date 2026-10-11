@@ -20,6 +20,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/settings"
 )
 
 // Consumption reports the original engine projection and foreground boundary.
@@ -250,7 +251,15 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 	provider := request["provider"].(string)
 	var finished <-chan error
 	if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
-		binding, err := harness.NativeBinding(provider)
+		run, err := f.Show()
+		if err != nil {
+			return err
+		}
+		var configured settings.Values
+		if run.Settings != nil {
+			configured = run.Settings.Values
+		}
+		binding, err := harness.NativeBinding(provider, configured)
 		if err != nil {
 			return err
 		}
