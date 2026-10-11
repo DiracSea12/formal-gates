@@ -39,7 +39,10 @@ func nativePathsFixture(t *testing.T) (string, func(string, string) string) {
 		}
 	}
 	return workspace, func(name, artifact string) string {
-		job := t.TempDir()
+		job := filepath.Join(t.TempDir(), "native")
+		if err := os.Mkdir(job, 0700); err != nil {
+			t.Fatal(err)
+		}
 		material := worker.Material{Input: protocol.WorkerInput{VCS: "git", Handler: "engine.development.batch.v2", Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{Artifacts: []string{artifact}}}}}}
 		materialPath := filepath.Join(job, "material.json")
 		body, _ := json.Marshal(material)
@@ -88,9 +91,6 @@ func TestNativeTerminalPathsPreserveSharedWorkspaceAndOriginalSource(t *testing.
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(workspace, "later.txt"), []byte("later writer\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := submitTerminalPathFixture(t, directory); err != nil {
 			t.Fatal(err)
 		}
 		recovered, err := evidenceSource(directory, "fixture", "session", nil)
@@ -195,7 +195,11 @@ func TestWhiteboxTerminalPathsIncludeCommittedMaterialsAndActualRemovals(t *test
 	if err := submitTerminalPathFixture(t, directory); err != nil {
 		t.Fatal(err)
 	}
-	facts, err := nativePathEvidence(directory, `{ "cases": [] }`, false)
+	answer, err := os.ReadFile(filepath.Join(directory, "answer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := nativePathEvidence(directory, string(answer), false)
 	if err != nil || !reflect.DeepEqual(facts.Paths, []string{"removed_test.txt", "retained_test.txt"}) {
 		t.Fatalf("semantic revision lost committed test materials: %+v %v", facts, err)
 	}

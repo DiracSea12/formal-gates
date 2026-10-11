@@ -12,12 +12,11 @@ import (
 
 func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 	workspace, directory := t.TempDir(), t.TempDir()
-	current := filepath.Join(workspace, ".formal-gates-input", "current")
 	sources := map[string]string{
-		"app.go":                               "package app\n// needle alpha\n",
-		"pkg/app_test.go":                      "package app\nimport \"testing\"\nfunc TestNeedle(t *testing.T) {} // needle beta\n",
-		".formal-gates-input/current/task.txt": "needle current\n",
-		".formal-gates-input/other/task.txt":   "needle other role secret\n",
+		"app.go":                         "package app\n// needle alpha\n",
+		"pkg/app_test.go":                "package app\nimport \"testing\"\nfunc TestNeedle(t *testing.T) {} // needle beta\n",
+		".gates/input/task.txt":          "needle confirmed input\n",
+		".gates/engine/other/state.json": "needle other role secret\n",
 	}
 	for name, body := range sources {
 		path := filepath.Join(workspace, name)
@@ -28,7 +27,7 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true, "materials": current}); err != nil {
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true}); err != nil {
 		t.Fatal(err)
 	}
 	cwd, err := os.Getwd()
@@ -67,7 +66,7 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 	if len(matches) != 3 {
 		t.Fatalf("visible matches: %+v", matches)
 	}
-	wantLines := map[string]int{"app.go": 2, "pkg/app_test.go": 3, ".formal-gates-input/current/task.txt": 1}
+	wantLines := map[string]int{"app.go": 2, "pkg/app_test.go": 3, ".gates/input/task.txt": 1}
 	tools, err := newNativeWorkspaceTools(directory)
 	if err != nil {
 		t.Fatal(err)

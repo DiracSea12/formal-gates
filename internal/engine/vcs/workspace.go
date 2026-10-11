@@ -88,20 +88,20 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 	if p.name != "git" {
 		return p.nativeChangedPaths()
 	}
-	tracked, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
+	tracked, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
 	if err != nil {
 		return nil, err
 	}
-	staged, err := p.runner.Run(p.root, "git", "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--")
+	staged, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--")
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := p.runner.Run(p.root, "git", "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := p.runner.RunRaw(p.root, "git", nil, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, err
 	}
-	paths := append(nulPaths(tracked), nulPaths(staged)...)
-	for _, path := range nulPaths(untracked) {
+	paths := append(nulPaths(string(tracked)), nulPaths(string(staged))...)
+	for _, path := range nulPaths(string(untracked)) {
 		if !p.isRuntimeStatusPath(path) {
 			paths = append(paths, path)
 		}
@@ -114,16 +114,16 @@ func (p *Provider) ChangedPaths() ([]string, error) {
 // immutable source, including materials already committed in that workspace.
 func (p *Provider) ChangedPathsFrom(base string) ([]string, error) {
 	if p.name == "git" {
-		out, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", base, "--")
+		out, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "--no-renames", "-z", base, "--")
 		if err != nil {
 			return nil, err
 		}
-		untracked, err := p.runner.Run(p.root, "git", "ls-files", "--others", "--exclude-standard", "-z")
+		untracked, err := p.runner.RunRaw(p.root, "git", nil, "ls-files", "--others", "--exclude-standard", "-z")
 		if err != nil {
 			return nil, err
 		}
-		paths := nulPaths(out)
-		for _, path := range nulPaths(untracked) {
+		paths := nulPaths(string(out))
+		for _, path := range nulPaths(string(untracked)) {
 			if !p.isRuntimeStatusPath(path) {
 				paths = append(paths, path)
 			}
@@ -228,15 +228,15 @@ func (p *Provider) Track(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	changed, err := p.runner.Run(p.root, "git", append([]string{"diff", "--name-only", "--no-renames", "-z", "--"}, paths...)...)
+	changed, err := p.runner.RunRaw(p.root, "git", nil, append([]string{"diff", "--name-only", "--no-renames", "-z", "--"}, paths...)...)
 	if err != nil {
 		return err
 	}
-	untracked, err := p.runner.Run(p.root, "git", append([]string{"ls-files", "--others", "-z", "--"}, paths...)...)
+	untracked, err := p.runner.RunRaw(p.root, "git", nil, append([]string{"ls-files", "--others", "-z", "--"}, paths...)...)
 	if err != nil {
 		return err
 	}
-	remaining := append(nulPaths(changed), nulPaths(untracked)...)
+	remaining := append(nulPaths(string(changed)), nulPaths(string(untracked))...)
 	slices.Sort(remaining)
 	remaining = slices.Compact(remaining)
 	if len(remaining) == 0 {
@@ -253,15 +253,15 @@ func (p *Provider) ApplyArtifact(identity string, paths []string) error {
 		return p.nativeApply(identity, paths)
 	}
 	for _, path := range paths {
-		working, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", identity, "--", path)
+		working, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "--no-renames", "-z", identity, "--", path)
 		if err != nil {
 			return err
 		}
-		staged, err := p.runner.Run(p.root, "git", "diff", "--cached", "--name-only", "--no-renames", "-z", identity, "--", path)
+		staged, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--cached", "--name-only", "--no-renames", "-z", identity, "--", path)
 		if err != nil {
 			return err
 		}
-		if working == "" && staged == "" {
+		if len(working) == 0 && len(staged) == 0 {
 			continue
 		}
 		entry, err := p.Entry(identity, path)
@@ -395,11 +395,11 @@ func (p *Provider) Changes(base, identity string) ([]Change, error) {
 		args = append(args, identity)
 	}
 	args = append(args, "--")
-	out, err := p.runner.Run(p.root, "git", args...)
+	out, err := p.runner.RunRaw(p.root, "git", nil, args...)
 	if err != nil {
 		return nil, err
 	}
-	fields := nulPaths(out)
+	fields := nulPaths(string(out))
 	if len(fields)%2 != 0 {
 		return nil, fmt.Errorf("native change inventory is incomplete")
 	}

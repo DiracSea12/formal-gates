@@ -5,6 +5,7 @@ package harness
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,7 +27,6 @@ func TestCodexNativeObservationPreservesSemanticContract(t *testing.T) {
 	domain := map[string]any{"findings": []any{map[string]any{"decision": "DISMISSED", "requirement": "scope", "normalPath": "normal", "module": "command", "rootCause": "outside requirement", "consequence": "none", "severity": "P3", "severityRationale": "outside scope", "verification": map[string]any{"scope": "checked", "severity": "checked", "causality": "checked", "reproduction": "checked", "classification": "checked"}, "reason": "outside scope"}}, "scopes": []any{map[string]any{"cases": []any{1}, "reason": "The changed public behavior affects the original case"}}, "gateImpacts": []any{map[string]any{"decision": "RERUN", "reason": "The changed implementation affects this gate"}}}
 	s := newCodexScenario(t)
 	s.request["schema"] = schema
-	s.peer.StrictSchema = true
 	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
 	if err != nil {
@@ -101,7 +101,6 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 					map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": `{"written":true}`}}},
 				}
 			}
-			scenario.peer.StrictSchema = true
 			scenario.peer.Answer = codexPlain(t, domain).(map[string]any)
 			before, _ := json.Marshal(schema)
 			source, err := scenario.execute(t)
@@ -207,7 +206,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			}
 			domain := codexPlain(t, result).(map[string]any)
 			s := newCodexScenario(t)
-			s.request["schema"], s.peer.StrictSchema = schema, true
+			s.request["schema"] = schema
 			s.peer.Answer = codexPlain(t, domain).(map[string]any)
 			source, err := s.execute(t)
 			if err != nil {
@@ -251,4 +250,126 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexQAContinuationUsesCurrentSemanticsWithPersistentToolDeclaration(t *testing.T) {
+	s := newCodexScenario(t)
+	s.request["read_only"] = true
+	input := protocol.WorkerInput{Handler: "engine.qa.execution.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}
+	commands := map[string]any{"commands": []any{[]any{map[string]any{"kind": "ARGV", "argv": []any{"printf", "accepted"}}}}}
+	prepare := func() map[string]any {
+		t.Helper()
+		schema, err := worker.ResultSchema(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		material := worker.Material{Input: input, ReadOnly: true, Prompt: "Compare only the current approved duty", ResultSchema: schema}
+		path := filepath.Join(s.directory, "material.json")
+		if err := os.MkdirAll(s.directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomicJSON(path, material); err != nil {
+			t.Fatal(err)
+		}
+		s.request["schema"], s.request["prompt"] = schema, material.Prompt
+		s.request["engine"] = map[string]any{"workerMaterial": map[string]any{"path": path, "actionId": input.Pending.ActionID, "attemptId": input.Pending.AttemptID, "readOnly": true}}
+		return schema
+	}
+	execute := func() map[string]any {
+		t.Helper()
+		s.save(t)
+		originalRequest := codexPlain(t, s.request)
+		services := ExecutionServices{Admit: func(directory string, request map[string]any) (func(), error) {
+			if directory != s.directory || !valuesEqual(request, originalRequest) {
+				return nil, fmt.Errorf("fixture admission differs from the current issued request")
+			}
+			return func() {}, nil
+		}}
+		source, err := codexExecute(s.request, s.directory, false, services)
+		if err != nil {
+			stderr, _ := os.ReadFile(filepath.Join(s.directory, "host.stderr"))
+			t.Fatalf("%v; peer stderr: %s", err, stderr)
+		}
+		if err := codexVerifySource(s.directory, source); err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	commandSchema := prepare()
+	s.peer.Answer = codexPlain(t, commands).(map[string]any)
+	originalDirectory := s.directory
+	original := execute()
+	originalEvidence, err := NativeWorkerResultEvidence("codex", originalDirectory, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandEvent, err := worker.DecodeResult(input, "command-result", originalEvidence.Answer, originalEvidence.Digest)
+	if err != nil || commandEvent.Result.ActionID != input.Pending.ActionID || len(commandEvent.Result.Validation.QACommands) != 1 {
+		t.Fatalf("original command submission lost its issued action: %v %v", commandEvent, err)
+	}
+	toolPath := filepath.Join(s.config, textOf(original["identity"])+".tools.json")
+	declaration, err := os.ReadFile(toolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tools []any
+	if err := json.Unmarshal(declaration, &tools); err != nil || len(tools) != 2 || !valuesEqual(getOf(tools[1], "inputSchema"), map[string]any{"type": "object"}) {
+		t.Fatalf("original native declaration is not a stable semantic object: %s %v", declaration, err)
+	}
+	s.directory = filepath.Join(filepath.Dir(originalDirectory), "comparison")
+	s.request["identity"] = original["identity"]
+	input.Validation.CommandCases = nil
+	input.Validation.Execution = &coverage.ExecutionBinding{}
+	input.Validation.Whitelist = &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{CaseID: "normal"}}}
+	input.Validation.RequiredCases, input.Validation.PendingCases = []string{"normal"}, []string{"normal"}
+	input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "normal", Operations: []protocol.ExecutionOperationFact{{ActionID: "original-execution", Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{CaseID: "normal", Source: "case:normal", Operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"printf", "accepted"}}}}, Evidence: protocol.CheckEvidence{ExitCode: 0, StdoutText: "accepted", Invocation: `["printf","accepted"]`}}}}}
+	comparisonSchema := prepare()
+	if valuesEqual(commandSchema, comparisonSchema) {
+		t.Fatal("fixture did not change from command authoring to fact comparison")
+	}
+	oldBody, _ := json.Marshal(commands)
+	oldError := worker.ValidateSemanticBody(input, oldBody)
+	if oldError == nil {
+		t.Fatal("old command body remained valid in the comparison phase")
+	}
+	errorBody, _ := json.Marshal(map[string]any{"error": oldError.Error(), "inputSchema": comparisonSchema})
+	s.peer.Reverse = []any{map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "old-command", "tool": nativeSemanticTool, "arguments": commands}}}
+	s.peer.Replies = []any{map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": string(errorBody)}}}}
+	s.peer.Answer = map[string]any{"records": []any{map[string]any{"result": "EXECUTED_PASS", "comparison": "Original stdout accepted and exit zero match the approved oracle"}}}
+	continued := execute()
+	if continued["identity"] != original["identity"] || valuesEqual(continued["native_turn"], original["native_turn"]) {
+		t.Fatal("comparison changed the native thread or reused its previous turn")
+	}
+	retained, err := os.ReadFile(toolPath)
+	if err != nil || !bytes.Equal(declaration, retained) {
+		t.Fatal("resume rewrote the original tool declaration", err)
+	}
+	evidence, err := NativeWorkerResultEvidence("codex", s.directory, continued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResult(input, "comparison-result", evidence.Answer, evidence.Digest)
+	if err != nil || event.Result.ActionID != input.Pending.ActionID || len(event.Result.Validation.Execution.Records) != 1 || event.Result.Validation.Execution.Records[0].CaseID != "normal" || event.Result.Validation.Execution.Records[0].Result != coverage.ExecutedPass {
+		t.Fatalf("current semantic result lost its original duty: %+v %v", event, err)
+	}
+	context, err := readJSONFile(filepath.Join(s.directory, nativeToolContextFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticFacts := 0
+	for _, fact := range listOf(getOf(context, "facts")) {
+		if getOf(fact, "kind") == "semantics" {
+			semanticFacts++
+		}
+	}
+	if semanticFacts != 2 {
+		t.Fatalf("rejected old body published semantic evidence: %v", context)
+	}
+	before, _ := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	recovered, err := codexReconcile(s.directory, map[string]any{"exit_code": 0})
+	after, _ := os.ReadFile(filepath.Join(s.config, "rpc.jsonl"))
+	if err != nil || !valuesEqual(continued, recovered) || !bytes.Equal(before, after) || nativePeerTurns(t, s) != 2 {
+		t.Fatal("comparison recovery replayed work or changed its original source", err)
+	}
+	t.Log("same action/attempt and native thread retained across two actual peer processes; current schema rejected old commands without an additional result fact; comparison recovery made no native call")
 }

@@ -291,8 +291,7 @@ func (p *Provider) Commit(message string) error {
 	return nil
 }
 
-// DiffNames 列出 base..head 的变更路径（每行一个，按 git 输出原序）：候选
-// freeze/promotion 据此描述候选包含的交付面。
+// DiffNames returns the original changed paths between base and head in native order.
 func (p *Provider) DiffNames(base, head string) ([]string, error) {
 	if p.name != "git" {
 		changes, err := p.Changes(base, head)
@@ -302,14 +301,11 @@ func (p *Provider) DiffNames(base, head string) ([]string, error) {
 		}
 		return paths, err
 	}
-	output, err := p.runner.Run(p.root, "git", "diff", "--name-only", base+".."+head)
+	output, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "-z", base+".."+head)
 	if err != nil {
 		return nil, fmt.Errorf("cannot list changed paths %s..%s: %w", base, head, err)
 	}
-	if strings.TrimSpace(output) == "" {
-		return nil, nil
-	}
-	return strings.Split(strings.TrimSpace(output), "\n"), nil
+	return nulPaths(string(output)), nil
 }
 
 func (p *Provider) verifyRoot() error {
@@ -350,7 +346,9 @@ func normalizeStatusPath(path string) string {
 	return strings.ReplaceAll(path, `\`, "/")
 }
 
-func isRuntimeStatusPath(path string) bool {
+// RuntimePath reports engine-owned runtime directories and their descendants.
+func RuntimePath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(path))
 	for _, dir := range runtimeStatusDirs {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true
@@ -372,7 +370,7 @@ func (p *Provider) WithRuntimeFiles(files RuntimeFiles) *Provider {
 }
 
 func (p *Provider) isRuntimeStatusPath(path string) bool {
-	return isRuntimeStatusPath(path) || slices.Contains(p.runtimeFiles.Files, canonicalPath(materialPath(p.root, path)))
+	return RuntimePath(path) || slices.Contains(p.runtimeFiles.Files, canonicalPath(materialPath(p.root, path)))
 }
 
 func (p *Provider) isEmptyRuntimeDirectory(path string) bool {

@@ -6,7 +6,6 @@ import (
 	"formal-gates/internal/engine/worker"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // NativeResultEvidence uses the native adapter's original source verifier.
@@ -59,27 +58,6 @@ func nativeToolFacts(directory string) ([]nativeToolFact, error) {
 	var context nativeToolContext
 	if err := json.Unmarshal(body, &context); err != nil {
 		return nil, err
-	}
-	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
-	if err != nil {
-		return nil, err
-	}
-	if materials, _ := getOf(request, "materials").(string); materials != "" {
-		relative, err := filepath.Rel(context.Workspace, resolveNativePath(materials))
-		if err != nil {
-			return nil, err
-		}
-		// Comparison exports use <side>/<original project path>.
-		for i, fact := range context.Facts {
-			for j, path := range fact.Paths {
-				for _, side := range []string{"base", "candidate"} {
-					prefix := filepath.Join(relative, "comparison", side) + string(filepath.Separator)
-					if strings.HasPrefix(path, prefix) {
-						context.Facts[i].Paths[j] = strings.TrimPrefix(path, prefix)
-					}
-				}
-			}
-		}
 	}
 	return context.Facts, nil
 }

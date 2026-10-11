@@ -88,6 +88,13 @@ func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn s
 	content := ""
 	if callErr != nil {
 		content = callErr.Error()
+		if getOf(params, "tool") == nativeSemanticTool {
+			body, err := json.Marshal(map[string]any{"error": content, "inputSchema": getOf(tools.schemas()[1], "inputSchema")})
+			if err != nil {
+				return nil, err
+			}
+			content = string(body)
+		}
 	} else {
 		body, err := json.Marshal(value)
 		if err != nil {
@@ -104,6 +111,16 @@ func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn s
 		return nil, err
 	}
 	return &nativeReply{payload: map[string]any{"result": result}, status: "tool-result"}, nil
+}
+
+// Dynamic tool declarations persist with the native thread. Semantic bodies
+// are checked against the current issued material on each invocation.
+func codexToolSchemas(tools *nativeWorkspaceTools) []any {
+	schemas := tools.schemas()
+	semantic := objectOrEmpty(schemas[1])
+	semantic["inputSchema"] = map[string]any{"type": "object"}
+	semantic["description"] = textOf(semantic["description"]) + " Use the current semantic schema supplied with this turn."
+	return schemas
 }
 
 func codexCaptureBinding() (map[string]any, error) { return codexConfiguredBinding(settings.Values{}) }
@@ -442,7 +459,7 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 		params["excludeTurns"] = true
 	} else {
 		params["ephemeral"] = false
-		params["dynamicTools"] = tools.schemas()
+		params["dynamicTools"] = codexToolSchemas(tools)
 	}
 	opened, err := client.request(method, params)
 	if err != nil {

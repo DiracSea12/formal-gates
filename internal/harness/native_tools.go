@@ -41,7 +41,6 @@ type nativeWorkspaceTools struct {
 	services                                              []ExecutionServices
 	material                                              *worker.Material
 	semanticSchema                                        map[string]any
-	materials                                             string
 }
 
 type nativeToolContext struct {
@@ -96,16 +95,6 @@ func newNativeWorkspaceTools(directory string, services ...ExecutionServices) (*
 		return nil, err
 	}
 	t := &nativeWorkspaceTools{directory: directory, workspace: resolveNativePath(workspace), readOnly: readOnly, requestDigest: textOf(proof["sha256"]), evidence: filepath.Join(directory, "tool-facts.jsonl")}
-	if materials, _ := getOf(request, "materials").(string); materials != "" {
-		if !filepath.IsAbs(materials) {
-			return nil, fmt.Errorf("current materials require their original absolute directory")
-		}
-		t.materials = resolveNativePath(materials)
-		relative, err := filepath.Rel(t.workspace, t.materials)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("current materials must belong to their issued workspace")
-		}
-	}
 	t.services = services
 	t.semanticSchema = objectOrEmpty(getOf(request, "schema"))
 	if getOf(request, "engine") != nil {
@@ -289,6 +278,19 @@ func (t *nativeWorkspaceTools) testOwned(relative string) bool {
 	return false
 }
 
+// Workspace access excludes the engine namespace and this action's native evidence owner.
+func (t *nativeWorkspaceTools) visible(relative, resolved string) bool {
+	resolvedRelative, err := filepath.Rel(t.workspace, resolved)
+	if err != nil || resolvedRelative == ".." || strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if vcs.RuntimePath(relative) || vcs.RuntimePath(resolvedRelative) {
+		return false
+	}
+	evidenceRelative, err := filepath.Rel(resolveNativePath(filepath.Dir(t.evidence)), resolved)
+	return err == nil && (evidenceRelative == ".." || strings.HasPrefix(evidenceRelative, ".."+string(filepath.Separator)))
+}
+
 func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, error) {
 	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(filepath.Clean(relative), ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("target must belong to the issued workspace")
@@ -312,13 +314,8 @@ func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, e
 	if t.testOwned(relative) || t.testOwned(rel) {
 		return "", fmt.Errorf("test-owned content is outside the issued gate duty")
 	}
-	if t.materials != "" {
-		parent := filepath.Dir(t.materials)
-		inside, _ := filepath.Rel(parent, resolved)
-		current, _ := filepath.Rel(t.materials, resolved)
-		if inside != "." && inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator)) && (current == ".." || strings.HasPrefix(current, ".."+string(filepath.Separator))) {
-			return "", fmt.Errorf("only the current role materials are available")
-		}
+	if !t.visible(relative, resolveNativePath(path)) {
+		return "", fmt.Errorf("runtime content is outside the issued workspace duty")
 	}
 	return resolved, nil
 }
@@ -326,12 +323,6 @@ func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, e
 func (t *nativeWorkspaceTools) writable(path string) error {
 	if t.readOnly {
 		return fmt.Errorf("issued action is read-only")
-	}
-	if t.materials != "" {
-		relative, _ := filepath.Rel(filepath.Dir(t.materials), path)
-		if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("current task materials are read-only")
-		}
 	}
 	return nil
 }
@@ -562,10 +553,10 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		paths := make([]string, 0, len(entries))
 		choices := make([]any, 0, len(entries))
 		for _, entry := range entries {
-			if t.materials != "" && path == filepath.Dir(t.materials) && entry.Name() != filepath.Base(t.materials) {
+			name := filepath.Join(relative, entry.Name())
+			if !t.visible(name, resolveNativePath(filepath.Join(t.workspace, name))) {
 				continue
 			}
-			name := filepath.Join(relative, entry.Name())
 			paths = append(paths, name)
 			choice := map[string]any{"entry": len(paths), "name": entry.Name(), "directory": entry.IsDir()}
 			if t.testOwned(name) {

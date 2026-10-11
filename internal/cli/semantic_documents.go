@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
 	"formal-gates/internal/settings"
 )
@@ -211,8 +212,12 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 		if err != nil {
 			return err
 		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == ".gates" {
+			if entry.Name() == ".git" || vcs.RuntimePath(relative) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -221,10 +226,6 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
@@ -243,18 +244,18 @@ func intakeMaterials(root string) ([]requirementDocumentChoice, error) {
 		if err != nil {
 			return err
 		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == ".gates" {
+			if entry.Name() == ".git" || vcs.RuntimePath(relative) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !entry.Type().IsRegular() {
 			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
 		}
 		materials = append(materials, requirementDocumentChoice{Position: len(materials) + 1, Path: filepath.ToSlash(relative)})
 		return nil

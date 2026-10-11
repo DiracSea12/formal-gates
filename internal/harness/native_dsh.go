@@ -110,11 +110,8 @@ func dshObservesDelivered(hold *nativePendingHold, message map[string]any) bool 
 	return toolCallID != "" && valuesEqual(getOf(update, "toolCallId"), toolCallID)
 }
 
-// dshHooks is DSH's transport configuration: the host decides when a turn
-// ends, so no request carries a total budget (bounded is false: the
-// supervisor-style total deadline discipline must not leak in), and a dead
-// reader is a transport error rather than a clean close. The permission
-// request is held for a user decision, never answered here.
+// DSH decides when a turn ends; the transport has no total execution budget.
+// A dead reader is a transport error. Permission requests wait for the user.
 func dshHooks() nativeHooks {
 	return nativeHooks{
 		transportPrefix: "DSH_TRANSPORT",

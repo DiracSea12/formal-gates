@@ -276,18 +276,6 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				return Material{}, err
 			}
 		}
-		for _, field := range []string{"completed", "inherited"} {
-			if validation[field] != nil {
-				var records []coverage.ExecutionRecord
-				if err := json.Unmarshal(validation[field], &records); err != nil {
-					return Material{}, err
-				}
-				validation[field], err = json.Marshal(promptRecords(records, false))
-				if err != nil {
-					return Material{}, err
-				}
-			}
-		}
 		if input.Validation.Repair != nil && validation["repair"] != nil {
 			var repair map[string]json.RawMessage
 			if err := json.Unmarshal(validation["repair"], &repair); err != nil {

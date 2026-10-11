@@ -61,7 +61,6 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.peer.Answer = codexPlain(t, domain).(map[string]any)
-	s.peer.StrictSchema = true
 	source, err := s.execute(t)
 	if err != nil {
 		t.Fatal(err)

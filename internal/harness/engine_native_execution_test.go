@@ -182,7 +182,6 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	}
 	s.request["binding"] = binding
 	s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The local peer needs an explicit user decision"}).(map[string]any)
-	s.peer.StrictSchema = true
 	s.runtime = filepath.Join(admission.Target, "bin", "formal-gates")
 	s.save(t)
 	return f, ref, s, binary
@@ -441,7 +440,6 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 	_, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "workflow-invalid-review"
 	s.peer.Answer = nil
-	s.peer.StrictSchema = true
 	s.save(t)
 	for range 2 {
 		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()

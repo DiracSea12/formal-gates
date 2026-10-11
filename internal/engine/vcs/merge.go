@@ -35,12 +35,12 @@ func (p *Provider) IndexEntries() ([]IndexEntry, error) {
 	if p.name != "git" {
 		return p.nativeIndex()
 	}
-	out, err := p.runner.Run(p.root, "git", "ls-files", "--stage", "-z")
+	out, err := p.runner.RunRaw(p.root, "git", nil, "ls-files", "--stage", "-z")
 	if err != nil {
 		return nil, err
 	}
 	var entries []IndexEntry
-	for _, row := range nulPaths(out) {
+	for _, row := range nulPaths(string(out)) {
 		metadata, path, ok := strings.Cut(row, "\t")
 		fields := strings.Fields(metadata)
 		if !ok || len(fields) != 3 {
@@ -105,16 +105,16 @@ func (p *Provider) WorkingChanges() ([]string, error) {
 	if p.name != "git" {
 		return p.nativeChangedPaths()
 	}
-	out, err := p.runner.Run(p.root, "git", "diff", "--name-only", "--no-renames", "-z", "--")
+	out, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "--no-renames", "-z", "--")
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := p.runner.Run(p.root, "git", "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := p.runner.RunRaw(p.root, "git", nil, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, err
 	}
-	paths := nulPaths(out)
-	for _, path := range nulPaths(untracked) {
+	paths := nulPaths(string(out))
+	for _, path := range nulPaths(string(untracked)) {
 		if !p.isRuntimeStatusPath(path) {
 			paths = append(paths, path)
 		}

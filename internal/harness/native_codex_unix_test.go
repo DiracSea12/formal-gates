@@ -40,7 +40,6 @@ type codexPeerInput struct {
 	Configuration  map[string]any `json:"configuration"`
 	Mode           string         `json:"mode"`
 	MessageText    string         `json:"message_text,omitempty"`
-	StrictSchema   bool           `json:"strict_schema,omitempty"`
 	Reverse        []any          `json:"reverse"`
 	Answer         map[string]any `json:"answer,omitempty"`
 	Replies        []any          `json:"replies"`
@@ -174,6 +173,8 @@ func TestCodexRPCPeer(t *testing.T) {
 		thread = codexPeerID(cwd + fmt.Sprint(os.Getpid()) + textOf(peer.ThreadParams))
 	}
 	historyPath := func(id string) string { return filepath.Join(os.Getenv("CODEX_HOME"), id+".json") }
+	toolPath := func(id string) string { return filepath.Join(os.Getenv("CODEX_HOME"), id+".tools.json") }
+	var declaredTools []any
 	var history []string
 	if valuesEqual(method, "thread/resume") {
 		thread = textOf(peer.ThreadParams["threadId"])
@@ -187,8 +188,26 @@ func TestCodexRPCPeer(t *testing.T) {
 			os.Exit(0)
 		}
 		json.Unmarshal(historyRaw, &history)
+		if getOf(frame, "params").(map[string]any)["dynamicTools"] != nil {
+			panic("resume cannot replace native tool declarations")
+		}
+		body, err := os.ReadFile(toolPath(thread))
+		if err != nil {
+			panic(err)
+		}
+		if err := json.Unmarshal(body, &declaredTools); err != nil {
+			panic(err)
+		}
 	} else {
 		check(method, "thread/start")
+		declaredTools = listOf(getOf(getOf(frame, "params"), "dynamicTools"))
+		body, err := json.Marshal(declaredTools)
+		if err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(toolPath(thread), body, 0600); err != nil {
+			panic(err)
+		}
 	}
 	originalThread := thread
 	if peer.Mode == "resume_identity" {
@@ -373,6 +392,13 @@ func TestCodexRPCPeer(t *testing.T) {
 		answer = domain
 	}
 	if status == "completed" && peer.Mode != "bad_json" {
+		var semanticSchema any
+		for _, tool := range declaredTools {
+			if getOf(tool, "name") == nativeSemanticTool {
+				semanticSchema = getOf(tool, "inputSchema")
+			}
+		}
+		check(semanticSchema, map[string]any{"type": "object"})
 		emit(map[string]any{"id": "semantic-submit", "method": "item/tool/call", "params": map[string]any{"threadId": thread, "turnId": turn, "callId": "semantic-submit", "tool": nativeSemanticTool, "arguments": answer}})
 		accepted := read()
 		check(getOf(accepted, "id"), "semantic-submit")
@@ -560,7 +586,7 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 				}
 			}
 		}
-		s.peer.ThreadParams["dynamicTools"] = (&nativeWorkspaceTools{readOnly: s.request["read_only"] == true, material: material, semanticSchema: objectOrEmpty(s.request["schema"])}).schemas()
+		s.peer.ThreadParams["dynamicTools"] = codexToolSchemas(&nativeWorkspaceTools{readOnly: s.request["read_only"] == true, material: material, semanticSchema: objectOrEmpty(s.request["schema"])})
 	}
 	params, err := codexTurnParameters(s.request, "")
 	if err != nil {
@@ -597,7 +623,6 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	}
 	s.request["schema"] = schema
 	s.request["read_only"] = true
-	s.peer.StrictSchema = true
 	domain := map[string]any{"findings": []any{}}
 	s.peer.Answer = codexPlain(t, domain).(map[string]any)
 	source, err := s.execute(t)
@@ -717,71 +742,6 @@ func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T
 	}
 }
 
-func TestCodexComparisonBlobLocationsRetainOriginalProjectPaths(t *testing.T) {
-	s := newCodexScenario(t)
-	materials := filepath.Join(s.workspace, ".formal-gates-input", "current")
-	for path, body := range map[string]string{"base/removed.go": "original base\n", "candidate/renamed.go": "original candidate\n"} {
-		file := filepath.Join(materials, "comparison", filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(file, []byte(body), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
-	schema, err := worker.ResultSchema(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.request["materials"], s.request["schema"], s.request["read_only"] = materials, schema, true
-	step := func(arguments map[string]any, response map[string]any) {
-		s.peer.Reverse = append(s.peer.Reverse, map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": fmt.Sprint(len(s.peer.Reverse) + 1), "tool": "workspace", "arguments": arguments}})
-		body, _ := json.Marshal(response)
-		s.peer.Replies = append(s.peer.Replies, map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": string(body)}}})
-	}
-	listing := func(number int, names ...string) map[string]any {
-		entries := []any{}
-		for i, name := range names {
-			entries = append(entries, map[string]any{"entry": i + 1, "name": name, "directory": !strings.HasSuffix(name, ".go")})
-		}
-		return map[string]any{"listing": number, "entries": entries}
-	}
-	step(map[string]any{"action": "list"}, listing(1, ".formal-gates-input"))
-	step(map[string]any{"action": "list", "listing": 1, "entry": 1}, listing(2, "current"))
-	step(map[string]any{"action": "list", "listing": 2, "entry": 1}, listing(3, "comparison"))
-	step(map[string]any{"action": "list", "listing": 3, "entry": 1}, listing(4, "base", "candidate"))
-	step(map[string]any{"action": "list", "listing": 4, "entry": 1}, listing(5, "removed.go"))
-	step(map[string]any{"action": "read", "listing": 5, "entry": 1}, map[string]any{"read": 6, "lines": []any{"original base\n"}})
-	step(map[string]any{"action": "list", "listing": 4, "entry": 2}, listing(7, "renamed.go"))
-	step(map[string]any{"action": "read", "listing": 7, "entry": 1}, map[string]any{"read": 8, "lines": []any{"original candidate\n"}})
-	domain := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "Original paths remain attributable", "locations": []any{map[string]any{"read": 6}, map[string]any{"read": 8}}}}}
-	s.peer.Answer = codexPlain(t, domain).(map[string]any)
-	source, err := s.execute(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(s.directory, nativeToolContextFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	evidence, err := NativeWorkerResultEvidence("codex", s.directory, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := worker.DecodeResultWithFacts(input, "result", evidence.Answer, evidence.Digest, nil, evidence.LocationFacts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(result.Result.Validation.Findings[0].Locations, []string{"removed.go", "renamed.go"}) {
-		t.Fatal("locations exposed temporary materials", result)
-	}
-	after, err := os.ReadFile(filepath.Join(s.directory, nativeToolContextFile))
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatal("location assembly rewrote its original source", err)
-	}
-}
-
 func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	f, ref, s, binary := engineNativeFixture(t, true)
 	entries, err := os.ReadDir(s.workspace)
@@ -831,7 +791,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 			t.Fatalf("native request did not preserve original hook configuration: %v %v", value, err)
 		}
 		registered := getOf(getOf(value, "thread_request"), "dynamicTools")
-		if resume && registered != nil || !resume && len(listOf(registered)) != 1 {
+		if resume && registered != nil || !resume && (len(listOf(registered)) != 2 || getOf(listOf(registered)[0], "name") != nativeWorkspaceTool || getOf(listOf(registered)[1], "name") != nativeSemanticTool || !valuesEqual(getOf(listOf(registered)[1], "inputSchema"), map[string]any{"type": "object"})) {
 			t.Fatalf("original registration/resume contract changed: %v", value)
 		}
 	}
@@ -907,7 +867,12 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	read, _ := json.Marshal(map[string]any{"read": 2, "lines": lines})
+	originalContext, err := readJSONFile(filepath.Join(originalDirectory, nativeToolContextFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readNumber := len(listOf(getOf(originalContext, "facts"))) + 1
+	read, _ := json.Marshal(map[string]any{"read": readNumber, "lines": lines})
 	s.peer.Reverse = []any{map[string]any{"method": "item/tool/call", "params": map[string]any{"callId": "resumed-read", "namespace": nil, "tool": "workspace", "arguments": map[string]any{"action": "read", "listing": 1, "entry": appEntry}}}}
 	s.peer.Replies = []any{map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(read)}}, "success": true}}
 	s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The original resumed read finished; this peer now needs an operator decision"}).(map[string]any)
@@ -915,7 +880,8 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
 	continued, err := NativeJobSource("codex", directory)
 	if err != nil || continued["identity"] != originalSource["identity"] || valuesEqual(continued["native_turn"], originalSource["native_turn"]) || nativePeerTurns(t, s) != 2 {
-		t.Fatalf("original resumed tool context: %v %v", continued, err)
+		stderr, _ := os.ReadFile(filepath.Join(directory, "host.stderr"))
+		t.Fatalf("original resumed tool context: %v %v; peer stderr: %s", continued, err, stderr)
 	}
 	verifySource(directory, continued, true)
 	verifySource(originalDirectory, originalSource, false)
@@ -964,6 +930,14 @@ func TestCodexNativeContinuationAndRecovery(t *testing.T) {
 	if !bytes.Equal(firstLog, secondLog) {
 		t.Fatal("recovery replayed native work")
 	}
+	firstSource, err := readJSONFile(filepath.Join(s.directory, "native-source.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPrompt := textOf(getOf(listOf(getOf(getOf(firstSource, "turn_request"), "input"))[0], "text"))
+	if !strings.HasPrefix(firstPrompt, "original prompt\n[Current submit_semantics input schema]\n") {
+		t.Fatal("original prompt or current semantic schema was not sent to the original turn")
+	}
 	firstID := source["identity"]
 	s.directory = filepath.Join(filepath.Dir(s.directory), "continued")
 	os.MkdirAll(s.directory, 0o755)
@@ -978,8 +952,16 @@ func TestCodexNativeContinuationAndRecovery(t *testing.T) {
 	if !valuesEqual(continued["identity"], firstID) || valuesEqual(continued["native_turn"], source["native_turn"]) {
 		t.Fatalf("continuation: %v", continued)
 	}
+	continuedSource, err := readJSONFile(filepath.Join(s.directory, "native-source.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuedPrompt := textOf(getOf(listOf(getOf(getOf(continuedSource, "turn_request"), "input"))[0], "text"))
+	if !strings.HasPrefix(continuedPrompt, "continue prompt\n[Current submit_semantics input schema]\n") {
+		t.Fatal("continuation lost the new prompt or its current semantic schema")
+	}
 	answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
-	if getOf(answer, "summary") != "original prompt / continue prompt" {
+	if getOf(answer, "summary") != firstPrompt+" / "+continuedPrompt {
 		t.Fatalf("history: %v", answer)
 	}
 	if valuesEqual(source["usage_evidence"], continued["usage_evidence"]) {

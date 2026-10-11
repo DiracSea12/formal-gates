@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -154,5 +156,80 @@ func TestRequirementCommandsAddContextToAnExistingEmptySection(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "New context\n## 需求点") || !strings.Contains(string(data), "Existing solution") {
 		t.Fatalf("context section boundary: %s", data)
+	}
+}
+
+func TestGateDirectoryDocumentsRetainPublishedRequirementAndMaterialPositions(t *testing.T) {
+	root := t.TempDir()
+	var out, errors bytes.Buffer
+	streams := IO{Stdout: &out, Stderr: &errors, Stdin: strings.NewReader("")}
+	invoke := func(args ...string) {
+		t.Helper()
+		out.Reset()
+		errors.Reset()
+		if code := Run("formal-gates", args, streams); code != 0 {
+			t.Fatalf("%v: %d %s", args, code, &errors)
+		}
+	}
+	invoke("requirement", "append", "--root", root, "--file", ".gates/requirements.md", "--title", "Output", "--requirement", "Return original input", "--acceptance", "Original bytes are retained", "--source", "User request", "--solution", "Use the existing owner")
+	var created facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	originals := map[string]string{".gates/requirements.md": created.Content, ".gates/方案.txt": "原方案\r\n", ".gates/材料.bin": "原工件\x00\r\n", ".gates/engine/other/retained.md": created.Content, ".gates/results/other.md": created.Content}
+	for path, content := range originals {
+		target := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invoke("requirement", "show", "--root", root)
+	var documents []requirementDocumentChoice
+	if err := json.Unmarshal(out.Bytes(), &documents); err != nil || len(documents) != 1 || documents[0].Path != ".gates/requirements.md" {
+		t.Fatalf("original documents: %s %v", &out, err)
+	}
+	materials, err := intakeMaterials(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := map[string]int{}
+	for _, material := range materials {
+		positions[material.Path] = material.Position
+	}
+	if len(positions) != 3 {
+		t.Fatalf("runtime materials published: %+v", materials)
+	}
+	for i := 0; i < 2; i++ {
+		invoke("workflow", "start", "--precheck", "--root", root, "--document", "1", "--solution-document", strconv.Itoa(positions[".gates/方案.txt"]), "--artifact-document", strconv.Itoa(positions[".gates/材料.bin"]))
+		var preview facade.IntakePreview
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
+			t.Fatal(err)
+		}
+		if preview.Content != created.Content || preview.IntakeCandidate.RequirementSource != ".gates/requirements.md" || len(preview.Materials) != 3 || len(preview.IntakeCandidate.Artifacts) != 3 || preview.IntakeCandidate.SolutionRevision != fmt.Sprintf("%x", sha256.Sum256([]byte("原方案\n"))) {
+			t.Fatalf("selected sources changed: %+v", preview)
+		}
+		for _, material := range preview.Materials {
+			if positions[material.Path] == 0 || strings.ReplaceAll(originals[material.Path], "\r\n", "\n") != material.Content || material.Revision != fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ReplaceAll(originals[material.Path], "\r\n", "\n")))) {
+				t.Fatalf("bound material bytes changed: %+v", material)
+			}
+		}
+	}
+	invoke("requirement", "edit", "--root", root, "--document", "1", "--item", "1", "--requirement", "Return valid original input")
+	expected := strings.Replace(created.Content, "Return original input", "Return valid original input", 1)
+	data, err := os.ReadFile(filepath.Join(root, ".gates/requirements.md"))
+	if err != nil || string(data) != expected {
+		t.Fatalf("position edit changed unrelated bytes: %q %v", data, err)
+	}
+	for path, content := range originals {
+		if path == ".gates/requirements.md" {
+			continue
+		}
+		actual, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil || string(actual) != content {
+			t.Fatalf("unselected material changed: %q %v", actual, err)
+		}
 	}
 }

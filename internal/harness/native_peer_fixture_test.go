@@ -134,7 +134,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		s.save(e.t)
 	case "codex":
 		s := codexScenario{request: request, directory: dir, workspace: workspace, home: c.home, config: paths["config"], runtime: filepath.Join(c.installed.Targets[0].TargetPath, "bin", "formal-gates"), peer: codexPeerInput{Workspace: workspace, Home: c.home, Config: paths["config"], Answer: answer,
-			StrictSchema: true, Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
+			Configuration: map[string]any{"model": "peer-model", "reasoningEffort": "high", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{workspace}, "networkAccess": false}, "approvalPolicy": "never", "approvalsReviewer": "user"}}}
 		s.peer.Answer = answer
 		s.configurePeerInputs(e.t)
 		if err := writeAtomicJSON(script, s.peer); err != nil {

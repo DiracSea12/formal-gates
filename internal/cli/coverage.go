@@ -49,9 +49,8 @@ type reconcileExecutionInput struct {
 	Execution coverage.ExecutionReport   `json:"execution"`
 }
 
-// runCoverage exposes the 3.5a coverage contract without coupling it to
-// workflow state, VCS, or legacy QA.  Inputs are read from stdin as JSON and
-// each operation delegates directly to the corresponding pure function.
+// runCoverage reads coverage inputs from stdin and delegates to pure coverage
+// functions without workflow state or VCS effects.
 func runCoverage(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		printCoverageUsage(streams.Stdout, program)
