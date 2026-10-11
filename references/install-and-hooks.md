@@ -53,8 +53,10 @@ host 的全局安装当作回退。
 
 引导文件 `install.command` 和 `install.bat` 会下载匹配的 release 源码与二进制、
 校验已发布的 checksum、组装本地包，把 binary 首次放到固定 stable launcher，再由该
-launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是候选，只能做只读验证
-和隔离 canary，不能安装、bootstrap、卸载或写 workflow state；引导脚本不是第二个安装器。
+launcher 调用唯一原生安装事务。既有 launcher 拒绝 release 安装参数时，`--force`
+引导安装由已校验源码包内的实际 `bin/formal-gates` 执行同一原生事务，只允许更新默认
+固定 launcher，原 journal 在替换前保存原 launcher。源码 binary 不接受普通安装、
+bootstrap、卸载或 workflow 写入；引导脚本不备份或覆盖既有 launcher。
 
 ## 安装位置
 

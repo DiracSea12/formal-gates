@@ -316,7 +316,8 @@ CLI 会话的短 cwd 只承载原生存储，文件操作仍在已绑定的实�
 `workflow message --text` 是新创作的语义转达；原文转发用 `--text-file` 读取原字节。
 没有原 chat API 的源证明时，不能将模型转述声称为原文零复制。
 
-脱离 run 的 `gate report --root <repo> --review <原序号>` 以具体 finding、证据和位置 flags
+`gate run --root <repo>` 发布当前包发现的门序号；`gate run --gate <原序号>` 选原门，
+精确 gate ID 仅供人工或程序集成。脱离 run 的 `gate report --root <repo> --review <原序号>` 以具体 finding、证据和位置 flags
 构造结果，例如 `--review-complete` 或 `--finding-severity`/`--finding-message`；原比较、
 路径和总体状态由程序取得。`--decision`、stdin typed JSON、精确 ID/path 接口保留给
 人工或程序集成，不是模型编写模板的入口。完整参数见各命令 `--help`。

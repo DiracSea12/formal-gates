@@ -61,6 +61,7 @@ type decodedResult struct {
 	Granularity *protocol.GranularityReview
 }
 type Granularity struct {
+	changes          *GranularityChange
 	Reason           string  `json:"reason"`
 	Batches          []Batch `json:"batches"`
 	VerificationTier string  `json:"verificationTier"`
@@ -68,7 +69,8 @@ type Granularity struct {
 	CheckpointReason string  `json:"checkpointReason,omitempty"`
 }
 type Batch struct {
-	Reuse         int `json:"reuse,omitempty"`
+	Reuse         int  `json:"reuse,omitempty"`
+	Remove        bool `json:"remove,omitempty"`
 	changes       *BatchChange
 	Owner         *int           `json:"owner,omitempty"`
 	DependsOn     []int          `json:"dependsOn,omitempty"`

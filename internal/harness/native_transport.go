@@ -18,8 +18,8 @@ package harness
 // Decoded values are plain Go values (map[string]any, []any, string, bool,
 // nil) with number literals kept as json.Number so the canonical encoder can
 // re-render them exactly. Decision points state their business meaning
-// explicitly (an integer turn counter, a non-empty session id, a binding with
-// entries) rather than emulating a Python runtime.
+// explicitly: an integer turn counter, a non-empty session id or a binding
+// with entries.
 
 import (
 	"bufio"
@@ -49,18 +49,17 @@ const nativeUnbounded time.Duration = -1
 const nativeUnsupportedMethod = -32601
 
 // nativeSourceFiles is the evidence a native run must leave behind, in the
-// order the receipt proofs them (native_transport.SOURCE_FILES).
+// order the receipt proofs them.
 var nativeSourceFiles = []string{"native-source.json", "native-events.jsonl", "answer.json"}
 
-// --- typed errors (the reference exception families) ---------------------------
+// --- typed errors -------------------------------------------------------------
 
-// bindingError is the refusal family for binding-class failures (the reference
-// implementation's HarnessError): the harness cannot even start the work.
+// bindingError reports binding failures that prevent work from starting.
 type bindingError struct{ message string }
 
 func (e *bindingError) Error() string { return e.message }
 
-// blockedError is the blocked-run refusal family (the reference RuntimeBlocked).
+// blockedError reports a blocked native run.
 type blockedError struct{ message string }
 
 func (e *blockedError) Error() string { return e.message }
@@ -1054,7 +1053,7 @@ func (c *nativeClient) receive(wait *time.Duration) (any, error) {
 		}
 		// Everything that is not a reverse request goes to the notification
 		// hook: notifications (a live method without an id) and plain
-		// responses alike, exactly like the reference receive()'s else branch.
+		// responses alike.
 		c.observePendings(object, arrival)
 		if c.hooks.notification != nil {
 			c.hooks.notification(message)
@@ -1355,8 +1354,8 @@ func (c *nativeClient) invalidatePendings() {
 	}
 }
 
-// appendInteraction records one inline-answered reverse request (the frozen
-// {method, status} shape the reference transport writes).
+// appendInteraction records one inline-answered reverse request with its
+// method and status.
 func (c *nativeClient) appendInteraction(entry map[string]any) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()

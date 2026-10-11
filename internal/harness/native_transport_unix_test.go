@@ -376,7 +376,7 @@ func TestTransportTimeoutText(t *testing.T) {
 // notifications keep the wait alive well past the nominal budget and a late
 // response is still accepted; the same exchange under bounded=true times out
 // at the total deadline. The supervisor's total-deadline discipline applies
-// only to bounded transports (合同保真要点 4).
+// only to bounded transports.
 //
 // The peer's startup notification is consumed before the request budget begins.
 func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {

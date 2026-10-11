@@ -141,10 +141,6 @@ export function apply(ctx, config = {}) {
   const binary = stableLauncherPath()
   const timeoutMs = Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS
   const dshHome = typeof config.dshHome === 'string' && config.dshHome.trim() !== '' ? config.dshHome : undefined
-  if (!binary) {
-    warn('formal-gates-dsh: config.binary is missing; hooks are disabled')
-    return
-  }
 
   const inflight = new Set()
   const controller = new AbortController()

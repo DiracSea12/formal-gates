@@ -26,6 +26,12 @@ func main() {
  if len(os.Args)==2 && os.Args[1]=="--version" { fmt.Println("candidate-contract");return }
  if len(os.Args)!=5 || strings.Join(os.Args[1:4]," ")!="package validate --root" { fail(fmt.Errorf("unexpected protocol: %v",os.Args)) }
  root:=os.Args[4];if root!=dir || filepath.Join(root,"bin",filepath.Base(executable))!=executable { fail(fmt.Errorf("wrong input identity: %s %s %s",root,dir,executable)) }
+ if observed:=os.Getenv("INSTALL_CONTRACT_JOURNAL_OBSERVED");observed!="" && root==os.Getenv("INSTALL_CONTRACT_RELEASE_ROOT") {
+  data,err:=os.ReadFile(os.Getenv("INSTALL_CONTRACT_JOURNAL"));fail(err);fail(os.WriteFile(observed,data,0600))
+  var journal struct { Binary struct { Path,Backup,Kind string } };fail(json.Unmarshal(data,&journal))
+  path:=journal.Binary.Backup;if journal.Binary.Kind=="symlink" { path=journal.Binary.Path }
+  data,err=os.ReadFile(path);fail(err);fail(os.WriteFile(observed+".binary",data,0600))
+ }
  if root==os.Getenv("INSTALL_CONTRACT_REJECT_ROOT") { fail(fmt.Errorf("candidate rejects installed root")) }
  data,err:=os.ReadFile(filepath.Join(root,"formal-gates.manifest.json"));fail(err)
  var doc struct { Parts []string ` + "`json:\"package_parts\"`" + ` };fail(json.Unmarshal(data,&doc))
@@ -116,6 +122,60 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		}
 		return root
 	}
+	t.Run("release_launcher_journal", func(t *testing.T) {
+		for _, kind := range []string{"regular", "symlink"} {
+			t.Run(kind, func(t *testing.T) {
+				candidate := source(t, true)
+				root := canonicalRegistryPath(t.TempDir())
+				launcher := filepath.Join(root, "stable", nativeBinaryName())
+				oldBinary := filepath.Join(root, "installed", nativeBinaryName())
+				before := []byte("installed launcher bytes\n")
+				if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "symlink" {
+					mustWriteValidateTest(t, oldBinary, string(before))
+					if err := os.Symlink(oldBinary, launcher); err != nil {
+						t.Skipf("symbolic links unavailable: %v", err)
+					}
+				} else {
+					if err := os.WriteFile(launcher, before, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				release := filepath.Join(root, "release")
+				registry := filepath.Join(root, "registry.json")
+				observed := filepath.Join(root, "observed.json")
+				t.Setenv("INSTALL_CONTRACT_JOURNAL", installOuterJournalPath(registry))
+				t.Setenv("INSTALL_CONTRACT_RELEASE_ROOT", release)
+				t.Setenv("INSTALL_CONTRACT_JOURNAL_OBSERVED", observed)
+				if _, err := Install(InstallOptions{Source: candidate, Host: "claude", Scope: "project", Project: t.TempDir(), ReleaseRoot: release, RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(observed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var journal outerInstallJournal
+				if err := json.Unmarshal(data, &journal); err != nil {
+					t.Fatal(err)
+				}
+				if journal.Operation != "install" || journal.Phase != "switched" || journal.Binary.Path != launcher || !journal.Binary.Existed || journal.Binary.Kind != kind || journal.Release.Path != release || journal.RegistryPath != registry {
+					t.Fatalf("release journal does not own original launcher identity: %+v", journal)
+				}
+				if kind == "symlink" && journal.Binary.LinkTarget != oldBinary {
+					t.Fatalf("journal does not retain original launcher link: %+v", journal.Binary)
+				}
+				if kind == "regular" && (journal.Binary.Mode != 0o700 || journal.Binary.Backup == "") {
+					t.Fatalf("journal does not retain original launcher file identity: %+v", journal.Binary)
+				}
+				data, err = os.ReadFile(observed + ".binary")
+				if err != nil || !bytes.Equal(data, before) {
+					t.Fatalf("journal snapshots original launcher bytes before publication: %q %v", data, err)
+				}
+			})
+		}
+	})
 	t.Run("future_contract", func(t *testing.T) {
 		root := source(t, true)
 		options := InstallOptions{Source: root, Host: "claude", Scope: "project", Project: t.TempDir(), RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "launcher", nativeBinaryName()), Force: true, SkipHooks: true}

@@ -64,10 +64,8 @@ try {
   $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-  # The stable launcher is the only native writer. An existing launcher is
-  # never overwritten by this script; the native journal owns that replacement.
-  # On a first install only, place the verified candidate at the empty stable
-  # path so the same stable owner can create the journal and finish the work.
+  # Native install owns launcher replacement in its journal. The script stages
+  # a verified binary only at an empty stable path for the first installation.
   $launcherDir = Split-Path -Parent $formalBinary
   New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
   if (-not (Test-Path -LiteralPath $formalBinary)) {
@@ -84,28 +82,11 @@ try {
     if (-not (Test-LegacyOwnerRejectedNewFlags $ownerText)) {
       throw "formal-gates install failed with exit code $LASTEXITCODE"
     }
-    # A pre-contract launcher can reject the new owner flags before its
-    # transaction starts. Replace it only for this compatibility handoff,
-    # then retry with the verified current binary at the fixed path. When the
-    # legacy launcher is a link (any reparse point), remove it before copying
-    # so the retry writes a real file instead of writing through the link
-    # into the old release. On failure the backed-up bytes are restored as a
-    # real file: the fixed launcher path keeps launching the same legacy
-    # binary while also satisfying the immutable-real-file pointer invariant.
-    $launcherWasLink = [bool](Get-Item -LiteralPath $formalBinary -Force).LinkType
-    $launcherBackup = Join-Path $tmp "launcher.before.exe"
-    Copy-Item $formalBinary $launcherBackup -Force
-    if ($launcherWasLink) {
-      Remove-Item -LiteralPath $formalBinary -Force
-    }
-    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
-    $stagedLauncher = $true
-    & $formalBinary @args
-    if ($LASTEXITCODE -ne 0) {
-      Copy-Item $launcherBackup $formalBinary -Force
-      $stagedLauncher = $false
-      throw "formal-gates install failed with exit code $LASTEXITCODE"
-    }
+    if (-not $Force) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+    # The verified source binary runs the same native release transaction;
+    # its journal snapshots the existing launcher before any replacement.
+    & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args
+    if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
   }
   $stagedLauncher = $false
   # Bootstrap the installed artifact through the same stable launcher before

@@ -134,7 +134,7 @@ func zcodeContainsString(values []string, want string) bool {
 	return false
 }
 
-// --- the provider catalogue (contract item 2) ----------------------------------
+// --- the provider catalogue ---------------------------------------------------
 
 // zcodeBundledProviderCatalogue names the app-server's bundled provider
 // catalogue when the host cannot (bundled_provider_catalogue).
@@ -205,7 +205,7 @@ func zcodePinnedCatalogue(binding map[string]any) string {
 	return catalogue
 }
 
-// --- capture, credentials and the client hooks (contract items 3-5) -----------
+// --- capture, credentials and the client hooks --------------------------------
 
 // zcodeCaptureBinding binds zcode to the node binary and the app-server script
 // it will execute (capture_binding). The catalogue is host configuration the
@@ -314,8 +314,7 @@ func zcodeRequestAuth(provider string, environment map[string]string) string {
 	cmd := exec.Command(node, helper, provider, zcodeCredentialStore(environment["ZCODE_DATA_BASE_DIR"]))
 	cmd.Env = nativeChildEnvironment(environment)
 	cmd.Stdout = &stdout
-	// stderr is captured and dropped by the reference; it never carries the
-	// secret and is never recorded here either.
+	// Credential helper stderr is discarded and never recorded.
 	if err := cmd.Start(); err != nil {
 		return ""
 	}
@@ -324,8 +323,7 @@ func zcodeRequestAuth(provider string, environment map[string]string) string {
 	select {
 	case <-done:
 	case <-time.After(60 * time.Second):
-		// The reference's 60-second subprocess timeout: killed and answered
-		// with nothing, never a partial credential.
+		// A timed-out credential helper is killed and returns no credential.
 		_ = cmd.Process.Kill()
 		<-done
 		return ""
@@ -690,7 +688,7 @@ func (z *zcodeClient) notification(message any) {
 	file.WriteString(string(line) + "\n")
 }
 
-// --- the selection mechanism (contract item 6) ---------------------------------
+// --- the selection mechanism --------------------------------------------------
 
 // zcodeReference is the exact provider/model reference a bound selection names
 // (reference). A bare model name cannot be resolved: this version exposes no
@@ -862,7 +860,7 @@ func zcodeBoundModel(snapshot any, wanted map[string]any, effort string) map[str
 	return out
 }
 
-// --- the account provider overlay (contract item 7) ----------------------------
+// --- the account provider overlay ---------------------------------------------
 
 // zcodeBuiltinProviderRevision is the revision the app-server answers with for
 // this catalogue (builtin_provider_revision). It is `<catalogue revision>`
@@ -1192,21 +1190,16 @@ func zcodeDeliverAccountProviders(client *zcodeClient, catalogue string, wanted 
 	return delivered, nil
 }
 
-// --- applying the selection (contract items 8-9) -------------------------------
+// --- applying the selection ---------------------------------------------------
 
 // applySelection applies the bound selection and reads the host back; never
-// substitutes (apply_selection). A host may silently ignore a setting it does
+// substitutes. A host may silently ignore a setting it does
 // not support (an unavailable thought level is dropped with a warning), so
 // every value is confirmed from the host's own report before it is recorded.
 // Nothing is persisted to the workspace's last-used selection.
 //
-// A change is only asked of a host that advertises models at all: a
-// snapshot whose available list is empty means an empty
-// provider registry, where session/setModel cannot apply any reference and
-// answers with its own opaque "Provider Registry 中不存在 Model" error.
-// The refusal is this transport's
-// own instead, and the frame is never fired. Registered bounded difference:
-// the frozen reference still sends the frame and reports the host's error.
+// A model change requires a non-empty advertised model list. The transport
+// refuses an empty provider registry without sending session/setModel.
 func (z *zcodeClient) applySelection(snapshot any, wanted map[string]any, effort, directory, workspace string) (map[string]any, error) {
 	configured := zcodeSelection(snapshot)
 	if wanted != nil {
@@ -1288,7 +1281,7 @@ func zcodeHandshake(snapshot any) (map[string]any, error) {
 	return protocol, nil
 }
 
-// --- evidence materialization and reconciliation (contract items 10-11) --------
+// --- evidence materialization and reconciliation ------------------------------
 
 // zcodeMaterializeSource turns committed native turn evidence into the bound
 // source receipt (materialize_source): events are matched by inputId/turnId,
@@ -1377,7 +1370,7 @@ func zcodeReconcile(directory string, process any) (map[string]any, error) {
 	return recoverNativeSource(directory, process, "ZCODE", func() (map[string]any, error) { return zcodeMaterializeSource(directory) })
 }
 
-// --- the execute sequence (contract item 12) -----------------------------------
+// --- the execute sequence -----------------------------------------------------
 
 // zcodeExecute runs ZCode's app-server sequence for one request
 // (native_zcode.execute): parse the request, establish the session, prepare
@@ -1416,7 +1409,7 @@ func zcodeExecute(request any, directory string, probe bool, services ...Executi
 // wanted selection, the reasoning effort, the permission mode a new
 // non-read-only session is switched to, and the read-only flag. The prompt
 // and schema stay unparsed until sendTurn: their absence surfaces only there,
-// after the session evidence exists, as in the reference sequence.
+// after the session evidence exists.
 type zcodeRequest struct {
 	workspace  string
 	binding    map[string]any

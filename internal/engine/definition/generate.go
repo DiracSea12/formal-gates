@@ -74,8 +74,7 @@ const (
 
 // writeGenerated 以仓库常规权限原子写出交付物（制品与 Go 源均 0644）：
 // 先写同目录临时文件并 fsync，再 rename 落位——读者要么看到旧字节、要么
-// 看到完整新字节，不存在撕裂中间态（封板后审计 H5；参考 internal/validate
-// 的 writeAtomic 与 replaceCompletedFile 模式）。Windows 上目标被并发读者
+// 看到完整新字节，不存在撕裂中间态。Windows 上目标被并发读者
 // 打开时 os.Rename 会以 Access is denied 失败，故走 ReplaceFileW 语义替换。
 // 字节内容与非原子写逐字节相同。
 func writeGenerated(path string, data []byte) error {

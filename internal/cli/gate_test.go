@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -79,5 +80,52 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 		if code := Run("formal-gates", []string{"gate", "report", "--context", context}, IO{Stdin: strings.NewReader(body), Stdout: &stdout, Stderr: &stderr}); code == 0 {
 			t.Fatal("gate report accepted a copied or unpublished position")
 		}
+	}
+}
+
+func TestStandaloneGateStartupSelectsPublishedCatalogPositions(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	if err := os.WriteFile(filepath.Join(pkg, "gates", "other.md"), []byte("# Another gate\nCheck the current changes.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "example.txt"), []byte("original\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errout bytes.Buffer
+	if code := Run("formal-gates", []string{"gate", "run", "--root", root, "--package-root", pkg}, IO{Stdout: &out, Stderr: &errout}); code != 0 {
+		t.Fatal(errout.String())
+	}
+	var choices []struct {
+		Gate int    `json:"gate"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &choices); err != nil || len(choices) != 2 {
+		t.Fatal("original catalog was not published", out.String(), err)
+	}
+	for _, choice := range choices {
+		out.Reset()
+		errout.Reset()
+		if code := Run("formal-gates", []string{"gate", "run", "--root", root, "--package-root", pkg, "--gate", strconv.Itoa(choice.Gate)}, IO{Stdout: &out, Stderr: &errout}); code != 0 {
+			t.Fatal(errout.String())
+		}
+		if !strings.Contains(out.String(), "[Gate: "+choice.Name+"]") {
+			t.Fatal("selected position rebound catalog", out.String())
+		}
+	}
+	contexts, _ := filepath.Glob(filepath.Join(root, ".gates", "tmp", "gate-review", "review-*.json"))
+	if len(contexts) != len(choices) {
+		t.Fatal("original comparison payloads not saved")
+	}
+	out.Reset()
+	errout.Reset()
+	if code := Run("formal-gates", []string{"gate", "run", "--root", root, "--package-root", pkg, "--gate", "3"}, IO{Stdout: &out, Stderr: &errout}); code == 0 {
+		t.Fatal("unpublished gate accepted")
+	}
+	after, _ := filepath.Glob(filepath.Join(root, ".gates", "tmp", "gate-review", "review-*.json"))
+	if len(after) != len(contexts) {
+		t.Fatal("invalid selection created a review")
+	}
+	if body, _ := os.ReadFile(filepath.Join(root, "example.txt")); string(body) != "original\n" {
+		t.Fatal("standalone gate changed source")
 	}
 }

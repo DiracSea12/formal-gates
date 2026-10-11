@@ -84,9 +84,72 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		return nil, nil
 	}
 	result := &protocol.GranularityReview{Reason: value.Reason, VerificationTier: value.VerificationTier, CheckpointReason: value.CheckpointReason}
+	batches := value.Batches
+	if input.ApprovedPlan != nil && !completed {
+		original := input.ApprovedPlan
+		result.Reason, result.VerificationTier, result.CheckpointReason = original.Reason, original.VerificationTier, original.CheckpointReason
+		for _, group := range original.CheckpointGroups {
+			result.CheckpointGroups = append(result.CheckpointGroups, slices.Clone(group))
+		}
+		change := value.changes
+		if change.Reason != nil {
+			result.Reason = *change.Reason
+		}
+		if change.VerificationTier != nil {
+			result.VerificationTier = *change.VerificationTier
+		}
+		if change.CheckpointReason != nil {
+			result.CheckpointReason = *change.CheckpointReason
+		}
+		if change.CheckpointGroups != nil {
+			result.CheckpointGroups = nil
+		}
+		if change.VerificationTier != nil && result.VerificationTier != "CHECKPOINT" {
+			if change.CheckpointGroups == nil {
+				result.CheckpointGroups = nil
+			}
+			if change.CheckpointReason == nil {
+				result.CheckpointReason = ""
+			}
+		}
+		if change.Batches == nil || len(batches) > 0 {
+			batches = nil
+			for i := range original.Batches {
+				batches = append(batches, Batch{Reuse: i + 1, changes: &BatchChange{}})
+			}
+			seen := map[int]bool{}
+			for _, item := range value.Batches {
+				if item.Reuse == 0 {
+					if item.Remove {
+						return nil, fmt.Errorf("batch removal selects an original confirmed batch")
+					}
+					batches = append(batches, item)
+					continue
+				}
+				if item.Reuse < 1 || item.Reuse > len(original.Batches) || seen[item.Reuse] {
+					return nil, fmt.Errorf("batch change selects each original confirmed batch at most once")
+				}
+				seen[item.Reuse] = true
+				if item.Remove {
+					raw, err := json.Marshal(item.changes)
+					if err != nil {
+						return nil, err
+					}
+					if string(raw) != "{}" {
+						return nil, fmt.Errorf("removed batch cannot also change content")
+					}
+				}
+				batches[item.Reuse-1] = item
+			}
+			batches = slices.DeleteFunc(batches, func(item Batch) bool { return item.Remove })
+		}
+	}
 	ids := []string{}
-	for index, item := range value.Batches {
+	for index, item := range batches {
 		id := fmt.Sprintf("batch-%d", index+1)
+		if input.ApprovedPlan != nil && item.Reuse == 0 {
+			id = contentID("batch", item, index)
+		}
 		if item.Reuse != 0 {
 			if input.ApprovedPlan == nil || item.Reuse < 1 || item.Reuse > len(input.ApprovedPlan.Batches) {
 				return nil, fmt.Errorf("batch reuse selects an original confirmed batch")
@@ -102,7 +165,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		}
 		result.CheckpointGroups = append(result.CheckpointGroups, selected)
 	}
-	for index, item := range value.Batches {
+	for index, item := range batches {
 		batch := protocol.DevelopmentBatch{Deliverable: item.Deliverable, PublicEntry: item.PublicEntry, Interfaces: item.Interfaces, StateBoundary: item.StateBoundary, Risk: item.Risk, Rollback: item.Rollback, Recovery: item.Recovery, Handoff: item.Handoff, ContextCost: item.ContextCost, Spike: item.Spike}
 		reused := item.Reuse != 0
 		if reused {
@@ -125,7 +188,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			if reused {
 				return nil, fmt.Errorf("completed repair uses current native artifacts, not a carried batch")
 			}
-			if len(value.Batches) != 1 || paths == nil || item.Artifacts != nil || item.NewArtifacts != nil {
+			if len(batches) != 1 || paths == nil || item.Artifacts != nil || item.NewArtifacts != nil {
 				return nil, fmt.Errorf("completed repair artifacts require original single-batch native paths")
 			}
 			batch.Artifacts = slices.Clone(paths)

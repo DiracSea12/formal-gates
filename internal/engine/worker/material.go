@@ -166,6 +166,10 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v2" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
+		if input.ApprovedPlan != nil {
+			contextValue["approvedPlan"] = input.ApprovedPlan
+			instructions += " approvedPlan publishes the complete original contract. Batch, subtask and DoD reuse select their one-based positions. Omitted plan fields and unmentioned batches retain original values; remove:true explicitly removes a selected original batch. New checkpointGroups select resulting batch positions."
+		}
 		contextValue["availableRouteCandidates"] = input.AvailableRouteCandidates
 		if len(input.ApprovedChecks) > 0 {
 			contextValue["approvedChecks"] = input.ApprovedChecks

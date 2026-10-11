@@ -17,9 +17,7 @@ const (
 )
 
 // Proof names one recorded file proof. The caller supplies the proofs as an
-// ordered slice rather than a map so that, when several proofs are wrong, the
-// refusal names the same one the reference implementation named: it iterated the
-// parsed document in insertion order, and a Go map has no order at all.
+// ordered slice so that the first failing proof follows the receipt's order.
 type Proof struct {
 	Name     string
 	Expected map[string]any
@@ -30,8 +28,7 @@ type Proof struct {
 //
 // The caller reads the two JSON documents and reports the proof order: reading
 // files is the wrapper's job, and the rules below are the evidence contract.
-// Numbers are compared by value rather than by spelling, matching the reference
-// implementation, where 1 and 1.0 are the same number.
+// Numbers are compared by value: 1 and 1.0 are the same number.
 func VerifyProcess(directory string, process, receipt, request map[string]any, proofs []Proof) (string, string) {
 	digest, err := CanonicalDigest(request)
 	if err != nil {

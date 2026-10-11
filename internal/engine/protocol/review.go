@@ -38,25 +38,6 @@ func validReviewAction(action review.Action) bool {
 
 // ---- 事件 schema（无状态形状校验，由 Event.Validate 调用） ----
 
-// validateReviewEvidence 校验审查证据变体的形状：动作封闭、派发与需求
-// revision 绑定非空、语义状态恰为 PASS/FAIL。finding 内容与 Operator 核
-// 实的完整性由 review.RecordCandidate 在接纳时拒绝。
-func validateReviewEvidence(evidence *ReviewResultEvidence) error {
-	if !validReviewAction(evidence.Action) {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("review evidence action %q is not a pre-development review action", evidence.Action)}
-	}
-	if strings.TrimSpace(evidence.DispatchID) == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "review evidence dispatch id is empty"}
-	}
-	if strings.TrimSpace(evidence.RequirementRevision) == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "review evidence requirement revision is empty"}
-	}
-	if evidence.Status != OutcomePass && evidence.Status != OutcomeFail {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("review evidence status %q cannot become a review candidate (only PASS or FAIL)", evidence.Status)}
-	}
-	return nil
-}
-
 // validateReviewDecisionPayload 强制决定载荷的小 tagged union：恰一个分
 // 支非空，且该分支自身形状合法。控制↔分支配对与账目变换在接纳层对
 // pending Ask 执行。

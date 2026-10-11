@@ -160,13 +160,28 @@ func failCaseReviews(d *validationDriver, count int) {
 		if len(manifest.Cases) == 0 {
 			manifest = simpleManifest(in)
 		}
+		manifest.Cases = slices.Clone(manifest.Cases)
+		failedCase := 0
+		reason := "The normal case has no preparation that provides executable ./app, so its declared command cannot be run from the clean project."
+		switch i {
+		case 1:
+			manifest.Cases[0].Preconditions = "clean project; build the current command as executable ./app"
+			reason = "The normal case procedure does not record the exit status, so its zero-exit oracle has no observable execution evidence."
+		case 2:
+			manifest.Cases[0].Steps = "execute ./app run valid; record exit status, stdout and stderr separately"
+			failedCase = 1
+			reason = "The invalid case oracle does not specify a nonzero exit status, so successful acceptance of invalid input could satisfy its ambiguous rejection check."
+		}
 		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 		id, in = qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
-		review := approvedReview(manifest)
+		review := approvedReview(in.Manifest)
 		review.SetStatus = coverage.StatusFail
-		review.CaseDecisions[0].Status = coverage.StatusFail
+		review.CaseDecisions[failedCase].Status = coverage.StatusFail
+		review.CaseDecisions[failedCase].Reason = reason
 		review.PointDecisions[0].Status = coverage.StatusFail
+		review.PointDecisions[0].Reason = reason
 		review.SourceDecisions[0].Status = coverage.StatusFail
+		review.SourceDecisions[0].Reason = reason
 		d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &review})
 	}
 	d.reopen()

@@ -64,8 +64,15 @@ var (
 )
 
 type documentLayout struct {
-	end   int
-	items []requirementLayout
+	end      int
+	items    []requirementLayout
+	sections []documentSection
+}
+
+type documentSection struct {
+	name    string
+	heading int
+	end     int
 }
 
 type requirementLayout struct {
@@ -99,7 +106,7 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(normalized, "\n")
 	if layout != nil {
-		layout.end = len(lines)
+		*layout = documentLayout{end: len(lines)}
 	}
 	issues := []RequirementPrecheckIssue{}
 	addIssue := func(line int, reqID, rule string) {
@@ -177,6 +184,12 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 		}
 		level, heading, isHeading := markdownHeading(raw)
 		if isHeading && level == 2 {
+			if layout != nil {
+				if len(layout.sections) > 0 {
+					layout.sections[len(layout.sections)-1].end = index
+				}
+				layout.sections = append(layout.sections, documentSection{name: heading, heading: index, end: len(lines)})
+			}
 			if inSection {
 				if layout != nil {
 					layout.end = index

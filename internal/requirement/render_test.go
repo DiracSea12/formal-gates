@@ -94,3 +94,31 @@ func TestSemanticEditsPreserveUnchangedDocumentBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticSectionEditsPreserveOtherDocumentBytes(t *testing.T) {
+	source := "# Request\n\n ## 背景与目标  \n\nOriginal context.\n\n```markdown\n## 方案\n```\n\n## 需求点\n\n### First  \n\n#### 要求\n\nOriginal body.\n\n#### 验收条件\n\n-   First condition.  \n\n#### 来源\n\nOwner.\n\n  ## 方案  \n\nOriginal solution.\n\n## Notes\n\nKeep notes."
+	for _, original := range []string{source, strings.ReplaceAll(source, "\n", "\r\n")} {
+		ending := "\n"
+		if strings.Contains(original, "\r\n") {
+			ending = "\r\n"
+		}
+		contextBody := "Original context." + ending + ending + "```markdown" + ending + "## 方案" + ending + "```"
+		for _, test := range []struct {
+			change SemanticChange
+			want   string
+		}{
+			{SemanticChange{Solution: prose("Corrected solution.")}, strings.Replace(original, "Original solution.", "Corrected solution.", 1)},
+			{SemanticChange{Context: prose("Corrected context.")}, strings.Replace(original, contextBody, "Corrected context.", 1)},
+			{SemanticChange{Context: prose("Corrected context."), Solution: prose("Corrected solution.\nAnother paragraph.")}, strings.Replace(strings.Replace(original, contextBody, "Corrected context.", 1), "Original solution.", "Corrected solution."+ending+"Another paragraph.", 1)},
+			{SemanticChange{Item: 1, Requirement: prose("Corrected body."), Solution: prose("Corrected solution.")}, strings.Replace(strings.Replace(original, "Original body.", "Corrected body.", 1), "Original solution.", "Corrected solution.", 1)},
+		} {
+			got, err := RenderSemanticChange("requirement.md", []byte(original), test.change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.want {
+				t.Fatalf("section edit changed other original bytes\nwant=%q\ngot=%q", test.want, got)
+			}
+		}
+	}
+}

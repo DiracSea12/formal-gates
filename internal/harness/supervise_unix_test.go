@@ -218,9 +218,7 @@ func TestSuperviseStreamBytes(t *testing.T) {
 			}
 			stdout := readBytes(t, filepath.Join(jobDir, "stdout.log"))
 			stderr := readBytes(t, filepath.Join(jobDir, "stderr.log"))
-			// The exact split (OUT vs ERR, multibyte, 100KB) is asserted by the
-			// differential test against the reference; here we only require the
-			// streams were captured and the large case is genuinely large.
+			// Streams must be captured, including the full large stdout payload.
 			if len(stdout)+len(stderr) == 0 && c.name != "no-trailing-newline" {
 				t.Fatalf("no stream bytes captured for %s", c.name)
 			}
@@ -323,7 +321,7 @@ func TestSuperviseCwd(t *testing.T) {
 	_ = runSupervisor(t, bin, jobDir, env)
 	stdout := string(readBytes(t, filepath.Join(jobDir, "stdout.log")))
 	// macOS resolves /var -> /private/var, so compare against the symlink-resolved
-	// cwd, exactly as the reference implementation's child would observe it.
+	// cwd observed by the child.
 	wantCwd, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		wantCwd = workDir

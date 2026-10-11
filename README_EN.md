@@ -35,8 +35,8 @@ intake begins only when the user explicitly requests it.
    refilling slots promptly. Gates read the full baseline-to-candidate diff; independent QA case
    text and execution evidence are excluded from gate input.
 8. **One repair.** Collect the wave, handle errors, and adjudicate problems before creating one
-   repair. Ordinary repair uses a fixed affected QA subset; requirement guarantee requires FULL
-   on the final candidate before Seal. Gate P2 fixes carry PASS without another gate review;
+   repair. Ordinary repair verifies the fixed affected QA subset and all current obligations; it does not
+   add a final FULL run before Seal. Gate P2 fixes carry PASS without another gate review;
    gate P3 remains Seal advisory.
 9. **Promotion and Seal.** Verify the same candidate and its equivalence receipt, clean registered
    resources, and prove no leftovers before Complete. Seal, integration, actual canaries, and

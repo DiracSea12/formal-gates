@@ -150,7 +150,7 @@
     "Native workflow commands resolve and verify immutable identities through the selected Git, SVN, or P4 command while reviewers inspect native comparisons directly.",
     "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
     "Native install and uninstall use the single marker-delimited host-instruction block from SKILL.md for the applicable Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode guidance files; Cursor global has no host-instruction file.",
-    "Source checkout builds are read-only candidate validation inputs; install/bootstrap/uninstall and workflow writes must use the registry-admitted fixed stable launcher.",
+    "Source checkout builds are read-only candidate validation inputs for workflow. A verified release installer may perform an explicit forced upgrade of an existing default stable launcher through the same native installation transaction; bootstrap, uninstall and workflow writes retain the stable launcher admission boundary.",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root.",
     "Native install also writes the DeepSeek Harness skill under .dsh/skills and mounts the bundled minimal Cordis hook plugin through the DSH home cordis.patch.yml; project-scope DSH installs skills and AGENTS.md instructions only because DSH loads only the home-level patch layer.",
@@ -161,8 +161,8 @@
     "Package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
   "support_caveats": [
-    "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode have bundled installer/hook target entries.",
-    "Claude Code, Codex, Cursor, DeepSeek Harness, ZCode, Gemini, OpenCode, and Windsurf are described by readable-skill, install-guidance, hook-configuration, and live-canary-proven blocking capability levels.",
+    "Core skill documents may be read by other Agent Skill compatible runtimes, but the native host registry declares the bundled installer and hook capabilities, including WorkBuddy.",
+    "Registered native hosts and other skill-compatible runtimes are described by readable-skill, install-guidance, hook-configuration, and live-canary-proven blocking capability levels.",
     "Hook enforcement claims require live canary evidence on the specific host.",
     "A passing canary on one host does not prove another host. Do not claim Codex or DeepSeek Harness plugin distribution from this package."
   ],

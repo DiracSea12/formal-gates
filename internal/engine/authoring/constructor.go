@@ -354,8 +354,7 @@ func NewParallelStep(h Header, spec ParallelSpec) (ParallelStep, error) {
 		return ParallelStep{}, fmt.Errorf("parallel step %q: join step id required", h.ID)
 	}
 	// join 必须是组外分立步骤：join 步 == 并行步自身时 join 依赖集合与
-	// children 自指重合，会在 compiler 层绕过 fan-out 覆盖检查（封板后审计
-	// H1），在构造层直接拒绝。
+	// children 自指重合，会在 compiler 层绕过 fan-out 覆盖检查，须在构造层拒绝。
 	if spec.Join.JoinStep == h.ID {
 		return ParallelStep{}, fmt.Errorf("parallel step %q: join step %q must be outside the parallel group (join step is the parallel step itself)", h.ID, spec.Join.JoinStep)
 	}

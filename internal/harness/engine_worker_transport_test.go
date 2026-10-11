@@ -350,3 +350,37 @@ func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
 func nativeWorkerGranularityFixture() *worker.Granularity {
 	return &worker.Granularity{Reason: "one cohesive public behavior", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "implement the documented public behavior"}}, Deliverable: "public behavior matches the confirmed input contract", PublicEntry: "app", NewArtifacts: []string{"app.go"}, Interfaces: "existing input and output", StateBoundary: "no persistent state", Risk: "invalid inputs must be rejected", DoD: []worker.Criterion{{Description: "normal and invalid inputs satisfy their outcomes"}}, Checks: []worker.Check{{Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "revert the behavior change", Recovery: "repeat from the accepted baseline", Handoff: "implementation ready for independent validation", ContextCost: "one public interface fits the implementation context"}}}
 }
+
+func TestNativeApprovedPlanDeltaUsesOriginalSubmittedFacts(t *testing.T) {
+	plan := canaryLocalPlan(false)
+	plan.Reason = "original plan rationale"
+	plan.Batches[0].Risk = "original risk"
+	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v2", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
+	schema, err := worker.ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := []string{}
+	for range review.RequiredVerificationChecks() {
+		verification = append(verification, "Verified original responsibilities and current source")
+	}
+	domain := map[string]any{"findings": []any{}, "verification": verification, "granularityReview": map[string]any{"batches": []any{map[string]any{"reuse": 1, "risk": "new risk"}}}}
+	source, err := nativeSemanticToolRoundTrip(t, schema, domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResult(input, "result", canonical, "sha256:original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := *plan
+	expected.Batches = append([]protocol.DevelopmentBatch{}, plan.Batches...)
+	expected.Batches[0].Risk = "new risk"
+	if !reflect.DeepEqual(event.Result.Review.GranularityReview, &expected) {
+		t.Fatal("typed delta lost original approved plan")
+	}
+}

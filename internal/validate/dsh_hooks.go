@@ -81,10 +81,10 @@ func configureDshHook(target installTarget) error {
 		return err
 	}
 	seq := doc.Content[0]
-	// DSH 的 home cordis.patch.yml 是 PatchOptions 列表：新插件行必须包在
+	// DSH 的 home cordis.patch.yml 是 PatchOptions 列表：插件行必须包在
 	// `- insert:` 下，否则会被当作"找不到目标 id 的 patch"跳过。这里同时收敛
-	// 旧版/重复条目，并保留用户已有的其他 patch。id 是安装器自有行，重复安装
-	// 直接替换该行（含旧版相对路径 specifier 的迁移）。
+	// 裸插件行/重复条目，并保留用户已有的其他 patch。id 是安装器自有行，重复安装
+	// 直接替换该行，支持相对路径 specifier。
 	kept := make([]*yaml.Node, 0, len(seq.Content)+1)
 	wrote := false
 	for _, item := range seq.Content {
@@ -112,7 +112,7 @@ func configureDshHook(target installTarget) error {
 			kept = append(kept, item)
 			continue
 		}
-		// 迁移裸插件行（旧格式）为 insert patch。
+		// 将裸插件行装配为 insert patch。
 		if id, _ := dshPluginRowIdentity(item); id == dshPluginEntryID {
 			if wrote {
 				continue

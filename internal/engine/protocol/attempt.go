@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"fmt"
-	"strings"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -162,7 +161,6 @@ func (s *State) retryExtensionGranted(target string) bool {
 	return s.validationGrantUsed("RETRY", "approve", target) ||
 		s.validationGrantUsed(KindDispatchBudgetDisposition, "retry", target)
 }
-func retryReason(record RejectedResult) string { return strings.TrimSpace(record.Reason) }
 
 // restoreRetryBinding transfers the ended execution's exact logical identity.
 func (s *State) restoreRetryBinding(action decision.IssuedAction, nextRevision uint64) {

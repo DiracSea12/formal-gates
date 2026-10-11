@@ -123,6 +123,7 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 			delete(properties[name].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any), "reuse")
 			delete(properties[name].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any), "remove")
 		}
+		delete(properties, "remove")
 		delete(properties, "reuse")
 		if input.ApprovedPlan != nil && len(input.ApprovedPlan.Batches) > 0 {
 			changed := maps.Clone(batch)
@@ -135,6 +136,9 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 				original := fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}, "description": map[string]any{"type": "string", "minLength": 1}, "remove": map[string]any{"type": "boolean"}}, []string{"reuse"})
 				array["items"] = map[string]any{"anyOf": []any{item, original}}
 			}
+			changed["properties"].(map[string]any)["remove"] = map[string]any{"type": "boolean"}
+			plan["required"] = []any{}
+			plan["description"] = "Change only new semantics of the published approvedPlan; omitted fields and original batches are retained. Explicit batches [] clears the list; reuse with remove:true removes an original batch."
 			changed["required"] = []any{"reuse"}
 			changed["description"] = "Select an original confirmed batch and supply only changed semantics. Omitted content, identities, dependencies, checks and route are carried by the program."
 			plan["properties"].(map[string]any)["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{batch, changed}}

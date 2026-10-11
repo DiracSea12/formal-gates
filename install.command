@@ -108,10 +108,8 @@ PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
 binary_target="$home/.local/bin/formal-gates"
-# The stable launcher is the only native writer. An existing launcher is never
-# overwritten by the shell; the native journal owns that replacement. On a
-# first install only, place the verified candidate at the empty stable path so
-# the same stable owner can create the journal and complete the transaction.
+# Native install owns launcher replacement in its journal. The script stages
+# a verified binary only at an empty stable path for the first installation.
 mkdir -p "$(dirname "$binary_target")"
 if [ -e "$binary_target" ]; then
   if [ ! -x "$binary_target" ]; then
@@ -139,34 +137,13 @@ if ! owner_output=$("${cmd[@]}" 2>&1); then
     printf '%s\n' "$owner_output" >&2
     exit 1
   fi
-  # A launcher from before the release-root transaction contract can reject
-  # these arguments before its transaction starts. Retry once with the
-  # verified current binary at the fixed launcher path. When the legacy
-  # launcher is a symbolic link, remove the link before copying so the retry
-  # writes a real file instead of writing through the link into the old
-  # release. On failure the backed-up bytes are restored as a real file: the
-  # fixed launcher path keeps launching the same legacy binary while also
-  # satisfying the immutable-real-file pointer invariant.
-  cp "$binary_target" "$tmp/launcher.before"
-  if [ -L "$binary_target" ]; then
-    rm "$binary_target"
-  fi
-  staged_launcher=true
-  if ! cp "$source_root/bin/formal-gates" "$binary_target"; then
-    # 拷贝本身失败（如磁盘满）时同样以真实文件恢复备份字节，固定 launcher
-    # 路径不因兼容重试而缺失。
-    cp "$tmp/launcher.before" "$binary_target"
-    chmod +x "$binary_target"
-    staged_launcher=false
+  if [ "$force" != true ]; then
+    printf '%s\n' "$owner_output" >&2
     exit 1
   fi
-  chmod +x "$binary_target"
-  if ! "$binary_target" "${cmd[@]:1}"; then
-    cp "$tmp/launcher.before" "$binary_target"
-    chmod +x "$binary_target"
-    staged_launcher=false
-    exit 1
-  fi
+  # The verified source binary runs the same native release transaction;
+  # its journal snapshots the existing launcher before any replacement.
+  "$source_root/bin/formal-gates" "${cmd[@]:1}"
 fi
 staged_launcher=false
 

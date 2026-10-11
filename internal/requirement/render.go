@@ -39,9 +39,6 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 		// Initial creation has no item for the finite projection to precheck yet.
 		layout.end = len(strings.SplitAfter(prefix, "\n")) - 1
 	} else {
-		if change.Context != nil || change.Solution != nil {
-			return nil, fmt.Errorf("context and solution prose are only available when creating the document")
-		}
 		var err error
 		document, err = parseRequirementProjection(path, data, &layout)
 		if err != nil {
@@ -86,7 +83,8 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 		}
 	}
 	expected := append([]FrozenRequirement(nil), document.Requirements...)
-	if change.Item == 0 {
+	sectionOnly := !initial && change.Item == 0 && change.Title == nil && change.Requirement == nil && change.Source == nil && change.Acceptance == nil
+	if change.Item == 0 && !sectionOnly {
 		if change.Title == nil || change.Requirement == nil || change.Source == nil || change.Acceptance == nil {
 			return nil, fmt.Errorf("new requirement needs title, requirement, acceptance and source prose")
 		}
@@ -96,7 +94,7 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 			block = ending + block
 		}
 		lines = spliceLines(lines, layout.end, layout.end, block)
-	} else {
+	} else if change.Item != 0 {
 		item := document.Requirements[change.Item-1]
 		span := layout.items[change.Item-1]
 		if change.Condition < 0 || change.Condition > len(item.AcceptanceConditions) {
@@ -167,6 +165,43 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 		}
 		result = []byte(strings.Join(lines, ""))
 	}
+	if !initial && (change.Context != nil || change.Solution != nil) {
+		if !sectionOnly {
+			if _, err := parseRequirementProjection(path, result, &layout); err != nil {
+				return nil, err
+			}
+		}
+		for name, text := range map[string]*string{"背景与目标": change.Context, "方案": change.Solution} {
+			if text == nil {
+				continue
+			}
+			count := 0
+			for _, section := range layout.sections {
+				if section.name == name {
+					count++
+				}
+			}
+			if count != 1 {
+				return nil, fmt.Errorf("editing %s requires exactly one ## %s section", name, name)
+			}
+		}
+		lines = strings.SplitAfter(string(result), "\n")
+		for i := len(layout.sections) - 1; i >= 0; i-- {
+			section := layout.sections[i]
+			var text *string
+			switch section.name {
+			case "背景与目标":
+				text = change.Context
+			case "方案":
+				text = change.Solution
+			}
+			if text != nil {
+				lines = replaceProse(lines, section.heading+1, section.end, *text, ending)
+			}
+		}
+		result = []byte(strings.Join(lines, ""))
+	}
+
 	if _, err := ParseRequirementProjection(path, result); err != nil {
 		return nil, err
 	}
@@ -189,7 +224,7 @@ func replaceProse(lines []string, start, end int, text, ending string) []string 
 		end--
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", ending)
-	if end > start && strings.HasSuffix(lines[end-1], "\n") {
+	if end > start && strings.HasSuffix(lines[end-1], "\n") || start == end && end < len(lines) && text != "" {
 		text += ending
 	}
 	return spliceLines(lines, start, end, text)

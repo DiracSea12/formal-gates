@@ -101,3 +101,25 @@ func reviseCriteria(original []protocol.DevelopmentCriterion, changes []Criterio
 	}
 	return slices.DeleteFunc(result, func(item protocol.DevelopmentCriterion) bool { return removed[item.ID] }), nil
 }
+
+// Plan changes retain the original approved contract when a field is omitted.
+type GranularityChange struct {
+	Reason           *string  `json:"reason,omitempty"`
+	Batches          *[]Batch `json:"batches,omitempty"`
+	VerificationTier *string  `json:"verificationTier,omitempty"`
+	CheckpointGroups *[][]int `json:"checkpointGroups,omitempty"`
+	CheckpointReason *string  `json:"checkpointReason,omitempty"`
+}
+
+func (item *Granularity) UnmarshalJSON(raw []byte) error {
+	type body Granularity
+	if err := decodeObject(raw, (*body)(item)); err != nil {
+		return err
+	}
+	var change GranularityChange
+	if err := json.Unmarshal(raw, &change); err != nil {
+		return err
+	}
+	item.changes = &change
+	return nil
+}

@@ -35,8 +35,8 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 	body := fs.String("requirement", "", "new requirement prose")
 	acceptance := fs.String("acceptance", "", "new acceptance condition prose")
 	source := fs.String("source", "", "new source prose")
-	context := fs.String("context", "", "new context prose for initial creation")
-	solution := fs.String("solution", "", "new solution prose for initial creation")
+	context := fs.String("context", "", "new background prose; omitted retains the original")
+	solution := fs.String("solution", "", "new solution prose; omitted retains the original")
 	removeCondition := fs.Bool("remove-condition", false, "remove the selected acceptance condition")
 	if err := fs.Parse(args); err != nil {
 		return 1, err
@@ -98,9 +98,6 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 	if command == "append" && *item != 0 {
 		return 1, fmt.Errorf("append does not select an existing requirement")
 	}
-	if command != "append" && *item == 0 {
-		return 1, fmt.Errorf("%s requires --item", command)
-	}
 	change := requirement.SemanticChange{Item: *item, Condition: *condition, Remove: command == "remove", RemoveCondition: *removeCondition}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -118,6 +115,13 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 			change.Solution = solution
 		}
 	})
+
+	if command == "remove" && *item == 0 {
+		return 1, fmt.Errorf("remove requires --item")
+	}
+	if command == "edit" && *item == 0 && change.Context == nil && change.Solution == nil {
+		return 1, fmt.Errorf("edit requires --item or new --context/--solution prose")
+	}
 	if len(data) == 0 && change.Solution == nil {
 		return 1, fmt.Errorf("initial requirement creation requires --solution prose")
 	}

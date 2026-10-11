@@ -2838,15 +2838,6 @@ func submit(engine *protocol.Engine, event protocol.Event) (protocol.Acceptance,
 	return engine.Submit(event, fingerprint)
 }
 
-func completed(steps []authoring.StepID, target authoring.StepID) bool {
-	for _, step := range steps {
-		if step == target {
-			return true
-		}
-	}
-	return false
-}
-
 func harnessPaths(root string) ([]string, error) {
 	paths := []string{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {

@@ -364,7 +364,7 @@ case-set 或目标集变化使旧 wave 失效，不能改 expected-set 制造收
 - 门审 P3 不修复，只在 Seal 前一次性 advisory；范围外 P3 同样不形成 obligation。
 - QA Review P1 修订后 fresh review；集合级 P2/P3 按稳定 suggestion ID 吸收并留来源、不复审。
   全部吸收且覆盖通过才 FROZEN；无建议则 PASS 后立即冻结。
-- 普通返修只 AFFECTED 执行冻结用例；requirement guarantee 的最终候选 Seal 前须 FULL。
+- 普通返修按 AFFECTED 验证冻结用例并核齐当前义务；不自动追加最终 FULL。
   只有需求含义、对外行为、成功/失败判据或稳定可执行性变化才能 THAW；临时环境失败是
   RUNTIME_ERROR。合法 QA artifact 修订重新装配并冻结候选，至少重跑改过测试和共享依赖项。
 - 既有三轮自动审查与额外授权上限保持；完整 expected-set 终结才计 wave，装配、pre-wave

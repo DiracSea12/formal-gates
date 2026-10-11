@@ -1,9 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"encoding/json"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
+	"formal-gates/internal/prompts"
+	"formal-gates/internal/requirement"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -50,4 +55,80 @@ func TestGranularityReusesConfirmedBatchAndNestedValues(t *testing.T) {
 	if _, err := DecodeGranularity(input, &invalid, nil, nil, false); err == nil {
 		t.Fatal("unknown batch reference accepted")
 	}
+}
+
+func TestApprovedPlanRetainsOmittedTopLevelContract(t *testing.T) {
+	original := nativePlanForInheritance()
+	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v2", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, ApprovedPlan: original, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	before, _ := json.Marshal(original)
+	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(material.Prompt, "original first delivery") || !strings.Contains(material.Prompt, "original checkpoint reason") || !strings.Contains(material.Prompt, `"approvedPlan"`) {
+		t.Fatal("plan role lacks original contract and positional source")
+	}
+	decode := func(raw string) *protocol.GranularityReview {
+		t.Helper()
+		var value Granularity
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			t.Fatal(err)
+		}
+		result, err := DecodeGranularity(input, &value, nil, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	result := decode(`{"batches":[{"reuse":1,"risk":"new risk"}]}`)
+	expected := *original
+	expected.Batches = append([]protocol.DevelopmentBatch{}, original.Batches...)
+	expected.Batches[0].Risk = "new risk"
+	if !reflect.DeepEqual(result, &expected) {
+		t.Fatalf("omitted plan/other batch changed: %#v", result)
+	}
+	if err := protocol.ValidateGranularity(result); err != nil {
+		t.Fatal(err)
+	}
+	result = decode(`{"verificationTier":"FINAL"}`)
+	if result.VerificationTier != "FINAL" || len(result.CheckpointGroups) != 0 || result.CheckpointReason != "" || !reflect.DeepEqual(result.Batches, original.Batches) {
+		t.Fatal("tier change lost batches or retained incompatible checkpoint fields")
+	}
+	if err := protocol.ValidateGranularity(result); err != nil {
+		t.Fatal(err)
+	}
+	result = decode(`{"checkpointGroups":[],"checkpointReason":""}`)
+	if len(result.CheckpointGroups) != 0 || result.CheckpointReason != "" {
+		t.Fatal("explicit clear was not applied")
+	}
+	if err := protocol.ValidateGranularity(result); err == nil {
+		t.Fatal("checkpoint proposal without its groups accepted")
+	}
+	result = decode(`{"reason":""}`)
+	if err := protocol.ValidateGranularity(result); err == nil {
+		t.Fatal("explicit empty reason was filled from old source")
+	}
+	after, _ := json.Marshal(original)
+	if !bytes.Equal(before, after) {
+		t.Fatal("proposal mutated its approved source")
+	}
+	input.ApprovedPlan = nil
+	var first Granularity
+	if err := json.Unmarshal([]byte(`{"batches":[]}`), &first); err != nil {
+		t.Fatal(err)
+	}
+	result, err = DecodeGranularity(input, &first, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.ValidateGranularity(result); err == nil {
+		t.Fatal("initial proposal missing new semantic contract accepted")
+	}
+}
+
+func nativePlanForInheritance() *protocol.GranularityReview {
+	batch := func(id, description string) protocol.DevelopmentBatch {
+		return protocol.DevelopmentBatch{ID: id, Subtasks: []protocol.DevelopmentSubtask{{ID: id + "-task", Description: "original duty"}}, Deliverable: description, PublicEntry: "./app", Artifacts: []string{id + ".go"}, Interfaces: "original interface", StateBoundary: "original state", Risk: "original risk", DoD: []protocol.DevelopmentCriterion{{ID: id + "-condition", Description: "original criterion"}}, Checks: []protocol.DevelopmentCheck{{ID: id + "-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: id + "-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "original rollback", Recovery: "original recovery", Handoff: "original handoff", ContextCost: "original context"}
+	}
+	return &protocol.GranularityReview{Reason: "original reason", VerificationTier: "CHECKPOINT", Batches: []protocol.DevelopmentBatch{batch("first", "original first delivery"), batch("second", "original second delivery")}, CheckpointGroups: [][]string{{"first"}, {"second"}}, CheckpointReason: "original checkpoint reason"}
 }

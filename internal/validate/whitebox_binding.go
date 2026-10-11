@@ -1,12 +1,9 @@
 package validate
 
 // whiteboxDeliveredTestCode is the whitebox designer's delivered structural test
-// code used by fixtures and the portable canary (binding): the tests bound
-// by whitebox cases are declared here. It is delivery data, not a validation
-// source: the CLI records a whitebox case's test reference (Test = "<file>::<function>",
-// an opaque file-locating reference) and does not parse or scan any code to check
-// existence. Existence and correspondence are verified by qa-review (reading the
-// delivered code) and qa-execution (actually running the tests).
+// code used by fixtures and the portable canary. Test-reference assembly parses
+// candidate Go files and binds the selected test's exact signature. QA review
+// checks correspondence, and QA execution runs the delivered tests.
 const whiteboxDeliveredTestCode = `package whiteboxfixture
 
 import "testing"

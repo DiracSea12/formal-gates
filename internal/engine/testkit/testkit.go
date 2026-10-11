@@ -223,12 +223,6 @@ func (h *FakeHost) SpawnCalls(actionID string) int {
 	return h.spawnCalls[actionID]
 }
 
-type HostActionResult struct {
-	Intent      protocol.HostActionIntent
-	Acceptance  protocol.Acceptance
-	SideEffects int
-}
-
 func (h *FakeHost) Execute(operation authoring.OperationID, params any) (protocol.HostActionIntent, error) {
 	fp, err := h.Engine.ObserveFingerprint()
 	if err != nil {
@@ -453,21 +447,6 @@ func (w *FakeWorker) ResultEventFor(eventID protocol.EventID, actionID string, m
 		return w.ReviewResultEvent(eventID, actionID, mark, payloadDigest)
 	}
 	return w.ResultEvent(eventID, actionID, protocol.OutcomePass, payloadDigest, "")
-}
-
-func (w *FakeWorker) SubmitEvent(ev protocol.Event) (protocol.Acceptance, error) {
-	fp, err := w.Engine.ObserveFingerprint()
-	if err != nil {
-		return protocol.Acceptance{}, err
-	}
-	acceptance, err := w.Engine.Submit(ev, fp)
-	if err != nil {
-		return acceptance, err
-	}
-	if fault := w.Faults.Inject(persistence.FaultSubmitResponseLost); fault != nil {
-		return acceptance, fault
-	}
-	return acceptance, nil
 }
 
 // SubmitConcurrently runs two deterministic callers against one state

@@ -1039,20 +1039,23 @@ func launcherInvocationMatches(expected string) bool {
 	return err == nil && stableLauncherPath(executable) == expected
 }
 
-// RequireInstallLauncher fences the public mutation command. Normal maintenance
-// uses the fixed launcher path; when --binary-target is supplied, that path is
-// the transaction launcher and the process must be invoked through it. A
-// different raw candidate cannot impersonate the selected launcher.
+// RequireInstallLauncher admits stable-launcher maintenance and release
+// upgrades from the source package's actual binary. Release upgrades use the
+// same native installation transaction; bootstrap still requires the launcher.
 func RequireInstallLauncher(options InstallOptions) error {
 	expected := defaultStableLauncherPath(options)
 	if strings.TrimSpace(options.BinaryTarget) != "" {
-		// A caller that supplies a launcher path owns that path for the
-		// transaction. The process must still be the same executable, so a
-		// raw candidate binary cannot impersonate a different launcher.
 		expected = stableLauncherPath(options.BinaryTarget)
 	}
 	if !launcherInvocationMatches(expected) {
-		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
+		executable, executableErr := os.Executable()
+		launcher, launcherErr := os.Stat(expected)
+		if options.Bootstrap || !options.Force || strings.TrimSpace(options.ReleaseRoot) == "" ||
+			strings.TrimSpace(options.BinaryTarget) == "" || expected != defaultStableLauncherPath(options) ||
+			executableErr != nil || stableLauncherPath(executable) != stableLauncherPath(filepath.Join(options.Source, "bin", nativeBinaryName())) ||
+			launcherErr != nil || !launcher.Mode().IsRegular() {
+			return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
+		}
 	}
 	// An explicit non-default transaction launcher must already be admitted.
 	// This keeps a plain candidate executable from selecting itself as a new
@@ -2147,9 +2150,8 @@ func isLegacyCodexGateCommand(command string, target installTarget) bool {
 		return false
 	}
 	want := normalizeHookCommand(command)
-	// Install migrates the former target/bin hook to the fixed launcher.
-	// Recognizing that one exact old owned shape is cleanup for the migration,
-	// not a second supported writer or fallback launcher.
+	// Installer-owned commands support both the fixed launcher and target/bin
+	// shapes so install can replace them and uninstall can remove them.
 	return want == normalizeHookCommand(nativeInstallCommand(targetLauncherPath(target), "hook", "decide")) ||
 		want == normalizeHookCommand(nativeInstallCommand(filepath.Join(target.targetPath, "bin", nativeBinaryName()), "hook", "decide"))
 }
@@ -2193,8 +2195,7 @@ func targetLauncherPath(target installTarget) string {
 	return filepath.Join(target.targetPath, "bin", nativeBinaryName())
 }
 
-// normalizeHookCommand 去掉命令字符串里的双引号，用于卸载/升级时识别新旧两种 install
-// 格式：旧版无条件给 exe 路径加引号、新版仅在需要时加引号，归一化后相同。
+// normalizeHookCommand 支持 exe 路径带双引号或不带双引号的 install 命令形状。
 func normalizeHookCommand(command string) string {
 	command = strings.ReplaceAll(command, `"`, "")
 	// Hook configs may preserve Windows backslashes while the installer

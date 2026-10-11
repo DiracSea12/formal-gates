@@ -273,8 +273,7 @@ func checkEnvelope(w *definitionWire) error {
 
 // checkCoherence 拒绝物化不一致的 IR：marker 定义、空信封、kind 与 payload
 // 变体不符、authority/runner 与变体派生物不符、步骤版本未与信封绑定、
-// 步骤表结构性缺陷（重复 step id、重复 ordinal、悬空 dependency——封板后
-// 审计 H3 的 decode 二次防线，compiler 正常输出天然满足）。
+// 步骤表结构性缺陷（重复 step id、重复 ordinal、悬空 dependency）。
 func checkCoherence(cd *compiler.CompiledDefinition) error {
 	if cd == nil {
 		return errors.New("encoder: nil definition")

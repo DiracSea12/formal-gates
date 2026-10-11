@@ -749,12 +749,14 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		vcs := fs.String("vcs", "git", "external VCS name")
 		scope := fs.String("scope", "", "optional logical review scope")
 		contextPath := fs.String("save-context", "", "save original review comparison and numeric location evidence; defaults to a program-selected review payload")
+		gateChoices := stringListFlag{}
+		fs.Var(&gateChoices, "gate", "select a discovered gate by its displayed number (repeatable)")
 		ids, code, err, done := parseFlagSetAllowPositional(fs, args, streams.Stdout)
 		if done {
 			return code, err
 		}
-		if len(ids) == 0 {
-			return 1, fmt.Errorf("gate run requires at least one gate id")
+		if len(ids) > 0 && len(gateChoices) > 0 {
+			return 1, fmt.Errorf("select gate numbers or exact integration ids, not both")
 		}
 		for _, id := range ids {
 			if strings.HasPrefix(id, "-") {
@@ -764,6 +766,20 @@ func runGate(program string, args []string, streams IO) (int, error) {
 		catalog, err := prompts.LoadPromptCatalog(*pkg)
 		if err != nil {
 			return 1, err
+		}
+		if len(ids) == 0 && len(gateChoices) == 0 {
+			choices := []map[string]any{}
+			for i, gate := range catalog.Gates {
+				choices = append(choices, map[string]any{"gate": i + 1, "name": gate.ID})
+			}
+			return printJSON(streams.Stdout, choices)
+		}
+		for _, choice := range gateChoices {
+			position, err := strconv.Atoi(choice)
+			if err != nil || position < 1 || position > len(catalog.Gates) {
+				return 1, fmt.Errorf("select an original displayed gate number")
+			}
+			ids = append(ids, catalog.Gates[position-1].ID)
 		}
 		for _, id := range ids {
 			if _, ok := catalog.Gate(id); !ok {
@@ -1233,7 +1249,7 @@ func printWorkflowUsage(w io.Writer, program string) {
 }
 
 func printGateUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s gate <subcommand>\n\nSubcommands:\n  run <ids...>  assemble one detached review prompt per gate id (outside any run)\n  report        construct and display a standalone gate result from semantic flags\n\nRun `%s gate <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s gate <subcommand>\n\nSubcommands:\n  run --gate N  select discovered gate numbers and assemble detached review prompts\n  report        construct and display a standalone gate result from semantic flags\n\nRun `%s gate <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printHookUsage(w io.Writer, program string) {

@@ -25,7 +25,7 @@ func zcodePathHash(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestZcodeReference pins reference's branches (合同选型机制拒绝分支):
+// TestZcodeReference checks provider/model selection shapes:
 // empty is nil, malformed JSON, a non-object, a wrong key set, and the exact
 // two-key object.
 func TestZcodeReference(t *testing.T) {
@@ -55,16 +55,6 @@ func TestZcodeReference(t *testing.T) {
 		t.Fatalf("ref = %s", got)
 	}
 }
-
-// TestZcodeSchemaForPrompt pins the prompt rendering's one presentation-order
-// rule: canonical encoding with each object's additionalProperties key moved
-// last (recursively; array order untouched), and the value unchanged. A value
-// without the directive key is byte-identical to the canonical encoding.
-
-// A directive inside an array element is reordered without touching
-// the array's own order.
-
-// The directive's own value is rendered as-is, whatever it is.
 
 // zcodeTestSnapshot is one host snapshot with a current selection, an
 // advertised list carrying reasoning levels, a thought level and a mode.

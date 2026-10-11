@@ -967,11 +967,16 @@ func TestBootstrapScriptsDelegateToNativeTransactionOwner(t *testing.T) {
 			t.Fatalf("bootstrap script still mutates the release pointer itself: %q", forbidden)
 		}
 	}
-	if !strings.Contains(shell, `"$binary_target" install`) || strings.Contains(shell, `"$source_root/bin/formal-gates" install`) {
-		t.Fatal("shell bootstrap does not invoke only the fixed stable launcher")
+	if !strings.Contains(shell, `"$binary_target" install`) || !strings.Contains(shell, `"$source_root/bin/formal-gates" "${cmd[@]:1}"`) {
+		t.Fatal("shell bootstrap omits stable maintenance or native release upgrade")
 	}
-	if !strings.Contains(powershell, `& $formalBinary @args`) || strings.Contains(powershell, `& (Join-Path $sourceDir.FullName "bin\formal-gates.exe")`) {
-		t.Fatal("PowerShell bootstrap does not invoke only the fixed stable launcher")
+	if !strings.Contains(powershell, `& $formalBinary @args`) || !strings.Contains(powershell, `& (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args`) {
+		t.Fatal("PowerShell bootstrap omits stable maintenance or native release upgrade")
+	}
+	for _, forbidden := range []string{"launcher.before", "launcherBackup", "launcherWasLink"} {
+		if strings.Contains(shell, forbidden) || strings.Contains(powershell, forbidden) {
+			t.Fatalf("bootstrap retains launcher backup/replacement ownership: %q", forbidden)
+		}
 	}
 }
 

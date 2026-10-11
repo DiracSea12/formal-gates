@@ -36,8 +36,7 @@ var exceptionName = map[int]string{
 	26: "OSError",
 }
 
-// defpath is os.defpath on POSIX: the PATH used when the (merged) environment
-// has no PATH at all.
+// defpath is the PATH used when the merged environment has no PATH.
 const defpath = "/bin:/usr/bin"
 
 // Supervise takes execution ownership of one job directory. It claims
@@ -236,7 +235,7 @@ const childSignalGrace = 250 * time.Millisecond
 
 // runChild walks the candidate list (in PATH order), relaying stdin and capturing
 // stdout/stderr to the job's stream files, and returns the receipt's exit code and
-// error text. It reproduces CPython's execvp semantics: each candidate is tried in
+// error text. Each candidate is tried in
 // turn; an ENOENT candidate is skipped (nothing recorded); an EACCES or ENOEXEC
 // candidate records the first such error and is skipped; the first candidate that
 // actually executes wins. The child's merged environment is the parent environment
@@ -384,7 +383,7 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, grouped bool) (int, string, 
 	case <-sigCh:
 		// Supervisor cancelled while waiting. Forward SIGTERM to the direct
 		// child (it may already be dead from the group signal) and settle with a
-		// 5s kill timeout, exactly as the reference's terminate handler does.
+		// 5s kill timeout.
 		terminate()
 		return 130, "owned job was cancelled", true
 	case s := <-resCh:
@@ -435,9 +434,8 @@ func mergedEnvList(request map[string]any) []string {
 
 // searchCandidates enumerates the PATH candidates for a bare argv[0], in order,
 // against the merged environment's PATH, falling back to /bin:/usr/bin when PATH
-// is absent. It deliberately does NOT pre-filter by executability: CPython's
-// execvp (and therefore the reference) walks the list and tries to execve each
-// candidate, recording the first EACCES/ENOEXEC and continuing, so the kernel's
+// is absent. Candidates are not pre-filtered by executability: runChild tries
+// each candidate, recording the first EACCES/ENOEXEC and continuing, so the kernel's
 // own errno — not a pre-flight Stat — decides which candidate runs. runChild
 // performs that walk.
 func searchCandidates(name string, env map[string]string) []string {
@@ -466,7 +464,7 @@ func spawnErr(name string, errno int, filename string) string {
 	return fmt.Sprintf("%s: [Errno %d] %s: '%s'", name, errno, msg, filename)
 }
 
-// mapExecError renders Go's exec start failure using CPython's exception text.
+// mapExecError renders an exec start failure in the receipt's error format.
 // The reachable errnos are ENOENT (2), EACCES (13) and ENOEXEC (8); any other
 // errno falls back to a generic OSError so the shape stays {Name}: [{Errno}] ...
 func mapExecError(err error, argv0 string) string {
