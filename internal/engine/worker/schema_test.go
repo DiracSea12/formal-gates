@@ -220,7 +220,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 					t.Fatalf("manifest owns %s", key)
 				}
 			}
-			c := m["cases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+			c := m["cases"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 			if c["mode"] != nil || !reflect.DeepEqual(c["scenario"].(map[string]any)["enum"], coverage.Scenarios()) {
 				t.Fatal("case semantics differ")
 			}

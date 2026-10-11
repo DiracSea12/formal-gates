@@ -15,25 +15,71 @@ type CaseRevisions struct {
 	Checkpoint  bool               `json:"checkpoint,omitempty"`
 }
 type CaseChange struct {
-	Remove        bool                  `json:"remove,omitempty"`
-	Files         *[]Location           `json:"files,omitempty"`
-	Operations    *[]coverage.Operation `json:"operations,omitempty"`
-	Scenario      *string               `json:"scenario,omitempty"`
-	SharedSteps   *[]int                `json:"sharedSteps,omitempty"`
-	PublicEntry   *string               `json:"publicEntry,omitempty"`
-	Preconditions *string               `json:"preconditions,omitempty"`
-	Steps         *string               `json:"steps,omitempty"`
-	Oracle        *string               `json:"oracle,omitempty"`
-	TestFile      *int                  `json:"testFile,omitempty"`
-	TestSymbol    *int                  `json:"testSymbol,omitempty"`
+	Remove        bool               `json:"remove,omitempty"`
+	Files         *[]Location        `json:"files,omitempty"`
+	Operations    *[]OperationChange `json:"operations,omitempty"`
+	Scenario      *string            `json:"scenario,omitempty"`
+	SharedSteps   *[]int             `json:"sharedSteps,omitempty"`
+	PublicEntry   *string            `json:"publicEntry,omitempty"`
+	Preconditions *string            `json:"preconditions,omitempty"`
+	Steps         *string            `json:"steps,omitempty"`
+	Oracle        *string            `json:"oracle,omitempty"`
+	TestFile      *int               `json:"testFile,omitempty"`
+	TestSymbol    *int               `json:"testSymbol,omitempty"`
 }
 type SharedStepChange struct {
-	Remove      bool                  `json:"remove,omitempty"`
-	Artifacts   *[]string             `json:"artifacts,omitempty"`
-	Independent *bool                 `json:"independent,omitempty"`
-	Procedure   *string               `json:"procedure,omitempty"`
-	Operations  *[]coverage.Operation `json:"operations,omitempty"`
-	Files       *[]Location           `json:"files,omitempty"`
+	Remove      bool               `json:"remove,omitempty"`
+	Artifacts   *[]string          `json:"artifacts,omitempty"`
+	Independent *bool              `json:"independent,omitempty"`
+	Procedure   *string            `json:"procedure,omitempty"`
+	Operations  *[]OperationChange `json:"operations,omitempty"`
+	Files       *[]Location        `json:"files,omitempty"`
+}
+
+type OperationChange struct {
+	Reuse   *int                    `json:"reuse,omitempty"`
+	Kind    *coverage.OperationKind `json:"kind,omitempty"`
+	Argv    *[]string               `json:"argv,omitempty"`
+	Command *string                 `json:"command,omitempty"`
+	Stdin   *string                 `json:"stdin,omitempty"`
+}
+
+// An explicit sequence supplies its final order; omitted original positions
+// are removed. Reused operations retain omitted fields applicable to their kind.
+func reviseOperations(original []coverage.Operation, changes []OperationChange) ([]coverage.Operation, error) {
+	result := make([]coverage.Operation, 0, len(changes))
+	for _, change := range changes {
+		item := coverage.Operation{}
+		if change.Reuse != nil {
+			if *change.Reuse < 1 || *change.Reuse > len(original) {
+				return nil, fmt.Errorf("operation selection is outside original QA item")
+			}
+			item = original[*change.Reuse-1]
+		}
+		if change.Kind != nil {
+			if item.Kind != *change.Kind {
+				switch *change.Kind {
+				case coverage.OperationArgv:
+					item.Command = ""
+				case coverage.OperationShell:
+					item.Argv = nil
+				}
+			}
+			item.Kind = *change.Kind
+		}
+		if change.Argv != nil {
+			item.Argv = *change.Argv
+		}
+		item.Argv = slices.Clone(item.Argv)
+		if change.Command != nil {
+			item.Command = *change.Command
+		}
+		if change.Stdin != nil {
+			item.Stdin = *change.Stdin
+		}
+		result = append(result, item)
+	}
+	return result, coverage.ValidateOperations(result)
 }
 
 func revisionSharedSteps(input *protocol.ValidationInput) []coverage.SharedStep {
@@ -117,7 +163,11 @@ func validateRemoval(change any) error {
 // and affected-case revisions; no retained text is supplied by the model.
 func (item *DesignedCase) UnmarshalJSON(raw []byte) error {
 	type body DesignedCase
-	if err := decodeObject(raw, (*body)(item)); err != nil {
+	value := struct {
+		*body
+		Operations *[]OperationChange `json:"operations,omitempty"`
+	}{body: (*body)(item)}
+	if err := decodeObject(raw, &value); err != nil {
 		return err
 	}
 	var change CaseChange
@@ -125,11 +175,20 @@ func (item *DesignedCase) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	item.changes = &change
+	if item.Case == 0 && value.Operations != nil {
+		var err error
+		item.Operations, err = reviseOperations(nil, *value.Operations)
+		return err
+	}
 	return nil
 }
 func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
 	type body DesignedSharedStep
-	if err := decodeObject(raw, (*body)(item)); err != nil {
+	value := struct {
+		*body
+		Operations *[]OperationChange `json:"operations,omitempty"`
+	}{body: (*body)(item)}
+	if err := decodeObject(raw, &value); err != nil {
 		return err
 	}
 	var change SharedStepChange
@@ -137,11 +196,18 @@ func (item *DesignedSharedStep) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	item.changes = &change
+	if item.Step == 0 && value.Operations != nil {
+		var err error
+		item.Operations, err = reviseOperations(nil, *value.Operations)
+		return err
+	}
 	return nil
 }
 func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
 	selected := change.SharedSteps
 	change.SharedSteps = nil
+	operations := change.Operations
+	change.Operations = nil
 	raw, err := json.Marshal(change)
 	if err != nil {
 		return err
@@ -151,13 +217,27 @@ func applyCaseChange(item *Case, change CaseChange, stepIDs []string) error {
 	}
 	if selected != nil {
 		item.SharedSteps, err = selectIDs(*selected, stepIDs)
+		if err != nil {
+			return err
+		}
+	}
+	if operations != nil {
+		item.Operations, err = reviseOperations(item.Operations, *operations)
 	}
 	return err
 }
 func applySharedStepChange(item *SharedStep, change SharedStepChange) error {
+	operations := change.Operations
+	change.Operations = nil
 	raw, err := json.Marshal(change)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(raw, item)
+	if err := json.Unmarshal(raw, item); err != nil {
+		return err
+	}
+	if operations != nil {
+		item.Operations, err = reviseOperations(item.Operations, *operations)
+	}
+	return err
 }

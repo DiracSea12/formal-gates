@@ -498,9 +498,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	}
 }
 
-// newEngineRouteFacade 在包内直接构建 engine 路由的 façade（Start 在
-// phase 3 只接 lightweight 路由；屏障投影的正路径是 engine 路由的
-// Show/Status/Next/Drive）。
+// newEngineRouteFacade 在包内直接构建用于屏障投影的 engine façade。
 func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	t.Helper()
 	root := t.TempDir()

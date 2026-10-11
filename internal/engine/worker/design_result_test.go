@@ -226,7 +226,7 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := schema["anyOf"].([]any)[0].(map[string]any)
-	item := body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
+	item := body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)
 	properties := item["properties"].(map[string]any)
 	location := properties["files"].(map[string]any)["items"].(map[string]any)
 	if location["type"] != "object" || properties["testFile"] == nil || properties["testSymbol"] == nil || properties["testRef"] != nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
@@ -238,7 +238,7 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = schema["anyOf"].([]any)[0].(map[string]any)
-	item = body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)
+	item = body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)
 	if item["properties"].(map[string]any)["testFile"] != nil || item["properties"].(map[string]any)["testSymbol"] != nil {
 		t.Fatal("blackbox receives file-bound whitebox reference choice")
 	}

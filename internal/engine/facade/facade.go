@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ const (
 // for diagnostics and is always set to "engine" by Start. MasterRunID and
 // SliceID bind Controller-created children; public Start creates top-level runs.
 type StartRequest struct {
+	RuntimeFiles              *vcs.RuntimeFiles         `json:"runtimeFiles,omitempty"`
 	VCS                       string                    `json:"vcs,omitempty"`
 	NativeHandle              vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
 	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
@@ -475,6 +477,13 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		return nil, Run{}, err
 	}
 	req := options.Request
+	if len(options.RuntimeFiles.Files) != 0 || len(options.RuntimeFiles.EmptyDirectories) != 0 {
+		files := options.RuntimeFiles
+		files.Files, files.EmptyDirectories = slices.Clone(files.Files), slices.Clone(files.EmptyDirectories)
+		req.RuntimeFiles = &files
+	} else {
+		req.RuntimeFiles = nil
+	}
 	if strings.TrimSpace(req.RunID) == "" {
 		return nil, Run{}, fmt.Errorf("engine start: run id is required")
 	}
@@ -809,6 +818,12 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, fmt.Errorf("engine open: request JSON is invalid: %w", err)
+	}
+	if req.RuntimeFiles != nil {
+		if len(inventories) != 0 && !reflect.DeepEqual(runtimeFiles, *req.RuntimeFiles) {
+			return nil, fmt.Errorf("UNREGISTERED_INSTALL: runtime inventory differs from the original installation payload")
+		}
+		runtimeFiles = *req.RuntimeFiles
 	}
 	if req.InstalledTargetIdentity == "" || req.PackageDigest == "" {
 		return nil, unsupported("installedTargetIdentity", "non-empty", req.InstalledTargetIdentity)

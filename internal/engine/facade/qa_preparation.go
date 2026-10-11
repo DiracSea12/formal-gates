@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,6 +24,14 @@ func preparationDigest(value any) string {
 // Preparation inputs include actual source bytes and uncommitted inputs.
 // Declared untracked outputs are products, never replacements for tracked input.
 func (f *Facade) qaPreparationInput(s *protocol.State, p protocol.CheckParameters, request map[string]any) (string, error) {
+	for _, operation := range p.QA.Preparation.Operations {
+		if operation.Kind != coverage.OperationArgv || len(operation.Argv) != 1 || operation.Stdin != "" {
+			return "", nil
+		}
+		if !strings.ContainsAny(operation.Argv[0], `/\`) {
+			return "", nil
+		}
+	}
 	workspace := s.NativeResources[p.WorkspaceID]
 	native := f.vcs.At(workspace.Path, workspace.Handle)
 	entries, err := native.TreeEntries(p.SourceIdentity)
@@ -56,7 +63,7 @@ func (f *Facade) qaPreparationInput(s *protocol.State, p protocol.CheckParameter
 	paths = slices.Compact(paths)
 	inputs := map[string]string{}
 	for _, path := range paths {
-		identity, err := preparationPathIdentity(filepath.Join(workspace.Path, filepath.FromSlash(path)))
+		identity, _, err := preparationPathIdentity(filepath.Join(workspace.Path, filepath.FromSlash(path)))
 		if err != nil {
 			return "", err
 		}
@@ -80,39 +87,19 @@ func (f *Facade) qaPreparationInput(s *protocol.State, p protocol.CheckParameter
 	}
 	tools := map[string]string{}
 	for _, operation := range p.QA.Preparation.Operations {
-		programs := operation.Argv[:0:0]
-		if operation.Kind == coverage.OperationArgv {
-			programs = append(programs, operation.Argv[0])
-		} else {
-			programs = append(programs, "/bin/sh")
-			// Available executable words also cover the usual shell toolchain
-			// (for example, go in a reviewed "go build" command).
-			for _, word := range strings.Fields(operation.Command) {
-				programs = append(programs, strings.Trim(word, ";|&\"'"))
-			}
+		program := operation.Argv[0]
+		path := program
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workspace.Path, p.QA.Directory, path)
 		}
-		for _, program := range programs {
-			path := program
-			if !filepath.IsAbs(path) && strings.ContainsAny(path, `/\`) {
-				path = filepath.Join(workspace.Path, path)
-			} else if !filepath.IsAbs(path) {
-				path, err = exec.LookPath(program)
-				if err != nil {
-					continue
-				}
-			}
-			if operation.Kind == coverage.OperationShell {
-				info, err := os.Stat(path)
-				if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
-					continue
-				}
-			}
-			identity, err := preparationPathIdentity(path)
-			if err != nil {
-				return "", err
-			}
-			tools[program] = identity
+		identity, script, err := preparationPathIdentity(path)
+		if err != nil {
+			return "", err
 		}
+		if script {
+			return "", nil
+		}
+		tools[program] = identity
 	}
 	step := *p.QA.Preparation
 	step.ID = ""
@@ -124,25 +111,25 @@ func (f *Facade) qaPreparationInput(s *protocol.State, p protocol.CheckParameter
 	}{inputs, tools, preparationDigest(environment), step, p.QA.PreparationOrdinal}), nil
 }
 
-func preparationPathIdentity(path string) (string, error) {
+func preparationPathIdentity(path string) (identity string, script bool, err error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return "missing", nil
+		return "missing", false, nil
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if info.IsDir() {
-		return "directory", nil
+		return "directory", false, nil
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	return preparationDigest(struct {
 		Mode fs.FileMode
 		Body []byte
-	}{info.Mode(), body}), nil
+	}{info.Mode(), body}), len(body) >= 2 && body[0] == '#' && body[1] == '!', nil
 }
 
 func preparationArtifacts(p protocol.CheckParameters) (map[string]string, error) {
@@ -163,7 +150,7 @@ func preparationArtifacts(p protocol.CheckParameters) (map[string]string, error)
 			if err != nil {
 				return err
 			}
-			artifacts[filepath.ToSlash(key)], err = preparationPathIdentity(path)
+			artifacts[filepath.ToSlash(key)], _, err = preparationPathIdentity(path)
 			return err
 		})
 		if err != nil {
@@ -187,12 +174,15 @@ func (f *Facade) reusePreparation(s *protocol.State, intent protocol.HostActionI
 		} else if err != nil {
 			return nativeResult{}, false, false, err
 		}
-		if request["qaPreparationInput"] != input {
+		if input != "" && request["qaPreparationInput"] != input {
 			continue
 		}
 		receipt, recorded := s.HostActionReceipts[original.ActionID]
 		if !recorded {
 			return nativeResult{}, false, true, nil
+		}
+		if input == "" {
+			continue
 		}
 		var prior protocol.CheckEvidence
 		if err := decodeReceiptEvidence(receipt, &prior); err != nil {

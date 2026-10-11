@@ -35,6 +35,7 @@ type nativeToolFact struct {
 }
 
 type nativeWorkspaceTools struct {
+	runtimeFiles                                          vcs.RuntimeFiles
 	directory, workspace, action, requestDigest, evidence string
 	readOnly                                              bool
 	facts                                                 []nativeToolFact
@@ -95,6 +96,11 @@ func newNativeWorkspaceTools(directory string, services ...ExecutionServices) (*
 		return nil, err
 	}
 	t := &nativeWorkspaceTools{directory: directory, workspace: resolveNativePath(workspace), readOnly: readOnly, requestDigest: textOf(proof["sha256"]), evidence: filepath.Join(directory, "tool-facts.jsonl")}
+	if raw, err := json.Marshal(getOf(request, "runtime_files")); err != nil {
+		return nil, err
+	} else if err := json.Unmarshal(raw, &t.runtimeFiles); err != nil {
+		return nil, err
+	}
 	t.services = services
 	t.semanticSchema = objectOrEmpty(getOf(request, "schema"))
 	if getOf(request, "engine") != nil {
@@ -284,7 +290,7 @@ func (t *nativeWorkspaceTools) visible(relative, resolved string) bool {
 	if err != nil || resolvedRelative == ".." || strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator)) {
 		return false
 	}
-	if vcs.RuntimePath(relative) || vcs.RuntimePath(resolvedRelative) {
+	if vcs.RuntimePath(relative) || vcs.RuntimePath(resolvedRelative) || t.runtimeFiles.ContainsFile(resolved) {
 		return false
 	}
 	evidenceRelative, err := filepath.Rel(resolveNativePath(filepath.Dir(t.evidence)), resolved)

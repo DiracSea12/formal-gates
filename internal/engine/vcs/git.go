@@ -360,8 +360,14 @@ func RuntimePath(path string) bool {
 // RuntimeFiles carries the verified installed inventory and installer-created
 // empty resource directories. It grants no exclusion to their other descendants.
 type RuntimeFiles struct {
-	Files            []string
-	EmptyDirectories []string
+	Files            []string `json:"files,omitempty"`
+	EmptyDirectories []string `json:"emptyDirectories,omitempty"`
+}
+
+// ContainsFile compares only verified installed leaves, preserving user files
+// beside them and through their canonical native path identity.
+func (files RuntimeFiles) ContainsFile(path string) bool {
+	return slices.Contains(files.Files, canonicalPath(path))
 }
 
 func (p *Provider) WithRuntimeFiles(files RuntimeFiles) *Provider {
@@ -370,7 +376,7 @@ func (p *Provider) WithRuntimeFiles(files RuntimeFiles) *Provider {
 }
 
 func (p *Provider) isRuntimeStatusPath(path string) bool {
-	return RuntimePath(path) || slices.Contains(p.runtimeFiles.Files, canonicalPath(materialPath(p.root, path)))
+	return RuntimePath(path) || p.runtimeFiles.ContainsFile(materialPath(p.root, path))
 }
 
 func (p *Provider) isEmptyRuntimeDirectory(path string) bool {

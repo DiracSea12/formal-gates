@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
 	"formal-gates/internal/settings"
+	"formal-gates/internal/validate"
 )
 
 func runRequirement(args []string, streams IO) (int, error) {
@@ -207,8 +208,12 @@ type requirementDocumentChoice struct {
 }
 
 func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
+	files, err := validate.ProjectRuntimeFiles(root)
+	if err != nil {
+		return nil, err
+	}
 	documents := []requirementDocumentChoice{}
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -222,7 +227,7 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 			}
 			return nil
 		}
-		if !entry.Type().IsRegular() || !strings.EqualFold(filepath.Ext(path), ".md") {
+		if files.ContainsFile(path) || !entry.Type().IsRegular() || !strings.EqualFold(filepath.Ext(path), ".md") {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -239,8 +244,12 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 
 // Intake materials are the project's ordinary files, excluding repository and runtime metadata.
 func intakeMaterials(root string) ([]requirementDocumentChoice, error) {
+	files, err := validate.ProjectRuntimeFiles(root)
+	if err != nil {
+		return nil, err
+	}
 	materials := []requirementDocumentChoice{}
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -254,7 +263,7 @@ func intakeMaterials(root string) ([]requirementDocumentChoice, error) {
 			}
 			return nil
 		}
-		if !entry.Type().IsRegular() {
+		if files.ContainsFile(path) || !entry.Type().IsRegular() {
 			return nil
 		}
 		materials = append(materials, requirementDocumentChoice{Position: len(materials) + 1, Path: filepath.ToSlash(relative)})

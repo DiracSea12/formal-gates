@@ -190,7 +190,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	if value.Input.Validation != nil && value.Input.Validation.Workspace != nil {
 		workspace = value.Input.Validation.Workspace.Path
 	}
-	known := map[string]any{"provider": provider, "prompt": value.Prompt, "schema": value.ResultSchema, "read_only": value.ReadOnly, "workspace": workspace}
+	known := map[string]any{"provider": provider, "prompt": value.Prompt, "schema": value.ResultSchema, "read_only": value.ReadOnly, "workspace": workspace, "runtime_files": f.runtimeFiles}
 	if snap.State.Settings != nil {
 		known["model"] = snap.State.Settings.Values.Model
 		known["reasoning_effort"] = snap.State.Settings.Values.ReasoningEffort
@@ -203,7 +203,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	}
 	for key := range request {
 		switch key {
-		case "engine", "provider", "prompt", "schema", "read_only", "workspace", "identity", "binding", "model", "reasoning_effort", "permission_mode", "native_store", "probe":
+		case "engine", "provider", "prompt", "schema", "read_only", "workspace", "identity", "binding", "model", "reasoning_effort", "permission_mode", "native_store", "probe", "runtime_files":
 		default:
 			return release, fmt.Errorf("worker execution has unissued field %s", key)
 		}

@@ -147,9 +147,80 @@ func TestQAExecutionBindsCommandsThenComparesOriginalFacts(t *testing.T) {
 	}
 }
 
-func TestSharedPreparationReusesOriginalJobAndIsolatesCaseWork(t *testing.T) {
+func buildPreparationExecutable(t *testing.T, directory, source string) string {
+	t.Helper()
+	file := filepath.Join(directory, "prepare.go")
+	if err := os.WriteFile(file, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tool := filepath.Join(directory, "prepare")
+	build := exec.Command("go", "build", "-o", tool, file)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build preparation executable: %v %s", err, out)
+	}
+	return tool
+}
+
+func TestShellPreparationExecutesEachCaseAndIsolatesCaseWork(t *testing.T) {
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "mkdir -p prepared; printf x >> prepared/runs; printf common > prepared/product"}}}}
+		for index := range m.Cases {
+			m.Cases[index].SharedSteps = []string{"prepare"}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`}}
+		}
+	})
+	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	first, second := input.ExecutionFacts[0].Operations[0], input.ExecutionFacts[1].Operations[0]
+	if first.Evidence.PreparationInput != "" || second.Evidence.PreparationInput != "" || first.Evidence.PreparationSourceAction != "" || second.Evidence.PreparationSourceAction != "" || second.ActionID == first.ActionID {
+		t.Fatalf("SHELL preparation did not retain each actual execution: %+v %+v", first, second)
+	}
+	if first.Evidence.Directory == second.Evidence.Directory || first.Evidence.RequestDigest == second.Evidence.RequestDigest {
+		t.Fatal("SHELL preparation reused another process identity")
+	}
+	data, err := os.ReadFile(filepath.Join(first.Parameters.QA.WorkspaceRoot, "prepared", "runs"))
+	if err != nil || string(data) != "xx" {
+		t.Fatal("SHELL preparation did not execute once per case", string(data), err)
+	}
+	paths := []string{}
+	for _, fact := range input.ExecutionFacts {
+		operation := fact.Operations[1]
+		if operation.Evidence.ExitCode != 0 || !strings.HasPrefix(operation.Evidence.StdoutText, "common") {
+			t.Fatal("case work was contaminated or lost shared product", operation.Evidence)
+		}
+		path := strings.TrimPrefix(operation.Evidence.StdoutText, "common")
+		paths = append(paths, path)
+		data, err := os.ReadFile(filepath.Join(path, "state"))
+		if err != nil || string(data) != "private" || operation.Evidence.StderrText != filepath.Join(filepath.Dir(path), "temp") {
+			t.Fatal("private mutable paths were not used by the actual process", err)
+		}
+	}
+	if paths[0] == paths[1] {
+		t.Fatal("different cases shared mutable work")
+	}
+	d.reopen()
+	_, restored := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if !reflect.DeepEqual(input.ExecutionFacts, restored.ExecutionFacts) {
+		t.Fatal("recovery changed the original shared execution reference")
+	}
+	data, _ = os.ReadFile(filepath.Join(first.Parameters.QA.WorkspaceRoot, "prepared", "runs"))
+	if string(data) != "xx" {
+		t.Fatal("recovery repeated shared preparation")
+	}
+}
+
+func TestSharedPreparationReusesOriginalARGVJobAndIsolatesCaseWork(t *testing.T) {
+	tool := buildPreparationExecutable(t, t.TempDir(), `package main
+import "os"
+func main() {
+	if err := os.MkdirAll("prepared", 0700); err != nil { panic(err) }
+	f, err := os.OpenFile("prepared/runs", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil { panic(err) }
+	if _, err := f.WriteString("x"); err != nil { panic(err) }
+	if err := f.Close(); err != nil { panic(err) }
+	if err := os.WriteFile("prepared/product", []byte("common"), 0600); err != nil { panic(err) }
+}`)
+	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
+		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{tool}}}}}
 		for index := range m.Cases {
 			m.Cases[index].SharedSteps = []string{"prepare"}
 			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`}}
@@ -219,10 +290,6 @@ func TestSharedPreparationReusesOriginalJobAndIsolatesCaseWork(t *testing.T) {
 		t.Fatal("effective environment change was omitted or its value was exposed", err)
 	}
 	t.Setenv("QA_PREPARATION_SETTING", "")
-	tool := filepath.Join(t.TempDir(), "preparation-tool")
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf first\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
 	qa := *p.QA
 	step := *qa.Preparation
 	step.Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{tool}}}
@@ -232,9 +299,7 @@ func TestSharedPreparationReusesOriginalJobAndIsolatesCaseWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf second\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	buildPreparationExecutable(t, filepath.Dir(tool), "package main\nfunc main() { println(\"changed\") }\n")
 	changed, err = d.f.qaPreparationInput(s, p, request)
 	if err != nil || changed == toolInput {
 		t.Fatal("in-place tool update reused the original preparation", err)
@@ -259,6 +324,108 @@ func TestIndependentPreparationActuallyRunsInEachPrivateEnvironment(t *testing.T
 			t.Fatal("independent preparation or its private product was not actually consumed")
 		}
 	}
+}
+
+func TestPreparationToolFromEnvironmentExecutesAfterToolChanges(t *testing.T) {
+	assertPreparationExecutesChangedExternalInput(t, "SHELL")
+}
+
+func TestPreparationInterpreterScriptExecutesAfterScriptChanges(t *testing.T) {
+	assertPreparationExecutesChangedExternalInput(t, "SCRIPT_ARGUMENT")
+}
+
+func TestPreparationScriptExecutableExecutesAfterEnvironmentToolChanges(t *testing.T) {
+	assertPreparationExecutesChangedExternalInput(t, "SCRIPT_EXECUTABLE")
+}
+
+func assertPreparationExecutesChangedExternalInput(t *testing.T, invocation string) {
+	t.Helper()
+	directory := t.TempDir()
+	tool := filepath.Join(directory, "prepare.sh")
+	ready, release := filepath.Join(directory, "ready"), filepath.Join(directory, "release")
+	t.Setenv("QA_PREPARATION_TOOL", tool)
+	t.Setenv("QA_PREPARATION_READY", ready)
+	t.Setenv("QA_PREPARATION_RELEASE", release)
+	old := "#!/bin/sh\nmkdir -p prepared; printf x >> prepared/runs; printf old > prepared/product; printf old; printf ready > \"$QA_PREPARATION_READY\"; while test ! -e \"$QA_PREPARATION_RELEASE\"; do sleep 0.01; done\n"
+	updated := "#!/bin/sh\nmkdir -p prepared; printf x >> prepared/runs; printf new > prepared/product; printf new\n"
+	if err := os.WriteFile(tool, []byte(old), 0700); err != nil {
+		t.Fatal(err)
+	}
+	operation := coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", tool}}
+	switch invocation {
+	case "SHELL":
+		operation = coverage.Operation{Kind: coverage.OperationShell, Command: `"$QA_PREPARATION_TOOL"`}
+	case "SCRIPT_EXECUTABLE":
+		script := filepath.Join(directory, "invoke.sh")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\n\"$QA_PREPARATION_TOOL\"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		operation = coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{script}}
+	}
+	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
+		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare the product using the configured external tool", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{operation}}}
+		for index := range m.Cases {
+			m.Cases[index].SharedSteps = []string{"prepare"}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "cat prepared/product"}}
+		}
+	})
+	changed := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := os.Stat(ready); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				changed <- err
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := os.WriteFile(tool, []byte(updated), 0700); err != nil {
+			changed <- err
+			return
+		}
+		changed <- os.WriteFile(release, []byte("continue"), 0600)
+	}()
+	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if err := <-changed; err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, fact := range input.ExecutionFacts {
+		preparation := fact.Operations[0]
+		if preparation.Evidence.PreparationInput != "" || preparation.Evidence.PreparationSourceAction != "" || preparation.Evidence.ExitCode != 0 || seen[preparation.ActionID] {
+			t.Fatalf("external inputs reused an old job: %+v", preparation)
+		}
+		seen[preparation.ActionID] = true
+		body, _ := json.Marshal(preparation)
+		t.Logf("actual preparation: %s", body)
+	}
+	first, second := input.ExecutionFacts[0].Operations[0], input.ExecutionFacts[1].Operations[0]
+	if first.Evidence.StdoutText != "old" || second.Evidence.StdoutText != "new" {
+		t.Fatalf("changed external contents were not actually executed: %q %q", first.Evidence.StdoutText, second.Evidence.StdoutText)
+	}
+	root := first.Parameters.QA.WorkspaceRoot
+	product, err := os.ReadFile(filepath.Join(root, "prepared", "product"))
+	if err != nil || string(product) != "new" {
+		t.Fatal("changed external input did not produce the current product", string(product), err)
+	}
+	runs, err := os.ReadFile(filepath.Join(root, "prepared", "runs"))
+	if err != nil || string(runs) != "xx" {
+		t.Fatal("each preparation was not executed exactly once", string(runs), err)
+	}
+	if input.ExecutionFacts[1].Operations[1].Evidence.StdoutText != "new" {
+		t.Fatal("case did not consume the changed preparation product")
+	}
+	d.reopen()
+	_, restored := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if !reflect.DeepEqual(input.ExecutionFacts, restored.ExecutionFacts) {
+		t.Fatal("recovery changed original non-reusable preparation receipts")
+	}
+	runs, _ = os.ReadFile(filepath.Join(root, "prepared", "runs"))
+	if string(runs) != "xx" {
+		t.Fatal("recovery repeated a completed preparation", string(runs))
+	}
+	t.Logf("actual product=%q preparation calls=%d; recovery retained original receipts", product, len(runs))
 }
 
 func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {

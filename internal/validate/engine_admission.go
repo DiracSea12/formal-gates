@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,24 @@ type EngineAdmission struct {
 	Lease         string
 	Token         string
 	RuntimeFiles  vcs.RuntimeFiles
+}
+
+var errNoEngineAdmission = errors.New("no active registered runtime")
+
+// ProjectRuntimeFiles uses the same verified installation authority for
+// read-only project discovery. A project without a registration remains usable.
+func ProjectRuntimeFiles(root string) (vcs.RuntimeFiles, error) {
+	registry := installRegistryPath(InstallOptions{})
+	if _, err := os.Stat(registry); os.IsNotExist(err) {
+		return vcs.RuntimeFiles{}, nil
+	} else if err != nil {
+		return vcs.RuntimeFiles{}, err
+	}
+	admission, err := ResolveEngineAdmission(root, "", registry)
+	if errors.Is(err, errNoEngineAdmission) {
+		return vcs.RuntimeFiles{}, nil
+	}
+	return admission.RuntimeFiles, err
 }
 
 // ResolveEngineAdmission reads the existing install registry and resolves the
@@ -106,7 +125,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 		candidates = append(candidates, candidate{record: record, exactRoot: exactRoot})
 	}
 	if len(candidates) == 0 {
-		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: no active registry record matches candidate package root %s", packageAbs)
+		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: no active registry record matches candidate package root %s: %w", packageAbs, errNoEngineAdmission)
 	}
 	// A project-local sibling is the authoritative binding for that project.
 	// The canonical global record remains a fallback for a first invocation that

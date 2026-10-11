@@ -280,33 +280,13 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 					return nil, err
 				}
 				item["description"] = "Change only this issued case: " + id
-				for _, family := range []struct {
-					field, selection string
-					count            int
-					change           reflect.Type
-				}{
-					{"cases", "case", len(input.Validation.Manifest.Cases), reflect.TypeOf(CaseChange{})},
-					{"sharedSteps", "step", len(input.Validation.Manifest.SharedSteps), reflect.TypeOf(SharedStepChange{})},
-				} {
-					if family.count == 0 {
-						continue
+				for _, original := range input.Validation.Manifest.Cases {
+					if original.CaseID == id {
+						item["properties"].(map[string]any)["operations"], err = operationRevisionSchema(original.Operations)
+						if err != nil {
+							return nil, err
+						}
 					}
-					array := fields[family.field].(map[string]any)
-					original := array["items"].(map[string]any)
-					change, err := resultTypeSchema(family.change)
-					if err != nil {
-						return nil, err
-					}
-					properties := change["properties"].(map[string]any)
-					delete(properties, "remove")
-					properties[family.selection] = map[string]any{"type": "integer", "minimum": 1, "maximum": family.count}
-					change["required"] = []any{family.selection}
-					change["description"] = "Select an existing item and supply only changed semantic fields; omitted values retain original content."
-					if !whitebox && family.field == "cases" {
-						delete(properties, "testFile")
-						delete(properties, "testSymbol")
-					}
-					array["items"] = map[string]any{"anyOf": []any{original, change}}
 				}
 				if !whitebox {
 					delete(item["properties"].(map[string]any), "testFile")
@@ -322,10 +302,58 @@ func completedSchema(input protocol.WorkerInput) (map[string]any, error) {
 					return nil, err
 				}
 				item["description"] = "Change only this issued shared instruction: " + step.ID
+				item["properties"].(map[string]any)["operations"], err = operationRevisionSchema(step.Operations)
+				if err != nil {
+					return nil, err
+				}
 				shared = append(shared, item)
 			}
 			fields["sharedSteps"] = map[string]any{"type": "array", "prefixItems": shared, "items": false, "minItems": len(shared), "maxItems": len(shared)}
 			return body, nil
+		}
+		cases, shared := [][]coverage.Operation{}, [][]coverage.Operation{}
+		for _, item := range input.Validation.Manifest.Cases {
+			cases = append(cases, item.Operations)
+		}
+		for _, item := range input.Validation.Manifest.SharedSteps {
+			shared = append(shared, item.Operations)
+		}
+		for _, family := range []struct {
+			field, selection string
+			change           reflect.Type
+			operations       [][]coverage.Operation
+		}{
+			{"cases", "case", reflect.TypeOf(CaseChange{}), cases},
+			{"sharedSteps", "step", reflect.TypeOf(SharedStepChange{}), shared},
+		} {
+			if len(family.operations) == 0 {
+				continue
+			}
+			array := fields[family.field].(map[string]any)
+			original := array["items"].(map[string]any)
+			delete(original["properties"].(map[string]any), family.selection)
+			alternatives := []any{original}
+			for index, operations := range family.operations {
+				change, err := resultTypeSchema(family.change)
+				if err != nil {
+					return nil, err
+				}
+				properties := change["properties"].(map[string]any)
+				delete(properties, "remove")
+				properties[family.selection] = map[string]any{"type": "integer", "enum": []int{index + 1}}
+				properties["operations"], err = operationRevisionSchema(operations)
+				if err != nil {
+					return nil, err
+				}
+				change["required"] = []any{family.selection}
+				change["description"] = "Select this existing item and supply only changed semantic fields; omitted values retain original content."
+				if !whitebox && family.field == "cases" {
+					delete(properties, "testFile")
+					delete(properties, "testSymbol")
+				}
+				alternatives = append(alternatives, change)
+			}
+			array["items"] = map[string]any{"anyOf": alternatives}
 		}
 		if !whitebox {
 			item := fields["cases"].(map[string]any)["items"].(map[string]any)
@@ -545,4 +573,26 @@ func indexSchema(ids []string) map[string]any {
 		indices = append(indices, index+1)
 	}
 	return map[string]any{"type": "integer", "enum": indices, "description": "Select the 1-based issued item number; the program supplies its actual ID."}
+}
+
+func operationRevisionSchema(original []coverage.Operation) (map[string]any, error) {
+	created, err := resultTypeSchema(reflect.TypeOf(coverage.Operation{}))
+	if err != nil {
+		return nil, err
+	}
+	items := []any{created}
+	if len(original) > 0 {
+		changed, err := resultTypeSchema(reflect.TypeOf(OperationChange{}))
+		if err != nil {
+			return nil, err
+		}
+		positions := []int{}
+		for index := range original {
+			positions = append(positions, index+1)
+		}
+		changed["properties"].(map[string]any)["reuse"] = map[string]any{"type": "integer", "enum": positions, "description": "Select the 1-based operation in this original case or shared step; the program carries its original argv, command and stdin."}
+		changed["required"] = []any{"reuse"}
+		items = append(items, changed)
+	}
+	return map[string]any{"type": "array", "items": map[string]any{"anyOf": items}, "description": "Omit operations to retain the original sequence. An explicit array defines the complete final order: reuse original positions and supply only changed fields, add complete new operations, or omit original positions to delete them; [] clears the sequence. Changing kind clears incompatible original argv or command values; supply the new invocation."}, nil
 }
