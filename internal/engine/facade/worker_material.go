@@ -160,15 +160,19 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	if request["probe"] == true {
 		return release, fmt.Errorf("an issued worker requires execution; host probes are independent harness work")
 	}
-	identity, err := snap.State.WorkerExecutionIdentity(material.ActionID, material.AttemptID, binding.ResumeActionID, f.definition)
+	input, identity, err := snap.State.WorkerExecutionIdentity(material.ActionID, material.AttemptID, binding.ResumeActionID, f.definition)
 	if err != nil {
 		return release, err
 	}
-	refs, err := f.workerMaterials(snap.State, false)
+	catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
 	if err != nil {
 		return release, err
 	}
-	if expected, known := refs[material.ActionID]; !known || expected != material {
+	expected, err := f.workerMaterial(input, catalog, false)
+	if err != nil {
+		return release, err
+	}
+	if expected != material {
 		return release, fmt.Errorf("worker execution material differs from current issuance")
 	}
 	value, err := readWorkerMaterial(material)
@@ -525,41 +529,50 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 		return nil, err
 	}
 	for id, input := range inputs {
-		material, err := worker.Render(input, catalog)
+		ref, err := f.workerMaterial(input, catalog, write)
 		if err != nil {
 			return nil, err
 		}
-		body, err := json.MarshalIndent(material, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		body = append(body, '\n')
-		sum := sha256.Sum256(body)
-		digest := hex.EncodeToString(sum[:])
-		// Content identity allows carried work to read current confirmed context
-		// without overwriting the input bytes of an already executing invocation.
-		path := filepath.Join(f.stateDir, "materials", digest+".json")
-		refs[id] = WorkerMaterial{ActionID: id, AttemptID: input.Pending.AttemptID, Path: path, Digest: "sha256:" + digest, ReadOnly: material.ReadOnly}
-		if !write {
-			continue
-		}
-		existing, err := os.ReadFile(path)
-		if err == nil {
-			if !bytes.Equal(existing, body) {
-				return nil, fmt.Errorf("worker material bytes differ from their content identity")
-			}
-			continue
-		}
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if err := f.admission.write(func() error {
-			return writeFileAtomic(path, body, 0600)
-		}); err != nil {
-			return nil, err
-		}
+		refs[id] = ref
 	}
 	return refs, nil
+}
+
+func (f *Facade) workerMaterial(input protocol.WorkerInput, catalog prompts.PromptCatalog, write bool) (WorkerMaterial, error) {
+	material, err := worker.Render(input, catalog)
+	if err != nil {
+		return WorkerMaterial{}, err
+	}
+	body, err := json.MarshalIndent(material, "", "  ")
+	if err != nil {
+		return WorkerMaterial{}, err
+	}
+	body = append(body, '\n')
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	// Content identity allows carried work to read current confirmed context
+	// without overwriting the input bytes of an already executing invocation.
+	path := filepath.Join(f.stateDir, "materials", digest+".json")
+	ref := WorkerMaterial{ActionID: input.Pending.ActionID, AttemptID: input.Pending.AttemptID, Path: path, Digest: "sha256:" + digest, ReadOnly: material.ReadOnly}
+	if !write {
+		return ref, nil
+	}
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		if !bytes.Equal(existing, body) {
+			return WorkerMaterial{}, fmt.Errorf("worker material bytes differ from their content identity")
+		}
+		return ref, nil
+	}
+	if !os.IsNotExist(err) {
+		return WorkerMaterial{}, err
+	}
+	if err := f.admission.write(func() error {
+		return writeFileAtomic(path, body, 0600)
+	}); err != nil {
+		return WorkerMaterial{}, err
+	}
+	return ref, nil
 }
 
 // registerIntakeRequirement uses the same typed requirement admission as

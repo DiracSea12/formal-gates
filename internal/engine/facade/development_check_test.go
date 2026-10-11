@@ -99,7 +99,14 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 				var process struct {
 					Alive bool `json:"alive"`
 				}
-				if err := d.f.checkBridge("supervisor-process", map[string]any{"directory": directory, "requestDigest": digest, "cancel": false}, &process); err != nil {
+				unlock, err := d.f.acquireWriteWindow()
+				if err != nil {
+					t.Error(err)
+					break
+				}
+				err = d.f.checkBridge("supervisor-process", map[string]any{"directory": directory, "requestDigest": digest, "cancel": false}, &process)
+				unlock()
+				if err != nil {
 					t.Error(err)
 					break
 				}
@@ -143,14 +150,22 @@ func developmentCheckIntent(t *testing.T, f *Facade, s *protocol.State, base, ac
 func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent protocol.HostActionIntent, execute bool) protocol.CheckEvidence {
 	t.Helper()
 	invoked := false
-	result, done, err := f.checkEvidence(s, intent, execute, &invoked)
+	observe := func(mayWrite bool) (nativeResult, bool, error) {
+		unlock, err := f.acquireWriteWindow()
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		defer unlock()
+		return f.checkEvidence(s, intent, mayWrite, &invoked)
+	}
+	result, done, err := observe(execute)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for !done {
 		time.Sleep(10 * time.Millisecond)
-		result, done, err = f.checkEvidence(s, intent, false, &invoked)
+		result, done, err = observe(false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -275,7 +290,13 @@ func TestDevelopmentCheckAbortSettlesProcess(t *testing.T) {
 	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "cancel", Purpose: protocol.CheckFullBuild, Command: "printf 'started'; sleep 10"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "cancel", "printf 'started'; sleep 10")
 	invoked := false
-	if _, done, err := f.checkEvidence(s, intent, true, &invoked); err != nil || done {
+	unlock, err := f.acquireWriteWindow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, done, err := f.checkEvidence(s, intent, true, &invoked)
+	unlock()
+	if err != nil || done {
 		t.Fatalf("start check: %v %v", done, err)
 	}
 	directory := filepath.Join(f.stateDir, "checks", strings.ReplaceAll(intent.ActionID, ":", "-"))
@@ -339,13 +360,25 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 				d.drive()
 				state := driverState(t, d)
 				for _, observed := range state.HostActionReceipts {
-					if observed.AdapterOperation == "op.check" && observed.Status == protocol.HostActionStatusExecuted {
-						receipt = observed
-						if err := decodeReceiptEvidence(observed, &executed); err != nil {
-							t.Fatal(err)
-						}
-						break
+					if observed.AdapterOperation != "op.check" || observed.Status != protocol.HostActionStatusExecuted {
+						continue
 					}
+					intent := state.ReconciledEffects[observed.ActionID].Intent
+					if intent == nil {
+						t.Fatal("executed check lacks its original signed intent")
+					}
+					var parameters protocol.CheckParameters
+					if err := decodeNativeParams(*intent, &parameters); err != nil {
+						t.Fatal(err)
+					}
+					if parameters.SourceActionID != action || parameters.Check.ID != plan.Batches[0].Checks[0].ID || parameters.Check.Command != command {
+						continue
+					}
+					receipt = observed
+					if err := decodeReceiptEvidence(observed, &executed); err != nil {
+						t.Fatal(err)
+					}
+					break
 				}
 				if receipt.ActionID != "" {
 					break

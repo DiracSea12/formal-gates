@@ -575,7 +575,7 @@ func (s *State) resourceUsable(id string) bool {
 	return exists && r.Status != "CLEANED" && !s.ResourceCleanupPending(id)
 }
 
-func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition) bool {
+func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition, validationTasks ...map[authoring.StepID][]decision.RequiredTask) bool {
 	if p.Resource.Role == "merge" {
 		r := s.integrationResource()
 		return s.Validation != nil && p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation && p.RouteScope == s.validationRouteDigest() && p.Resource == r && s.resourceUsable(r.ID)
@@ -623,9 +623,15 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 		}
 		return false
 	}
-	view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
-	s.projectValidationTasks(&view, cd)
-	for _, tasks := range view.RequiredTasks {
+	var required map[authoring.StepID][]decision.RequiredTask
+	if len(validationTasks) != 0 {
+		required = validationTasks[0]
+	} else {
+		view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
+		s.projectValidationTasks(&view, cd)
+		required = view.RequiredTasks
+	}
+	for _, tasks := range required {
 		for _, task := range tasks {
 			if sameWorkspaceInput(s.taskResource(task.Task, cd), p.Resource) && (p.Task == nil && current || p.Task != nil && task.Task == *p.Task) {
 				return true
@@ -840,7 +846,7 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) err
 	return err
 }
 
-func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition) {
+func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition, validationTasks map[authoring.StepID][]decision.RequiredTask) {
 	for _, step := range cd.Steps {
 		p, ok := step.Payload.(compiler.CompiledHostActionStep)
 		if !ok || (p.Operation != "op.workspace" && p.Operation != "op.cleanup" && p.Operation != "op.check") {
@@ -848,7 +854,7 @@ func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.Compi
 		}
 		view.RequiredTasks[step.Header.ID] = nil
 		for _, intent := range s.ExecutableHostActions() {
-			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && intent.Step == step.Header.ID && s.NativeActionCurrent(intent, cd) {
+			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && intent.Step == step.Header.ID && s.nativeActionCurrent(intent, cd, validationTasks) {
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}})
 			}
 		}

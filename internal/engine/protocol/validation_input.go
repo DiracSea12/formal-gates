@@ -75,15 +75,21 @@ func (s *State) ValidationInputs(cd *compiler.CompiledDefinition) map[string]Val
 		return values
 	}
 	for id, pending := range s.PendingActions {
-		if s.validationDispatchBlocked(id) || !s.prewaveDispatchCurrent(id, cd) {
-			continue
+		if input, ok := s.issuedValidationInput(id, pending, cd); ok {
+			values[id] = input
 		}
-		if _, ok := s.DispatchBindings[id]; !ok {
-			continue
-		}
-		values[id] = s.validationInput(pending, cd)
 	}
 	return values
+}
+
+func (s *State) issuedValidationInput(id string, pending PendingAction, cd *compiler.CompiledDefinition) (ValidationInput, bool) {
+	if s.Validation == nil || s.abortRequested() || s.validationDispatchBlocked(id) || !s.prewaveDispatchCurrent(id, cd) {
+		return ValidationInput{}, false
+	}
+	if _, ok := s.DispatchBindings[id]; !ok {
+		return ValidationInput{}, false
+	}
+	return s.validationInput(pending, cd), true
 }
 
 func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefinition) ValidationInput {

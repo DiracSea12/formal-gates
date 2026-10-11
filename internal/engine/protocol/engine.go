@@ -572,9 +572,15 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 		}
 	}
 	s.projectValidationTasks(&view, compiled)
+	validationTasks := map[authoring.StepID][]decision.RequiredTask{}
+	for _, step := range compiled.Steps {
+		if validationHandler(step) != "" {
+			validationTasks[step.Header.ID] = slices.Clone(view.RequiredTasks[step.Header.ID])
+		}
+	}
 	s.projectRetryTasks(&view, compiled)
 	s.projectValidationBoundary(&view, compiled)
-	s.projectResourceBoundary(&view, compiled)
+	s.projectResourceBoundary(&view, compiled, validationTasks)
 	return view
 }
 

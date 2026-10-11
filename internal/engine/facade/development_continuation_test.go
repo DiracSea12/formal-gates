@@ -119,7 +119,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 		t.Fatal(err)
 	}
 	projected := contextInput.Validation.Development
-	if !reflect.DeepEqual(projected.Batch, feedback.Batch) || !reflect.DeepEqual(projected.Result, feedback.Result) || len(projected.Checks) != 1 || projected.Checks[0].ExitCode != feedback.Checks[0].ExitCode || projected.Checks[0].Stdout != feedback.Checks[0].Stdout || projected.Checks[0].Stderr != feedback.Checks[0].Stderr {
+	if !reflect.DeepEqual(projected.Batch, feedback.Batch) || projected.Result == nil || projected.Result.Outcome != feedback.Result.Outcome || projected.Result.FailureClass != feedback.Result.FailureClass || projected.Result.InterruptionReason != feedback.Result.InterruptionReason || projected.Result.InvalidReason != feedback.Result.InvalidReason || projected.Result.Validation == nil || projected.Result.Validation.Status != feedback.Result.Validation.Status || !reflect.DeepEqual(projected.Result.Validation.Development, feedback.Result.Validation.Development) || len(projected.Checks) != 1 || projected.Checks[0].ExitCode != feedback.Checks[0].ExitCode || projected.Checks[0].Stdout != feedback.Checks[0].Stdout || projected.Checks[0].Stderr != feedback.Checks[0].Stderr {
 		t.Fatal("material lost confirmed work or actual check observations")
 	}
 	if contextInput.Validation.Workspace != nil || projected.Checks[0].Directory != "" || strings.Contains(material.Prompt, input.Workspace.Path) {

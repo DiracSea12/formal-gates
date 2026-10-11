@@ -10,35 +10,35 @@ import (
 
 // WorkerExecutionIdentity admits a current worker or its signed resume. Job
 // ownership remains with the native executor; issuance and recovery stay here.
-func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID string, cd *compiler.CompiledDefinition) (string, error) {
+func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID string, cd *compiler.CompiledDefinition) (WorkerInput, string, error) {
 	if s.ResetPending() || !s.parentReviewReady() {
-		return "", fmt.Errorf("worker execution is held by the current control boundary")
+		return WorkerInput{}, "", fmt.Errorf("worker execution is held by the current control boundary")
 	}
-	input, current := s.WorkerInputs(cd)[actionID]
+	input, current := s.WorkerInput(actionID, cd)
 	if !current || input.Pending.AttemptID != attemptID {
-		return "", fmt.Errorf("worker execution has no current issued action/attempt")
+		return WorkerInput{}, "", fmt.Errorf("worker execution has no current issued action/attempt")
 	}
 	if receipt, known := s.SpawnReceipts[actionID]; known && receipt.Status == SpawnStatusUnknown {
-		return "", fmt.Errorf("worker execution is UNKNOWN; observe the original dispatch")
+		return WorkerInput{}, "", fmt.Errorf("worker execution is UNKNOWN; observe the original dispatch")
 	}
 	if resumeActionID == "" {
 		if recovery, waiting := s.pendingAttemptRecovery(actionID, attemptID); waiting && (recovery.Action == RecoveryAsk || recovery.Action == RecoveryWait) {
-			return "", fmt.Errorf("worker execution awaits its original recovery decision or native effect")
+			return WorkerInput{}, "", fmt.Errorf("worker execution awaits its original recovery decision or native effect")
 		}
-		return "", nil
+		return input, "", nil
 	}
 	intent, issued := s.PendingHostActions[resumeActionID]
 	if !issued || intent.Operation != HostActionResumeAgent || intent.Resume == nil || intent.Resume.WorkerActionID != actionID || intent.Resume.AttemptID != attemptID {
-		return "", fmt.Errorf("worker resume has no matching issued intent")
+		return WorkerInput{}, "", fmt.Errorf("worker resume has no matching issued intent")
 	}
 	if _, consumed := s.HostActionReceipts[resumeActionID]; consumed {
-		return "", fmt.Errorf("worker resume intent is already consumed")
+		return WorkerInput{}, "", fmt.Errorf("worker resume intent is already consumed")
 	}
 	receipt, known := s.SpawnReceipts[actionID]
 	if !known || receipt.Status != SpawnStatusSpawned || receipt.agentIdentity() != intent.Resume.Identity {
-		return "", fmt.Errorf("worker resume differs from the original native identity")
+		return WorkerInput{}, "", fmt.Errorf("worker resume differs from the original native identity")
 	}
-	return intent.Resume.Identity, nil
+	return input, intent.Resume.Identity, nil
 }
 
 // WorkerInput is a projection of an issued action, not another work ledger.
@@ -72,60 +72,70 @@ type WorkerReviewInput struct {
 
 func (s *State) WorkerInputs(cd *compiler.CompiledDefinition) map[string]WorkerInput {
 	values := map[string]WorkerInput{}
-	if s.Validation == nil || s.Validation.Document.Content == "" || s.requirementChangePending() || s.abortRequested() {
-		return values
-	}
-	validation := s.ValidationInputs(cd)
-	for id, pending := range s.PendingActions {
-		attempt, ok := s.Attempts[pending.Task]
-		if !ok || attempt.ID != pending.AttemptID || attempt.ActionID != id || attempt.AwaitingResult {
-			continue
+	for id := range s.PendingActions {
+		if input, ok := s.WorkerInput(id, cd); ok {
+			values[id] = input
 		}
-		if _, rejected := s.RejectedResults[id]; rejected {
-			continue
-		}
-		if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch" || s.validationRole(pending.Task, cd) == "engine.repair") && !s.developmentContinuation(id, cd) {
-			continue
-		}
-		input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
-		if s.SliceChild != nil {
-			input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
-		}
-		if value, ok := validation[id]; ok {
-			input.Handler = value.Handler
-			input.Validation = &value
-		} else if pending.ReviewSeries != "" {
-			series, ok := s.ReviewSeries.Series(pending.ReviewSeries)
-			if !ok {
-				continue
-			}
-			input.Review = &WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: s.requirementRevisionAt(s.DispatchIssueRevisions[id]), AuthorizationID: review.AuthorizationOfDispatch(series, id)}
-			for _, step := range cd.Steps {
-				if step.Header.ID == pending.Task.Step {
-					if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
-						input.Handler = string(payload.Handler)
-					}
-					break
-				}
-			}
-		} else {
-			continue
-		}
-		if input.Handler == "engine.repair" {
-			input.ApprovedChecks = s.fullProjectChecks()
-			_, plan, _ := s.confirmedDevelopmentPlan()
-			if plan != nil {
-				for _, batch := range plan.Batches {
-					for _, check := range batch.Checks {
-						if check.Purpose == "" {
-							check.ID = batch.ID + ":" + check.ID
-							input.ApprovedChecks = append(input.ApprovedChecks, check)
-						}
-					}
-				}
-			}
-		}
-		values[id] = input
 	}
 	return values
+}
+
+// WorkerInput projects one action through the same issuance owner as WorkerInputs.
+func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerInput, bool) {
+	if s.Validation == nil || s.Validation.Document.Content == "" || s.requirementChangePending() || s.abortRequested() {
+		return WorkerInput{}, false
+	}
+	pending, issued := s.PendingActions[id]
+	if !issued {
+		return WorkerInput{}, false
+	}
+	attempt, ok := s.Attempts[pending.Task]
+	if !ok || attempt.ID != pending.AttemptID || attempt.ActionID != id || attempt.AwaitingResult {
+		return WorkerInput{}, false
+	}
+	if _, rejected := s.RejectedResults[id]; rejected {
+		return WorkerInput{}, false
+	}
+	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch" || s.validationRole(pending.Task, cd) == "engine.repair") && !s.developmentContinuation(id, cd) {
+		return WorkerInput{}, false
+	}
+	input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
+	if s.SliceChild != nil {
+		input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
+	}
+	if value, ok := s.issuedValidationInput(id, pending, cd); ok {
+		input.Handler = value.Handler
+		input.Validation = &value
+	} else if pending.ReviewSeries != "" {
+		series, ok := s.ReviewSeries.Series(pending.ReviewSeries)
+		if !ok {
+			return WorkerInput{}, false
+		}
+		input.Review = &WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: s.requirementRevisionAt(s.DispatchIssueRevisions[id]), AuthorizationID: review.AuthorizationOfDispatch(series, id)}
+		for _, step := range cd.Steps {
+			if step.Header.ID == pending.Task.Step {
+				if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
+					input.Handler = string(payload.Handler)
+				}
+				break
+			}
+		}
+	} else {
+		return WorkerInput{}, false
+	}
+	if input.Handler == "engine.repair" {
+		input.ApprovedChecks = s.fullProjectChecks()
+		_, plan, _ := s.confirmedDevelopmentPlan()
+		if plan != nil {
+			for _, batch := range plan.Batches {
+				for _, check := range batch.Checks {
+					if check.Purpose == "" {
+						check.ID = batch.ID + ":" + check.ID
+						input.ApprovedChecks = append(input.ApprovedChecks, check)
+					}
+				}
+			}
+		}
+	}
+	return input, true
 }

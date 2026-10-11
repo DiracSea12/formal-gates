@@ -21,7 +21,60 @@ import (
 	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/prompts"
 )
+
+func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
+	f, root := workerMaterialFacade(t)
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, ref := range run.WorkerMaterials {
+		before := readWorkerFile(t, ref.Path)
+		for _, owner := range []*Facade{f, func() *Facade {
+			reopened, err := Open(root, f.runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return reopened
+		}()} {
+			snap, err := owner.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, _, err := snap.State.WorkerExecutionIdentity(id, ref.AttemptID, "", owner.definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := prompts.LoadPromptCatalog(owner.admission.Target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, err := owner.workerMaterial(input, catalog, false)
+			if err != nil || selected != ref {
+				t.Fatal("selected rendering differs from original material reference", selected, err)
+			}
+			request, _, directory, err := owner.WorkerExecutionRequest(ref, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			release, err := AdmitExecution(directory, request)
+			if err != nil {
+				t.Fatal("original request lost execution admission", err)
+			}
+			release()
+			request["prompt"] = "different material"
+			if release, err := AdmitExecution(directory, request); err == nil {
+				release()
+				t.Fatal("different prompt passed original material admission")
+			}
+			if !bytes.Equal(before, readWorkerFile(t, ref.Path)) {
+				t.Fatal("single material observation changed immutable bytes")
+			}
+		}
+	}
+}
 
 func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	t.Helper()

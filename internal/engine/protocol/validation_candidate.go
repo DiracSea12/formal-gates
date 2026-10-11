@@ -160,7 +160,7 @@ func (s *State) candidateFailureRoute(intent HostActionIntent) (FailureRoute, in
 	return route, len(failures), max
 }
 
-func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition, validationTasks ...map[authoring.StepID][]decision.RequiredTask) bool {
 	if intent.Adapter != nil && intent.Adapter.Operation == "op.check" {
 		return s.checkInputsCurrent(intent, cd)
 	}
@@ -170,7 +170,7 @@ func (s *State) candidateInputsCurrent(intent HostActionIntent, cd *compiler.Com
 		if json.Unmarshal(raw, &p) != nil {
 			return false
 		}
-		return s.workspaceParametersCurrent(p, cd)
+		return s.workspaceParametersCurrent(p, cd, validationTasks...)
 	}
 	if intent.Adapter != nil && intent.Adapter.Operation == "op.cleanup" {
 		return !s.ResourcesCleaned() && s.CleanupEligible(cd)
@@ -632,7 +632,11 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 }
 
 func (s *State) NativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
-	return s.nativeActionAllowed(intent) && s.candidateInputsCurrent(intent, cd)
+	return s.nativeActionCurrent(intent, cd)
+}
+
+func (s *State) nativeActionCurrent(intent HostActionIntent, cd *compiler.CompiledDefinition, validationTasks ...map[authoring.StepID][]decision.RequiredTask) bool {
+	return s.nativeActionAllowed(intent) && s.candidateInputsCurrent(intent, cd, validationTasks...)
 }
 
 func (s *State) nativeActionAllowed(intent HostActionIntent) bool {
