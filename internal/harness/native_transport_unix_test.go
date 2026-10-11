@@ -374,24 +374,37 @@ func TestTransportTimeoutText(t *testing.T) {
 // at the total deadline. The supervisor's total-deadline discipline applies
 // only to bounded transports (合同保真要点 4).
 //
-// The reader loop can
-// starve on a loaded machine, so the per-message gap needs explicit headroom,
-// not just the nominal cadence. With notifications every 0.1s and a 0.8s
-// per-message budget the unbounded side tolerates an 8x cadence gap; the
-// bounded side's 12x0.1s = 1.2s span still exceeds its 0.8s total deadline by
-// 1.5x, so its timeout assertion stays deterministic.
+// The peer's startup notification is consumed before the request budget begins.
 func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
 	notifications := func() []peerStep {
-		steps := make([]peerStep, 0, 13)
+		steps := []peerStep{{Send: `{"method": "peer/ready"}`}}
 		for i := 0; i < 12; i++ {
 			steps = append(steps, peerStep{On: "initialize", SleepSecs: 0.1, Send: `{"method": "session/event"}`})
 		}
 		steps = append(steps, peerStep{On: "initialize", Send: `{"id": 1, "result": {"ok": true}}`})
 		return steps
 	}
-	client, _, _ := spawnClient(t, peerScript{Steps: notifications()}, func(h *nativeHooks) {
-		h.defaultTimeout = 800 * time.Millisecond
-	})
+	readyClient := func(bounded bool) *nativeClient {
+		var frames []any
+		client, directory, echoPath := spawnClient(t, peerScript{Steps: notifications()}, func(h *nativeHooks) {
+			h.defaultTimeout = 800 * time.Millisecond
+			h.bounded = bounded
+			h.received = func(message any) { frames = append(frames, message) }
+		})
+		t.Cleanup(func() {
+			client.close()
+			if t.Failed() {
+				body, _ := json.Marshal(frames)
+				t.Logf("bounded=%v received=%s sent=%s stderr=%s", bounded, body, readTestFile(t, echoPath), readTestFile(t, filepath.Join(directory, "host.stderr")))
+			}
+		})
+		message, err := client.receive(nil)
+		if err != nil || objectOrEmpty(message)["method"] != "peer/ready" {
+			t.Fatalf("peer startup: %v %v", message, err)
+		}
+		return client
+	}
+	client := readyClient(false)
 	result, err := client.request("initialize", map[string]any{})
 	client.close()
 	if err != nil {
@@ -401,11 +414,7 @@ func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
 		t.Fatalf("result = %v", result)
 	}
 
-	client2, _, _ := spawnClient(t, peerScript{Steps: notifications()}, func(h *nativeHooks) {
-		h.defaultTimeout = 800 * time.Millisecond
-		h.bounded = true
-	})
-	defer client2.close()
+	client2 := readyClient(true)
 	_, err = client2.request("initialize", map[string]any{})
 	if blockedText(t, err) != "DSH_NATIVE_TIMEOUT: initialize" {
 		t.Fatalf("bounded transport must hit the total deadline, got %v", err)
