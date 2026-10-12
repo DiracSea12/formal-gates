@@ -21,7 +21,7 @@ func zcodeSchemaRoleInputs() map[string]protocol.WorkerInput {
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		inputs[string(action)] = protocol.WorkerInput{Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: action}}
 	}
-	inputs[string(review.StartReadiness)] = protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: canaryLocalPlan(false), AvailableRouteCandidates: []string{"quality"}}
+	inputs[string(review.StartReadiness)] = protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: &protocol.GranularityReview{Batches: []protocol.DevelopmentBatch{{ID: "usage"}}}, AvailableRouteCandidates: []string{"quality"}}
 	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
 		inputs[handler+"/issued"] = protocol.WorkerInput{Handler: handler, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "public behavior"}}}}, Repair: &protocol.RepairInput{}}}
 	}
@@ -141,7 +141,11 @@ func TestZcodeSemanticToolDiscoveryPreservesEveryRoleContract(t *testing.T) {
 									t.Fatalf("model tool catalogue omitted original %s", field)
 								}
 								originalField := getOf(getOf(branch, "properties"), field)
-								if !zcodeSchemaContainsChoice(fields[field], codexPlain(t, originalField)) {
+								body, err := json.Marshal(originalField)
+								if err != nil {
+									t.Fatal(err)
+								}
+								if !zcodeSchemaContainsChoice(fields[field], decodeTestJSON(t, string(body))) {
 									t.Fatalf("model field %s narrowed an original branch option", field)
 								}
 							}
