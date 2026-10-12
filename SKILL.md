@@ -27,7 +27,7 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 formal-gates workflow start --precheck --document <原文档序号>
 ```
 
-在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认后使用 `start --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，记录 unverified；不把它当验证通过。
+在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认后使用 `start --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
 
 需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 的原字段序号入口，不编写固定 JSON 外壳。
 

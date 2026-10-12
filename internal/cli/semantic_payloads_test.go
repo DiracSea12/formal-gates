@@ -70,6 +70,87 @@ func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
 	t.Log("document position 1 and material positions 1/3 preserved full original intake; repeated preparation reused the same payload without run/registry")
 }
 
+func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
+	for _, multiple := range []bool{false, true} {
+		t.Run(strconv.FormatBool(multiple), func(t *testing.T) {
+			root := t.TempDir()
+			originals := map[string]string{"request.md": "# 普通需求与方案\r\n保留原文、空格  和引号 \"原样\"。\r\n"}
+			if multiple {
+				originals["design.txt"] = "独立方案\r\n"
+				originals["reference.txt"] = "原参考\n"
+			}
+			for path, content := range originals {
+				mustWriteCLI(t, filepath.Join(root, path), content)
+			}
+			var out, stderr bytes.Buffer
+			invoke := func(flags ...string) int {
+				t.Helper()
+				out.Reset()
+				stderr.Reset()
+				args := append([]string{"workflow", "start", "--precheck", "--root", root}, flags...)
+				return Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr})
+			}
+			if invoke("--route", "lightweight", "--materials") != 0 {
+				t.Fatal(stderr.String())
+			}
+			var materials []requirementDocumentChoice
+			if err := json.Unmarshal(out.Bytes(), &materials); err != nil || len(materials) != len(originals) {
+				t.Fatal("ordinary material positions", out.String(), err)
+			}
+			positions := map[string]int{}
+			for _, material := range materials {
+				positions[material.Path] = material.Position
+			}
+			if invoke("--route", "lightweight") != 0 {
+				t.Fatal(stderr.String())
+			}
+			if multiple {
+				var choices []requirementDocumentChoice
+				if err := json.Unmarshal(out.Bytes(), &choices); err != nil || !reflect.DeepEqual(choices, materials) {
+					t.Fatal("ambiguous lightweight intake did not retain original positions", out.String(), err)
+				}
+				if paths, err := originalPayloadPaths(workflowPayloadDirectory(root, "", "intake")); err != nil || len(paths) != 0 {
+					t.Fatal("ambiguous selection saved a candidate", paths, err)
+				}
+			}
+			flags := []string{"--route", "lightweight", "--document", strconv.Itoa(positions["request.md"])}
+			if multiple {
+				flags = append(flags, "--solution-document", strconv.Itoa(positions["design.txt"]), "--artifact-document", strconv.Itoa(positions["reference.txt"]))
+			}
+			for range 2 {
+				if invoke(flags...) != 0 {
+					t.Fatal(stderr.String())
+				}
+				var preview facade.IntakePreview
+				if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
+					t.Fatal(err)
+				}
+				if preview.RequirementDocument != nil || preview.Content != strings.ReplaceAll(originals["request.md"], "\r\n", "\n") || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.RequirementRevision != preview.Revision || len(preview.Materials) != len(originals) {
+					t.Fatal("lightweight selection changed original confirmation material", preview)
+				}
+				for _, material := range preview.Materials {
+					if material.Content != strings.ReplaceAll(originals[material.Path], "\r\n", "\n") {
+						t.Fatal("selected material lost its original bytes", material)
+					}
+				}
+				assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
+			}
+			if invoke("--route", "regular", "--document", "1") == 0 || !strings.Contains(stderr.String(), "select an original displayed requirement document") {
+				t.Fatal("regular document selection admitted ordinary material", out.String(), stderr.String())
+			}
+			if invoke("--route", "regular", "--requirement", "request.md") == 0 || !strings.Contains(stderr.String(), "document must contain exactly one ## 需求点 section") {
+				t.Fatal("regular precheck stopped requiring structured requirements", out.String(), stderr.String())
+			}
+			for path, content := range originals {
+				actual, err := os.ReadFile(filepath.Join(root, path))
+				if err != nil || string(actual) != content {
+					t.Fatal("intake changed source material", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T) {
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)

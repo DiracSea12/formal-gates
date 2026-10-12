@@ -363,7 +363,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	route := fs.String("route", "", "regular or lightweight")
 	intakePath := fs.String("intake-receipt", "", "program integration: exact original intake candidate file")
 	intakeChoice := fs.Int("intake", 0, "original displayed intake candidate position")
-	document := fs.Int("document", 0, "original displayed requirement document position")
+	document := fs.Int("document", 0, "original displayed requirement document or lightweight material position")
 	solutionDocument := fs.Int("solution-document", 0, "original displayed confirmation material position")
 	var artifactDocuments positionListFlag
 	fs.Var(&artifactDocuments, "artifact-document", "original displayed confirmation material position; repeatable")
@@ -385,14 +385,15 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		if *listMaterials {
 			return printIntakeMaterials(*root, streams.Stdout)
 		}
-		selected, err := selectIntakeDocuments(*root, requirementPath, *document, solutionPath, *solutionDocument, &artifacts, artifactDocuments, streams.Stdout)
+		structured := routeName != "lightweight"
+		selected, err := selectIntakeDocuments(*root, structured, requirementPath, *document, solutionPath, *solutionDocument, &artifacts, artifactDocuments, streams.Stdout)
 		if err != nil {
 			return 1, err
 		}
 		if !selected {
 			return 0, nil
 		}
-		preview, err := facade.PrepareIntake(*root, *requirementPath, *solutionPath, artifacts, routeName != "lightweight")
+		preview, err := facade.PrepareIntake(*root, *requirementPath, *solutionPath, artifacts, structured)
 		if err != nil {
 			return 1, err
 		}

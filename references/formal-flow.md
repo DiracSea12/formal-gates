@@ -62,7 +62,8 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 
 输出 `content` 全文、`revision` 精确内容摘要、`requirementDocument` 结构投影，以及
 程序准备的 `intakeCandidate`。在项目目录执行时 root 缺省为当前目录，不做项目发现。
-`--document` 复用 requirement show 发布的原需求文档序号；唯一文档可自动选取。
+regular 的 `--document` 复用 requirement show 发布的原需求文档序号；lightweight 复用
+`--precheck --materials` 发布的普通材料序号。唯一候选可自动选取。
 `start --precheck --materials` 只读发布项目普通文件的材料序号，`--solution-document <序号>`
 选择独立方案，缺省使用正式文件；可重复 `--artifact-document <序号>` 添加确认材料。
 `materials` 含全部选定材料的规范化全文和各自 revision。路径、内容摘要、方案绑定与

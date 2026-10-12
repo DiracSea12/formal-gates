@@ -293,12 +293,16 @@ func printIntakeMaterials(root string, out io.Writer) (int, error) {
 	return printValue(out, materials, err)
 }
 
-func selectIntakeDocuments(root string, requirementPath *string, document int, solutionPath *string, solution int, artifacts *stringListFlag, artifactPositions []int, out io.Writer) (bool, error) {
+func selectIntakeDocuments(root string, structured bool, requirementPath *string, document int, solutionPath *string, solution int, artifacts *stringListFlag, artifactPositions []int, out io.Writer) (bool, error) {
 	if document != 0 && *requirementPath != "" {
 		return false, fmt.Errorf("select a document position or exact requirement file")
 	}
 	if *requirementPath == "" {
-		documents, err := requirementDocuments(root)
+		listDocuments := requirementDocuments
+		if !structured {
+			listDocuments = intakeMaterials
+		}
+		documents, err := listDocuments(root)
 		if err != nil {
 			return false, err
 		}
