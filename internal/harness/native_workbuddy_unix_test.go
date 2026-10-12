@@ -108,6 +108,9 @@ func TestWorkBuddyCLI(t *testing.T) {
 	if json.Unmarshal(raw, &config) != nil || getOf(getOf(getOf(config, "mcpServers"), "formal-gates"), "command") == nil {
 		fail("wrong MCP server")
 	}
+	if getOf(getOf(getOf(config, "mcpServers"), "formal-gates"), "alwaysLoad") != true {
+		fail("managed MCP tools deferred behind disabled discovery")
+	}
 	calls, _ := os.OpenFile(expected["calls"], os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	fmt.Fprintln(calls, identity)
 	calls.Close()

@@ -157,7 +157,7 @@ func workbuddyArguments(request any, directory, executable, workspace string, en
 	if err != nil {
 		return nil, "", err
 	}
-	config, err := canonicalBody(map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": server["command"], "args": server["args"]}}})
+	config, err := canonicalBody(map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": server["command"], "args": server["args"], "alwaysLoad": true}}})
 	if err != nil {
 		return nil, "", err
 	}
