@@ -52,7 +52,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.drive()
-	design, input := master.action("engine.qa.design.v4")
+	design, input := master.action("engine.qa.design.v5")
 	if input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
 		t.Fatal("retained master did not start merge QA design")
 	}

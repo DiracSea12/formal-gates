@@ -49,7 +49,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v4", "engine.readiness.plan.v4"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v5", "engine.readiness.plan.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -140,7 +140,7 @@ func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v4"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v5"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
 			if handler == "engine.review.worker.v2" {
@@ -196,7 +196,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode != coverage.ReviewWhitebox {
-				for _, absent := range []string{"testFile", "testSymbol", "白盒测试文件", "Omit public-entry fields"} {
+				for _, absent := range []string{"test.read", "test.symbol", "白盒测试文件", "Omit public-entry fields"} {
 					if strings.Contains(material.Prompt, absent) {
 						t.Fatal("blackbox received unrelated whitebox instructions", absent)
 					}
@@ -204,7 +204,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 				if !strings.Contains(material.Prompt, "Supply publicEntry/preconditions/steps") {
 					t.Fatal("blackbox public operation duty was lost")
 				}
-			} else if !strings.Contains(material.Prompt, "testFile") || !strings.Contains(material.Prompt, "testSymbol") || !strings.Contains(material.Prompt, "Omit public-entry fields") {
+			} else if !strings.Contains(material.Prompt, "test.read") || !strings.Contains(material.Prompt, "test.symbol") || !strings.Contains(material.Prompt, "Omit public-entry fields") {
 				t.Fatal("whitebox original file/symbol selection duty was lost")
 			}
 		})

@@ -129,7 +129,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 // Failed executions remain decisions about the same duty across both pre-wave
 // authoring and frozen validation targets, including a carried invalidated wave.
 func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T) {
-	for _, role := range []string{"engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, role := range []string{"engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
@@ -137,7 +137,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 				if role == "engine.qa.execution.v3" || role == "engine.gate.v2" {
 					d.reviewReady()
 				} else if role == "engine.qa.review.rationale.v2" {
-					id, in := d.action("engine.qa.design.v4")
+					id, in := d.action("engine.qa.design.v5")
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 					d.drive()
@@ -207,7 +207,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					}
 				}
 				if redo && role == "engine.qa.review.rationale.v2" {
-					design, di := d.action("engine.qa.design.v4")
+					design, di := d.action("engine.qa.design.v5")
 					m := di.Manifest
 					d.business(design, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Manifest: &m})
 				}
@@ -223,7 +223,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					}
 				}
 				switch role {
-				case "engine.qa.design.v4":
+				case "engine.qa.design.v5":
 					m := simpleManifest(in)
 					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 				case "engine.qa.review.rationale.v2":
@@ -243,7 +243,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 					d.materialize()
 					d.drive()
 				}
-				if role == "engine.qa.design.v4" {
+				if role == "engine.qa.design.v5" {
 					rid, ri := d.action("engine.qa.review.rationale.v2")
 					r := approvedReview(ri.Manifest)
 					d.business(rid, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
@@ -408,7 +408,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 						t.Fatal("THAW revived previously carried repair")
 					}
 				}
-				d.action("engine.qa.design.v4")
+				d.action("engine.qa.design.v5")
 				return
 			}
 			if len(d.run.AdapterIntents) != 0 {

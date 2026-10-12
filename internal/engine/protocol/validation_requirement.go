@@ -110,7 +110,7 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 		case "engine.development.batch.v4", "engine.repair.v5":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
-		case "engine.qa.design.v4", "engine.qa.review.rationale.v2":
+		case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
 			if set := v.Sets[s.validationMode(key)]; set != nil {
 				var affected []string
 				for _, c := range set.Manifest.Cases {

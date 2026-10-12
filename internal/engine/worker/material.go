@@ -62,13 +62,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.merge.resolve.v3":
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
-		case "engine.qa.design.v4":
+		case "engine.qa.design.v5":
 			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones."
 			if len(input.Validation.AffectedCases) > 0 {
 				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields, or remove:true to explicitly remove that issued item. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
 			}
 			if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
-				instructions += " Associate test material through original file selections; testFile selects an original read in case files and testSymbol selects its published test function number. Create new names in code, then read the full file before selecting. Omit public-entry fields."
+				instructions += " Associate test material through original file selections. Select Go tests with test.read and test.symbol from a published full read; the program includes their file. Other languages use approved operations and oracle for the actual test entry. Create new names in code, then read before selection. Omit public-entry fields."
 			} else {
 				instructions += " Supply publicEntry/preconditions/steps for the public behavior, without test file or symbol selections."
 			}
@@ -91,13 +91,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
-	if !value.ReadOnly && input.Handler != "engine.qa.execution.v3" && input.Handler != "engine.qa.design.v4" && input.Handler != "engine.merge.resolve.v3" {
+	if !value.ReadOnly && input.Handler != "engine.qa.execution.v3" && input.Handler != "engine.qa.design.v5" && input.Handler != "engine.merge.resolve.v3" {
 		instructions += " Deliver only actual authorized artifacts; the program captures registered VCS differences. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
 	}
 	if input.Handler == "engine.merge.resolve.v3" {
 		instructions += " Remove your temporary build and test outputs before reporting completion, or produce them outside the workspace."
 	}
-	if input.Handler == "engine.qa.design.v4" && !value.ReadOnly {
+	if input.Handler == "engine.qa.design.v5" && !value.ReadOnly {
 		instructions += " Associate only actual test material files with cases or their referenced shared steps. Remove temporary build and test outputs from the workspace before reporting completion, or produce them outside the workspace. Do not return a separate development path declaration."
 	}
 	if completionBatch(input) != nil {
@@ -118,7 +118,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
 		actionID = "qa-execution"
-	case "engine.qa.design.v4":
+	case "engine.qa.design.v5":
 		actionID = "qa-design"
 	case "engine.qa.review.rationale.v2":
 		actionID = "qa-review"
@@ -153,7 +153,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		ruleIDs = []string{"gate"}
 	case "engine.repair.verify.v2":
 		ruleIDs = []string{"qa-execution-blackbox", "qa-execution-whitebox"}
-	case "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
+	case "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
 		mode := "blackbox"
 		if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 			mode = "whitebox"
@@ -203,7 +203,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			names = []string{"repair", "development", "contract"}
 		case "engine.merge.resolve.v3":
 			names = []string{"conflict"}
-		case "engine.qa.design.v4":
+		case "engine.qa.design.v5":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases"}
 		case "engine.qa.review.rationale.v2":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
@@ -349,7 +349,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
-	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5" || input.Handler == "engine.qa.design.v4" {
+	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5" || input.Handler == "engine.qa.design.v5" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {

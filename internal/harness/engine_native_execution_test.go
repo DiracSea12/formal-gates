@@ -1637,7 +1637,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	var merge facade.WorkerMaterial
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == "MERGE" {
+		if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "MERGE" {
 			merge = run.WorkerMaterials[id]
 		}
 	}

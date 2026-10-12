@@ -672,7 +672,7 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
 			key := runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID}
 			basis.Definition.ExternalSteps = append(basis.Definition.ExternalSteps, key)
-			if payload.Handler == "engine.qa.design.v4" {
+			if payload.Handler == "engine.qa.design.v5" {
 				if payload.Retry != nil {
 					attempts = payload.Retry.MaxAttempts
 				}

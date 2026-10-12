@@ -358,7 +358,7 @@ func (d *candidateDriver) business(id string, result protocol.ValidationResult) 
 			d.t.Fatal("execution source is not Qn")
 		}
 	}
-	if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && input.Workspace.Source != input.Binding.Candidate {
+	if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && input.Workspace.Source != input.Binding.Candidate {
 		d.t.Fatal("whitebox authoring source is not Dn")
 	}
 	if head := d.p.git(d.t, "-C", input.Workspace.Path, "rev-parse", "HEAD"); head != expected {
@@ -508,7 +508,7 @@ func (d *candidateDriver) untilValidation() {
 			switch input.Handler {
 			case "engine.development.batch.v4":
 				d.develop(id, input)
-			case "engine.qa.design.v4":
+			case "engine.qa.design.v5":
 				d.design(id, input)
 			case "engine.qa.review.rationale.v2":
 				d.caseReview(id, input)
@@ -833,7 +833,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 	for id, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.development.batch.v4" {
 			d.develop(id, input)
-		} else if input.Handler == "engine.qa.design.v4" {
+		} else if input.Handler == "engine.qa.design.v5" {
 			d.design(id, input)
 		}
 	}
@@ -958,7 +958,7 @@ func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
 				d.develop(id, input)
 				continue
 			}
-			if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				result := d.designResult(id, input)
 				d.write(input.Workspace.Path, "app.go", "package main\nfunc main() {}\nfunc valid(s string) bool {return true}\n", 0644)
 				result.Development.Paths = append(result.Development.Paths, "app.go")

@@ -12,7 +12,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 	for _, decision := range []string{"ACCEPT", "DEFER"} {
 		t.Run(decision, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design.v4")
+			id, in := d.action("engine.qa.design.v5")
 			m := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			d.drive()
@@ -56,7 +56,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 				if next.Status != "DRAFT" || next.Review != nil {
 					t.Fatalf("affected suggestion did not reopen after barrier %+v", next)
 				}
-				id, in = d.action("engine.qa.design.v4")
+				id, in = d.action("engine.qa.design.v5")
 				m = in.Manifest
 				m.Cases[0].Preconditions += "; use an empty directory"
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -132,7 +132,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 
 func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()

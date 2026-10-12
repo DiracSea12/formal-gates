@@ -300,13 +300,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	if p.GranularityReview != nil && role != "engine.repair.v5" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
-	if p.DesignChange != nil && role != "engine.qa.design.v4" {
+	if p.DesignChange != nil && role != "engine.qa.design.v5" {
 		return validationError("only QA design can change its manifest")
 	}
 	if len(p.QACommands) > 0 && role != "engine.qa.execution.v3" {
 		return validationError("only QA execution can bind a missing invocation")
 	}
-	if p.Checkpoint && role != "engine.qa.design.v4" && role != "engine.qa.execution.v3" {
+	if p.Checkpoint && role != "engine.qa.design.v5" && role != "engine.qa.execution.v3" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
 	mode := s.validationMode(b.Task)
@@ -372,7 +372,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 
 		}
-	case "engine.qa.design.v4":
+	case "engine.qa.design.v5":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}

@@ -67,7 +67,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 	var priorManifest, priorCandidate string
 	tasks := map[string]bool{}
 	for semanticReview := 0; semanticReview < 3; semanticReview++ {
-		id, input := d.action("engine.qa.design.v4")
+		id, input := d.action("engine.qa.design.v5")
 		if tasks[input.Binding.Task.String()] {
 			t.Fatal("a new design obligation reused completed work")
 		}
@@ -76,7 +76,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 			logicalTask := input.Binding.Task
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 			d.drive()
-			id, input = d.action("engine.qa.design.v4")
+			id, input = d.action("engine.qa.design.v5")
 			if input.Binding.Task != logicalTask || len(d.run.Validation.Sets[coverage.ReviewWhitebox].ReviewHistory) != semanticReview {
 				t.Fatal("invalid design advanced the task or semantic review generation")
 			}
@@ -135,7 +135,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 		d.drive()
 	}
 	old := d.validationAsk("RETRY")
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -190,7 +190,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 	for _, remedy := range []string{"QA_ARTIFACT_REPAIR", "DISMISS"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			_, designed := d.action("engine.qa.design.v4")
+			_, designed := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(designed)
 			for i := range manifest.Cases {
 				if manifest.Cases[i].CaseID == "invalid" {
@@ -262,7 +262,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 			d.submit(event)
 			d.drive()
 			if remedy == "QA_ARTIFACT_REPAIR" {
-				id, input := d.action("engine.qa.design.v4")
+				id, input := d.action("engine.qa.design.v5")
 				manifest := input.Manifest
 				for i := range manifest.Cases {
 					if manifest.Cases[i].CaseID == failed.CaseID {

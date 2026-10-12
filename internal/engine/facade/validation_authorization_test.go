@@ -155,7 +155,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 func failCaseReviews(d *validationDriver, count int) {
 	d.t.Helper()
 	for i := 0; i < count; i++ {
-		id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
+		id, in := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewBlackbox)
 		manifest := in.Manifest
 		if len(manifest.Cases) == 0 {
 			manifest = simpleManifest(in)
@@ -567,7 +567,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			dev, di := d.action("engine.development.batch.v4")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			d.materialize()
-			id, in := d.action("engine.qa.design.v4")
+			id, in := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 			var reviewTask string
@@ -584,7 +584,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 			d.reopen()
 			d.drive()
 			if remedy == "redesign" {
-				id, in = d.action("engine.qa.design.v4")
+				id, in = d.action("engine.qa.design.v5")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 				id, in = d.action("engine.qa.review.rationale.v2")
 				if in.Binding.Task.String() == reviewTask {
@@ -814,7 +814,7 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 			dev, di := d.action("engine.development.batch.v4")
-			design, qi := d.action("engine.qa.design.v4")
+			design, qi := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(qi)
 			d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 			id, ri := d.action("engine.qa.review.rationale.v2")
@@ -922,7 +922,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	if d.run.Validation.Candidate != nil || len(d.run.Validation.Waves) != 0 {
 		t.Fatal("one mode waiver bypassed another mode's review")
 	}
-	id, in := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
+	id, in := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewWhitebox)
 	manifest := in.Manifest
 	manifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -949,7 +949,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
 	d.reopen()
 	d.drive()
-	id, in = qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
+	id, in = qaModeAction(d, "engine.qa.design.v5", coverage.ReviewBlackbox)
 	m := in.Manifest
 	m.Cases[0].Preconditions += "; initialize current command input"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -1596,13 +1596,13 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
-	black, blackInput := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewBlackbox)
+	black, blackInput := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewBlackbox)
 	blackManifest := simpleManifest(blackInput)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Manifest: &blackManifest})
 	black, blackInput = qaModeAction(d, "engine.qa.review.rationale.v2", coverage.ReviewBlackbox)
 	blackReview := approvedReview(blackManifest)
 	d.business(black, protocol.ValidationResult{Binding: blackInput.Binding, Status: "PASS", Review: &blackReview})
-	white, whiteInput := qaModeAction(d, "engine.qa.design.v4", coverage.ReviewWhitebox)
+	white, whiteInput := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewWhitebox)
 	whiteManifest := whiteInput.Manifest
 	whiteManifest.Cases = []coverage.AcceptanceCase{{CaseID: "white-valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input succeeds"}, {CaseID: "white-invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input is rejected"}}
 	whiteManifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "white-invalid"}}
@@ -1655,7 +1655,7 @@ func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v4")
+	design, qi := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(qi)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	id, ri := d.action("engine.qa.review.rationale.v2")

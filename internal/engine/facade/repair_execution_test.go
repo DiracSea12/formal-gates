@@ -132,7 +132,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one public command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 	d.drive()
-	id, in := d.action("engine.qa.design.v4")
+	id, in := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(in)
 	for i := range manifest.Cases {
 		argument := "valid"

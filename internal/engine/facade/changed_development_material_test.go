@@ -27,7 +27,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			}
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 			d.drive()
-			design, in := d.action("engine.qa.design.v4")
+			design, in := d.action("engine.qa.design.v5")
 			manifest := in.Manifest
 			manifest.Cases = []coverage.AcceptanceCase{{CaseID: "valid", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "Valid accepts the actual word", Files: []string{"app_test.go"}}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "MISUSE", TestRef: "app_test.go::TestInvalid", Oracle: "Valid rejects empty input", Files: []string{"app_test.go"}}}
 			manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "valid"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "invalid"}}
@@ -74,7 +74,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			}
 			d.business(nextDev, protocol.ValidationResult{Binding: newInput.Binding, Status: "PASS", Development: batchEvidence(newInput)})
 			d.drive()
-			_, after := d.action("engine.qa.design.v4")
+			_, after := d.action("engine.qa.design.v5")
 			actual, materialErr := os.ReadFile(filepath.Join(after.Workspace.Path, "app_test.go"))
 			facts := map[string]any{"approvedArtifact": approvedArtifact, "oldDevelopment": before.ReviewBase, "oldArtifact": before.ReviewArtifact, "oldWorkspace": before.Workspace, "newDevelopment": d.run.Validation.DevelopmentSnapshot, "newDevelopmentInput": newInput, "newDeveloperTestBody": string(devEntry), "newDeveloperTestError": fmt.Sprint(statErr), "newAuthoring": after, "newAuthoringTestBody": string(actual), "newAuthoringTestError": fmt.Sprint(materialErr), "confirmedRequirementChoices": choices, "rejected": d.run.RejectedResults}
 			if evidence := os.Getenv("NATIVE_VCS_EVIDENCE"); evidence != "" {
@@ -107,7 +107,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			}
 			originalInput := after
 			d.reopen()
-			_, restored := d.action("engine.qa.design.v4")
+			_, restored := d.action("engine.qa.design.v5")
 			if !reflect.DeepEqual(originalInput, restored) {
 				t.Fatal("reopened authoring changed its original source binding", restored)
 			}

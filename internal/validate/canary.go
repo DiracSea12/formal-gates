@@ -496,16 +496,14 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
 		checked[in.Handler] = true
-	case "engine.qa.design.v4":
+	case "engine.qa.design.v5":
 		mode := in.Manifest.Binding.ReviewKind
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
 		if mode == coverage.ReviewWhitebox {
-			c.TestFile, c.TestSymbol = 1, 1
 			c.PublicEntry, c.Preconditions, c.Steps = "", "", ""
 			c.Operations = nil
 			c.Oracle = canaryWhiteboxOracle
-			missing.TestFile, missing.TestSymbol = 1, 2
 			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
 			missing.Operations = nil
 			missing.Oracle = canaryWhiteboxOracle
@@ -517,8 +515,8 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 				return payload, err
 			}
 			*facts = append(*facts, worker.LocationFact{Kind: "read", Paths: []string{"whitebox_delivered_test.go"}, Content: body})
-			files := []worker.Location{{Read: len(*facts)}}
-			c.Files, missing.Files = &files, &files
+			c.Test = &worker.TestSelection{Read: len(*facts), Symbol: 1}
+			missing.Test = &worker.TestSelection{Read: len(*facts), Symbol: 2}
 		}
 		manifest := worker.DesignManifest{Cases: []worker.DesignedCase{c, missing}, Coverage: [][]int{}}
 		for range in.Manifest.Points {

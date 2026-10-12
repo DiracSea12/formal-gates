@@ -65,7 +65,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			write(di.Workspace.Path, "app.py", "def valid(value):\n    return isinstance(value, str) and bool(value)\n")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.py"}, Summary: "validate strings"}})
 			d.drive()
-			design, in := d.action("engine.qa.design.v4")
+			design, in := d.action("engine.qa.design.v5")
 			if in.Workspace == nil || in.Workspace.Role != "whitebox-authoring" {
 				t.Fatalf("wrong authoring input: %+v", in.Workspace)
 			}

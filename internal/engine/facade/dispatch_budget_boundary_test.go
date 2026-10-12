@@ -73,7 +73,7 @@ func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
 	// cap 已达后在途的 QA 派发：瞬态恢复入口必须零效果＋落预算 Ask。
 	qaID := ""
 	for pendingID, pending := range snap.State.PendingActions {
-		if input, ok := snap.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == snap.State.Attempts[pending.Task].ID {
+		if input, ok := snap.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == snap.State.Attempts[pending.Task].ID {
 			qaID = pendingID
 			break
 		}
@@ -495,7 +495,7 @@ func resumeAndComplete(d *validationDriver, action string) error {
 // 算处置 Ask（恢复准入与恢复记账共用同一任务身份解析）。
 func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	d.receipt(id)
 	start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
 	if err != nil {
@@ -549,7 +549,7 @@ func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
 func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 	t.Run("budget retry first blocks the RETRY extension", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox")
-		id, _ := d.action("engine.qa.design.v4")
+		id, _ := d.action("engine.qa.design.v5")
 		d.receipt(id)
 		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
 		if err != nil {
@@ -597,7 +597,7 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 
 	t.Run("RETRY extension first blocks the budget retry", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox")
-		id, input := d.action("engine.qa.design.v4")
+		id, input := d.action("engine.qa.design.v5")
 		d.receipt(id)
 		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
 		if err != nil {
@@ -611,7 +611,7 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "runtime-failure", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
 		decideValidation(d, d.validationAsk("RETRY"), "approve")
 		d.drive()
-		reissued, reinput := d.action("engine.qa.design.v4")
+		reissued, reinput := d.action("engine.qa.design.v5")
 		if reissued == id || reinput.Binding.Task != input.Binding.Task {
 			t.Fatalf("retry extension re-signed a different task: %s %+v", reissued, reinput.Binding)
 		}
@@ -766,7 +766,7 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	}
 	qa := ""
 	for pendingID, pending := range before.State.PendingActions {
-		if input, ok := before.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == before.State.Attempts[pending.Task].ID {
+		if input, ok := before.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == before.State.Attempts[pending.Task].ID {
 			qa = pendingID
 			break
 		}

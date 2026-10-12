@@ -240,7 +240,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 
 func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.qa.design.v4")
+	id, in := d.action("engine.qa.design.v5")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -251,7 +251,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	d.materialize()
 	d.materialize()
-	id, in = d.action("engine.qa.design.v4")
+	id, in = d.action("engine.qa.design.v5")
 	m = in.Manifest
 	for _, item := range []struct{ id, scenario string }{{"normal", "SUCCESS"}, {"invalid", "MISUSE"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: "white-" + item.id, Scenario: item.scenario, Mode: coverage.CaseWhitebox, TestRef: "app_test.go::Test" + map[string]string{"normal": "Normal", "invalid": "Invalid"}[item.id], Oracle: "specified input outcome"})

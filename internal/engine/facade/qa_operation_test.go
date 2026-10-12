@@ -79,7 +79,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				d.drive()
 				ready := false
 				for _, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.qa.design.v4" && input.Manifest.Binding.ReviewKind == mode {
+					if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == mode {
 						ready = true
 						break
 					}
@@ -93,7 +93,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		design, qi := qaModeAction(d, "engine.qa.design.v4", mode)
+		design, qi := qaModeAction(d, "engine.qa.design.v5", mode)
 		manifest := qi.Manifest
 		manifest.Cases = nil
 		manifest.Edges = nil
@@ -235,7 +235,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v4")
+	design, qi := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(qi)
 	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '%s' "$1"; cat; printf x >> qa-executions`, "fixture", "quoted words"}, Stdin: " actual-input"}}
 	manifest.Cases[0].Oracle = "stdout is quoted words actual-input"
@@ -408,7 +408,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	design, authored := waitAction("engine.qa.design.v4")
+	design, authored := waitAction("engine.qa.design.v5")
 	if err := os.WriteFile(filepath.Join(authored.Workspace.Path, "app_test.go"), []byte("package main\nimport \"testing\"\nfunc TestFailure(t *testing.T){t.Fatal(\"observed failure\")}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

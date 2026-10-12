@@ -29,7 +29,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				accepted = append(accepted, acceptedEvent{event, receipt})
 				return receipt
 			}
-			qa, _ := d.action("engine.qa.design.v4")
+			qa, _ := d.action("engine.qa.design.v5")
 			d.receipt(qa)
 			start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), qa, protocol.LifecycleStart)
 			if err != nil {

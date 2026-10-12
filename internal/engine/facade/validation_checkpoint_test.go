@@ -16,7 +16,7 @@ func TestExecutionCheckpointKeepsCasesPendingUntilEveryEdgeCompletes(t *testing.
 				Links:   []protocol.SourcePoint{{SourceID: "SOL-001", PointID: "SOL-AC-001"}, {SourceID: "SOL-001", PointID: "SOL-AC-002"}},
 			}
 			d := configuredValidationDriver(t, inventory, "blackbox")
-			_, input := d.action("engine.qa.design.v4")
+			_, input := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(input)
 			for _, c := range manifest.Cases {
 				for _, link := range inventory.Links {

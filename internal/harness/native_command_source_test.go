@@ -24,7 +24,7 @@ func TestNativeRequirementFragmentsOwnOriginalQAValues(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
 			command, argument, stdin := "printf '<片段>\\n'; cat", " 中文 'two words' ", " first🙂\r\nsecond尾"
 			original := "命令🙂 [" + command + "] end\r\n参数 [" + argument + "] tail\r\n输入 [" + stdin + "] end\r\n程序 [/usr/bin/printf]\r\n格式 [%s]"
-			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
+			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path, input.RequirementDocument.Content = "requirements.md", original
 			if entrypoint == "commands" {
 				input.Handler, input.Validation.CommandCases = "engine.qa.execution.v3", []string{"approved-case"}
@@ -130,7 +130,7 @@ func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
 			stdin := " 中文 \"input\"\r\n\r\n"
 			argument := " two words \"quoted\"\r\n"
 			original := "Confirmed values:\n" + command + stdin + argument + "/usr/bin/printf"
-			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
+			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path = "requirements.md"
 			input.RequirementDocument.Content = original
 			input.RequirementDocument.ContentDigest = "confirmed-original"
@@ -405,7 +405,7 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 func TestNativeReadOwnsOriginalQAInvocation(t *testing.T) {
 	for _, kind := range []string{"design", "commands"} {
 		t.Run(kind, func(t *testing.T) {
-			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{RequirementRevision: "confirmed", Generation: 7}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "confirmed", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "the documented behavior", Oracle: "the documented output"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "source", PointID: "point"}}}}
+			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{RequirementRevision: "confirmed", Generation: 7}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "confirmed", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "the documented behavior", Oracle: "the documented output"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "source", PointID: "point"}}}}
 			if kind == "commands" {
 				input.Handler = "engine.qa.execution.v3"
 				input.Validation.CommandCases = []string{"approved-case"}

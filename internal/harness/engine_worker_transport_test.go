@@ -93,7 +93,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 }
 
 func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -180,7 +180,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 }
 
 func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
-	for _, handler := range []string{"engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
 			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
@@ -193,7 +193,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			var payload any
 			switch handler {
-			case "engine.qa.design.v4":
+			case "engine.qa.design.v5":
 				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Case: 1, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
 			case "engine.qa.review.rationale.v2":
 				payload = &worker.CaseReview{SourceDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "oracle valid"}}}
@@ -202,7 +202,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
-			case "engine.qa.design.v4":
+			case "engine.qa.design.v5":
 				expected.DesignChange = &protocol.QADesignChange{RemoveCases: []string{}, RemoveSharedSteps: []string{}, CoveragePoints: []string{"AC"}}
 				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: manifest.Cases[0].SharedSteps, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
 			case "engine.qa.review.rationale.v2":
@@ -240,7 +240,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if handler == "engine.qa.design.v4" {
+			if handler == "engine.qa.design.v5" {
 				actual := event.Result.Validation.Manifest
 				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID != "case" {
 					t.Fatal("substantive design replacement changed its original program identity")
@@ -312,7 +312,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)

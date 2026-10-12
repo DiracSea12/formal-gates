@@ -14,7 +14,7 @@ import (
 func semanticInput() protocol.WorkerInput {
 	binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "original-revision", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "approved-route", TopologyScope: "original-topology"}
 	manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"alpha", "beta"}, Points: []coverage.AcceptancePoint{{PointID: "one", ObservableBehavior: "first behavior", Oracle: "first oracle"}, {PointID: "two", ObservableBehavior: "second behavior", Oracle: "second oracle"}}, Cases: []coverage.AcceptanceCase{{CaseID: "new"}, {CaseID: "prior"}}, SharedSteps: []coverage.SharedStep{{ID: "setup", Procedure: "real setup"}}}
-	return protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
+	return protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
 }
 func decodeSemantic(t *testing.T, input protocol.WorkerInput, result any) protocol.WorkerResultPayload {
 	t.Helper()
@@ -125,12 +125,12 @@ func TestExecutionCheckpointDoesNotResubmitCompletedCaseEdges(t *testing.T) {
 
 func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 	for _, sample := range []struct{ handler, raw string }{
-		{"engine.qa.design.v4", `{"actionId":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v4", `{"provider":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v4", `{"payloadDigest":"wrong","cases":[],"coverage":{}}`},
-		{"engine.qa.design.v4", `{"binding":{"generation":9},"cases":[],"coverage":{}}`},
-		{"engine.qa.design.v4", `{"sources":["wrong"],"cases":[],"coverage":{}}`},
-		{"engine.qa.design.v4", `{"cases":[{"caseId":"new","mode":"WHITEBOX","oracle":"actual"}],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"actionId":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"provider":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"payloadDigest":"wrong","cases":[],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"binding":{"generation":9},"cases":[],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"sources":["wrong"],"cases":[],"coverage":{}}`},
+		{"engine.qa.design.v5", `{"cases":[{"caseId":"new","mode":"WHITEBOX","oracle":"actual"}],"coverage":{}}`},
 		{"engine.gate.v2", `{"status":"PASS","findings":[{"id":"wrong","severity":"P3","message":"real finding"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"id":"wrong","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"decision":"ACCEPT","severity":"P3","message":"actual suggestion"}]}`},
@@ -180,10 +180,10 @@ func TestDesignFilesInheritOnlyWhenOmitted(t *testing.T) {
 func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
-	files := []Location{{Read: 2}, {Listing: 1, Entry: 2}}
+	files := []Location{{Listing: 1, Entry: 2}}
 	sharedFiles := []Location{{Listing: 1, Entry: 3}}
 	unused := []Location{{Listing: 1, Entry: 4}}
-	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", TestFile: 1, TestSymbol: 1, Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{len(input.Validation.Manifest.Cases) + 1}, nil}}}
+	value := Design{DesignManifest: DesignManifest{Cases: []DesignedCase{{Scenario: "SUCCESS", Test: &TestSelection{Read: 2, Symbol: 1}, Oracle: "exact output", Files: &files, SharedSteps: []int{2}}}, SharedSteps: []DesignedSharedStep{{Procedure: "prepare test material", Files: &sharedFiles}, {Procedure: "not referenced", Files: &unused}}, Coverage: [][]int{{len(input.Validation.Manifest.Cases) + 1}, nil}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)

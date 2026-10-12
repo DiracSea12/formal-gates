@@ -25,8 +25,7 @@ type CaseChange struct {
 	Preconditions *string            `json:"preconditions,omitempty"`
 	Steps         *string            `json:"steps,omitempty"`
 	Oracle        *string            `json:"oracle,omitempty"`
-	TestFile      *int               `json:"testFile,omitempty"`
-	TestSymbol    *int               `json:"testSymbol,omitempty"`
+	Test          *TestSelection     `json:"test,omitempty"`
 }
 type SharedStepChange struct {
 	Remove      bool               `json:"remove,omitempty"`

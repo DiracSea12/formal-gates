@@ -15,7 +15,7 @@ import (
 
 func zcodeSchemaRoleInputs() map[string]protocol.WorkerInput {
 	inputs := map[string]protocol.WorkerInput{}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.repair.verify.v2", "engine.gate.v2"} {
 		inputs[handler] = protocol.WorkerInput{Handler: handler, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Observation: &protocol.ObservationInput{}}}
 	}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
@@ -37,7 +37,7 @@ func zcodeSchemaRoleInputs() map[string]protocol.WorkerInput {
 				name += "-affected"
 				validation.AffectedCases = []string{"case"}
 			}
-			inputs[name] = protocol.WorkerInput{Handler: "engine.qa.design.v4", Validation: validation}
+			inputs[name] = protocol.WorkerInput{Handler: "engine.qa.design.v5", Validation: validation}
 		}
 	}
 	return inputs

@@ -194,7 +194,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			}
 		}
 		role = "development"
-	case "engine.qa.design.v4":
+	case "engine.qa.design.v5":
 		if s.validationMode(key) == coverage.ReviewMerge {
 			source = s.AcceptedNativeSnapshot()
 		}
@@ -316,7 +316,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return chosen
 	case "AUTHORING":
-		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v4", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
+		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v5", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
 		return s.taskResource(task, cd)
 	case "QA_ARTIFACT":
 		return s.taskResource(p.DesignTasks[coverage.ReviewWhitebox], cd)

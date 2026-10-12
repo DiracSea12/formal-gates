@@ -20,7 +20,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, input := d.action("engine.qa.design.v4")
+			id, input := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(input)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 			d.drive()
@@ -37,7 +37,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 				d.drive()
 				expected = append(expected, test.impacts[i]...)
 				if len(expected) > 0 {
-					_, design := d.action("engine.qa.design.v4")
+					_, design := d.action("engine.qa.design.v5")
 					if openTask != "" && design.Binding.Task.String() != openTask {
 						t.Fatal("suggestion disposition replaced an open design obligation")
 					}
@@ -67,7 +67,7 @@ func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.
 					t.Fatalf("lost accepted impact %s", id)
 				}
 			}
-			id, input = d.action("engine.qa.design.v4")
+			id, input = d.action("engine.qa.design.v5")
 			for _, caseID := range expected {
 				if slices.ContainsFunc(input.InheritableReviews, func(d coverage.ReviewDecision) bool { return d.ID == caseID }) {
 					t.Fatalf("affected case %s inherited old approval", caseID)

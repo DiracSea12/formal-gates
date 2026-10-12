@@ -394,7 +394,7 @@ func assembleDesign(input protocol.WorkerInput, value *Design, facts []LocationF
 		if err != nil {
 			return nil, err
 		}
-		entry := Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, TestFile: item.TestFile, TestSymbol: item.TestSymbol}
+		entry := Case{CaseID: id, Files: item.Files, Operations: item.Operations, Scenario: item.Scenario, SharedSteps: steps, PublicEntry: item.PublicEntry, Preconditions: item.Preconditions, Steps: item.Steps, Oracle: item.Oracle, Test: item.Test}
 		if item.Case != 0 {
 			original := issued.Cases[item.Case-1]
 			entry = Case{CaseID: original.CaseID, Operations: slices.Clone(original.Operations), Scenario: original.Scenario, SharedSteps: slices.Clone(original.SharedSteps), PublicEntry: original.PublicEntry, Preconditions: original.Preconditions, Steps: original.Steps, Oracle: original.Oracle}

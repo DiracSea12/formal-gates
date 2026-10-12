@@ -33,7 +33,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
-			id, in := d.action("engine.qa.design.v4")
+			id, in := d.action("engine.qa.design.v5")
 			m := simpleManifest(in)
 			for i := range m.Cases {
 				argument := "valid"

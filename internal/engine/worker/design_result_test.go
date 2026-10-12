@@ -179,8 +179,8 @@ func TestCaseFileSelectionsPreserveReferencesAndSelectPublishedSymbols(t *testin
 	for _, sample := range []struct{ raw, ref string }{
 		{`{"cases":[{}]}`, "case_test.go::TestOriginal"},
 		{`{"cases":[{"operations":[{"kind":"ARGV","argv":["go","test","."]}]}]}`, ""},
-		{`{"cases":[{"files":[{"read":2}],"testFile":1,"testSymbol":2}]}`, "case_test.go::TestOther"},
-		{`{"cases":[{"files":[{"read":3}],"testFile":1,"testSymbol":1}]}`, "replacement_test.go::TestCreated"},
+		{`{"cases":[{"test":{"read":2,"symbol":2}}]}`, "case_test.go::TestOther"},
+		{`{"cases":[{"files":[],"test":{"read":3,"symbol":1}}]}`, "replacement_test.go::TestCreated"},
 	} {
 		event, err := DecodeResultWithFacts(input, "result", []byte(sample.raw), "original-source", []string{}, facts)
 		if err != nil {
@@ -198,16 +198,16 @@ func TestCaseFileSelectionsPreserveReferencesAndSelectPublishedSymbols(t *testin
 	}
 	for _, raw := range []string{
 		`{"cases":[{"files":["case_test.go"]}]}`,
-		`{"cases":[{"files":[{"read":2,"line":1}],"testFile":1,"testSymbol":1}]}`,
+		`{"cases":[{"files":[{"read":2,"line":1}],"test":{"read":2,"symbol":1}}]}`,
 		`{"cases":[{"files":[{"requirementLine":1}]}]}`,
 		`{"cases":[{"testRef":"case_test.go::TestOriginal"}]}`,
 		`{"cases":[{"testRef":"TestCreated"}]}`,
-		`{"cases":[{"testFile":1,"testSymbol":1}]}`,
-		`{"cases":[{"files":[{"listing":1,"entry":1}],"testFile":1,"testSymbol":1}]}`,
-		`{"cases":[{"files":[{"read":2}],"testFile":2,"testSymbol":1}]}`,
-		`{"cases":[{"files":[{"read":3}],"testFile":1,"testSymbol":2}]}`,
-		`{"cases":[{"files":[{"read":2}],"testFile":1}]}`,
-		`{"cases":[{"files":[{"read":2}],"testSymbol":1}]}`,
+		`{"cases":[{"test":{"symbol":1}}]}`,
+		`{"cases":[{"test":{"read":1,"symbol":1}}]}`,
+		`{"cases":[{"test":{"read":4,"symbol":1}}]}`,
+		`{"cases":[{"test":{"read":3,"symbol":2}}]}`,
+		`{"cases":[{"test":{"read":2}}]}`,
+		`{"cases":[{"test":{"read":2,"symbol":0}}]}`,
 	} {
 		if _, err := DecodeResultWithFacts(input, "invalid", []byte(raw), "original-source", []string{}, facts); err == nil {
 			t.Fatal("copied/invalid file identity accepted", raw)
@@ -228,8 +228,20 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 	body := schema["anyOf"].([]any)[0].(map[string]any)
 	item := body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)
 	properties := item["properties"].(map[string]any)
+	for _, field := range []string{"publicEntry", "preconditions", "steps"} {
+		if properties[field] != nil {
+			t.Fatal("whitebox schema publishes blackbox field", field)
+		}
+	}
+	if len(item["oneOf"].([]any)) != 2 {
+		t.Fatal("whitebox schema omits original reference or approved recipe")
+	}
+	selection := properties["test"].(map[string]any)["properties"].(map[string]any)
+	if selection["read"] == nil || selection["symbol"] == nil {
+		t.Fatal("test selection omits original read or symbol")
+	}
 	location := properties["files"].(map[string]any)["items"].(map[string]any)
-	if location["type"] != "object" || properties["testFile"] == nil || properties["testSymbol"] == nil || properties["testRef"] != nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
+	if location["type"] != "object" || properties["test"] == nil || properties["testRef"] != nil || location["properties"].(map[string]any)["line"] != nil || location["properties"].(map[string]any)["requirementLine"] != nil {
 		t.Fatal("schema publishes raw/non-file identity", location)
 	}
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewBlackbox
@@ -239,7 +251,7 @@ func TestDesignFileSchemaPublishesOnlyFileSelections(t *testing.T) {
 	}
 	body = schema["anyOf"].([]any)[0].(map[string]any)
 	item = body["properties"].(map[string]any)["cases"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)
-	if item["properties"].(map[string]any)["testFile"] != nil || item["properties"].(map[string]any)["testSymbol"] != nil {
+	if item["properties"].(map[string]any)["test"] != nil {
 		t.Fatal("blackbox receives file-bound whitebox reference choice")
 	}
 }

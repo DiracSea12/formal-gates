@@ -67,6 +67,25 @@ func TestManifestOperationsHaveOneInvocationSource(t *testing.T) {
 	}
 }
 
+func TestWhiteboxRecipeUsesApprovedOperationsWithoutTestReference(t *testing.T) {
+	c, _ := fixtureContract()
+	item := &c.Manifests[1].Cases[0]
+	item.TestRef = ""
+	item.Files = []string{"test_behavior.py"}
+	item.Operations = []Operation{{Kind: OperationArgv, Argv: []string{"python3", "test_behavior.py"}}}
+	if err := c.Validate(); err != nil {
+		t.Fatal("approved whitebox recipe rejected", err)
+	}
+	item.PublicEntry = "app run"
+	if err := c.Validate(); err == nil {
+		t.Fatal("whitebox recipe accepted blackbox entry fields")
+	}
+	item.PublicEntry, item.Operations = "", nil
+	if err := c.Validate(); err == nil {
+		t.Fatal("whitebox case without reference or invocation accepted")
+	}
+}
+
 func TestManifestDigestBindsCaseAndSharedOperations(t *testing.T) {
 	for _, shared := range []bool{false, true} {
 		c, _ := fixtureContract()

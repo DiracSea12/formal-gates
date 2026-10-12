@@ -174,7 +174,7 @@ func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) 
 	if err := e.acceptValidationResult(s, partial, 2); err == nil {
 		t.Fatal("complete result retained unfinished work")
 	}
-	for _, role := range []string{"engine.qa.design.v4", "engine.qa.execution.v3", "engine.gate.v2", "engine.repair.verify.v2"} {
+	for _, role := range []string{"engine.qa.design.v5", "engine.qa.execution.v3", "engine.gate.v2", "engine.repair.verify.v2"} {
 		task := pipelineTask(e.cfg.Definition, role, "candidate")
 		binding := partial.Validation.Binding
 		binding.Task = task

@@ -14,7 +14,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", kind, held), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, in := d.action("engine.qa.design.v4")
+				id, in := d.action("engine.qa.design.v5")
 				m := simpleManifest(in)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 				id, in = d.action("engine.qa.review.rationale.v2")
@@ -31,7 +31,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 					t.Fatal("missing final candidate intent")
 				}
 				d.chooseValidation(protocol.ValidationRequest{Kind: kind, Mode: coverage.ReviewBlackbox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal"}}, "")
-				id, in = d.action("engine.qa.design.v4")
+				id, in = d.action("engine.qa.design.v5")
 				m = in.Manifest
 				m.Cases[0].Preconditions += "; initialized input file"
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})

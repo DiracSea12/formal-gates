@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 )
 
@@ -33,7 +34,7 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
 	development, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v4")
+	design, qi := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(qi)
 	configure(&manifest)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
@@ -539,5 +540,72 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 		if err != nil || len(data) != 1 {
 			t.Fatal("replay or recovery repeated a case command", string(data), err)
 		}
+	}
+}
+
+func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is unavailable")
+	}
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := nativeMasterAt(t, root, base, nil)
+	build := exec.Command("go", "build", "-o", filepath.Join(d.f.admission.Target, "bin", "formal-gates"), "./cmd/formal-gates")
+	build.Dir = "../../.."
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build runtime: %v %s", err, output)
+	}
+	d.reviewPass(commandPlan())
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command behavior"}})
+	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))
+	d.drive()
+	development, di := d.action("engine.development.batch.v4")
+	d.business(development, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
+	d.drive()
+	design, qi := d.action("engine.qa.design.v5")
+	body := "import subprocess\nimport unittest\nclass Behavior(unittest.TestCase):\n    def test_normal(self):\n        self.assertEqual(subprocess.run(['./app', 'run', 'valid']).returncode, 0)\n    def test_invalid(self):\n        self.assertNotEqual(subprocess.run(['./app', 'run', 'invalid']).returncode, 0)\n"
+	if err := os.WriteFile(filepath.Join(qi.Workspace.Path, "test_recipe.py"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := qi.Manifest
+	for i, name := range []string{"test_normal", "test_invalid"} {
+		id, scenario := "normal", "SUCCESS"
+		if i == 1 {
+			id, scenario = "invalid", "FAILURE"
+		}
+		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: id, Mode: coverage.CaseWhitebox, Scenario: scenario, Files: []string{"test_recipe.py"}, Oracle: "Python unittest runs one test, passes its assertion and reports OK", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"python3", "-m", "unittest", "test_recipe.Behavior." + name}}}})
+		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: id})
+	}
+	paths, err := vcs.New(qi.Workspace.Path, nil).ChangedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: paths}})
+	d.drive()
+	review, ri := d.action("engine.qa.review.rationale.v2")
+	approved := approvedReview(manifest)
+	d.business(review, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &approved})
+	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if len(input.Manifest.Cases) != 2 || d.run.Validation.Sets[coverage.ReviewWhitebox].Status != "FROZEN" {
+		t.Fatal("whitebox recipe did not freeze its complete test set")
+	}
+	candidate := d.run.Validation.Candidate.Identity
+	actual, err := (exec.Command("git", "-C", root, "show", candidate+":test_recipe.py")).Output()
+	if err != nil || string(actual) != body {
+		t.Fatal("candidate omitted or changed approved Python test material", err)
+	}
+	for _, fact := range input.ExecutionFacts {
+		if len(fact.Operations) != 1 {
+			t.Fatal("recipe invoked extra operations")
+		}
+		evidence := fact.Operations[0].Evidence
+		if evidence.ExitCode != 0 || evidence.GoResult != "" || !strings.Contains(evidence.StderrText, "Ran 1 test") || !strings.Contains(evidence.StderrText, "OK") {
+			t.Fatal("Python test did not actually run and pass", evidence)
+		}
+	}
+	d.reopen()
+	_, restored := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
+	if !reflect.DeepEqual(input.ExecutionFacts, restored.ExecutionFacts) {
+		t.Fatal("recovery changed or repeated the original recipe execution")
 	}
 }

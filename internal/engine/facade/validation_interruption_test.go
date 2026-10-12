@@ -14,7 +14,7 @@ import (
 
 func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	for attempt := 0; attempt < 2; attempt++ {
 		manifest := simpleManifest(input)
 		manifest.Edges = nil
@@ -28,7 +28,7 @@ func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
 		}
 		d.drive()
 		previous := id
-		id, input = d.action("engine.qa.design.v4")
+		id, input = d.action("engine.qa.design.v5")
 		state := driverState(t, d)
 		if state.Attempts[input.Binding.Task].PreviousAction != previous || input.Interruption == nil || input.Interruption.ActionID != previous || !strings.Contains(input.Interruption.Detail, rejected.Reason) {
 			t.Fatal("retry lost its own rejection feedback", input.Interruption)

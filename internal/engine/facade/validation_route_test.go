@@ -130,14 +130,14 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
 				}
 			}
-			d.action("engine.qa.design.v4")
+			d.action("engine.qa.design.v5")
 		})
 	}
 }
 
 func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v4")
+	id, in := d.action("engine.qa.design.v5")
 	m := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -230,12 +230,12 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 
 func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v4")
+	id, in := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(in)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
-	currentID, current := d.action("engine.qa.design.v4")
+	currentID, current := d.action("engine.qa.design.v5")
 	if currentID != id || current.Binding != in.Binding || current.Manifest.Binding != in.Manifest.Binding {
 		t.Fatal("route addition replaced the issued design context")
 	}
@@ -353,7 +353,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input"}})
 			d.materialize()
 			d.materialize()
-			id, in = d.action("engine.qa.design.v4")
+			id, in = d.action("engine.qa.design.v5")
 			manifest := in.Manifest
 			manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestValid", Oracle: "valid input accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid input rejected"}}
 			for _, c := range manifest.Cases {

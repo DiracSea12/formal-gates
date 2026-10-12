@@ -31,7 +31,7 @@ func TestRoleMaterialsKeepObservationsWithoutPhysicalWorkspaceBindings(t *testin
 	record := coverage.ExecutionRecord{CaseID: fact.CaseID, Procedure: procedure, Observation: observation, Comparison: "actual comparison", Result: coverage.ExecutedFail}
 	report := &coverage.ExecutionReport{Records: []coverage.ExecutionRecord{record}}
 	finding := protocol.ObservationFinding{Target: protocol.ValidationTarget{Execution: report}, Evidence: protocol.WorkerResult{Validation: &protocol.ValidationResult{Execution: report}}, FailedCases: []coverage.ExecutionRecord{record}}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.qa.execution.v3", "engine.repair.v5", "engine.repair.verify.v2", "engine.validation.observation.v2", "engine.qa.design.v4", "engine.qa.review.rationale.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v4", "engine.qa.execution.v3", "engine.repair.v5", "engine.repair.verify.v2", "engine.validation.observation.v2", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.gate.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler

@@ -110,7 +110,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			break
 		}
 	}
-	if role == "engine.qa.design.v4" && mode == coverage.ReviewWhitebox {
+	if role == "engine.qa.design.v5" && mode == coverage.ReviewWhitebox {
 		input.ReviewBase = s.Validation.DevelopmentSnapshot
 	}
 	if role == "engine.qa.review.rationale.v2" && mode == coverage.ReviewWhitebox {
@@ -155,7 +155,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	}
 	c := s.coverageContract(s.Validation.Candidate)
 	switch role {
-	case "engine.qa.design.v4", "engine.qa.review.rationale.v2":
+	case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
 		contract := modeCoverageContract(c, mode)
 		contract.Candidate = nil
 		input.Contract = &contract
@@ -182,7 +182,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	input.Manifest.Points, _ = s.coveragePoints()
 	if set := s.Validation.Sets[mode]; set != nil {
 		input.Manifest = set.Manifest
-		if (role == "engine.qa.design.v4" || role == "engine.qa.review.rationale.v2") && len(set.AffectedCases) > 0 {
+		if (role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2") && len(set.AffectedCases) > 0 {
 			input.AffectedCases = slices.Clone(set.AffectedCases)
 			if s.prewaveDispatchCurrent(pending.ActionID, cd) {
 				input.RevisionInstruction = s.qaRevisionInstruction(mode, binding)
@@ -205,7 +205,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		input.InheritableReviews = s.inheritableReviews(set)
 		input.InheritableSharedReviews = s.inheritableSharedReviews(set)
 	}
-	if role == "engine.qa.design.v4" || role == "engine.qa.review.rationale.v2" {
+	if role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2" {
 		input.Manifest.Binding.RequirementRevision = binding.RequirementRevision
 		input.Contract.RequiredSources.Binding.RequirementRevision = binding.RequirementRevision
 		if binding.RouteScope != "" {

@@ -152,7 +152,7 @@ func ExecutionStatuses() []string {
 }
 
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
-// public-entry fields; white-box cases use the unique test reference.
+// public-entry fields; white-box cases use a test reference or approved operations.
 type AcceptanceCase struct {
 	Files         []string    `json:"files,omitempty"`
 	Scenario      string      `json:"scenario,omitempty"`
@@ -698,13 +698,15 @@ func (c CoverageContract) Validate() error {
 				return invalid(CodeInvalidCaseBinding, cpath+".mode", "case mode does not match review kind")
 			}
 			if qaCase.Mode == CaseWhitebox {
-				if !nonempty(qaCase.TestRef, "test") || nonempty(qaCase.PublicEntry, "entry") || nonempty(qaCase.Preconditions, "preconditions") || nonempty(qaCase.Steps, "steps") {
-					return invalid(CodeInvalidCaseBinding, cpath, "whitebox cases require only a unique test reference and oracle")
+				if !nonempty(qaCase.TestRef, "test") && len(qaCase.Operations) == 0 || nonempty(qaCase.PublicEntry, "entry") || nonempty(qaCase.Preconditions, "preconditions") || nonempty(qaCase.Steps, "steps") {
+					return invalid(CodeInvalidCaseBinding, cpath, "whitebox cases require a test reference or approved operations and oracle")
 				}
-				if _, duplicate := seenWhiteboxRefs[qaCase.TestRef]; duplicate {
+				if _, duplicate := seenWhiteboxRefs[qaCase.TestRef]; qaCase.TestRef != "" && duplicate {
 					return invalid(CodeDuplicateID, cpath+".testRef", "duplicate whitebox test reference")
 				}
-				seenWhiteboxRefs[qaCase.TestRef] = struct{}{}
+				if qaCase.TestRef != "" {
+					seenWhiteboxRefs[qaCase.TestRef] = struct{}{}
+				}
 			} else if !nonempty(qaCase.PublicEntry, "entry") || !nonempty(qaCase.Preconditions, "preconditions") || !nonempty(qaCase.Steps, "steps") || nonempty(qaCase.TestRef, "test") {
 				return invalid(CodeInvalidCaseBinding, cpath, "blackbox/merge cases require public entry, preconditions, steps, and oracle")
 			}

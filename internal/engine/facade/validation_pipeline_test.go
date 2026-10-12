@@ -590,13 +590,13 @@ func approvedReview(m coverage.AcceptanceManifest) coverage.ReviewResult {
 }
 func (d *validationDriver) reviewReady() {
 	d.t.Helper()
-	_, input := d.action("engine.qa.design.v4")
+	_, input := d.action("engine.qa.design.v5")
 	d.reviewReadyWithManifest(simpleManifest(input))
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
 	dev, di := d.action("engine.development.batch.v4")
-	design, qi := d.action("engine.qa.design.v4")
+	design, qi := d.action("engine.qa.design.v5")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
 	}
@@ -737,7 +737,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 		Alternatives: []coverage.AlternativeVerification{{SourceID: "SOL-002", Reason: "release policy is document verification", Method: "inspect release policy", Status: coverage.StatusPass, Evidence: "policy contains required supported platform statement"}},
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
-	design, qi := d.action("engine.qa.design.v4")
+	design, qi := d.action("engine.qa.design.v5")
 	dev, di := d.action("engine.development.batch.v4")
 	m := simpleManifest(qi)
 	m.Edges = nil
@@ -807,7 +807,7 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 		}
 	}
 	// Carried source bindings are projected after verifying the original result's dispatch.
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	if d.run.Validation.Sets[coverage.ReviewBlackbox].Manifest.Binding.RequirementRevision != revision {
@@ -822,7 +822,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := request.BaseSnapshot
-	id, input := d.action("engine.qa.design.v4")
+	id, input := d.action("engine.qa.design.v5")
 	m := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &m})
 	d.drive()
@@ -905,7 +905,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go", "old_test.go"}, Summary: "production and existing tests"}})
 	materialize()
 	materialize()
-	id, input = d.action("engine.qa.design.v4")
+	id, input = d.action("engine.qa.design.v5")
 	m = input.Manifest
 	for _, row := range []struct{ id, scenario, test string }{{"white-success", "SUCCESS", "TestSuccess"}, {"white-misuse", "MISUSE", "TestMisuse"}} {
 		m.Cases = append(m.Cases, coverage.AcceptanceCase{CaseID: row.id, Mode: coverage.CaseWhitebox, Scenario: row.scenario, TestRef: "app_test.go::" + row.test, Oracle: "specified input outcome"})
@@ -943,7 +943,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 			var input protocol.ValidationInput
 			var result protocol.ValidationResult
 			if handler == "engine.qa.review.rationale.v2" {
-				design, designed := d.action("engine.qa.design.v4")
+				design, designed := d.action("engine.qa.design.v5")
 				manifest := simpleManifest(designed)
 				d.business(design, protocol.ValidationResult{Binding: designed.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()

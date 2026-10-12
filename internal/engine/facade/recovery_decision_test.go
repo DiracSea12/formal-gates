@@ -392,7 +392,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	events := []protocol.Event{}
-	for _, role := range []string{"engine.development.batch.v4", "engine.qa.design.v4"} {
+	for _, role := range []string{"engine.development.batch.v4", "engine.qa.design.v5"} {
 		id, _ := d.action(role)
 		d.receipt(id)
 		events = append(events, protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native failure:" + id, InterruptionReason: "native configuration requires attention"}})

@@ -348,8 +348,8 @@ func TestWhiteboxAuthoringReusesOnlyCurrentDevelopmentSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := pipelineTask(cd, "engine.qa.design.v4", "3:WHITEBOX:1:")
-	revised := pipelineTask(cd, "engine.qa.design.v4", "3:WHITEBOX:2:clarify")
+	original := pipelineTask(cd, "engine.qa.design.v5", "3:WHITEBOX:1:")
+	revised := pipelineTask(cd, "engine.qa.design.v5", "3:WHITEBOX:2:clarify")
 	resource := NativeResource{ID: "authoring", Owner: "run", Role: "whitebox-authoring", Path: "/run/authoring", Source: "development", Identity: "test-candidate", Status: "READY"}
 	s := &State{RunID: "run", NativeRoot: "/run", SelectedGates: []string{"whitebox"}, Validation: &Validation{DevelopmentSnapshot: "development", RequirementRevision: "confirmed", Generation: 3, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: {DesignTask: original, Status: "DRAFT"}}}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"original": {Task: original, WorkspaceID: resource.ID}}}
 	if actual := s.taskResource(revised, cd); actual != resource {

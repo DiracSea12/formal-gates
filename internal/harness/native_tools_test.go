@@ -816,7 +816,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	}
 	read := callWorkspace(t, tools, fmt.Sprintf(`{"action":"read","listing":%d,"entry":%d}`, listing["listing"].(int), entry))
 	choices := read["testSymbols"].([]map[string]any)
-	if len(choices) != 2 || choices[0]["name"] != "TestWrong" || choices[1]["name"] != "TestChosen" || choices[1]["testSymbol"] != 2 {
+	if len(choices) != 2 || choices[0]["name"] != "TestWrong" || choices[1]["name"] != "TestChosen" || choices[1]["symbol"] != 2 {
 		t.Fatal("published symbol choices did not match full source declarations", choices)
 	}
 	originalRead := read["read"].(int)
@@ -837,13 +837,13 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	for _, fact := range resumed.facts {
 		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
-	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","files":[{"read":%d}],"testFile":1,"testSymbol":2}],"coverage":[]}`, originalRead))
+	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","test":{"read":%d,"symbol":2}}],"coverage":[]}`, originalRead))
 	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newRaw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"created test passes","files":[{"read":%d}],"testFile":1,"testSymbol":1}],"coverage":[]}`, created["read"].(int)))
+	newRaw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"created test passes","test":{"read":%d,"symbol":1}}],"coverage":[]}`, created["read"].(int)))
 	newEvent, err := worker.DecodeResultWithFacts(input, "created-result", newRaw, "created-output", []string{}, facts)
 	if err != nil || newEvent.Result.Validation.Manifest.Cases[0].TestRef != "sample_test.go::TestCreated" {
 		t.Fatal("created code lost its symbol selection", err)
@@ -867,7 +867,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	if err != nil || string(value) != "chosen" {
 		t.Fatal("actual selected test side effect differs", err)
 	}
-	t.Logf("read=%d testSymbol=2 original=%s actual Go event=pass persisted=%q", originalRead, qaCase.TestRef, value)
+	t.Logf("read=%d symbol=2 original=%s actual Go event=pass persisted=%q", originalRead, qaCase.TestRef, value)
 }
 
 func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t *testing.T) {

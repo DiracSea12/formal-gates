@@ -282,7 +282,7 @@ func (t *nativeWorkspaceTools) publishRead(relative string, body []byte) (map[st
 		if symbols, parseErr := coverage.GoTestSymbols(relative, body); parseErr == nil {
 			choices := make([]map[string]any, 0, len(symbols))
 			for index, symbol := range symbols {
-				choices = append(choices, map[string]any{"testSymbol": index + 1, "name": symbol})
+				choices = append(choices, map[string]any{"symbol": index + 1, "name": symbol})
 			}
 			value["testSymbols"] = choices
 		}

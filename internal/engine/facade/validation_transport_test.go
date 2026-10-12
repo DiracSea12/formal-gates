@@ -23,7 +23,7 @@ func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.H
 	}
 	if stage != "DEVELOPMENT" && stage != "AUTHORING" {
 		d.materialize()
-		id, in := d.action("engine.qa.design.v4")
+		id, in := d.action("engine.qa.design.v5")
 		m := in.Manifest
 		m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "valid accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid rejected"}}
 		for _, c := range m.Cases {
@@ -445,7 +445,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 				if raw := snap.State.HostActionReceipts[intent.ActionID]; raw.Step != intent.Step || raw.PayloadDigest != intent.PayloadDigest || raw.AdapterEvidence.Values["identity"] != event.HostAction.AdapterEvidence.Values["identity"] {
 					t.Fatal("completion evidence changed")
 				}
-				expected := map[string]string{"AUTHORING": "engine.qa.design.v4", "QA_ARTIFACT": "engine.qa.review.rationale.v2", "REVIEW_READY": "engine.qa.execution.v3"}[stage]
+				expected := map[string]string{"AUTHORING": "engine.qa.design.v5", "QA_ARTIFACT": "engine.qa.review.rationale.v2", "REVIEW_READY": "engine.qa.execution.v3"}[stage]
 				if stage == "DEVELOPMENT" {
 					d.drive()
 					onlyCandidate(t, d, "AUTHORING")

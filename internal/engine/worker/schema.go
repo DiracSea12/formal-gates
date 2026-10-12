@@ -289,7 +289,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 		fields["records"] = comparisonSchema(input.Validation.Repair.VerificationCases, item, false)
 	}
-	if input.Handler == "engine.qa.design.v4" {
+	if input.Handler == "engine.qa.design.v5" {
 		whitebox := input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
 		if len(input.Validation.AffectedCases) > 0 {
 			cases := []any{}
@@ -307,9 +307,12 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 						}
 					}
 				}
-				if !whitebox {
-					delete(item["properties"].(map[string]any), "testFile")
-					delete(item["properties"].(map[string]any), "testSymbol")
+				if whitebox {
+					for _, field := range []string{"publicEntry", "preconditions", "steps"} {
+						delete(item["properties"].(map[string]any), field)
+					}
+				} else {
+					delete(item["properties"].(map[string]any), "test")
 				}
 				cases = append(cases, item)
 			}
@@ -370,22 +373,36 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 				}
 				change["required"] = []any{family.selection}
 				change["description"] = "Select this existing item and supply only changed semantic fields; omitted values retain original content."
-				if !whitebox && family.field == "cases" {
-					delete(properties, "testFile")
-					delete(properties, "testSymbol")
+				if family.field == "cases" {
+					if whitebox {
+						for _, field := range []string{"publicEntry", "preconditions", "steps"} {
+							delete(properties, field)
+						}
+					} else {
+						delete(properties, "test")
+					}
 				}
 				alternatives = append(alternatives, change)
 			}
 			array["items"] = map[string]any{"anyOf": alternatives}
 		}
-		if !whitebox {
-			item := fields["cases"].(map[string]any)["items"].(map[string]any)
-			if branches, ok := item["anyOf"].([]any); ok {
-				item = branches[0].(map[string]any)
-			}
-			delete(item["properties"].(map[string]any), "testFile")
-			delete(item["properties"].(map[string]any), "testSymbol")
+		item := fields["cases"].(map[string]any)["items"].(map[string]any)
+		if branches, ok := item["anyOf"].([]any); ok {
+			item = branches[0].(map[string]any)
 		}
+		if whitebox {
+			for _, field := range []string{"publicEntry", "preconditions", "steps"} {
+				delete(item["properties"].(map[string]any), field)
+			}
+			item["properties"].(map[string]any)["operations"].(map[string]any)["minItems"] = 1
+			item["oneOf"] = []any{
+				map[string]any{"required": []string{"test"}, "not": map[string]any{"required": []string{"operations"}}},
+				map[string]any{"required": []string{"operations"}, "not": map[string]any{"required": []string{"test"}}},
+			}
+		} else {
+			delete(item["properties"].(map[string]any), "test")
+		}
+
 		items := []any{}
 		for _, point := range input.Validation.Manifest.Points {
 			items = append(items, map[string]any{"anyOf": []any{map[string]any{"type": "null"}, map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "description": "Choose cases covering: " + point.ObservableBehavior}}})
@@ -533,14 +550,13 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 				location["description"] = "Select original read or listing/entry numbers for related test files. Omit files to retain an issued relation; an empty array clears it. The program supplies paths."
 				child["items"] = location
 			}
-			if field.Name == "TestFile" {
+			if value == reflect.TypeOf(TestSelection{}) {
 				child["minimum"] = 1
-				child["description"] = "Select the 1-based original read position in this case's files, together with its published testSymbol number. Omit both to retain the issued reference; operations replaces an issued Go test invocation with the authored recipe."
 			}
-			if field.Name == "TestSymbol" {
-				child["minimum"] = 1
-				child["description"] = "Select the published testSymbol number from the original full read selected by testFile. New functions must be written and read before selection."
+			if field.Name == "Test" {
+				child["description"] = "Select the original read and its published Go symbol number. The program supplies the exact reference and includes its file; omit to retain an issued reference."
 			}
+
 			properties[name] = child
 			if !strings.Contains(options, "omitempty") {
 				required = append(required, name)

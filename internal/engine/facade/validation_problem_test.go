@@ -28,7 +28,7 @@ func TestAcceptedAdjudicationRemainsCorrectable(t *testing.T) {
 // C REQ-001 allows unchanged shared instructions to retain their approval.
 func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.qa.design.v4")
+	id, in := d.action("engine.qa.design.v5")
 	m := simpleManifest(in)
 	m.SharedSteps = []coverage.SharedStep{{ID: "setup", Procedure: "initialize a clean project once"}}
 	for i := range m.Cases {
@@ -44,7 +44,7 @@ func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 	sg := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "case clarification", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: sg.ID, Decision: "ACCEPT", Reason: "clarify this case only", AffectedCases: []string{"invalid"}}}})
 	d.drive()
-	id, in = d.action("engine.qa.design.v4")
+	id, in = d.action("engine.qa.design.v5")
 	m = in.Manifest
 	m.Cases[1].Oracle = "rejects invalid input with the documented diagnostic"
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})

@@ -224,6 +224,10 @@ type DesignedSharedStep struct {
 	Operations  []coverage.Operation `json:"operations,omitempty"`
 	Files       *[]Location          `json:"files,omitempty"`
 }
+type TestSelection struct {
+	Read   int `json:"read"`
+	Symbol int `json:"symbol"`
+}
 type DesignedCase struct {
 	changes       *CaseChange
 	Case          int                  `json:"case,omitempty"`
@@ -235,8 +239,7 @@ type DesignedCase struct {
 	Preconditions string               `json:"preconditions,omitempty"`
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
-	TestFile      int                  `json:"testFile,omitempty"`
-	TestSymbol    int                  `json:"testSymbol,omitempty"`
+	Test          *TestSelection       `json:"test,omitempty"`
 }
 type Manifest struct {
 	Replace           bool                `json:"replace,omitempty"`
@@ -264,8 +267,7 @@ type Case struct {
 	Preconditions string               `json:"preconditions,omitempty"`
 	Steps         string               `json:"steps,omitempty"`
 	Oracle        string               `json:"oracle"`
-	TestFile      int                  `json:"testFile,omitempty"`
-	TestSymbol    int                  `json:"testSymbol,omitempty"`
+	Test          *TestSelection       `json:"test,omitempty"`
 }
 type Decision struct {
 	Status coverage.DecisionStatus `json:"status"`
@@ -453,7 +455,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 						originalRef = original.TestRef
 					}
 				}
-				c.TestRef, err = selectedTestRef(item, c.Files, originalRef, locationFacts)
+				c.TestRef, err = selectedTestRef(item, &c.Files, originalRef, locationFacts)
 				if err != nil {
 					return protocol.Event{}, err
 				}
@@ -500,7 +502,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				return protocol.Event{}, err
 			}
 			body.Manifest, body.DesignChange = &manifest, &change
-			if input.Handler == "engine.qa.design.v4" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v5" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				if paths == nil {
 					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
 				}
@@ -694,7 +696,7 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return &Repair{}, nil
 	case "engine.merge.resolve.v3":
 		return &ConflictResolution{}, nil
-	case "engine.qa.design.v4":
+	case "engine.qa.design.v5":
 		if len(input.Validation.AffectedCases) > 0 {
 			return &CaseRevisions{}, nil
 		}
@@ -981,8 +983,8 @@ func selectedTestFiles(locations []Location, facts []LocationFact) ([]string, er
 	return LocationPaths(locations, facts, requirement.FrozenRequirementProjection{})
 }
 
-func selectedTestRef(item Case, files []string, original string, facts []LocationFact) (string, error) {
-	if item.TestFile == 0 && item.TestSymbol == 0 {
+func selectedTestRef(item Case, files *[]string, original string, facts []LocationFact) (string, error) {
+	if item.Test == nil {
 		if len(item.Operations) > 0 {
 			if _, err := coverage.GoTestOperation(original); err == nil {
 				return "", nil
@@ -990,25 +992,25 @@ func selectedTestRef(item Case, files []string, original string, facts []Locatio
 		}
 		return original, nil
 	}
-	if item.TestFile < 1 || item.TestFile > len(files) || item.TestSymbol < 1 || item.Files == nil || item.TestFile > len(*item.Files) {
-		return "", fmt.Errorf("testFile and testSymbol select an original read in this case's files")
+	selection := item.Test
+	if selection.Read < 1 || selection.Read > len(facts) || selection.Symbol < 1 {
+		return "", fmt.Errorf("test selects an original read and its published symbol")
 	}
-	location := (*item.Files)[item.TestFile-1]
-	if location.Read < 1 || location.Read > len(facts) {
-		return "", fmt.Errorf("test symbol selection requires its published original read")
+	fact := facts[selection.Read-1]
+	if fact.Kind != "read" || len(fact.Paths) != 1 {
+		return "", fmt.Errorf("test symbol selection requires one original read file")
 	}
-	fact := facts[location.Read-1]
-	if fact.Kind != "read" || len(fact.Paths) != 1 || fact.Paths[0] != files[item.TestFile-1] {
-		return "", fmt.Errorf("test symbol selection differs from its original read file")
-	}
-	symbols, err := coverage.GoTestSymbols(fact.Paths[0], []byte(fact.Content))
+	symbols, err := coverage.GoTestSymbols(fact.Paths[0], fact.Content)
 	if err != nil {
 		return "", err
 	}
-	if item.TestSymbol > len(symbols) {
-		return "", fmt.Errorf("testSymbol is not in the selected read's published test symbols")
+	if selection.Symbol > len(symbols) {
+		return "", fmt.Errorf("test symbol is not in the selected read's published symbols")
 	}
-	return files[item.TestFile-1] + "::" + symbols[item.TestSymbol-1], nil
+	if !slices.Contains(*files, fact.Paths[0]) {
+		*files = append([]string{fact.Paths[0]}, *files...)
+	}
+	return fact.Paths[0] + "::" + symbols[selection.Symbol-1], nil
 }
 
 // ValidateSemanticBody checks the issued role body before publishing tool evidence.
