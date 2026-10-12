@@ -223,15 +223,26 @@ func removeZCodeHook(target installTarget) error {
 		if !ok {
 			continue
 		}
-		events[event] = removeZCodeHookEntries(entries, target)
+		remaining := removeZCodeHookEntries(entries, target)
+		if len(entries) != 0 && len(remaining) == 0 {
+			delete(events, event)
+		} else {
+			events[event] = remaining
+		}
 	}
 	if state, stateErr := readZCodeHookState(statePath); stateErr == nil {
 		restoreZCodeHookState(root, state)
 	}
 	after, _ := json.Marshal(config)
 	if string(before) != string(after) {
-		if err := writeHookConfig(target.hookConfig, config); err != nil {
-			return err
+		if len(config) == 1 && len(root) == 1 && len(events) == 0 {
+			if err := os.Remove(target.hookConfig); err != nil {
+				return err
+			}
+		} else {
+			if err := writeHookConfig(target.hookConfig, config); err != nil {
+				return err
+			}
 		}
 	}
 	_ = os.Remove(statePath)

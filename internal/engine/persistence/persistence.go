@@ -29,8 +29,6 @@
 //   - stateSchemaVersion directly uses the unique current encoder constant;
 //   - 本包不导入 internal/validate：engine 包不得反向依赖。
 //
-// Windows 平台分叉维持延期：execute 段的原子 rename 收敛在
-// Store.executeCommit 单点，未来平台分层只需替换该调用。
 package persistence
 
 import (
