@@ -307,7 +307,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 					}
 				}
 				if !slices.ContainsFunc(batch.Checks, func(existing protocol.DevelopmentCheck) bool {
-					return existing.Purpose == selected.Purpose && existing.Command == selected.Command
+					return existing.Purpose == selected.Purpose && existing.Command == selected.Command && existing.Goal == selected.Goal
 				}) {
 					batch.Checks = append(batch.Checks, selected)
 				}

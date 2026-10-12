@@ -16,6 +16,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 )
 
 // These trajectories use the public drive/submit surface and actual Git
@@ -1003,12 +1004,39 @@ func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
 	if finished != 3 {
 		t.Fatalf("master developer started before all native merges: %d", finished)
 	}
-	evidence := batchEvidence(input)
-	evidence.Paths = []string{"parser.go", "command.go", "tooling.go"}
-	for range master.Checks {
-		evidence.Commands = append(evidence.Commands, "true")
+	native := vcs.NewNative(input.Workspace.Path, "git", nil).At(input.Workspace.Path, input.Workspace.Handle)
+	paths, err := native.ChangedPaths()
+	if err != nil {
+		t.Fatal(err)
 	}
-	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	if paths == nil {
+		paths = []string{}
+	}
+	if len(paths) != 0 {
+		t.Fatalf("integrated workspace has unexpected edits: %v", paths)
+	}
+	d.receipt(action)
+	state = driverState(t, d)
+	issued, ok := state.WorkerInput(action, d.f.definition)
+	if !ok {
+		t.Fatal("missing original developer input")
+	}
+	completed := make([]string, len(master.DoD))
+	for i := range completed {
+		completed[i] = "Integrated verification calls prepared"
+	}
+	raw, err := json.Marshal(map[string]any{"summary": "Prepared integrated project verification", "commands": []string{"go build ./...", "go test -timeout=0 -count=1 ./..."}, "completion": map[string]any{"dod": completed, "handoff": "Ready for program verification"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := worker.DecodeResultWithFacts(issued, d.eventID(), raw, "prepared-integration-calls", paths, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(event.Result.Validation.Development.Paths) != 0 {
+		t.Fatal("program invented developer changes from child paths")
+	}
+	d.submit(event)
 	for {
 		d.drive()
 		state = driverState(t, d)

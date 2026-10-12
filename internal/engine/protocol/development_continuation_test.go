@@ -248,3 +248,34 @@ func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
 		t.Fatal("semantic completion modified plan or bypassed approved checks")
 	}
 }
+
+func TestDevelopmentCompletionRequiresChangesOrNewCalls(t *testing.T) {
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	record := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "PASS", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Claimed completion", Completion: &DevelopmentCompletion{DoD: map[string]string{}, Handoff: "Ready"}}}}
+	if err := e.acceptValidationResult(s, record, 2); err == nil {
+		t.Fatal("completion without changes or new calls admitted")
+	}
+	plan := s.Results["readiness"].Review.GranularityReview
+	for i := range plan.Batches[0].Checks {
+		plan.Batches[0].Checks[i].Command, plan.Batches[0].Checks[i].Goal = "", "Verify the confirmed project boundary"
+	}
+	task := planTask(e.cfg.Definition, plan, plan.Batches[0].ID)
+	record.Validation.Binding.Task = task
+	s.DispatchBindings[pending.ActionID] = record.Validation.Binding
+	record.Validation.Development.Commands = []string{"prepared-build", "prepared-tests"}
+	if err := e.acceptValidationResult(s, record, 2); err != nil {
+		t.Fatalf("newly prepared calls require unnecessary file changes: %v", err)
+	}
+	s.Results[pending.ActionID] = record
+	if err := e.acceptValidationResult(s, record, 3); err == nil {
+		t.Fatal("unchanged carried calls counted as new work")
+	}
+	updated := *record.Validation
+	development := *updated.Development
+	updated.Development = &development
+	record.Validation = &updated
+	record.Validation.Development.Commands = []string{"prepared-build", "corrected-tests"}
+	if err := e.acceptValidationResult(s, record, 3); err != nil {
+		t.Fatalf("corrected unfinished call requires unnecessary file changes: %v", err)
+	}
+}

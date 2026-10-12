@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 )
 
 func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) (*Facade, *protocol.State, string) {
@@ -550,6 +553,77 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 	}
 	if actualSuccesses != 2 {
 		t.Fatalf("corrected source did not pass both actual checks: %d", actualSuccesses)
+	}
+	retainNativeEvidence(t, d.f)
+}
+
+func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := nativeMasterAt(t, root, base, nil)
+	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = "../../.."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build runtime: %v %s", err, out)
+	}
+	plan := commandPlan()
+	for i := range plan.Batches[0].Checks {
+		plan.Batches[0].Checks[i].Command, plan.Batches[0].Checks[i].Goal = "", "Verify the existing complete project"
+	}
+	d.reviewPass(plan)
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Prepare complete verification calls"}})
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	d.drive()
+	action, input := planBatchAction(d, "command")
+	native := vcs.NewNative(input.Workspace.Path, "git", nil).At(input.Workspace.Path, input.Workspace.Handle)
+	paths, err := native.ChangedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths == nil {
+		paths = []string{}
+	}
+	if len(paths) != 0 {
+		t.Fatalf("native workspace is not clean: %v", paths)
+	}
+	d.receipt(action)
+	state := driverState(t, d)
+	issued, ok := state.WorkerInput(action, d.f.definition)
+	if !ok {
+		t.Fatal("missing original developer input")
+	}
+	raw := []byte(`{"summary":"Prepared complete project verification","commands":["go build ./...","go test -timeout=0 -count=1 ./..."],"completion":{"dod":["Existing command contract is ready for program verification"],"handoff":"Ready for checks"}}`)
+	event, err := worker.DecodeResultWithFacts(issued, d.eventID(), raw, "prepared-clean-workspace-calls", paths, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(event)
+	for {
+		d.drive()
+		state = driverState(t, d)
+		if state.Tasks[input.Binding.Task] == runtime.TaskTerminal {
+			break
+		}
+	}
+	if len(state.Results[action].Validation.Development.Paths) != 0 {
+		t.Fatal("new calls invented file changes")
+	}
+	checked := 0
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != protocol.HostActionStatusExecuted {
+			continue
+		}
+		var value protocol.CheckEvidence
+		if err := decodeReceiptEvidence(receipt, &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.SourceActionID == action && value.ExitCode == 0 {
+			checked++
+		}
+	}
+	if checked != len(plan.Batches[0].Checks) {
+		t.Fatalf("clean source did not pass every actual check: %d", checked)
 	}
 	retainNativeEvidence(t, d.f)
 }

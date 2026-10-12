@@ -348,8 +348,8 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	case "engine.repair.v5":
 		return s.acceptRepairResult(record)
 	case "engine.development.batch.v4":
-		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || (p.Status == "PASS" && len(p.Development.Paths) == 0) || strings.TrimSpace(p.Development.Summary) == "" {
-			return validationError("development requires declared paths and summary")
+		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || strings.TrimSpace(p.Development.Summary) == "" {
+			return validationError("development requires actual work and summary")
 		}
 		if role == "engine.development.batch.v4" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
@@ -372,8 +372,16 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 				if err := validateDevelopmentContinuation(p.Development); err != nil {
 					return err
 				}
-			} else if err := validateDevelopmentCompletion(batch, p.Development); err != nil {
-				return err
+			} else {
+				if err := validateDevelopmentCompletion(batch, p.Development); err != nil {
+					return err
+				}
+				if len(p.Development.Paths) == 0 {
+					prior := s.Results[record.ActionID].Validation
+					if len(p.Development.Commands) == 0 || prior != nil && prior.Development != nil && slices.Equal(prior.Development.Commands, p.Development.Commands) {
+						return validationError("development completion requires file changes or newly prepared verification calls")
+					}
+				}
 			}
 			if s.Validation.DevelopmentSnapshot != "" {
 				s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""

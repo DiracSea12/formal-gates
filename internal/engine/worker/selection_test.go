@@ -9,6 +9,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 )
 
 func TestPlanAllocatesIdentitiesAndMapsSemanticChoices(t *testing.T) {
@@ -129,5 +130,24 @@ func TestDevelopmentPathsComeOnlyFromTerminalFacts(t *testing.T) {
 		if _, err := DecodeResultWithPaths(input, "result", []byte(body), "native-source", []string{"real"}); err == nil {
 			t.Fatal("manual mechanical field accepted")
 		}
+	}
+}
+
+func TestVerificationGoalsRetainDistinctObligations(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	value := &Granularity{Batches: []Batch{{Checks: []Check{{Purpose: protocol.CheckFullTests, Goal: "Verify malformed options"}, {Purpose: protocol.CheckFullTests, Goal: "Verify stored state"}}}}}
+	plan, err := DecodeGranularity(input, value, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := plan.Batches[0].Checks
+	if len(checks) != 2 || checks[0].Goal != value.Batches[0].Checks[0].Goal || checks[1].Goal != value.Batches[0].Checks[1].Goal || checks[0].ID != "batch-1-check-1" || checks[1].ID != "batch-1-check-2" {
+		t.Fatalf("distinct goals lost their original duties or allocated identities: %+v", checks)
+	}
+	input = protocol.WorkerInput{Handler: "engine.repair.v5"}
+	value.Batches[0].Checks = []Check{{Command: "original-call"}, {Command: "original-call"}}
+	plan, err = DecodeGranularity(input, value, nil, nil, false)
+	if err != nil || len(plan.Batches[0].Checks) != 1 {
+		t.Fatalf("equal existing calls changed their deduplication: %v", err)
 	}
 }
