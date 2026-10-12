@@ -932,9 +932,17 @@ func findings(values []Finding, facts []LocationFact, document requirement.Froze
 	if values == nil {
 		return nil, nil
 	}
+	// Frozen requirement reads supply finding locations only. Physical file
+	// selections keep their original pathless requirement facts.
+	locationFacts := slices.Clone(facts)
+	for index, fact := range locationFacts {
+		if fact.Kind == "requirement" && document.Path != "" && string(fact.Content) == document.Content {
+			locationFacts[index] = LocationFact{Kind: "read", Paths: []string{document.Path}, Content: fact.Content}
+		}
+	}
 	result := make([]review.Finding, 0, len(values))
 	for _, item := range values {
-		locations, err := LocationPaths(item.Locations, facts, document)
+		locations, err := LocationPaths(item.Locations, locationFacts, document)
 		if err != nil {
 			return nil, err
 		}
@@ -997,6 +1005,21 @@ func selectedTestRef(item Case, files []string, original string, facts []Locatio
 
 // ValidateSemanticBody checks the issued role body before publishing tool evidence.
 func ValidateSemanticBody(input protocol.WorkerInput, raw []byte, facts ...[]LocationFact) error {
-	_, _, err := decodeRoleBody(input, raw, facts...)
+	value, _, err := decodeRoleBody(input, raw, facts...)
+	if err != nil {
+		return err
+	}
+	var locations []LocationFact
+	if len(facts) > 0 {
+		locations = facts[0]
+	}
+	if value.Review != nil {
+		if _, err := findings(value.Review.Findings, locations, input.RequirementDocument); err != nil {
+			return err
+		}
+	}
+	if value.Validation != nil {
+		_, err = findings(value.Validation.Findings, locations, input.RequirementDocument)
+	}
 	return err
 }
