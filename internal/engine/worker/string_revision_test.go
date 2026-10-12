@@ -136,11 +136,24 @@ func TestStringRevisionSchemaBindsEachOriginalArray(t *testing.T) {
 	checkArray := func(t *testing.T, array map[string]any, want []int) {
 		t.Helper()
 		branches := array["items"].(map[string]any)["anyOf"].([]any)
+		if len(branches) != 5 {
+			t.Fatal("string choices omit original lines, columns, parts or reuse", array)
+		}
 		source := branches[1].(map[string]any)
-		if !reflect.DeepEqual(source["required"], []any{"read", "from", "to"}) {
+		required, err := json.Marshal(source["required"])
+		if err != nil || string(required) != `["read","from","to"]` {
 			t.Fatal("original read source range missing", source)
 		}
-		if len(branches) != 3 || !reflect.DeepEqual(branches[2].(map[string]any)["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) || array["description"] == "" {
+		columns := branches[2].(map[string]any)
+		required, err = json.Marshal(columns["required"])
+		if err != nil || string(required) != `["read","from","to","fromColumn","toColumn"]` {
+			t.Fatal("original column range missing", columns)
+		}
+		parts := branches[3].(map[string]any)["properties"].(map[string]any)["parts"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
+		if len(parts) != 4 || !reflect.DeepEqual(parts[3], branches[4]) {
+			t.Fatal("parts reuse is not bound to the original array", array)
+		}
+		if !reflect.DeepEqual(branches[4].(map[string]any)["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) || array["description"] == "" {
 			t.Fatal("element choices are not bound to the original array", array)
 		}
 	}
