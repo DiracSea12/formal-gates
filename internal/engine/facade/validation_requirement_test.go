@@ -27,11 +27,13 @@ func confirmValidationCoverage(d *validationDriver, redo string, inventory *prot
 }
 func confirmValidationDocument(d *validationDriver, redo string, inventory *protocol.CoverageInventory, document string) {
 	d.t.Helper()
-	if !d.mockNative {
-		path := driverState(d.t, d).IntakeConfirmationReceipt.RequirementSource
-		if err := os.WriteFile(filepath.Join(d.f.root, path), []byte(document), 0600); err != nil {
-			d.t.Fatal(err)
-		}
+	receipt := driverState(d.t, d).CurrentIntakeConfirmation()
+	if err := os.WriteFile(filepath.Join(d.f.root, receipt.RequirementSource), []byte(document), 0600); err != nil {
+		d.t.Fatal(err)
+	}
+	intake, err := prepareConfirmedIntake(d.f.root, receipt, true)
+	if err != nil {
+		d.t.Fatal(err)
 	}
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
 	var choices []protocol.RequirementWorkDecision
@@ -54,15 +56,14 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 		}
 	}
 	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"all bound inputs preserve meaning"}}
-	pkg := protocol.RequirementDecisionPackage{Children: children, Impact: impact, Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, Children: children, Impact: impact, Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
 	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	d.submit(event)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Children: children, Impact: impact, Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, Children: children, Impact: impact, Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}}.WithRequirementDocument(document))
 }
 
 // TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection：重走
