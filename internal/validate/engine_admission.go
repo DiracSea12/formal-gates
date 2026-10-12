@@ -102,6 +102,9 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	}
 	candidates := []candidate{}
 	for _, record := range doc.Records {
+		if record.Scope == "global" && strings.Contains(record.ID, "-project-") {
+			continue
+		}
 		if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
 			continue
 		}
@@ -127,11 +130,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if len(candidates) == 0 {
 		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: no active registry record matches candidate package root %s: %w", packageAbs, errNoEngineAdmission)
 	}
-	// A project-local sibling is the authoritative binding for that project.
-	// The canonical global record remains a fallback for a first invocation that
-	// has not materialized its sibling yet.  This is what lets one stable
-	// launcher serve multiple projects without treating their records as a
-	// conflict.
+	// An exact project installation takes precedence over a global installation.
 	if root != "" {
 		hasExact := false
 		for _, item := range candidates {
@@ -200,16 +199,20 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 		runtimeFiles.Files = append(runtimeFiles.Files, canonicalRegistryPath(record.LauncherPath))
 	}
 	if record.ResourceRoot != "" {
-		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot)}
+		references, err := filepath.Glob(filepath.Join(record.ResourceRoot, "engine-runs", "*.json"))
+		if err != nil {
+			return EngineAdmission{}, err
+		}
+		for _, reference := range references {
+			runtimeFiles.Files = append(runtimeFiles.Files, canonicalRegistryPath(reference))
+		}
+		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot), canonicalRegistryPath(filepath.Join(record.ResourceRoot, "engine-runs"))}
 	}
 	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token, RuntimeFiles: runtimeFiles}, nil
 }
 
-// admissionRecordRootMatch reports whether a record can serve root.  Global
-// installs use the home-level record for first invocation and derive a
-// project-local sibling thereafter; project installs are bound to their
-// registered project root.  Returning exactRoot lets the resolver prefer a
-// sibling over the canonical global fallback when both are present.
+// Project installations bind their exact root; canonical global installations
+// serve projects whose original engine request carries the root.
 func admissionRecordRootMatch(record RegistryRecord, root string, explicitNamespace bool) (exactRoot, applicable bool) {
 	if strings.TrimSpace(root) == "" {
 		return false, true
@@ -222,9 +225,6 @@ func admissionRecordRootMatch(record RegistryRecord, root string, explicitNamesp
 	projectRoot := canonicalRegistryPath(record.ProjectRoot)
 	if record.Scope == "project" {
 		return projectRoot == canonicalRoot, projectRoot == canonicalRoot
-	}
-	if projectRoot == canonicalRoot {
-		return true, true
 	}
 	if explicitNamespace {
 		// Global records serve multiple projects. The run's own request binds
@@ -257,15 +257,7 @@ func verifyEngineBootstrapReceipt(registryPath string, record RegistryRecord, pa
 			}
 			return nil
 		}
-		// A global invocation sibling is created after the canonical global
-		// bootstrap receipt. It shares the installed target and launcher, so the
-		// canonical receipt is also its immutable bootstrap proof.
-		if record.Scope == "global" && strings.EqualFold(admitted.Scope, "global") &&
-			canonicalRegistryPath(admitted.Target) == canonicalRegistryPath(record.Target) &&
-			canonicalRegistryPath(admitted.LauncherPath) == canonicalRegistryPath(record.LauncherPath) &&
-			admitted.PackageDigest == packageDigest {
-			return nil
-		}
+
 	}
 	return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap receipt does not contain admitted target %q", record.ID)
 }

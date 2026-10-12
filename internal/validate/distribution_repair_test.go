@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,150 +15,6 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
-	source := copyPackageFixture(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	project := repairGitProject(t)
-	registry := filepath.Join(home, ".formal-gates", "registry.json")
-	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
-	fixtureLauncherInvocation(t, launcher)
-
-	first, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
-		BinaryTarget: launcher, Force: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first.Targets) != 1 {
-		t.Fatalf("unexpected global target report: %+v", first)
-	}
-	// 文档化首启边界：普通 install 只提交 registry record，第一次 workflow start
-	// 之前必须先提交 bootstrap receipt。
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
-		BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
-		t.Fatalf("first bootstrap rejected the fresh global install: %v", err)
-	}
-	document, err := LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sibling RegistryRecord
-	for _, record := range document.Records {
-		if record.ID == first.Targets[0].RegistryRecordID {
-			sibling = record
-		}
-	}
-	sibling.ID += "-project-fixture"
-	sibling.ProjectRoot = canonicalRegistryPath(project)
-	sibling.StateRoot = canonicalRegistryPath(filepath.Join(project, ".gates"))
-	sibling.ResourceRoot = canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
-	sibling.CanonicalPaths = map[string]string{}
-	for key, value := range document.Records[0].CanonicalPaths {
-		sibling.CanonicalPaths[key] = value
-	}
-	sibling.CanonicalPaths["projectRoot"] = sibling.ProjectRoot
-	sibling.CanonicalPaths["stateRoot"] = sibling.StateRoot
-	sibling.CanonicalPaths["resourceRoot"] = sibling.ResourceRoot
-	repairCommitRegistry(t, registry, sibling)
-	otherProject := t.TempDir()
-	otherSibling := sibling
-	otherSibling.ID += "-other"
-	otherSibling.ProjectRoot = canonicalRegistryPath(otherProject)
-	otherSibling.StateRoot = canonicalRegistryPath(filepath.Join(otherProject, ".gates"))
-	otherSibling.ResourceRoot = canonicalRegistryPath(filepath.Join(otherProject, ".formal-gates-resources"))
-	otherSibling.CanonicalPaths = maps.Clone(sibling.CanonicalPaths)
-	otherSibling.CanonicalPaths["projectRoot"] = otherSibling.ProjectRoot
-	otherSibling.CanonicalPaths["stateRoot"] = otherSibling.StateRoot
-	otherSibling.CanonicalPaths["resourceRoot"] = otherSibling.ResourceRoot
-	repairCommitRegistry(t, registry, otherSibling)
-	originalContexts := []RegistryRecord{sibling, otherSibling}
-	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if admission.RecordID == first.Targets[0].RegistryRecordID || admission.RecordID != sibling.ID {
-		t.Fatalf("global admission lost its existing project-local sibling: %+v", admission)
-	}
-
-	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("upgraded package\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	releaseRoot := filepath.Join(t.TempDir(), "release")
-	second, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
-		ReleaseRoot: releaseRoot, BinaryTarget: launcher, Force: true,
-	})
-	if err != nil {
-		t.Fatalf("global upgrade rejected the project-local sibling: %v", err)
-	}
-	document, err = LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, record := range document.Records {
-		if strings.HasPrefix(record.ID, first.Targets[0].RegistryRecordID+"-project-") &&
-			(record.PackageDigest != second.PackageDigest || record.InstalledDigest != second.Targets[0].InstalledDigest) {
-			t.Fatalf("global project-local sibling was not refreshed: %+v", record)
-		}
-	}
-	// A canonical upgrade can encounter project admissions from its original
-	// installation. Bootstrap must reconcile them through the same owner.
-	for _, original := range originalContexts {
-		repairCommitRegistry(t, registry, original)
-	}
-	bootstrap := InstallOptions{Source: releaseRoot, ReleaseRoot: releaseRoot, Host: "claude", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true}
-	if _, err := Install(bootstrap); err != nil {
-		t.Fatalf("bootstrap rejected the refreshed global sibling: %v", err)
-	}
-	document, err = LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	byID := map[string]RegistryRecord{}
-	for _, record := range document.Records {
-		byID[record.ID] = record
-	}
-	canonical := byID[first.Targets[0].RegistryRecordID]
-	for _, original := range originalContexts {
-		current := byID[original.ID]
-		if current.ProjectRoot != original.ProjectRoot || current.StateRoot != original.StateRoot || current.ResourceRoot != original.ResourceRoot {
-			t.Fatal("upgrade changed original project context")
-		}
-		for _, key := range []string{"projectRoot", "stateRoot", "resourceRoot"} {
-			if current.CanonicalPaths[key] != original.CanonicalPaths[key] {
-				t.Fatal("upgrade changed original canonical project paths")
-			}
-		}
-		if current.ReleaseRoot != canonical.ReleaseRoot || current.SkipHooks != canonical.SkipHooks || current.HookConfig != canonical.HookConfig || !sameRegistryIdentity(current, canonical) {
-			t.Fatal("project sibling did not inherit original canonical installation")
-		}
-		if current.CanonicalPaths["releaseRoot"] != canonical.CanonicalPaths["releaseRoot"] {
-			t.Fatal("project sibling retained a different release root")
-		}
-	}
-	foreign := sibling
-	foreign.ID = "unrelated-installation-project"
-	repairCommitRegistry(t, registry, foreign)
-	before, err := os.ReadFile(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Install(bootstrap); err == nil || !strings.Contains(err.Error(), "unaccounted registry identity") {
-		t.Fatal("bootstrap accepted an unrelated identity family", err)
-	}
-	after, err := os.ReadFile(registry)
-	if err != nil || string(before) != string(after) {
-		t.Fatal("rejected unrelated family changed registry bytes", err)
-	}
-}
-
-// Release-root bootstrap preserves the registered installed identity and the
-// source executable mode under the same installation transaction.
 func TestReleaseRootBootstrapPreservesExecutableModeAndIdentity(t *testing.T) {
 	source := copyPackageFixture(t)
 	binary := filepath.Join(source, "bin", nativeBinaryName())
@@ -495,5 +350,73 @@ func TestFaultMatrixReceiptProvesPreparedPartialCopy(t *testing.T) {
 	}
 	if !receipt.Prepared || !receipt.PartialCopy || len(receipt.CopiedComponents) == 0 {
 		t.Fatalf("recovery receipt lacks prepared partial-copy evidence: %+v", receipt)
+	}
+}
+
+func TestGlobalInstallRetiresDerivedAdmissionsWithoutChangingRunFiles(t *testing.T) {
+	source := copyPackageFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	registry := filepath.Join(home, ".formal-gates", "registry.json")
+	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
+	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	installed, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := document.Records[0]
+	project := t.TempDir()
+	state := filepath.Join(project, ".gates", "engine", "retained", "state.json")
+	if err := os.MkdirAll(filepath.Dir(state), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("retained user run bytes\n")
+	if err := os.WriteFile(state, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	retired := canonical
+	retired.ID += "-project-retained"
+	repairCommitRegistry(t, registry, retired)
+	if _, err := Install(options); err != nil {
+		t.Fatal(err)
+	}
+	document, err = LoadRegistry(registry)
+	if err != nil || len(document.Records) != 1 || document.Records[0].ID != canonical.ID {
+		t.Fatal("native install retained derived registry authority", document, err)
+	}
+	retired.ID += "-another"
+	repairCommitRegistry(t, registry, retired)
+	options.Bootstrap = true
+	if _, err := Install(options); err != nil {
+		t.Fatal(err)
+	}
+	document, err = LoadRegistry(registry)
+	if err != nil || len(document.Records) != 1 {
+		t.Fatal("native bootstrap retained derived registry authority", err)
+	}
+	if got, err := os.ReadFile(state); err != nil || string(got) != string(original) {
+		t.Fatal("retirement rewrote retained user state", err)
+	}
+	foreign := canonical
+	foreign.ID = "unrelated-global-family"
+	repairCommitRegistry(t, registry, foreign)
+	before, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "unaccounted registry identity") {
+		t.Fatal("unknown family bypassed normal bootstrap identity", err)
+	}
+	if after, err := os.ReadFile(registry); err != nil || string(before) != string(after) {
+		t.Fatal("unknown family rejection changed registry", err)
+	}
+	if !isFile(filepath.Join(installed.Targets[0].TargetPath, "bin", nativeBinaryName())) {
+		t.Fatal("rejected unknown family removed runtime")
 	}
 }

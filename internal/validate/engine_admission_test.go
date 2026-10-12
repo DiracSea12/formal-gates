@@ -11,7 +11,7 @@ import (
 	"formal-gates/internal/host"
 )
 
-func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
+func TestResolveEngineAdmissionUsesCanonicalGlobalBinding(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -25,19 +25,13 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	global := admissionRepairRecord(target, launcher, home)
 	projectOne := t.TempDir()
 	projectTwo := t.TempDir()
-	siblingOne := admissionRepairRecord(target, launcher, projectOne)
-	siblingOne.ID = global.ID + "-project-one"
-	siblingTwo := admissionRepairRecord(target, launcher, projectTwo)
-	siblingTwo.ID = global.ID + "-project-two"
 	global.PackageDigest = packageDigest
 	global.InstalledDigest = installed.Digest
-	siblingOne.PackageDigest, siblingOne.InstalledDigest = global.PackageDigest, global.InstalledDigest
-	siblingTwo.PackageDigest, siblingTwo.InstalledDigest = global.PackageDigest, global.InstalledDigest
 	path := filepath.Join(home, ".formal-gates", "registry.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	doc := RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: []RegistryRecord{global, siblingOne, siblingTwo}}
+	doc := RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: []RegistryRecord{global}}
 	data, _ := json.Marshal(doc)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -52,7 +46,7 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve %s: %v", project, err)
 		}
-		if admission.RecordID == global.ID || admission.Provider != host.Claude {
+		if admission.RecordID != global.ID || admission.Provider != host.Claude {
 			t.Fatalf("resolve %s lost the project or host binding: %+v", project, admission)
 		}
 	}
@@ -63,20 +57,9 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	if admission.RecordID != global.ID || admission.Provider != host.Claude {
 		t.Fatalf("first invocation selected sibling: %+v", admission)
 	}
-	byRecord, err := ResolveEngineAdmissionByRecord(siblingTwo.ID)
-	if err != nil || byRecord.RecordID != siblingTwo.ID || byRecord.Provider != host.Claude {
+	byRecord, err := ResolveEngineAdmissionByRecord(global.ID)
+	if err != nil || byRecord.RecordID != global.ID || byRecord.Provider != host.Claude {
 		t.Fatalf("record-specific resolution = %+v, err=%v", byRecord, err)
-	}
-	conflicting := siblingOne
-	conflicting.ID = global.ID + "-project-conflict"
-	conflicting.PackageDigest = "sha256:other-package"
-	doc.Records = append(doc.Records, conflicting)
-	data, _ = json.Marshal(doc)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveEngineAdmission(projectOne, target); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
-		t.Fatalf("identity conflict was not rejected: %v", err)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	engineRuntime "formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
@@ -577,7 +577,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if loadErr != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge load failed: %w", loadErr))
 		}
-		records = append(records, refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, records)...)
+		registryDocument.Records = retireGlobalInvocationRecords(registryDocument.Records, targets, options)
 		committed, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records)
 		if err != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge commit failed: %w", err))
@@ -921,6 +921,8 @@ func rejectActiveWorkflowRunsForUninstall(targets []installTarget, options Unins
 	}
 	targetPaths := map[string]bool{}
 	stateRoots := map[string]bool{}
+	resourceRoots := map[string]bool{}
+	locatedStates := []string{}
 	for _, target := range targets {
 		targetPaths[canonicalRegistryPath(target.targetPath)] = true
 		desired := installRegistryRecord(target, installOptions)
@@ -932,12 +934,71 @@ func rejectActiveWorkflowRunsForUninstall(targets []installTarget, options Unins
 		if !targetPaths[canonicalRegistryPath(record.Target)] {
 			continue
 		}
+		if record.ResourceRoot != "" {
+			resourceRoots[record.ResourceRoot] = true
+		}
 		if record.StateRoot != "" {
 			stateRoots[canonicalRegistryPath(record.StateRoot)] = true
 		}
 	}
 	if strings.TrimSpace(options.Project) != "" {
 		stateRoots[canonicalRegistryPath(options.Project)] = true
+	}
+	for resourceRoot := range resourceRoots {
+		references, err := filepath.Glob(filepath.Join(resourceRoot, "engine-runs", "*.json"))
+		if err != nil {
+			return err
+		}
+		for _, reference := range references {
+			data, err := os.ReadFile(reference)
+			if err != nil {
+				return err
+			}
+			var location struct {
+				Request string `json:"request"`
+			}
+			if err := json.Unmarshal(data, &location); err != nil {
+				return err
+			}
+			data, err = os.ReadFile(location.Request)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			var request struct {
+				RunID  string `json:"runId"`
+				Target string `json:"admissionTarget"`
+				Root   string `json:"admissionRoot"`
+			}
+			if err := json.Unmarshal(data, &request); err != nil {
+				return err
+			}
+			if !targetPaths[canonicalRegistryPath(request.Target)] {
+				continue
+			}
+			stateDir := filepath.Dir(location.Request)
+			if _, err := os.Stat(filepath.Join(stateDir, "terminal-summary.intent.json")); err == nil {
+				return fmt.Errorf("unfinished terminal cleanup for workflow run %q fences uninstall", request.RunID)
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			statePath := filepath.Join(stateDir, "state.json")
+			if _, err := os.Stat(statePath); err == nil {
+				locatedStates = append(locatedStates, statePath)
+				continue
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			for _, intent := range []string{filepath.Join(filepath.Dir(stateDir), request.RunID+".start.intent.json")} {
+				if _, err := os.Stat(intent); err == nil {
+					return fmt.Errorf("unfinished workflow run %q at %s fences uninstall", request.RunID, intent)
+				} else if !os.IsNotExist(err) {
+					return err
+				}
+			}
+		}
 	}
 	for stateRoot := range stateRoots {
 		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
@@ -949,30 +1010,38 @@ func rejectActiveWorkflowRunsForUninstall(targets []installTarget, options Unins
 			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", stateRoot, err)
 		}
 		matches = append(matches, candidateMatches...)
-		for _, statePath := range matches {
-			data, readErr := os.ReadFile(statePath)
-			if readErr != nil {
-				return fmt.Errorf("uninstall active-run inventory failed for %s: %w", statePath, readErr)
-			}
-			var probe struct {
-				RunID   string `json:"runId"`
-				Status  string `json:"status"`
-				Phase   string `json:"phase"`
-				Content struct {
-					RunID string `json:"runId"`
-					Phase string `json:"phase"`
-				} `json:"content"`
-			}
-			_ = json.Unmarshal(data, &probe)
-			active := strings.EqualFold(probe.Status, "ACTIVE") || strings.EqualFold(probe.Phase, "INTAKE_REGISTERED") || strings.EqualFold(probe.Content.Phase, "INTAKE_REGISTERED")
-			if !active {
-				continue
-			}
-			if probe.RunID == "" {
-				probe.RunID = probe.Content.RunID
-			}
-			return fmt.Errorf("active workflow run %q at %s fences uninstall", probe.RunID, statePath)
+		locatedStates = append(locatedStates, matches...)
+	}
+	for _, statePath := range locatedStates {
+		data, readErr := os.ReadFile(statePath)
+		if readErr != nil {
+			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", statePath, readErr)
 		}
+		var probe struct {
+			RunID   string `json:"runId"`
+			Status  string `json:"status"`
+			Phase   string `json:"phase"`
+			Content struct {
+				RunID string `json:"runId"`
+				Phase string `json:"phase"`
+			} `json:"content"`
+		}
+		_ = json.Unmarshal(data, &probe)
+		phase := probe.Content.Phase
+		if phase == "" {
+			phase = probe.Phase
+		}
+		active := strings.EqualFold(probe.Status, "ACTIVE") || phase != "" && phase != string(engineRuntime.PhaseTerminal)
+		if phase == string(engineRuntime.PhaseTerminal) {
+			return fmt.Errorf("unfinished terminal cleanup at %s fences uninstall", statePath)
+		}
+		if !active {
+			continue
+		}
+		if probe.RunID == "" {
+			probe.RunID = probe.Content.RunID
+		}
+		return fmt.Errorf("active workflow run %q at %s fences uninstall", probe.RunID, statePath)
 	}
 	return nil
 }
@@ -1136,6 +1205,12 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	outer.PackageDigest = source.Digest
 	existingRegistry, existingRegistryErr := LoadRegistry(registryPath)
 	registryWasPresent := existingRegistryErr == nil
+	retiredRecords := false
+	if registryWasPresent {
+		current := retireGlobalInvocationRecords(existingRegistry.Records, targets, options)
+		retiredRecords = len(current) != len(existingRegistry.Records)
+		existingRegistry.Records = current
+	}
 	if existingRegistryErr != nil && !os.IsNotExist(existingRegistryErr) {
 		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", existingRegistryErr)
 	}
@@ -1266,15 +1341,13 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	}
 	existingByID := map[string]RegistryRecord{}
 	if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
+		existing.Records = retireGlobalInvocationRecords(existing.Records, targets, options)
 		for _, record := range existing.Records {
 			existingByID[record.ID] = record
 			for _, target := range targets {
 				desired := installRegistryRecord(target, options)
 				sameTarget := canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath)
 				if sameTarget && record.ID != desired.ID {
-					if isGlobalInvocationRecord(record, desired) {
-						continue
-					}
 					writeBootstrapAdmissionRejection(registryPath, target, options, desired.ID, "bootstrap target already exists with a different registry record identity")
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s has an unaccounted registry identity", target.targetPath))
 				}
@@ -1322,7 +1395,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		}
 	}
 	records := make([]RegistryRecord, 0, len(targets))
-	mutatesRegistry := false
+	mutatesRegistry := retiredRecords
 	createdResourceRoots := []string{}
 	for _, target := range targets {
 		desired := installRegistryRecord(target, options)
@@ -1353,11 +1426,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		}
 		return InstallReport{}, rollback(loadErr)
 	}
-	siblingRefresh := refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, records)
-	if len(siblingRefresh) != 0 {
-		records = append(records, siblingRefresh...)
-		mutatesRegistry = true
-	}
+	registryDocument.Records = retireGlobalInvocationRecords(registryDocument.Records, targets, options)
 	rollbackWithResources := func(cause error) error {
 		for _, path := range createdResourceRoots {
 			removeEmptyDirectory(path)
@@ -1420,43 +1489,26 @@ func bootstrapReleasePreservesIdentity(record RegistryRecord, sourceRoot, instal
 		record.PackageDigest != "" && record.VCSIdentity != ""
 }
 
-// Global installs have one canonical host record, but workflow state and
-// resources remain project-local. Project-derived sibling records share the
-// same stable installation family and target. Their shared installation
-// binding must be refreshed whenever the
-// canonical global target is upgraded or bootstrapped.
-func isGlobalInvocationRecord(record, desired RegistryRecord) bool {
-	return desired.Scope == "global" && record.Scope == "global" &&
-		record.ID != desired.ID && strings.HasPrefix(record.ID, desired.ID+"-project-") &&
-		canonicalRegistryPath(record.Target) == canonicalRegistryPath(desired.Target) &&
-		canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(desired.LauncherPath) &&
-		record.Host == desired.Host && record.HookConfig == desired.HookConfig &&
-		record.RuntimeSibling == desired.RuntimeSibling
-}
-
-func refreshedGlobalInvocationRecords(existing []RegistryRecord, targets []installTarget, options InstallOptions, already []RegistryRecord) []RegistryRecord {
-	refreshed := []RegistryRecord{}
-	for _, record := range existing {
-		for index, target := range targets {
+// Native installation transactions remove retired project-derived rows from
+// their own global identity family. Project run files are never rewritten.
+func retireGlobalInvocationRecords(records []RegistryRecord, targets []installTarget, options InstallOptions) []RegistryRecord {
+	current := make([]RegistryRecord, 0, len(records))
+	for _, record := range records {
+		retired := false
+		for _, target := range targets {
 			desired := installRegistryRecord(target, options)
-			if !isGlobalInvocationRecord(record, desired) {
-				continue
+			if desired.Scope == "global" && record.Scope == "global" &&
+				strings.HasPrefix(record.ID, desired.ID+"-project-") &&
+				record.Host == desired.Host && canonicalRegistryPath(record.Target) == canonicalRegistryPath(desired.Target) {
+				retired = true
+				break
 			}
-			updated := already[index]
-			updated.ID, updated.Status = record.ID, record.Status
-			updated.Generation, updated.Lease, updated.Token = record.Generation, record.Lease, record.Token
-			updated.ProjectRoot, updated.StateRoot, updated.ResourceRoot = record.ProjectRoot, record.StateRoot, record.ResourceRoot
-			updated.CanonicalPaths = maps.Clone(updated.CanonicalPaths)
-			for _, key := range []string{"projectRoot", "stateRoot", "resourceRoot"} {
-				updated.CanonicalPaths[key] = record.CanonicalPaths[key]
-			}
-			if sameRegistryBinding(record, updated) && sameRegistryIdentity(record, updated) {
-				continue
-			}
-			refreshed = append(refreshed, updated)
+		}
+		if !retired {
+			current = append(current, record)
 		}
 	}
-	return refreshed
+	return current
 }
 
 func bootstrapUnregisteredReceipt(registryPath string, target installTarget, options InstallOptions, reason string) AdmissionReceipt {

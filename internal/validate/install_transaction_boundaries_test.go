@@ -6,8 +6,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -640,17 +644,13 @@ func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived := admissionSeedGlobalSibling(t, registry, global.ID, project)
-	run, err := admissionStartCurrent(project, packageRoot, registry, derived.ID, "install-global", "lightweight")
+	run, err := admissionStartCurrent(project, packageRoot, registry, global.ID, "install-global", "lightweight")
 	if err != nil {
 		t.Fatal(err)
 	}
 	loaded := admissionCurrentRequest(t, project, run.RunID)
-	if loaded.InstalledTargetIdentity == global.ID || loaded.AdmissionRoot != project || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != derived.Generation || loaded.AdmissionLease != derived.Lease || loaded.AdmissionToken != derived.Token {
+	if loaded.InstalledTargetIdentity != global.ID || loaded.AdmissionRoot != project || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != global.Generation || loaded.AdmissionLease != global.Lease || loaded.AdmissionToken != global.Token {
 		t.Fatalf("global admission lost project binding: %+v", loaded)
-	}
-	if derived.Target != global.Target || derived.LauncherPath != global.LauncherPath || derived.ProjectRoot != canonicalRegistryPath(project) || derived.StateRoot != canonicalRegistryPath(filepath.Join(project, ".gates")) || derived.ResourceRoot != canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources")) {
-		t.Fatalf("existing project-local roots differ: %+v", derived)
 	}
 
 	if _, err := os.Stat(filepath.Join(hostRoot, ".gates")); !os.IsNotExist(err) {
@@ -1323,77 +1323,296 @@ func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 
 var _ = fmt.Sprintf
 
-func TestBootstrapValidatesSharedPackagesAndEveryAdmission(t *testing.T) {
-	source := installFixtureSource(t)
+func TestGlobalUninstallDiscoversStartedProjectRun(t *testing.T) {
+	source := copyPackageFixture(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	project := installGitProject(t)
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
 	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
 	fixtureLauncherInvocation(t, launcher)
 	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
-	first, err := Install(options)
+	installed, err := Install(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := options
-	other.Host = "claude"
-	second, err := Install(other)
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, original := range document.Records {
-		for index := range 3 {
-			project := t.TempDir()
-			sibling := original
-			sibling.ID += fmt.Sprintf("-project-%d", index)
-			sibling.ProjectRoot = canonicalRegistryPath(project)
-			sibling.StateRoot = canonicalRegistryPath(filepath.Join(project, ".gates"))
-			sibling.ResourceRoot = canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
-			sibling.CanonicalPaths = map[string]string{}
-			for key, value := range original.CanonicalPaths {
-				sibling.CanonicalPaths[key] = value
-			}
-			sibling.CanonicalPaths["projectRoot"] = sibling.ProjectRoot
-			sibling.CanonicalPaths["stateRoot"] = sibling.StateRoot
-			sibling.CanonicalPaths["resourceRoot"] = sibling.ResourceRoot
-			repairCommitRegistry(t, registry, sibling)
-		}
-	}
-	log := filepath.Join(t.TempDir(), "validation.log")
-	t.Setenv("PACKAGE_OWNER_VALIDATION_LOG", log)
 	options.Bootstrap = true
-	report, err := Install(options)
+	if _, err := Install(options); err != nil {
+		t.Fatal(err)
+	}
+	run, err := admissionStartCurrent(project, installed.Targets[0].TargetPath, registry, installed.Targets[0].RegistryRecordID, "global-active", "regular")
+	if err != nil || run.Status != "ACTIVE" {
+		t.Fatal("normal global Start", run.Status, err)
+	}
+	f, err := facade.Open(project, run.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	counts := map[string]int{}
-	for _, path := range strings.Split(strings.TrimSpace(string(installReadFile(t, log))), "\n") {
-		counts[canonicalRegistryPath(path)]++
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal("normal review advancement", err)
 	}
-	for _, path := range []string{source, first.Targets[0].TargetPath, second.Targets[0].TargetPath} {
-		if counts[canonicalRegistryPath(path)] != 1 {
-			t.Fatalf("physical package validation repeated or omitted for %s: %v", path, counts)
+	state := filepath.Join(project, facade.EngineNamespace, run.RunID, "state.json")
+	before := installReadFile(t, state)
+	var projection struct {
+		Content struct {
+			Phase string `json:"phase"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(before, &projection); err != nil || projection.Content.Phase != "PRODUCT_REVIEW" {
+		t.Fatal("review state was not genuinely advanced", projection.Content.Phase, err)
+	}
+	doc, err := LoadRegistry(registry)
+	if err != nil || len(doc.Records) != 1 {
+		t.Fatal("Start wrote an extra registry namespace", err)
+	}
+	references, err := filepath.Glob(filepath.Join(doc.Records[0].ResourceRoot, "engine-runs", "*.json"))
+	if err != nil || len(references) != 1 {
+		t.Fatal("original request location missing", references, err)
+	}
+	var location map[string]string
+	if err := json.Unmarshal(installReadFile(t, references[0]), &location); err != nil || len(location) != 1 || location["request"] != filepath.Join(filepath.Dir(state), "request.json") {
+		t.Fatal("location became a state projection", location, err)
+	}
+	if _, err := Uninstall(UninstallOptions{Host: "codex", Scope: "global", RegistryPath: registry}); err == nil || !strings.Contains(err.Error(), "active workflow run") {
+		t.Fatal("uninstall did not refuse normal ACTIVE project", err)
+	}
+	if !bytes.Equal(before, installReadFile(t, state)) || !isFile(filepath.Join(installed.Targets[0].TargetPath, "bin", nativeBinaryName())) {
+		t.Fatal("rejected uninstall changed active state or runtime")
+	}
+
+}
+
+func TestGlobalTerminalRunReleasesUninstall(t *testing.T) {
+	source := copyPackageFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	project := installGitProject(t)
+	registry := filepath.Join(home, ".formal-gates", "registry.json")
+	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
+	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	installed, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Bootstrap = true
+	if _, err := Install(options); err != nil {
+		t.Fatal(err)
+	}
+	run, err := admissionStartCurrent(project, installed.Targets[0].TargetPath, registry, installed.Targets[0].RegistryRecordID, "global-terminal", "lightweight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := facade.Open(project, run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references, err := filepath.Glob(filepath.Join(doc.Records[0].ResourceRoot, "engine-runs", "*.json"))
+	if err != nil || len(references) != 1 {
+		t.Fatal("original request location", references, err)
+	}
+	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.SubmitControl(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	for i, ask := range run.PendingAsks {
+		if ask.Control == protocol.ControlAbort {
+			position = i + 1
 		}
 	}
-	after, err := LoadRegistry(registry)
-	if err != nil || len(after.Records) != 8 {
-		t.Fatal("bootstrap lost namespace records", after, err)
+	if position == 0 {
+		t.Fatal("abort Ask missing")
 	}
-	var receipt BootstrapReceipt
-	if err := json.Unmarshal(installReadFile(t, report.BootstrapReceiptPath), &receipt); err != nil || !reflect.DeepEqual(receipt.Records, after.Records) {
-		t.Fatal("bootstrap receipt changed original admission contents", err)
+	decision, err := f.PrepareControl(facade.ControlInput{Ask: position, Choice: "abort", Reason: "Finish the isolated run"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	after.Records[len(after.Records)-1].Token = ""
-	before := installWriteRegistry(t, registry, after.Epoch, after.Records...)
-	if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "cannot be reconciled") {
-		t.Fatal("shared target bypassed an invalid admission record", err)
+	if _, _, err = f.SubmitControl(decision); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(before, installReadFile(t, registry)) {
-		t.Fatal("rejected bootstrap changed original registry bytes")
+	run, err = f.Drive()
+	for err == nil && run.Status == "ABORTING" {
+		previous := run.Revision
+		run, err = f.Drive()
+		if err == nil && run.Revision == previous {
+			t.Fatalf("abort stopped at original facts: %+v", run.Next)
+		}
+	}
+	if err != nil || run.Status != "ABORTED" {
+		t.Fatal("normal abort terminal cleanup", run.Status, err)
+	}
+	if _, err := os.Stat(references[0]); !os.IsNotExist(err) {
+		t.Fatal("terminal owner retained request location", err)
+	}
+	if _, err := f.Drive(); err != nil {
+		t.Fatal("repeated terminal cleanup", err)
+	}
+	if _, err := Uninstall(UninstallOptions{Host: "codex", Scope: "global", RegistryPath: registry}); err != nil {
+		t.Fatal("terminal run still fenced uninstall", err)
+	}
+
+}
+
+func TestGlobalStartAndUninstallShareAdmissionBoundary(t *testing.T) {
+	for _, first := range []string{"start", "uninstall"} {
+		t.Run(first, func(t *testing.T) {
+			source := copyPackageFixture(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			project := installGitProject(t)
+			registry := filepath.Join(home, ".formal-gates", "registry.json")
+			launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+			fixtureLauncherInvocation(t, launcher)
+			options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+			installed, err := Install(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.Bootstrap = true
+			if _, err = Install(options); err != nil {
+				t.Fatal(err)
+			}
+			ad, err := ResolveEngineAdmission(project, installed.Targets[0].TargetPath, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preview, err := facade.PrepareIntake(project, "requirements.md", "requirements.md", nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := "concurrent-start"
+			start := func() error {
+				_, _, err := facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, RuntimeFiles: ad.RuntimeFiles, Request: facade.StartRequest{RunID: id, Route: "lightweight", Provider: ad.Provider, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: &facade.Admission{RegistryPath: ad.RegistryPath, Target: ad.Target, Provider: ad.Provider, PackageDigest: ad.PackageDigest, InstalledTargetIdentity: ad.RecordID, Generation: ad.Generation, Lease: ad.Lease, Token: ad.Token}})
+				return err
+			}
+			uninstall := func() error {
+				_, err := Uninstall(UninstallOptions{Host: "codex", Scope: "global", RegistryPath: registry})
+				return err
+			}
+			results := make(chan error, 1)
+			if first == "start" {
+				go func() { results <- start() }()
+				for {
+					references, err := filepath.Glob(filepath.Join(home, ".formal-gates-resources", "engine-runs", "*.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(references) == 1 {
+						break
+					}
+					select {
+					case err := <-results:
+						t.Fatal("Start ended before publishing its original reference", err)
+					default:
+					}
+					time.Sleep(time.Millisecond)
+				}
+				err = uninstall()
+				if err == nil {
+					t.Fatal("uninstall ignored published Start prefix")
+				}
+				var held *LockHeldError
+				if errors.As(err, &held) {
+					if held.Path != registry+".lock" {
+						t.Fatal("uninstall stopped at an unrelated lock", held)
+					}
+				} else if !strings.Contains(err.Error(), "fences uninstall") {
+					t.Fatal("unexpected uninstall result", err)
+				}
+				if err = <-results; err != nil {
+					t.Fatal(err)
+				}
+				if !isFile(filepath.Join(project, facade.EngineNamespace, id, "state.json")) {
+					t.Fatal("Start winner lost state")
+				}
+
+			} else {
+				release, err := coordination.AcquireRun(project, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { results <- start() }()
+				err = uninstall()
+				release()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = <-results; err == nil {
+					t.Fatal("Start wrote after uninstall revoked admission")
+				}
+				if _, err = os.Stat(filepath.Join(project, facade.EngineNamespace, id, "state.json")); !os.IsNotExist(err) {
+					t.Fatal("revoked Start created authoritative state", err)
+				}
+			}
+		})
+	}
+}
+
+func TestGlobalRequestReferenceKeepsExactRuntimeInventory(t *testing.T) {
+	source := copyPackageFixture(t)
+	project := installGitProject(t)
+	t.Setenv("HOME", project)
+	t.Setenv("USERPROFILE", project)
+	registry := filepath.Join(project, ".formal-gates", "registry.json")
+	launcher := filepath.Join(project, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
+	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	installed, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Bootstrap = true
+	if _, err = Install(options); err != nil {
+		t.Fatal(err)
+	}
+	ad, err := ResolveEngineAdmission(project, installed.Targets[0].TargetPath, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := facade.PrepareIntake(project, "requirements.md", "requirements.md", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "inventory-run"
+	_, _, err = facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, RuntimeFiles: ad.RuntimeFiles, Request: facade.StartRequest{RunID: id, Route: "lightweight", Provider: ad.Provider, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: &facade.Admission{RegistryPath: ad.RegistryPath, Target: ad.Target, Provider: ad.Provider, PackageDigest: ad.PackageDigest, InstalledTargetIdentity: ad.RecordID, Generation: ad.Generation, Lease: ad.Lease, Token: ad.Token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := ResolveEngineAdmission(project, installed.Targets[0].TargetPath, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := filepath.Join(project, ".formal-gates-resources")
+	refs, err := filepath.Glob(filepath.Join(resources, "engine-runs", "*.json"))
+	if err != nil || len(refs) != 1 {
+		t.Fatal(refs, err)
+	}
+	var req facade.StartRequest
+	if err = json.Unmarshal(installReadFile(t, filepath.Join(project, facade.EngineNamespace, id, "request.json")), &req); err != nil || req.RuntimeFiles == nil || !req.RuntimeFiles.ContainsFile(refs[0]) || !bound.RuntimeFiles.ContainsFile(refs[0]) {
+		t.Fatal("original request location missing from carried or discovered inventory", err)
+	}
+	userFile := filepath.Join(resources, "user-notes.txt")
+	if err = os.WriteFile(userFile, []byte("original user content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if bound.RuntimeFiles.ContainsFile(userFile) {
+		t.Fatal("runtime payload granted exclusion to adjacent user content")
+	}
+	pending, err := vcs.New(project, nil).WithRuntimeFiles(bound.RuntimeFiles).Status()
+	if err != nil || strings.Contains(pending, filepath.Base(refs[0])) || !strings.Contains(pending, "user-notes.txt") {
+		t.Fatal("native VCS lost exact runtime/user boundary", pending, err)
 	}
 }
