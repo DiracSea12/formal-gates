@@ -160,6 +160,12 @@ func (s *Store) CleanupTerminal() error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
+		if name == "payloads" {
+			if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
+				return err
+			}
+			continue
+		}
 		if name != stateFileName && name != intentFileName && name != "slice-receipt.json" &&
 			!(strings.HasPrefix(name, tempPrefix) && strings.HasSuffix(name, tempSuffix)) {
 			continue
