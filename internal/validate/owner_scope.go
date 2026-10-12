@@ -74,8 +74,7 @@ func isWorkflowStartCommand(command string) bool {
 }
 
 // captureStartOwner 在「主线程 + workflow start」时把发起对话身份写入 sidecar。任何一步
-// 不满足（非主线程、非 start、无身份字段、无 --root）都静默跳过——宁可丢失 owner 也不
-// 污染 sidecar 或干扰判定。
+// 不满足（非主线程、非 start、无身份字段、相对根目录无宿主 cwd）都静默跳过。
 func captureStartOwner(decoded any, providers ...string) {
 	if hookAgentType(decoded) != "" {
 		return
@@ -89,8 +88,12 @@ func captureStartOwner(decoded any, providers ...string) {
 		return
 	}
 	root := workflowStartRoot(command)
-	if root == "" {
-		return
+	if !filepath.IsAbs(root) {
+		cwd := hookPayloadCwd(decoded)
+		if cwd == "" {
+			return
+		}
+		root = filepath.Join(cwd, root)
 	}
 	dir := filepath.Dir(ownerSidecarPath(root))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -108,14 +111,14 @@ func captureStartOwner(decoded any, providers ...string) {
 	_ = os.WriteFile(ownerSidecarPath(root), data, 0o600)
 }
 
-// workflowStartRoot 从 workflow start 命令解析 --root（支持 --root X 与 --root=X）。
+// workflowStartRoot 解析 --root（支持 --root X 与 --root=X），缺省为当前目录。
 func workflowStartRoot(command string) string {
 	for _, v := range switchValues(splitCommand(command), "root") {
 		if strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
 	}
-	return ""
+	return "."
 }
 
 // ConsumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次

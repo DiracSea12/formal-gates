@@ -52,49 +52,95 @@ func TestHookOwnerIdentity(t *testing.T) {
 }
 
 func TestCaptureAndConsumeStartOwner(t *testing.T) {
-	root := t.TempDir()
-	payload := map[string]any{
-		"tool_name": "Bash",
-		"tool_input": map[string]any{
-			"command": "formal-gates workflow start --root " + filepath.ToSlash(root) + " --split no",
-		},
-		"transcript_path": "/t/owner.jsonl",
-		"session_id":      "owner-session",
-	}
-	captureStartOwner(payload, "codex")
-	tr, se, provider := ConsumeStartOwner(root)
-	if tr != "/t/owner.jsonl" || se != "owner-session" || provider != "codex" {
-		t.Fatalf("capture/consume mismatch: got (%q,%q,%q)", tr, se, provider)
-	}
-	if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
-		t.Fatalf("sidecar not removed after consume")
+	for _, name := range []string{"default root", "relative root", "absolute root"} {
+		t.Run(name, func(t *testing.T) {
+			cwd := t.TempDir()
+			root := cwd
+			command := "formal-gates workflow start --intake 1"
+			switch name {
+			case "relative root":
+				root = filepath.Join(cwd, "project")
+				command += " --root project"
+			case "absolute root":
+				root = t.TempDir()
+				command += fmt.Sprintf(" --root=%q", root)
+			}
+			payload, err := json.Marshal(map[string]any{
+				"cwd":             cwd,
+				"tool_name":       "Bash",
+				"tool_input":      map[string]any{"command": command},
+				"transcript_path": "/t/owner.jsonl",
+				"session_id":      "owner-session",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Hook(payload, "codex"); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(ownerSidecarPath(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var owner map[string]string
+			if err := json.Unmarshal(data, &owner); err != nil {
+				t.Fatal(err)
+			}
+			if len(owner) != 3 || owner["transcript"] != "/t/owner.jsonl" || owner["session"] != "owner-session" || owner["provider"] != "codex" {
+				t.Fatalf("bootstrap owner mismatch: %s", data)
+			}
+			tr, se, provider := ConsumeStartOwner(root)
+			if tr != "/t/owner.jsonl" || se != "owner-session" || provider != "codex" {
+				t.Fatalf("capture/consume mismatch: got (%q,%q,%q)", tr, se, provider)
+			}
+			if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
+				t.Fatalf("sidecar not removed after consume")
+			}
+			if tr, se, provider := ConsumeStartOwner(root); tr != "" || se != "" || provider != "" {
+				t.Fatalf("repeated consume retained owner: got (%q,%q,%q)", tr, se, provider)
+			}
+		})
 	}
 }
 
-func TestCaptureStartOwnerSkipsNonStart(t *testing.T) {
-	root := t.TempDir()
-	// 非 workflow start 命令不应写 sidecar。
-	captureStartOwner(map[string]any{
-		"tool_name":       "Bash",
-		"tool_input":      map[string]any{"command": "echo hi"},
-		"transcript_path": "/t/owner.jsonl",
-		"session_id":      "owner-session",
-	})
-	if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
-		t.Fatalf("sidecar written for non-start command")
+func TestCaptureStartOwnerSkipsUnownedCommands(t *testing.T) {
+	for _, name := range []string{"non-start", "subagent", "no identity"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			payload := map[string]any{
+				"cwd":             root,
+				"tool_name":       "Bash",
+				"tool_input":      map[string]any{"command": "formal-gates workflow start --intake 1"},
+				"transcript_path": "/t/owner.jsonl",
+				"session_id":      "owner-session",
+			}
+			switch name {
+			case "non-start":
+				payload["tool_input"] = map[string]any{"command": "echo hi"}
+			case "subagent":
+				payload["agent_type"] = "dev-worker"
+			case "no identity":
+				delete(payload, "transcript_path")
+				delete(payload, "session_id")
+			}
+			captureStartOwner(payload)
+			if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
+				t.Fatalf("sidecar written for %s", name)
+			}
+		})
 	}
 }
 
 func TestPrecheckDoesNotCaptureOrReplaceBootstrapOwner(t *testing.T) {
 	root := t.TempDir()
-	bootstrap := map[string]any{"command": fmt.Sprintf("formal-gates workflow start --root %q --intake-receipt receipt.json", root), "session_id": "bootstrap-owner"}
+	bootstrap := map[string]any{"cwd": root, "command": "formal-gates workflow start --intake 1", "session_id": "bootstrap-owner"}
 	captureStartOwner(bootstrap, "codex")
 	before, err := os.ReadFile(ownerSidecarPath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, flag := range []string{"--precheck", "--precheck=true"} {
-		payload, _ := json.Marshal(map[string]any{"command": fmt.Sprintf("formal-gates workflow start %s --root %q --requirement requirement.md", flag, root), "session_id": "preview-owner"})
+		payload, _ := json.Marshal(map[string]any{"cwd": root, "command": fmt.Sprintf("formal-gates workflow start %s --document 1", flag), "session_id": "preview-owner"})
 		if _, err := Hook(payload, "codex"); err != nil {
 			t.Fatal(err)
 		}
