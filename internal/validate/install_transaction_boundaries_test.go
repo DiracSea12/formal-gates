@@ -419,8 +419,8 @@ func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(thirdDocument.Records) != 2 {
-		t.Fatalf("uninstall changed registry record cardinality: got=%d records=%+v", len(thirdDocument.Records), thirdDocument.Records)
+	if len(thirdDocument.Records) != 1 {
+		t.Fatalf("uninstall did not remove only its own record: got=%d records=%+v", len(thirdDocument.Records), thirdDocument.Records)
 	}
 	if thirdDocument.Epoch <= secondDocument.Epoch {
 		t.Fatalf("uninstall registry epoch regressed: before=%d after=%d", secondDocument.Epoch, thirdDocument.Epoch)
@@ -431,11 +431,10 @@ func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
 	if got := installRecordByID(t, thirdDocument, claudeBefore.ID); !reflect.DeepEqual(got, claudeBefore) {
 		t.Fatalf("uninstall changed the unrelated record: before=%+v after=%+v", claudeBefore, got)
 	}
-	codexAfter := installRecordByID(t, thirdDocument, codexID)
-	codexWant := installRecordByID(t, secondDocument, codexID)
-	codexWant.Status = "disabled"
-	if !reflect.DeepEqual(codexAfter, codexWant) {
-		t.Fatalf("uninstall changed non-status fields of the installing record: before=%+v after=%+v", codexWant, codexAfter)
+	for _, record := range thirdDocument.Records {
+		if record.ID == codexID {
+			t.Fatal("uninstall retained its registry record")
+		}
 	}
 }
 

@@ -399,6 +399,7 @@ type outerInstallJournal struct {
 	CreatedAt        string                `json:"createdAt"`
 	Registry         outerFileSnapshot     `json:"registry"`
 	Receipt          outerFileSnapshot     `json:"receipt"`
+	Receipts         []outerFileSnapshot   `json:"receipts,omitempty"`
 	Targets          []outerTargetSnapshot `json:"targets"`
 	Release          outerTreeSnapshot     `json:"release"`
 	Binary           outerFileSnapshot     `json:"binary"`
@@ -435,6 +436,7 @@ type outerTargetSnapshot struct {
 	RulePath        string            `json:"rulePath,omitempty"`
 	ResourcePath    string            `json:"resourcePath,omitempty"`
 	ResourceExisted bool              `json:"resourceExisted,omitempty"`
+	ResourceMode    uint32            `json:"resourceMode,omitempty"`
 	Tree            outerTreeSnapshot `json:"tree"`
 	Hook            outerFileSnapshot `json:"hook"`
 	HookState       outerFileSnapshot `json:"hookState"`
@@ -616,7 +618,14 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 		if err := restoreOuterFile(target.Rule); err != nil && firstErr == nil {
 			firstErr = err
 		}
-		if !target.ResourceExisted {
+		if journal.Operation == "uninstall" && target.ResourceExisted && target.ResourcePath != "" {
+			if err := os.MkdirAll(target.ResourcePath, os.FileMode(target.ResourceMode)); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if err := os.Chmod(target.ResourcePath, os.FileMode(target.ResourceMode)); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		} else if !target.ResourceExisted {
 			removeEmptyDirectory(target.ResourcePath)
 		}
 	}
@@ -639,6 +648,11 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 	}
 	if err := restoreOuterFile(journal.Receipt); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	for _, receipt := range journal.Receipts {
+		if err := restoreOuterFile(receipt); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	for _, path := range journal.Staged {
 		_ = os.RemoveAll(path)

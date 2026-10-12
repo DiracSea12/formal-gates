@@ -37,13 +37,12 @@ const (
 )
 
 type PathLayout struct {
-	GlobalBase             string
-	GlobalHookConfig       string
-	GlobalManaged          string
-	ProjectBase            string
-	ProjectHookConfig      string
-	ProjectManaged         string
-	RemoveManagedWhenEmpty bool
+	GlobalBase        string
+	GlobalHookConfig  string
+	GlobalManaged     string
+	ProjectBase       string
+	ProjectHookConfig string
+	ProjectManaged    string
 }
 
 type HookSpec struct {
@@ -107,7 +106,7 @@ var descriptors = []*Descriptor{
 		Installable:   true,
 		Paths: PathLayout{
 			GlobalBase: ".cursor", GlobalHookConfig: ".cursor/hooks.json",
-			ProjectBase: ".cursor", ProjectHookConfig: ".cursor/hooks.json", ProjectManaged: ".cursor/rules/formal-gates.mdc", RemoveManagedWhenEmpty: true,
+			ProjectBase: ".cursor", ProjectHookConfig: ".cursor/hooks.json", ProjectManaged: ".cursor/rules/formal-gates.mdc",
 		},
 		Hook:              HookSpec{Kind: HookFlat, Protocol: ProtocolGeneric, GateEvent: "preToolUse", GateMatcher: "*"},
 		LifecycleRequired: true,

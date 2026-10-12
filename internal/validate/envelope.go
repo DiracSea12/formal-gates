@@ -503,9 +503,6 @@ func loadRegistryForCommit(path string) (RegistryDocument, error) {
 // install/bootstrap/uninstall transaction already holds the registry lock and
 // supplies complete bound records; recovery may only restore exact old bytes.
 func commitRegistryRecordsUnlocked(path string, doc RegistryDocument, records []RegistryRecord) (RegistryDocument, error) {
-	if len(records) == 0 {
-		return doc, nil
-	}
 	replacements := map[string]bool{}
 	for _, record := range records {
 		replacements[record.ID] = true

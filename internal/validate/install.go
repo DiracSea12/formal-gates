@@ -644,6 +644,25 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
 	}
+	removing := map[string]bool{}
+	for _, target := range targets {
+		removing[canonicalRegistryPath(target.targetPath)] = true
+	}
+	remaining := []RegistryRecord{}
+	selected := []RegistryRecord{}
+	sharedRelease, sharedBinary, sharedResource := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, record := range activeRegistryRecords {
+		if removing[canonicalRegistryPath(record.Target)] {
+			selected = append(selected, record)
+			continue
+		}
+		remaining = append(remaining, record)
+		if strings.EqualFold(record.Status, "active") {
+			sharedRelease[canonicalRegistryPath(record.ReleaseRoot)] = true
+			sharedBinary[canonicalRegistryPath(record.LauncherPath)] = true
+			sharedResource[canonicalRegistryPath(record.ResourceRoot)] = true
+		}
+	}
 	transactionParent := filepath.Dir(registryPath)
 	if transactionParent == "." || transactionParent == "" {
 		transactionParent = filepath.Dir(targets[0].targetPath)
@@ -708,6 +727,48 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		}
 		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule})
 	}
+	seen := map[string]bool{}
+	for index, record := range selected {
+		backupRoot := filepath.Join(transactionRoot, fmt.Sprintf("owned-%d", index))
+		if record.ReleaseRoot != "" && !sharedRelease[canonicalRegistryPath(record.ReleaseRoot)] && !seen[canonicalRegistryPath(record.ReleaseRoot)] {
+			tree, err := snapshotInstallTree(record.ReleaseRoot, filepath.Join(backupRoot, "release"))
+			if err != nil {
+				return UninstallReport{}, err
+			}
+			outer.Release = outerTreeFromBackup(tree)
+			seen[canonicalRegistryPath(record.ReleaseRoot)] = true
+		}
+		if record.LauncherPath != "" && !sharedBinary[canonicalRegistryPath(record.LauncherPath)] && !seen[canonicalRegistryPath(record.LauncherPath)] {
+			outer.Binary, err = snapshotOuterFile(record.LauncherPath, filepath.Join(backupRoot, "launcher"))
+			if err != nil {
+				return UninstallReport{}, err
+			}
+			seen[canonicalRegistryPath(record.LauncherPath)] = true
+		}
+		if record.ResourceRoot != "" && !sharedResource[canonicalRegistryPath(record.ResourceRoot)] && !seen[canonicalRegistryPath(record.ResourceRoot)] {
+			entries, err := os.ReadDir(record.ResourceRoot)
+			if err != nil && !os.IsNotExist(err) {
+				return UninstallReport{}, err
+			}
+			if err == nil && len(entries) == 0 {
+				info, err := os.Stat(record.ResourceRoot)
+				if err != nil {
+					return UninstallReport{}, err
+				}
+				outer.Targets[0].ResourcePath, outer.Targets[0].ResourceExisted, outer.Targets[0].ResourceMode = record.ResourceRoot, true, uint32(info.Mode().Perm())
+			}
+			seen[canonicalRegistryPath(record.ResourceRoot)] = true
+		}
+	}
+	if len(remaining) == 0 {
+		for index, suffix := range []string{".install.json", ".bootstrap.json", ".admission.json", ".transaction.json.receipt.json", ".transaction.json.failure.json"} {
+			receipt, err := snapshotOuterFile(registryPath+suffix, filepath.Join(transactionRoot, fmt.Sprintf("receipt-%d", index)))
+			if err != nil {
+				return UninstallReport{}, err
+			}
+			outer.Receipts = append(outer.Receipts, receipt)
+		}
+	}
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, err
 	}
@@ -742,12 +803,8 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			if err := installFault("managed-rule"); err != nil {
 				return UninstallReport{}, rollback(err)
 			}
-			removeManagedWhenEmpty := false
-			if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil {
-				removeManagedWhenEmpty = descriptor.Paths.RemoveManagedWhenEmpty
-			}
 			if !managedRuleSharedByActiveInstall(target.managedRulePath, targets, activeRegistryRecords) {
-				if err := removeManagedRuleFile(target.managedRulePath, removeManagedWhenEmpty); err != nil {
+				if err := removeManagedRuleFile(target.managedRulePath, true); err != nil {
 					return UninstallReport{}, rollback(err)
 				}
 			}
@@ -759,24 +816,46 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, rollback(err)
 		}
 	}
+	if outer.Release.Path != "" {
+		if err := os.RemoveAll(outer.Release.Path); err != nil {
+			return UninstallReport{}, rollback(err)
+		}
+	}
+	if outer.Binary.Path != "" {
+		if err := os.Remove(outer.Binary.Path); err != nil && !os.IsNotExist(err) {
+			return UninstallReport{}, rollback(err)
+		}
+	}
+	if path := outer.Targets[0].ResourcePath; path != "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return UninstallReport{}, rollback(err)
+		}
+	}
+
+	for _, receipt := range outer.Receipts {
+		if err := os.Remove(receipt.Path); err != nil && !os.IsNotExist(err) {
+			return UninstallReport{}, rollback(err)
+		}
+	}
+	if err := installFault("registry-commit"); err != nil {
+		return UninstallReport{}, rollback(err)
+	}
 	if registryPath != "" {
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
-			updated := append([]RegistryRecord(nil), doc.Records...)
-			for index := range updated {
-				for _, target := range targets {
-					if filepath.Clean(updated[index].Target) == filepath.Clean(target.targetPath) {
-						updated[index].Status = "disabled"
-						break
-					}
-				}
-			}
-			if _, err := commitRegistryRecordsUnlocked(registryPath, doc, updated); err != nil {
+			doc.Records = remaining
+			if _, err := commitRegistryRecordsUnlocked(registryPath, doc, remaining); err != nil {
 				return UninstallReport{}, rollback(fmt.Errorf("uninstall registry bridge update failed: %w", err))
+			}
+			if len(remaining) == 0 {
+				if err := os.Remove(registryPath); err != nil && !os.IsNotExist(err) {
+					return UninstallReport{}, rollback(err)
+				}
 			}
 		} else if !os.IsNotExist(loadErr) {
 			return UninstallReport{}, rollback(fmt.Errorf("uninstall registry bridge unavailable: %w", loadErr))
 		}
 	}
+
 	outer.Phase = "registry-committed"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, rollback(err)
@@ -1827,11 +1906,29 @@ func removeGenericInstallHooks(target installTarget) error {
 		if !ok {
 			continue
 		}
-		hooks[event] = removeFormalGatesHookEntries(existing, target, shape)
+		remaining := removeFormalGatesHookEntries(existing, target, shape)
+		if len(existing) != 0 && len(remaining) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = remaining
+		}
 	}
 	after, _ := json.Marshal(config)
 	if string(before) == string(after) {
 		return nil
+	}
+	if len(config) == 1 {
+		empty := true
+		for _, value := range hooks {
+			entries, ok := value.([]any)
+			if !ok || len(entries) != 0 {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			return os.Remove(target.hookConfig)
+		}
 	}
 	return writeHookConfig(target.hookConfig, config)
 }
