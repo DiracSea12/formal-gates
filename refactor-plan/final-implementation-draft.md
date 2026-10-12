@@ -325,9 +325,9 @@ Controller 按 master/整体 run 和审查动作分别持久化两条独立的 `
 
 关键并行组：
 
-- 开发期：开发 worker + 黑盒 QA 用例设计/审查；
+- 普通非分片开发期：开发 worker + 黑盒 QA 用例设计/审查；
 - 分片开发期：各 slice 开发 + 合并 QA 跨片用例设计/审查；
-- 开发实现快照 Dn/S1 后：只解锁白盒设计/authoring；白盒测试提交为 Qn/S2，QA Review 与 P2/P3 吸收若修改测试继续提交，直至所有 mode 的最终 case-set FROZEN 且绑定含测试快照；
+- 普通非分片 run 选择白盒时，开发实现快照 Dn/S1 后：只解锁白盒设计/authoring；白盒测试提交为 Qn/S2，QA Review 与 P2/P3 吸收若修改测试继续提交，直至所有 mode 的最终 case-set FROZEN 且绑定含测试快照；
 - 最终 review-ready 候选就绪后：一次冻结 expected-set/digest，全部 eligible QA execution 与 selected gates 同时准备并最大并行，均绑定该最终候选；
 - 合并后：合并 QA 执行 + 合并门；
 - 修复后：所有受影响且依赖满足的验证再次最大 fan-out。
@@ -335,6 +335,8 @@ Controller 按 master/整体 run 和审查动作分别持久化两条独立的 `
 review-ready 是执行屏障：之前不提前签发黑盒执行或门，也不用 provisional 结果代替最终候选验证。普通实现返修沿用 FROZEN 用例，不重新设计。
 
 ## 7. 开发后 QA、门与三轮
+
+普通黑盒/白盒 QA 的候选与审查义务适用于非分片 run；child 只冻结完整开发候选与适用普通门结果，分片集中 QA 遵循 §8。
 
 ```text
 开发快照 Dn/S1 → 白盒设计并提交测试 Qn/S2
@@ -424,20 +426,22 @@ Controller/validator 负责结构校验，覆盖率、mutation、property-based 
 
 `start` 不接受也不冻结拆分意向（取消 `--split` 强制声明）。拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认：高置信要拆时 Ask 精确拓扑，低置信不拆或不确定由 engine 自动记录 no-split 理由。拓扑确认即绑定点——确认前用户可改变意向、无需重启或 reset；确认后不得重切，变更走用户需求变化、reset/rebuild 或 abort。
 
-master 确认拓扑后，Controller 执行固定 child-creation plan：ENGINE_LOCAL 持久化 intent、分配 childRunID、创建 PREPARING child state 并注入 bindings；每个 Git/SVN/P4 workspace/client 再由 VCS adapter 独立 StepSpec 创建/对账；ENGINE 校验全部 typed receipts/identity 后，才原子提交 `sliceID -> childRunID` map 并解锁 child。child 继承完整产品/技术审和拓扑，各自持久化 full/custom 路线。
+master 确认拓扑后，Controller 执行固定 child-creation plan：ENGINE_LOCAL 持久化 intent、分配 childRunID、创建 PREPARING child state 并注入 bindings；每个 Git/SVN/P4 workspace/client 再由 VCS adapter 独立 StepSpec 创建/对账；ENGINE 校验全部 typed receipts/identity 后，才原子提交 `sliceID -> childRunID` map 并解锁 child。child 继承完整产品/技术审和拓扑，各自持久化 full/custom 路线；只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。
 
 child 达标后进入可恢复 `SLICE_READY`，不独立最终 SEALED、不删除恢复信息。durable receipt 至少包含：
 
 - 状态、child/slice/master ID；
 - workflow/state schema version；
-- 已包含白盒测试的最终 child VCS identity、tree/validation digest 与 candidate-promotion receipt；
+- 最终完整 child VCS identity、tree/validation digest 与 candidate-promotion receipt；
 - requirement/topology/route bindings；
-- QA/门结果、批准 cases、cost；
+- 普通门结果、cost；`SelectedQA` 与 `ApprovedCases` 为空，明确未选择普通 QA；
 - 最后 request/event digest 和幂等结果。
 
 master 只按持久 map 接受预期 receipt，不扫描任意 sidecar 猜测 child 完成。child abort 产生 ABORTED receipt 并阻塞 master；master 的 abort/reset/重大需求变化按用户授权级联，不留 orphan。
 
 ### 8.2 合并路径
+
+分片 QA 集中在 master 合并后执行；merge QA 的批准用例覆盖完整已确认需求与方案中适用的 QA 义务。master 最终 Seal 绑定这些用例和执行结果、完整 child receipt map 与成本；整体需求保证以这些当前证据为准。
 
 ```mermaid
 flowchart TD
@@ -451,7 +455,7 @@ flowchart TD
     MS --> AC{"child validation view 受影响?"}
     AC -- "否" --> MQE["合并 QA 执行"]
     AC -- "否" --> MG["合并门"]
-    AC -- "是或 UNKNOWN" --> CRV["最终主线候选补跑受影响 child 义务"]
+    AC -- "是或 UNKNOWN" --> CRV["最终主线候选补跑受影响 child 普通门"]
     CRV --> MQE
     CRV --> MG
     MQE --> MJ["merge join"]
@@ -476,7 +480,7 @@ flowchart TD
     MA -- "精确 waiver / abort" --> ME["重新判定或终止"]
 ```
 
-合并后始终跑合并 QA 与合并门。Operator 完成新细节语义核实后实际处置仍不唯一时，才执行 `VALIDATION_DETAIL_DISPOSITION` Ask；用户选直接返修后才由主线开发 worker 修复，不回 child、不重新 Seal child、不重复路线或澄清。用户选修 QA artifact 时，必须在主线物化修改并冻结新候选，至少 fresh review/重跑改过的 merge 测试或用例，共享组件变化时扩大到所有依赖项；随后重新计算 merge gate、merge QA 和 child obligation 的 reuse/affected，不能直接回旧候选执行。每次冲突处置/主线 repair 后，Controller 用 topology ownership、VCS diff 和 child receipt 的 validation view 计算 `AffectedChildSet`：只改 integration-owned glue/跨片接缝且 child view 全部精确相等时，仍只重跑合并双验证；改变 child-owned 内容或 UNKNOWN 时，在同一最终主线候选上额外补跑对应 child 受影响的黑盒、白盒与普通门义务，再与合并双验证 join。合并流程使用同一 wave 计数规则：处置完成后 `wave >= 3` 才作三轮 Ask。
+合并后始终跑合并 QA 与合并门。Operator 完成新细节语义核实后实际处置仍不唯一时，才执行 `VALIDATION_DETAIL_DISPOSITION` Ask；用户选直接返修后才由主线开发 worker 修复，不回 child、不重新 Seal child、不重复路线或澄清。用户选修 QA artifact 时，必须在主线物化修改并冻结新候选，至少 fresh review/重跑改过的 merge 测试或用例，共享组件变化时扩大到所有依赖项；随后重新计算 merge gate、merge QA 和 child obligation 的 reuse/affected，不能直接回旧候选执行。每次冲突处置/主线 repair 后，Controller 用 topology ownership、VCS diff 和 child receipt 的 validation view 计算 `AffectedChildSet`：只改 integration-owned glue/跨片接缝且 child view 全部精确相等时，仍只重跑合并双验证；改变 child-owned 内容或 UNKNOWN 时，在同一最终主线候选上额外补跑对应 child 受影响的普通门义务，再与合并双验证 join。合并流程使用同一 wave 计数规则：处置完成后 `wave >= 3` 才作三轮 Ask。
 
 ### 8.3 VCS adapter
 
