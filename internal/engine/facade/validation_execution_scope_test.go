@@ -7,6 +7,8 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -192,11 +194,16 @@ func (d *validationDriver) recordExecutionScope(mode coverage.ReviewKind, cases 
 	d.drive()
 }
 
-func repairedExecutionDriver(t *testing.T) *validationDriver {
+func repairedExecutionDriver(t *testing.T, drivers ...*validationDriver) *validationDriver {
 	t.Helper()
-	d, finding, wave := validationWithGateFinding(t)
+	d, finding, wave := validationWithGateFinding(t, drivers...)
 	resolveGateFinding(d, finding, wave)
 	id, in := d.action("engine.repair.v5")
+	if !d.mockNative {
+		if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\nfunc main() { println(\"ordered\") }\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	d.verifyRepair(edit)
@@ -227,7 +234,14 @@ func rejectExecutionScope(d *validationDriver, cases ...string) {
 func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 	for _, change := range []string{"route", "carry", "carry-route", "redo", "qa-retry"} {
 		t.Run(change, func(t *testing.T) {
-			d := repairedExecutionDriver(t)
+			var d *validationDriver
+			if change == "carry" {
+				root := t.TempDir()
+				base := snapshotRepoCommits(t, root)[0]
+				d = repairedExecutionDriver(t, plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality"))
+			} else {
+				d = repairedExecutionDriver(t)
+			}
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 			original, input := d.action("engine.qa.execution.v3")
 			candidate := *d.run.Validation.Candidate
@@ -279,7 +293,9 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS"})
 			}
 			d.reopen()
-			d.drive()
+			if change != "carry" {
+				d.drive()
+			}
 			d.assertRequiredValidationComplete(coverage.ScopeAffected)
 		})
 	}
@@ -439,7 +455,9 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 }
 
 func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
-	d := repairedExecutionDriver(t)
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := repairedExecutionDriver(t, plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality"))
 	confirmValidationWork(d, "")
 	d.reopen()
 	d.drive()
@@ -450,7 +468,6 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 		t.Fatal("new dispatch lost current requirement or scope")
 	}
 	d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
-	d.drive()
 	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 }
 

@@ -27,6 +27,12 @@ func confirmValidationCoverage(d *validationDriver, redo string, inventory *prot
 }
 func confirmValidationDocument(d *validationDriver, redo string, inventory *protocol.CoverageInventory, document string) {
 	d.t.Helper()
+	if !d.mockNative {
+		path := driverState(d.t, d).IntakeConfirmationReceipt.RequirementSource
+		if err := os.WriteFile(filepath.Join(d.f.root, path), []byte(document), 0600); err != nil {
+			d.t.Fatal(err)
+		}
+	}
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
 	var choices []protocol.RequirementWorkDecision
 	for _, item := range d.run.RequirementWork {

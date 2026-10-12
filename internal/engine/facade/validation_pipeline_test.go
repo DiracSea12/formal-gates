@@ -1441,14 +1441,41 @@ func (d *validationDriver) verifyRepair(edit protocol.ValidationResult) {
 // Required validation includes the approved complement's original PASS facts.
 func (d *validationDriver) assertRequiredValidationComplete(scope coverage.ScopeMode) {
 	d.t.Helper()
-	d.drive()
+	if d.mockNative {
+		d.drive()
+	} else {
+		for i := 0; i < 12; i++ {
+			if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+				d.t.Fatal(err)
+			}
+			if _, err := d.f.driveNative(); err != nil {
+				d.t.Fatal(err)
+			}
+			current, err := d.f.engine.Load()
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			if current.State.FinalValidationComplete(d.f.definition) {
+				break
+			}
+		}
+		var err error
+		d.run, err = d.f.project()
+		if err != nil {
+			d.t.Fatal(err)
+		}
+	}
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	if wave.Status != "COMPLETE" || wave.Scope != scope || !snapshot.State.FinalValidationComplete(d.f.definition) {
-		d.t.Fatalf("required validation did not qualify for promotion: scope=%s status=%s next=%+v", wave.Scope, wave.Status, d.run.Next)
+		facts, _ := json.Marshal(struct {
+			Wave     protocol.ValidationWave
+			Operator any
+		}{wave, d.run.Next.Operator})
+		d.t.Fatalf("required validation did not qualify for promotion: scope=%s status=%s next=%+v facts=%s", wave.Scope, wave.Status, d.run.Next, facts)
 	}
 	for _, input := range d.run.ValidationInputs {
 		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v2" {

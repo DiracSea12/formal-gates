@@ -187,7 +187,8 @@ func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current 
 			continue
 		}
 		_, responsibility := s.targetResponsibility(prior, previous)
-		if !s.validationWorkCarryAuthorized(responsibility.ResultAction, responsibility.Task) {
+		binding := s.DispatchBindings[responsibility.ResultAction]
+		if (assembly == "" || binding.RequirementRevision != current.RequirementRevision || binding.Generation != current.Generation) && !s.validationWorkCarryAuthorized(responsibility.ResultAction, responsibility.Task) {
 			continue
 		}
 		if target.Kind == "QA" && (prior.Scope != current.Scope && assembly == "" || !sameWaveCases(prior, current, target.Mode)) {
@@ -284,6 +285,9 @@ func (s *State) RequirementAssemblySource() string {
 	}
 	prior := s.currentValidationWave()
 	if prior == nil || prior.Status != "COMPLETE" || s.Validation.Candidate != nil && *s.Validation.Candidate != prior.Candidate {
+		return ""
+	}
+	if s.validateFinalCoverage() != nil {
 		return ""
 	}
 	current := &ValidationWave{Coverage: s.coverageContract(s.Validation.Candidate), Versions: map[coverage.ReviewKind]string{}}

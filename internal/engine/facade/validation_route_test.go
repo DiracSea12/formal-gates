@@ -13,9 +13,14 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-func validationWithGateFinding(t *testing.T) (*validationDriver, string, string) {
+func validationWithGateFinding(t *testing.T, drivers ...*validationDriver) (*validationDriver, string, string) {
 	t.Helper()
-	d := newValidationDriver(t, "blackbox", "quality")
+	var d *validationDriver
+	if len(drivers) > 0 {
+		d = drivers[0]
+	} else {
+		d = newValidationDriver(t, "blackbox", "quality")
+	}
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution.v3")
 	r := executionFor(in)
