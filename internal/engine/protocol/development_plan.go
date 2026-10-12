@@ -315,8 +315,8 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 	}
 	route.DevelopmentPlan = nil
 	solutionRevision := s.RequirementRevision()
-	if s.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt.SolutionRevision != "" {
-		solutionRevision = s.IntakeConfirmationReceipt.SolutionRevision
+	if receipt := s.CurrentIntakeConfirmation(); receipt != nil && receipt.SolutionRevision != "" {
+		solutionRevision = receipt.SolutionRevision
 	}
 	preview.Confirmation = DevelopmentPlanConfirmation{ReviewActionID: id, Digest: digestOfCanonical(struct {
 		Review      string

@@ -1374,19 +1374,14 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
-		req, err := f.request()
+		intake, err := prepareConfirmedIntake(f.root, snap.State.CurrentIntakeConfirmation(), snap.State.Route != "lightweight")
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
-		if req.IntakeConfirmationReceipt.RequirementSource != "" {
-			revision, err := requirementArtifactRevision(filepath.Join(f.root, req.IntakeConfirmationReceipt.RequirementSource))
-			if err != nil {
-				return protocol.Acceptance{}, Run{}, err
-			}
-			if strings.HasPrefix(snap.State.RequirementRevision(), "sha256:") {
-				revision = "sha256:" + revision
-			}
-			preview.RequirementRevision = revision
+		preview.Intake = &intake.IntakeCandidate
+		preview.RequirementRevision = intake.Revision
+		if strings.HasPrefix(snap.State.RequirementRevision(), "sha256:") {
+			preview.RequirementRevision = "sha256:" + preview.RequirementRevision
 		}
 		if err := f.resetChildrenPreview(&preview); err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -1400,6 +1395,15 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		}
 	}
 	if event.Decide != nil && event.Decide.Reset != nil {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		if preview := snap.State.PendingAsks[string(event.Decide.Request)].Reset; preview != nil && preview.Intake != nil {
+			if err := validateArtifactBindings(f.root, *preview.Intake); err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+		}
 		if err := f.validateResetChildren(string(event.Decide.Request)); err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
@@ -1649,7 +1653,7 @@ func (f *Facade) project() (Run, error) {
 			return Run{}, err
 		}
 	}
-	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
+	run.IntakeConfirmationReceipt = snap.State.CurrentIntakeConfirmation()
 	run.IntakeReceipt = snap.State.IntakeReceipt
 	// The protocol plan owns the boundary; the facade adds the bound package
 	// and freshness token for the pending requirement confirmation.
@@ -2066,9 +2070,10 @@ func IntakeDigest(receipt IntakeConfirmationReceipt) (string, error) {
 		RequirementSource   string                      `json:"requirementSource"`
 		RequirementRevision string                      `json:"requirementRevision"`
 		Artifacts           []IntakeArtifact            `json:"artifacts"`
+		SolutionSource      string                      `json:"solutionSource,omitempty"`
 		SolutionRevision    string                      `json:"solutionRevision"`
 		SolutionDigest      string                      `json:"solutionDigest"`
-	}{receipt.Coverage, receipt.Source, receipt.Authority, receipt.Transport, receipt.RequirementSource, receipt.RequirementRevision, receipt.Artifacts, receipt.SolutionRevision, receipt.SolutionDigest}
+	}{receipt.Coverage, receipt.Source, receipt.Authority, receipt.Transport, receipt.RequirementSource, receipt.RequirementRevision, receipt.Artifacts, receipt.SolutionSource, receipt.SolutionRevision, receipt.SolutionDigest}
 	data, err := json.Marshal(canonical)
 	if err != nil {
 		return "", err
@@ -2118,6 +2123,10 @@ func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) er
 		return fmt.Errorf("%s: resolve artifact root: %w", InvalidIntakeConfirmation, err)
 	}
 	solutionDigest := ""
+	solutionPath := receipt.SolutionSource
+	if solutionPath == "" {
+		solutionPath = receipt.RequirementSource
+	}
 	for _, artifact := range receipt.Artifacts {
 		path := filepath.FromSlash(artifact.Path)
 		if !filepath.IsAbs(path) {
@@ -2136,7 +2145,10 @@ func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) er
 		if observed != artifact.Revision {
 			return fmt.Errorf("%s: artifact %s revision mismatch (receipt %s, current %s)", InvalidIntakeConfirmation, artifact.Path, artifact.Revision, observed)
 		}
-		if artifact.Revision == receipt.SolutionRevision {
+		if artifact.Path == solutionPath {
+			if artifact.Revision != receipt.SolutionRevision {
+				return fmt.Errorf("%s: solution revision does not match selected artifact %s", InvalidIntakeConfirmation, artifact.Path)
+			}
 			solutionDigest = "sha256:" + observed
 		}
 	}
@@ -2156,7 +2168,7 @@ func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) er
 				return fmt.Errorf("%s: requirement revision does not match artifact %s", InvalidIntakeConfirmation, artifact.Path)
 			}
 		}
-		if artifact.Revision == receipt.SolutionRevision {
+		if artifact.Path == solutionPath {
 			solutionMatched = true
 		}
 	}
@@ -2179,6 +2191,12 @@ func validateArtifactBindings(root string, receipt IntakeConfirmationReceipt) er
 // summary prevents input order from becoming observable state.
 func canonicalizeIntakeReceipt(receipt IntakeConfirmationReceipt) IntakeConfirmationReceipt {
 	receipt.RequirementSource = filepath.ToSlash(filepath.Clean(strings.TrimSpace(receipt.RequirementSource)))
+	if receipt.SolutionSource != "" {
+		receipt.SolutionSource = filepath.ToSlash(filepath.Clean(strings.TrimSpace(receipt.SolutionSource)))
+		if receipt.SolutionSource == receipt.RequirementSource {
+			receipt.SolutionSource = ""
+		}
+	}
 	receipt.Artifacts = append([]IntakeArtifact(nil), receipt.Artifacts...)
 	for i := range receipt.Artifacts {
 		receipt.Artifacts[i].Path = filepath.ToSlash(filepath.Clean(strings.TrimSpace(receipt.Artifacts[i].Path)))

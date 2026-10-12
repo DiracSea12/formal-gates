@@ -540,10 +540,11 @@ func (f *Facade) ensureRef(ref, identity string, mayWrite bool, invoked *bool) (
 	return err == nil, err
 }
 func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParameters, mayWrite bool, invoked *bool) (bool, error) {
-	if s.IntakeConfirmationReceipt == nil {
+	receipt := s.CurrentIntakeConfirmation()
+	if receipt == nil {
 		return false, fmt.Errorf("workspace requires intake artifacts")
 	}
-	requirementPath := filepath.Clean(s.IntakeConfirmationReceipt.RequirementSource)
+	requirementPath := filepath.Clean(receipt.RequirementSource)
 	if filepath.IsAbs(requirementPath) {
 		var err error
 		requirementPath, err = filepath.Rel(f.root, requirementPath)
@@ -551,7 +552,7 @@ func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParam
 			return false, err
 		}
 	}
-	for _, artifact := range s.IntakeConfirmationReceipt.Artifacts {
+	for _, artifact := range receipt.Artifacts {
 		isRequirement := filepath.Clean(filepath.FromSlash(artifact.Path)) == requirementPath
 		revision := artifact.Revision
 		if isRequirement {

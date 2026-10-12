@@ -272,11 +272,7 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 					return candidate, fmt.Errorf("requirement change needs its complete prepared package")
 				}
 				p := face.Package
-				req, e := f.request()
-				if e != nil {
-					return candidate, e
-				}
-				intake, e := PrepareIntake(f.root, req.IntakeConfirmationReceipt.RequirementSource, req.IntakeConfirmationReceipt.RequirementSource, nil, run.Route != "lightweight")
+				intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, run.Route != "lightweight")
 				if e != nil {
 					return candidate, e
 				}
@@ -284,11 +280,14 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 				if strings.HasPrefix(p.CandidateRevision, "sha256:") {
 					revision = "sha256:" + revision
 				}
+				if p.Intake == nil || intake.IntakeCandidate.Digest != p.Intake.Digest {
+					return candidate, fmt.Errorf("prepared intake materials differ from the pending confirmation package")
+				}
 				if revision != p.CandidateRevision {
 					return candidate, fmt.Errorf("prepared requirement bytes differ from the pending confirmation package")
 				}
 				candidate.Intake = &intake
-				event.Decide.Requirement = &protocol.RequirementDecisionPayload{Coverage: p.Coverage, BaseRevision: face.BaseRevision, CandidateRevision: p.CandidateRevision, DeltaDigest: p.DeltaDigest, ImpactDigest: p.ImpactDigest, Source: p.Source, Classification: p.Classification, RedoProductReview: p.RedoProductReview, RedoStartReadiness: p.RedoStartReadiness, RedoTopology: p.RedoTopology, RedoRoute: p.RedoRoute, WorkDecisions: p.WorkDecisions, Children: p.Children, Impact: p.Impact, ResetRequestID: p.ResetRequestID, FindingDigest: p.FindingDigest, Reason: input.Reason}
+				event.Decide.Requirement = &protocol.RequirementDecisionPayload{Intake: p.Intake, Coverage: p.Coverage, BaseRevision: face.BaseRevision, CandidateRevision: p.CandidateRevision, DeltaDigest: p.DeltaDigest, ImpactDigest: p.ImpactDigest, Source: p.Source, Classification: p.Classification, RedoProductReview: p.RedoProductReview, RedoStartReadiness: p.RedoStartReadiness, RedoTopology: p.RedoTopology, RedoRoute: p.RedoRoute, WorkDecisions: p.WorkDecisions, Children: p.Children, Impact: p.Impact, ResetRequestID: p.ResetRequestID, FindingDigest: p.FindingDigest, Reason: input.Reason}
 			}
 		case protocol.ControlReset:
 			if choice == "proceed" {
@@ -341,9 +340,29 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 	if candidate.Event.Request == nil && candidate.Event.Decide == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation contains no program-generated control")
 	}
+	if request := candidate.Event.Request; request != nil && request.Package != nil && request.Package.Intake != nil {
+		digest, err := IntakeDigest(*request.Package.Intake)
+		if err != nil || candidate.Intake == nil || digest != candidate.Intake.IntakeCandidate.Digest {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement package differs from its complete material preview")
+		}
+		if _, recorded, err := f.recordedEvent(candidate.Event); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		} else if !recorded {
+			if err := validateArtifactBindings(f.root, candidate.Intake.IntakeCandidate); err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+		}
+	}
 	if decision := candidate.Event.Decide; decision != nil && decision.Requirement != nil && decision.Choice == "proceed" {
 		if candidate.Intake == nil || candidate.Intake.Revision != strings.TrimPrefix(decision.Requirement.CandidateRevision, "sha256:") || candidate.Intake.IntakeCandidate.RequirementRevision != candidate.Intake.Revision {
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its original complete intake binding")
+		}
+		if decision.Requirement.Intake == nil {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its complete material package")
+		}
+		materialDigest, err := IntakeDigest(*decision.Requirement.Intake)
+		if err != nil || materialDigest != candidate.Intake.IntakeCandidate.Digest {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation differs from its complete material package")
 		}
 		if err := validateConfirmation(candidate.Intake.IntakeCandidate, DefaultDefinitionSource); err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -406,12 +425,7 @@ func bindWork(work []protocol.RequirementWork, choices []WorkChoice) ([]protocol
 }
 
 func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput) (protocol.RequirementDecisionPackage, IntakePreview, error) {
-	req, e := f.request()
-	if e != nil {
-		return protocol.RequirementDecisionPackage{}, IntakePreview{}, e
-	}
-	path := req.IntakeConfirmationReceipt.RequirementSource
-	intake, e := PrepareIntake(f.root, path, path, nil, run.Route != "lightweight")
+	intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, run.Route != "lightweight")
 	if e != nil {
 		return protocol.RequirementDecisionPackage{}, intake, e
 	}
@@ -419,7 +433,7 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 	if strings.HasPrefix(run.Review.RequirementRevision, "sha256:") {
 		revision = "sha256:" + revision
 	}
-	p := protocol.RequirementDecisionPackage{CandidateRevision: revision, Classification: input.Classification, Source: protocol.RequirementSourceUserInitiated, Impact: &input.Impact}
+	p := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, Classification: input.Classification, Source: protocol.RequirementSourceUserInitiated, Impact: &input.Impact}
 	p.DeltaDigest = controlDigest(struct {
 		Base, Candidate string
 		Changed         []string

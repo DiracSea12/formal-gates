@@ -515,7 +515,7 @@ func (f *Facade) RegisterQAWorktree(worktree string) error {
 	if resolved != snap.State.BaseSnapshot {
 		return fmt.Errorf("QA isolation worktree native identity %s does not match the base snapshot %s", resolved, snap.State.BaseSnapshot)
 	}
-	receipt := snap.State.IntakeConfirmationReceipt
+	receipt := snap.State.CurrentIntakeConfirmation()
 	if receipt == nil {
 		return fmt.Errorf("QA worktree registration requires the run's intake artifacts")
 	}

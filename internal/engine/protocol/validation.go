@@ -669,8 +669,8 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 func (s *State) coverageContract(candidate *coverage.ValidationCandidate) coverage.CoverageContract {
 	v := s.Validation
 	b := coverage.SourceBinding{RunID: s.RunID, RequirementRevision: v.RequirementRevision, SolutionRevision: v.RequirementRevision}
-	if s.IntakeConfirmationReceipt != nil {
-		b.SolutionRevision = s.IntakeConfirmationReceipt.SolutionRevision
+	if receipt := s.CurrentIntakeConfirmation(); receipt != nil {
+		b.SolutionRevision = receipt.SolutionRevision
 	}
 	c := coverage.CoverageContract{RequiredSources: coverage.RequiredSources{Binding: b}, SelectedKinds: s.validationKinds(), Candidate: candidate}
 	for _, req := range v.Document.Requirements {

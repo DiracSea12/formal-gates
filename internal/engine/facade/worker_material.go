@@ -726,7 +726,7 @@ func (f *Facade) registerIntakeRequirement() error {
 	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhasePreparing {
 		return nil
 	}
-	receipt := s.IntakeConfirmationReceipt
+	receipt := s.CurrentIntakeConfirmation()
 	revision := s.RequirementRevision()
 	data, err := os.ReadFile(filepath.Join(f.root, receipt.RequirementSource))
 	if err != nil {

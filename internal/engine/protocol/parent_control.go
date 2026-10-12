@@ -108,8 +108,8 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 				if confirmed == nil {
 					return validationError("parent confirmation has no accepted requirement package")
 				}
-				pkg := RequirementDecisionPackage{Coverage: confirmed.Coverage, CandidateRevision: confirmed.CandidateRevision, DeltaDigest: confirmed.DeltaDigest, ImpactDigest: confirmed.ImpactDigest, Source: confirmed.Source, Classification: confirmed.Classification, FindingDigest: confirmed.FindingDigest, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
-				payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, FindingDigest: pkg.FindingDigest, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
+				pkg := RequirementDecisionPackage{Intake: confirmed.Intake, Coverage: confirmed.Coverage, CandidateRevision: confirmed.CandidateRevision, DeltaDigest: confirmed.DeltaDigest, ImpactDigest: confirmed.ImpactDigest, Source: confirmed.Source, Classification: confirmed.Classification, FindingDigest: confirmed.FindingDigest, WorkDecisions: choice.WorkDecisions, RedoRoute: choice.RouteDisposition == RequirementWorkRedo}
+				payload := &RequirementDecisionPayload{Intake: pkg.Intake, Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, FindingDigest: pkg.FindingDigest, WorkDecisions: pkg.WorkDecisions, RedoRoute: pkg.RedoRoute, Reason: choice.Reason}
 				s.SliceChild.ParentChange = authority
 				ask := PendingAsk{Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: &pkg}
 				document := ""

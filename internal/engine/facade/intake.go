@@ -69,6 +69,9 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 	slices.Sort(paths)
 	paths = slices.Compact(paths)
 	preview := IntakePreview{IntakeCandidate: IntakeConfirmationReceipt{Source: DefaultIntakeSource, Authority: DefaultIntakeAuthority, Transport: DefaultIntakeTransport, RequirementSource: requirementPath}}
+	if solutionPath != requirementPath {
+		preview.IntakeCandidate.SolutionSource = solutionPath
+	}
 	for _, path := range paths {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 		if err != nil {
@@ -95,4 +98,13 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 	}
 	preview.IntakeCandidate.Digest, err = IntakeDigest(preview.IntakeCandidate)
 	return preview, err
+}
+
+// prepareConfirmedIntake reuses the selected paths of the current confirmation.
+func prepareConfirmedIntake(root string, receipt *IntakeConfirmationReceipt, structured bool) (IntakePreview, error) {
+	paths := make([]string, len(receipt.Artifacts))
+	for i, artifact := range receipt.Artifacts {
+		paths[i] = artifact.Path
+	}
+	return PrepareIntake(root, receipt.RequirementSource, receipt.SolutionSource, paths, structured)
 }

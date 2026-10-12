@@ -11,21 +11,22 @@ import (
 // Accepted development and its native target survive; only registered scratch
 // resources are candidates for cleanup.
 type ResetPreview struct {
-	RunID               string            `json:"runId"`
-	RequirementRevision string            `json:"requirementRevision"`
-	Base                string            `json:"base"`
-	Current             string            `json:"current"`
-	Development         string            `json:"development,omitempty"`
-	Topology            *TopologyBinding  `json:"topology,omitempty"`
-	RouteMode           string            `json:"routeMode"`
-	Gates               []string          `json:"gates"`
-	Children            []string          `json:"children"`
-	ChildPreviews       []ResetPreview    `json:"childPreviews,omitempty"`
-	Preserve            []string          `json:"preserve"`
-	Clear               []string          `json:"clear"`
-	Resources           []NativeResource  `json:"resources"`
-	Work                []RequirementWork `json:"work"`
-	Digest              string            `json:"digest"`
+	Intake              *IntakeConfirmationReceipt `json:"intake,omitempty"`
+	RunID               string                     `json:"runId"`
+	RequirementRevision string                     `json:"requirementRevision"`
+	Base                string                     `json:"base"`
+	Current             string                     `json:"current"`
+	Development         string                     `json:"development,omitempty"`
+	Topology            *TopologyBinding           `json:"topology,omitempty"`
+	RouteMode           string                     `json:"routeMode"`
+	Gates               []string                   `json:"gates"`
+	Children            []string                   `json:"children"`
+	ChildPreviews       []ResetPreview             `json:"childPreviews,omitempty"`
+	Preserve            []string                   `json:"preserve"`
+	Clear               []string                   `json:"clear"`
+	Resources           []NativeResource           `json:"resources"`
+	Work                []RequirementWork          `json:"work"`
+	Digest              string                     `json:"digest"`
 }
 
 func (p ResetPreview) CanonicalDigest() string { p.Digest = ""; return digestOfCanonical(p) }
@@ -103,6 +104,7 @@ func (e *Engine) acceptResetDecision(s *State, ask PendingAsk, d *DecidePayload)
 	current := s.ResetPreview()
 	current.Work = e.requirementWork(s)
 	current.RequirementRevision = ask.Reset.RequirementRevision
+	current.Intake = ask.Reset.Intake
 	current.Children = ask.Reset.Children
 	current.ChildPreviews = ask.Reset.ChildPreviews
 	current.Digest = current.CanonicalDigest()
@@ -284,7 +286,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	d.Reset.Applied = true
 	s.Decisions[d.RequestID] = d
 	request := "reset-confirm:" + d.RequestID
-	pkg := &RequirementDecisionPackage{Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
+	pkg := &RequirementDecisionPackage{Intake: preview.Intake, Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
 	for _, work := range e.requirementWork(s) {
 		disposition := RequirementWorkRedo
 		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v4" {
@@ -319,7 +321,7 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 		if pkg == nil {
 			return validationError("cascaded reset has no local re-registration")
 		}
-		payload := &RequirementDecisionPayload{Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, ResetRequestID: d.RequestID, Reason: d.Reset.Reason}
+		payload := &RequirementDecisionPayload{Intake: pkg.Intake, Coverage: pkg.Coverage, BaseRevision: s.RequirementRevision(), CandidateRevision: pkg.CandidateRevision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, ResetRequestID: d.RequestID, Reason: d.Reset.Reason}
 		document := ""
 		if parent.validationRequirementCurrent() {
 			document = parent.Validation.Document.Content

@@ -653,6 +653,7 @@ type TopologyBinding struct {
 // 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
 // 代数（单调，防篡改链的一环）。
 type ConfirmedRevision struct {
+	Intake         *IntakeConfirmationReceipt `json:"intake,omitempty"`
 	Coverage       *CoverageInventory         `json:"coverage,omitempty"`
 	Revision       string                     `json:"revision"`
 	DeltaDigest    string                     `json:"deltaDigest,omitempty"`
@@ -694,9 +695,9 @@ const (
 	IntakeTransportStableLauncher IntakeTransport = "stable-launcher"
 )
 
-// IntakeConfirmationReceipt is the typed pre-start acceptance supplied by the
-// host.  It is deliberately data-only: validation and canonical digesting are
-// performed by the façade before Engine.Init writes anything.
+// IntakeConfirmationReceipt is the typed material confirmation supplied by the
+// host. File verification and canonical digesting belong to the facade before
+// admission. The initial receipt remains separate from later confirmed revisions.
 type IntakeConfirmationReceipt struct {
 	Coverage            *CoverageInventory `json:"coverage,omitempty"`
 	Source              string             `json:"source"`
@@ -705,11 +706,13 @@ type IntakeConfirmationReceipt struct {
 	RequirementSource   string             `json:"requirementSource"`
 	RequirementRevision string             `json:"requirementRevision"`
 	Artifacts           []IntakeArtifact   `json:"artifacts"`
-	SolutionRevision    string             `json:"solutionRevision"`
-	SolutionDigest      string             `json:"solutionDigest"`
-	ConfirmedAt         string             `json:"confirmedAt,omitempty"`
-	ExpiresAt           string             `json:"expiresAt,omitempty"`
-	Digest              string             `json:"digest,omitempty"`
+	// SolutionSource is the selected solution path; empty selects RequirementSource.
+	SolutionSource   string `json:"solutionSource,omitempty"`
+	SolutionRevision string `json:"solutionRevision"`
+	SolutionDigest   string `json:"solutionDigest"`
+	ConfirmedAt      string `json:"confirmedAt,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+	Digest           string `json:"digest,omitempty"`
 }
 
 // IntakeReceipt is the first-drive durable projection of the exact

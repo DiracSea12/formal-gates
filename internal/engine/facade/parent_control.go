@@ -270,6 +270,7 @@ func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 			return err
 		}
 		p.RequirementRevision = preview.RequirementRevision
+		p.Intake = preview.Intake
 		p.Digest = p.CanonicalDigest()
 		preview.ChildPreviews = append(preview.ChildPreviews, p)
 	}

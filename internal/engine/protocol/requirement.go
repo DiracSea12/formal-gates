@@ -102,6 +102,9 @@ func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 	if pkg.Source != RequirementSourceUserInitiated && pkg.Source != RequirementSourceReset && !findingBound {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "a finding-driven requirement decision must bind its finding digest"}
 	}
+	if pkg.Intake != nil && (pkg.Intake.RequirementRevision != strings.TrimPrefix(pkg.CandidateRevision, "sha256:") || pkg.Intake.Digest == "") {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement package material does not bind its candidate revision"}
+	}
 	return validateWorkDecisionShape(pkg.WorkDecisions)
 }
 
@@ -141,6 +144,17 @@ func (s *State) initialRequirementRevision() string {
 		return ""
 	}
 	return s.IntakeConfirmationReceipt.RequirementRevision
+}
+
+// CurrentIntakeConfirmation reads material bindings from the original revision ledger.
+// The initial intake remains the immutable start confirmation.
+func (s *State) CurrentIntakeConfirmation() *IntakeConfirmationReceipt {
+	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
+		if receipt := s.RequirementRevisions[i].Intake; receipt != nil {
+			return receipt
+		}
+	}
+	return s.IntakeConfirmationReceipt
 }
 
 // requirementRevisionAt keeps historical work bound to its local issue time.
@@ -534,6 +548,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	scope := requirementRedoScope(payload)
 	// 登记确认事实（新权威 revision）。
 	state.RequirementRevisions = append(state.RequirementRevisions, ConfirmedRevision{
+		Intake:   payload.Intake,
 		Coverage: payload.Coverage,
 		Children: payload.Children, Impact: payload.Impact, ResetRequestID: payload.ResetRequestID,
 		Revision:       payload.CandidateRevision,
@@ -549,6 +564,9 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	})
 	if state.RequirementGuarantee != nil {
 		state.RequirementGuarantee.RequirementRevision = payload.CandidateRevision
+		if receipt := state.CurrentIntakeConfirmation(); receipt != nil {
+			state.RequirementGuarantee.SolutionRevision = receipt.SolutionRevision
+		}
 		state.RequirementGuarantee.ManifestDigest = ""
 	}
 	// 机械执行 scope：勾选的 series 调单 series stale 原语（不跨 series

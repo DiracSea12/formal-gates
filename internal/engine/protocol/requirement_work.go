@@ -215,7 +215,8 @@ func (e *Engine) validateRequirementWork(state *State, decisions []RequirementWo
 }
 
 func sameRequirementPackage(a, b RequirementDecisionPackage) bool {
-	return digestOfCanonical(a.Coverage) == digestOfCanonical(b.Coverage) && a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
+	sameIntake := a.Intake == nil && b.Intake == nil || a.Intake != nil && b.Intake != nil && a.Intake.Digest == b.Intake.Digest && sameIntakeConfirmation(*a.Intake, *b.Intake)
+	return sameIntake && digestOfCanonical(a.Coverage) == digestOfCanonical(b.Coverage) && a.CandidateRevision == b.CandidateRevision && a.DeltaDigest == b.DeltaDigest && a.ImpactDigest == b.ImpactDigest &&
 		a.Source == b.Source && a.Classification == b.Classification && a.RedoProductReview == b.RedoProductReview &&
 		a.RedoStartReadiness == b.RedoStartReadiness && a.RedoTopology == b.RedoTopology && a.RedoRoute == b.RedoRoute &&
 		a.FindingDigest == b.FindingDigest && a.ResetRequestID == b.ResetRequestID && digestOfCanonical(a.Children) == digestOfCanonical(b.Children) && digestOfCanonical(a.Impact) == digestOfCanonical(b.Impact) && slices.Equal(a.WorkDecisions, b.WorkDecisions)

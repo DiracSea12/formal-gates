@@ -219,7 +219,7 @@ func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, expectedFingerprint 
 
 func sameIntakeConfirmation(a, b IntakeConfirmationReceipt) bool {
 	return a.Source == b.Source && a.Authority == b.Authority && a.Transport == b.Transport &&
-		a.RequirementSource == b.RequirementSource &&
+		a.RequirementSource == b.RequirementSource && a.SolutionSource == b.SolutionSource &&
 		a.RequirementRevision == b.RequirementRevision && a.SolutionRevision == b.SolutionRevision &&
 		a.SolutionDigest == b.SolutionDigest && equalIntakeArtifacts(a.Artifacts, b.Artifacts)
 }
@@ -1237,6 +1237,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			preview.Work = e.requirementWork(state)
 			if ev.resetPreview != nil {
 				preview.RequirementRevision = ev.resetPreview.RequirementRevision
+				preview.Intake = ev.resetPreview.Intake
 				preview.Children = ev.resetPreview.Children
 				preview.ChildPreviews = ev.resetPreview.ChildPreviews
 				preview.Digest = preview.CanonicalDigest()

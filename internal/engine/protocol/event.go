@@ -278,6 +278,7 @@ type RouteDecision struct {
 // RequirementDecisionPackage binds the revision, impact preview and each
 // downstream work disposition shown on the requirement-change Ask.
 type RequirementDecisionPackage struct {
+	Intake             *IntakeConfirmationReceipt `json:"intake,omitempty"`
 	Coverage           *CoverageInventory         `json:"coverage,omitempty"`
 	CandidateRevision  string                     `json:"candidateRevision"`
 	DeltaDigest        string                     `json:"deltaDigest"`
@@ -298,7 +299,7 @@ type RequirementDecisionPackage struct {
 // packageView 投影出 DECIDE 载荷中的包字段，供与 Ask 落账包的逐字段
 // 相等比较。
 func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
-	return RequirementDecisionPackage{Coverage: p.Coverage,
+	return RequirementDecisionPackage{Intake: p.Intake, Coverage: p.Coverage,
 		CandidateRevision:  p.CandidateRevision,
 		DeltaDigest:        p.DeltaDigest,
 		ImpactDigest:       p.ImpactDigest,
@@ -319,6 +320,7 @@ func (p *RequirementDecisionPayload) packageView() RequirementDecisionPackage {
 // （CAS 基线，必须等于 Ask 落账基线与当前权威 revision）与 Reason（决定
 // 理由，随决定落账）。其余字段必须与包逐字段相等。
 type RequirementDecisionPayload struct {
+	Intake             *IntakeConfirmationReceipt `json:"intake,omitempty"`
 	Coverage           *CoverageInventory         `json:"coverage,omitempty"`
 	BaseRevision       string                     `json:"baseRevision"`
 	CandidateRevision  string                     `json:"candidateRevision"`
