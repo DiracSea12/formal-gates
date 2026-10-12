@@ -15,6 +15,7 @@ type streamAdapter struct {
 	stdinPrompt        bool
 	checkResult        func(any) error
 	checkMessage       func(any) error
+	repeatedInit       func(map[string]any, map[string]any) bool
 	provider, prefix   string
 	capture            func() (map[string]any, error)
 	probe              func(string, string, map[string]string) (map[string]any, error)
@@ -217,6 +218,7 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 	reader := bufio.NewReaderSize(file, 64*1024)
 	var terminal map[string]any
 	var selection map[string]any
+	var initialization map[string]any
 	for {
 		line, readErr := readNativeLine(reader)
 		if line != "" || readErr == nil {
@@ -230,6 +232,9 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 			}
 			if !streamSubagent(event) {
 				if terminal != nil {
+					if adapter.repeatedInit != nil && adapter.repeatedInit(initialization, event) {
+						continue
+					}
 					return nil, &blockedError{message: adapter.prefix + "_RESULT: root message after terminal result"}
 				}
 				if session, _ := event["session_id"].(string); session != "" && session != identity {
@@ -240,6 +245,9 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 						return nil, &blockedError{message: adapter.prefix + "_BINDING: native init does not match the session workspace"}
 					}
 					selection = adapter.selection(event)
+					if initialization == nil {
+						initialization = event
+					}
 				}
 				if valuesEqual(event["type"], "result") {
 					if !valuesEqual(event["session_id"], identity) || !valuesEqual(event["is_error"], false) {

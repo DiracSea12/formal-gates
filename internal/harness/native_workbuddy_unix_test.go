@@ -119,7 +119,8 @@ func TestWorkBuddyCLI(t *testing.T) {
 		fail(err.Error())
 	}
 	encoder := json.NewEncoder(os.Stdout)
-	encoder.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": cwd, "model": "selected-model", "effort": "high"})
+	initialization := map[string]any{"type": "system", "subtype": "init", "session_id": identity, "uuid": identity, "cwd": cwd, "model": "selected-model", "effort": "high", "__timestamp": "2026-01-01T00:00:00Z"}
+	encoder.Encode(initialization)
 	if expected["wait"] == "true" {
 		time.Sleep(time.Hour)
 	}
@@ -127,6 +128,8 @@ func TestWorkBuddyCLI(t *testing.T) {
 	server := getOf(getOf(config, "mcpServers"), "formal-gates")
 	peerSubmitSemantics(textOf(listOf(getOf(server, "args"))[2]), map[string]any{"summary": "native " + identity})
 	encoder.Encode(map[string]any{"type": "result", "subtype": "success", "uuid": "result-" + identity, "session_id": identity, "is_error": false, "structured_output": map[string]any{"summary": "native " + identity}})
+	initialization["__timestamp"] = "2026-01-01T00:00:01Z"
+	encoder.Encode(initialization)
 	os.Exit(0)
 }
 
@@ -173,6 +176,49 @@ func TestWorkBuddyPrintLifecyclePreservesNativeIdentityAndUsage(t *testing.T) {
 	usage, err := cost.ParseTranscript("workbuddy", filepath.Join(job, "native-events.jsonl"))
 	if err != nil || usage.InputCacheMissTokens != 11 || usage.OutputTokens != 7 {
 		t.Fatalf("usage=%+v err=%v", usage, err)
+	}
+	eventsPath := filepath.Join(job, "native-events.jsonl")
+	originalEvents, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := decodeNativeJSON([]byte(strings.Split(string(originalEvents), "\n")[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedInit := objectOrEmpty(initial)
+	changedInit["model"] = "other-model"
+	for _, late := range []struct {
+		name  string
+		event any
+	}{
+		{"assistant", map[string]any{"type": "assistant", "session_id": identity, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "additional answer"}}}}},
+		{"result", getOf(source, "native_result")},
+		{"tool", map[string]any{"type": "tool", "session_id": identity}},
+		{"changed-init", changedInit},
+	} {
+		t.Run(late.name, func(t *testing.T) {
+			body, err := CanonicalJSON(late.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(eventsPath, append(append([]byte{}, originalEvents...), append(body, '\n')...), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, observe := range []func() (map[string]any, error){
+				func() (map[string]any, error) { return streamObserve(workbuddyStream, job) },
+				func() (map[string]any, error) {
+					return workbuddyReconcile(job, map[string]any{"exit_code": 0, "error": ""})
+				},
+			} {
+				if _, err := observe(); err == nil || !strings.Contains(err.Error(), "root message after terminal") {
+					t.Fatalf("late root event accepted: %v", err)
+				}
+			}
+		})
+	}
+	if err := os.WriteFile(eventsPath, originalEvents, 0600); err != nil {
+		t.Fatal(err)
 	}
 	resumed := t.TempDir()
 	request["identity"] = identity

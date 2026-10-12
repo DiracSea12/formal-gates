@@ -3,6 +3,7 @@ package harness
 import (
 	"crypto/rand"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 	"formal-gates/internal/settings"
 )
 
-var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage}
+var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit}
 
 func workbuddyCaptureBinding() (map[string]any, error) {
 	return workbuddyConfiguredBinding(settings.Values{})
@@ -203,6 +204,17 @@ func workbuddyCheckResult(result any) error {
 	}
 	return nil
 }
+
+func workbuddyRepeatedInit(initial, message map[string]any) bool {
+	if message["type"] != "system" || message["subtype"] != "init" {
+		return false
+	}
+	first, repeated := maps.Clone(initial), maps.Clone(message)
+	delete(first, "__timestamp")
+	delete(repeated, "__timestamp")
+	return valuesEqual(first, repeated)
+}
+
 func workbuddyCheckMessage(message any) error {
 	if getOf(message, "type") != "assistant" {
 		return nil
