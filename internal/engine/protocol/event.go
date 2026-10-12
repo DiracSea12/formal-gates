@@ -94,8 +94,8 @@ const (
 	// KindTaskProgress：外部边界对 expected 任务当前 Attempt 的进度
 	// 观察（RUNNING/VALIDATING/TERMINAL）。
 	KindTaskProgress EventKind = "TASK_PROGRESS"
-	// KindSpawnReceipt：fake host 对一次签发的 SpawnReceipt（actionID/
-	// correlation/provider/status 公共字段，）。接纳后任务进入
+	// KindSpawnReceipt：宿主对一次签发的 SpawnReceipt（actionID/
+	// correlation/provider/status 公共字段）。接纳后任务进入
 	// 声明签发态并落账 receipt。
 	KindSpawnReceipt EventKind = "SPAWN_RECEIPT"
 	// KindWorkerResult：worker 的 typed result（actionID/provider/outcome/
@@ -1025,14 +1025,10 @@ type Acceptance struct {
 // token——旧的提交被 STALE_FRESHNESS 拒绝且零状态变化，新的须以
 // Freshness() 重新获取。
 func freshnessToken(revision uint64, request RequestID) string {
-	data, err := canonicalJSON(struct {
+	data, _ := canonicalJSON(struct {
 		Revision uint64 `json:"revision"`
 		Request  string `json:"request"`
 	}{revision, string(request)})
-	if err != nil {
-		// wire 只含 int 与 string，编码不会失败；保守起见落到确定值。
-		return encoder.Digest([]byte(fmt.Sprintf("freshness:%d:%s", revision, request)))
-	}
 	return encoder.Digest(data)
 }
 

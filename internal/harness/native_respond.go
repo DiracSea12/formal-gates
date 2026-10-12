@@ -85,15 +85,11 @@ func assembleNativeAnswer(record map[string]any, selection nativeSelection) (map
 		return answer, nil
 	}
 	questions := listOf(record["questions"])
-	if record["method"] == zcodeUserInputMethod && selection.Choice == 0 && len(selection.Responses) == 1 && len(questions) == 1 && len(listOf(getOf(questions[0], "options"))) == 0 {
-		response := selection.Responses[0]
-		if response.Text == "" || len(response.Choices) != 0 || len(selection.Values) != 0 {
-			return nil, fmt.Errorf("this question needs original free text")
+	if record["method"] == "item/tool/requestUserInput" || record["method"] == zcodeUserInputMethod {
+		zcode := record["method"] == zcodeUserInputMethod
+		if len(selection.Values) != 0 {
+			return nil, fmt.Errorf("this question has no form values")
 		}
-		answer["answers"] = map[string]any{"answer": response.Text}
-		return answer, nil
-	}
-	if record["method"] == "item/tool/requestUserInput" {
 		responses := selection.Responses
 		if selection.Choice != 0 {
 			if len(questions) != 1 || len(responses) != 0 {
@@ -107,16 +103,27 @@ func assembleNativeAnswer(record map[string]any, selection nativeSelection) (map
 		answers := map[string]any{}
 		for i, question := range questions {
 			response := responses[i]
+			if zcode && getOf(question, "multiSelect") != true && len(response.Choices) > 1 {
+				return nil, fmt.Errorf("this question accepts one option")
+			}
 			values := []any{}
 			for _, position := range response.Choices {
 				option, err := nativeOption(getOf(question, "options"), position)
 				if err != nil {
 					return nil, err
 				}
-				values = append(values, option["label"])
+				if zcode {
+					values = append(values, option["value"])
+				} else {
+					values = append(values, option["label"])
+				}
 			}
 			if response.Text != "" {
-				if getOf(question, "options") != nil && getOf(question, "isOther") != true {
+				freeText := getOf(question, "options") == nil || getOf(question, "isOther") == true
+				if zcode {
+					freeText = len(listOf(getOf(question, "options"))) == 0
+				}
+				if !freeText {
 					return nil, fmt.Errorf("this question does not offer free text")
 				}
 				values = append(values, response.Text)
@@ -124,9 +131,25 @@ func assembleNativeAnswer(record map[string]any, selection nativeSelection) (map
 			if len(values) == 0 {
 				return nil, fmt.Errorf("each question needs an option or free text")
 			}
-			answers[textOf(getOf(question, "id"))] = map[string]any{"answers": values}
+			if zcode {
+				var value any = values[0]
+				if getOf(question, "multiSelect") == true {
+					value = values
+				}
+				answers[textOf(getOf(question, "question"))] = value
+			} else {
+				answers[textOf(getOf(question, "id"))] = map[string]any{"answers": values}
+			}
 		}
-		answer["answers"] = answers
+		if zcode {
+			if len(questions) == 1 {
+				answer["answers"] = map[string]any{"answer": answers[textOf(getOf(questions[0], "question"))]}
+			} else {
+				answer["answers"] = map[string]any{"answers": answers}
+			}
+		} else {
+			answer["answers"] = answers
+		}
 		return answer, nil
 	}
 	if len(selection.Responses) != 0 {
@@ -507,8 +530,11 @@ func nativeQuestionView(record map[string]any, position int) map[string]any {
 		rows := []any{}
 		for i, raw := range questions {
 			row := map[string]any{"question": i + 1, "text": getOf(raw, "question"), "freeText": getOf(raw, "options") == nil || getOf(raw, "isOther") == true}
-			if record["method"] == zcodeUserInputMethod && len(listOf(getOf(raw, "options"))) == 0 {
-				row["freeText"] = true
+			if record["method"] == zcodeUserInputMethod {
+				row["freeText"] = len(listOf(getOf(raw, "options"))) == 0
+				if multiple := getOf(raw, "multiSelect"); multiple != nil {
+					row["multiSelect"] = multiple
+				}
 			}
 			choices := []any{}
 			for j, option := range listOf(getOf(raw, "options")) {

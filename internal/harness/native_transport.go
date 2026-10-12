@@ -94,7 +94,7 @@ func nativeErrorText(err error) string {
 
 // --- JSON decoding and decoded-value access -----------------------------------
 
-// readJSONFile reads and decodes one evidence/request file (infra.read): a
+// readJSONFile reads and decodes one evidence/request file: a
 // repeated object key is refused, never silently collapsed.
 func readJSONFile(path string) (any, error) {
 	data, err := os.ReadFile(path)
@@ -128,7 +128,7 @@ func decodeNativeJSON(raw []byte) (any, error) {
 	return value, nil
 }
 
-// decodeUniqueKeys is decodeNativeJSON with infra.read semantics: a repeated
+// decodeUniqueKeys is decodeNativeJSON with a repeated
 // object key is refused instead of collapsed.
 func decodeUniqueKeys(raw []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -430,7 +430,7 @@ func verifyNativeSource(directory string, source any, provider string) error {
 }
 
 // forEachSessionEvent streams this session's evidence events one line at a
-// time, rejecting mixed-session evidence (native_transport.session_events).
+// time, rejecting mixed-session evidence.
 // Only one decoded line is alive at a time: native-events.jsonl reaches tens
 // of megabytes on a long turn, and the whole turn is never held in memory.
 func forEachSessionEvent(directory string, identity any, handle func(record map[string]any) error) error {
@@ -664,7 +664,7 @@ func (h nativeHooks) interactionSpec(method string) *nativeInteractionSpec {
 }
 
 // nativeHooks is everything an adapter supplies on top of the shared transport
-// mechanics (native_transport.Client's overridables). The zero value is the
+// mechanics. The zero value is the
 // plain {id, method, params} JSON-RPC shape with a 60s bounded default.
 type nativeHooks struct {
 	// Transport failures are prefixed so evidence names the transport.
@@ -1578,8 +1578,7 @@ func (c *nativeClient) close() error {
 }
 
 // closeNativeSession asks the host to close a session; a failed close never
-// hides a real result, so every error is swallowed
-// (native_transport.close_session).
+// hides a real result, so every error is swallowed.
 func closeNativeSession(client *nativeClient, identity string) {
 	if identity == "" {
 		return

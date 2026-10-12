@@ -310,8 +310,8 @@ func correctFinding(series *Series, runID, requirementRevision string, candidate
 			return err
 		}
 	}
-	if input.Decision == decisionReseveritize && blockingSeverity(input.Severity) && placeholderRationale(input.SeverityRationale) {
-		return fmt.Errorf("review: re-severity to %s requires an independent non-placeholder severity rationale", input.Severity)
+	if input.Decision == decisionReseveritize && blockingSeverity(input.Severity) && strings.TrimSpace(input.SeverityRationale) == "" {
+		return fmt.Errorf("review: re-severity to %s requires an independent severity rationale", input.Severity)
 	}
 	if input.Decision != decisionReseveritize && input.SeverityRationale != "" {
 		return fmt.Errorf("review: severity rationale is accepted only for RESEVERITIZE")

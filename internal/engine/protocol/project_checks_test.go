@@ -252,3 +252,15 @@ func TestSplitMasterMissingCallsUseConfirmedTaskIdentity(t *testing.T) {
 		t.Fatal("existing or child calls caused extra master development")
 	}
 }
+
+func TestEveryBatchDeclaresCompleteProjectChecks(t *testing.T) {
+	plan := ownedDevelopmentPlan()
+	plan.Batches[0].Checks = []DevelopmentCheck{{ID: "local", Command: "verify core"}}
+	if err := ValidateProjectChecks(plan); err == nil || !strings.Contains(err.Error(), "core") || !strings.Contains(err.Error(), CheckFullBuild) {
+		t.Fatalf("later full checks satisfied an earlier batch: %v", err)
+	}
+	plan.Batches[0].Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Goal: "Build the complete core project"}, {ID: "tests", Purpose: CheckFullTests, Goal: "Test the complete core project"}}
+	if err := ValidateProjectChecks(plan); err != nil {
+		t.Fatalf("developer-prepared goals were rejected: %v", err)
+	}
+}

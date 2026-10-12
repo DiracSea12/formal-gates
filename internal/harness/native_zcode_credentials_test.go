@@ -13,10 +13,13 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/settings"
 )
 
 func TestZcodeCredentialsUseTheBoundNativeEnvironment(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
+	node, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("node is not available")
 	}
 	original, err := os.ReadFile(zcodeCredentialHelper)
@@ -81,12 +84,12 @@ func TestZcodeCredentialsUseTheBoundNativeEnvironment(t *testing.T) {
 			t.Fatal(err)
 		}
 		unbound := map[string]string{"ZCODE_DATA_BASE_DIR": nativeHome}
-		if zcodeRequestAuth("p1", unbound) != "" {
+		if zcodeRequestAuth(node, "p1", unbound) != "" {
 			t.Fatal("parent environment silently decrypted another native environment")
 		}
 		environment := map[string]string{"HOME": nativeHome, "USERPROFILE": nativeHome, "ZCODE_DATA_BASE_DIR": nativeHome, "ZCODE_CREDENTIAL_SECRET": configuredSecret}
 		directory := t.TempDir()
-		client := &zcodeClient{hostData: nativeHome, environment: environment, directory: directory}
+		client := &zcodeClient{executable: node, hostData: nativeHome, environment: environment, directory: directory}
 		for _, name := range []string{"protocol.jsonl", "host.stderr", "interaction-status.json", "native-events.jsonl"} {
 			if err := os.WriteFile(filepath.Join(directory, name), nil, 0600); err != nil {
 				t.Fatal(err)
@@ -102,7 +105,7 @@ func TestZcodeCredentialsUseTheBoundNativeEnvironment(t *testing.T) {
 				t.Fatal("bound environment or selected account was lost")
 			}
 		}
-		reopened := &zcodeClient{hostData: nativeHome, environment: environment, directory: directory}
+		reopened := &zcodeClient{executable: node, hostData: nativeHome, environment: environment, directory: directory}
 		reply, err := reopened.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "p1"})
 		if err != nil || getOf(getOf(getOf(reply.payload, "result"), "requestAuth"), "apiKey") != "local-native-credential" {
 			t.Fatal("recreated client changed its native environment")
@@ -123,5 +126,58 @@ func TestZcodeCredentialsUseTheBoundNativeEnvironment(t *testing.T) {
 		if os.Getenv("HOME") != engineHome || os.Getenv("USERPROFILE") != engineHome {
 			t.Fatal("native binding changed parent process environment")
 		}
+	}
+}
+
+func TestZcodeConfiguredExecutableOwnsCredentialHelper(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	node = resolveNativePath(node)
+	original, err := os.ReadFile(zcodeCredentialHelper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runNativePackageTest(t) {
+		return
+	}
+	root, err := nativePackageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(root, "internal", "harness", zcodeCredentialHelper)
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	script := filepath.Join(directory, "zcode.cjs")
+	if err := os.WriteFile(script, []byte("process.stdin.resume(); process.stdin.on('end', () => process.exit(0));\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(directory, "credentials.json")
+	if err := os.WriteFile(store, []byte(`{"account-provider:coding-plan:provider:account:fixture:api-key":"offline-dummy"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(zcodeCredentialHelperEnv, store)
+	t.Setenv("PATH", t.TempDir())
+	binding, err := zcodeConfiguredBinding(settings.Values{Native: map[string]string{"zcodeExecutable": node, "zcodeScript": script}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := newZcodeClient(objectOrEmpty(binding["launch"]), directory, directory, zcodeLaunchEnvironment(binding))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.client.close()
+	for range 2 {
+		reply, err := client.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "provider"})
+		if err != nil || reply.status != "provider-runtime-headers-applied" || getOf(getOf(getOf(reply.payload, "result"), "requestAuth"), "apiKey") != "offline-dummy" {
+			t.Fatal("configured executable or provider lost in credential helper", err, reply)
+		}
+		t.Log("PATH has no node; original configured launch and credential helper both succeeded")
 	}
 }

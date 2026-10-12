@@ -544,7 +544,7 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := proofsOf(t, s.directory, nativeSourceFiles)
-			observed, err := cursorObserve(s.directory, false)
+			observed, err := cursorObserve(s.directory)
 			if err != nil || !valuesEqual(source, observed) || !valuesEqual(before, proofsOf(t, s.directory, nativeSourceFiles)) {
 				t.Fatalf("observe %v %v", observed, err)
 			}
@@ -831,7 +831,7 @@ func TestCursorParallelSourcesRemainIndependent(t *testing.T) {
 		}
 	}
 	for _, s := range []*cursorScenario{first, second} {
-		source, err := cursorObserve(s.directory, false)
+		source, err := cursorObserve(s.directory)
 		if err != nil || source["identity"] != s.peer.UUID || source["native_store"] != s.peer.Store || getOf(source["selection"], "model") != getOf(s.peer.Config["model"], "modelId") {
 			t.Fatalf("crossed source %v %v", source, err)
 		}
@@ -876,7 +876,7 @@ func TestCursorSharedConfigSelectionAndConcurrentTurns(t *testing.T) {
 				}
 			}
 			for _, s := range []*cursorScenario{first, second} {
-				source, err := cursorObserve(s.directory, false)
+				source, err := cursorObserve(s.directory)
 				if err != nil || source["identity"] != s.peer.UUID || source["native_store"] != s.peer.Store || getOf(source["selection"], "model") != getOf(s.peer.Config["model"], "modelId") || getOf(source["selection"], "reasoning_effort") != s.request["reasoning_effort"] {
 					t.Fatalf("call selection or identity crossed: %v %v", source, err)
 				}

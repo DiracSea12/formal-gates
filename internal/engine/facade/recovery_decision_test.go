@@ -154,6 +154,28 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 						t.Fatalf("abort was accepted without original abort authority: %+v", accepted)
 					}
 				}
+				if workerFailure && choice != "abort" {
+					if snapshot.State.Guard.UsedRetries != 1 {
+						t.Fatalf("executed %s recovery lost its retry consumption: %+v", choice, snapshot.State.Guard)
+					}
+					retry := snapshot.State.Attempts[input.Binding.Task].ActionID
+					d.business(retry, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+					d.drive()
+					completed, err := d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if completed.State.Guard.UsedRetries != 1 || completed.State.Attempts[input.Binding.Task].ID != "" {
+						t.Fatalf("successful recovery reclaimed consumed retry: %+v", completed.State.Guard)
+					}
+					d.reopen()
+					d.drive()
+					reloaded, err := d.f.engine.Load()
+					if err != nil || reloaded.State.Guard.UsedRetries != 1 {
+						t.Fatalf("reload changed successful retry consumption: %+v %v", reloaded, err)
+					}
+
+				}
 			})
 		}
 	}

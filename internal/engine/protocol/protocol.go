@@ -478,7 +478,7 @@ type State struct {
 	NativeHandle         vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
 	NativeRoot           string                    `json:"nativeRoot,omitempty"`
 	NativeResources      map[string]NativeResource `json:"nativeResources,omitempty"`
-	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线身份
+	// BaseSnapshot 是 regular 路线经原生 VCS provider 校验过的不可变基线身份
 	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
 	// InitialSnapshot is the immutable native HEAD accepted at regular Start.

@@ -191,11 +191,8 @@ func isVCSWriteCommand(command string) bool {
 	return false
 }
 
-// commandWritesFiles reports whether a Bash/shell command writes to the VCS or to
-// files (git commit 与写文件 Bash），从而纳入阻断判定。只读命令不命中：输出
-// 重定向到 /dev/null（丢弃输出）与 2>&1（stderr 合并）等只读惯用法不视为写文件，由
-// redirectWriteTargets 正确解析重定向目标、不靠朴素子串匹配（"2>&1 命中 2>"、
-// "> /dev/null 命中 > " 的误判在此被修正）。
+// commandWritesFiles reports writes to the VCS or files. Discarded output and
+// descriptor redirection do not count as file writes.
 func commandWritesFiles(command string) bool {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -542,9 +539,7 @@ func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool
 		return allowHook(input.agentType + " is allowed to write code and test/design documents"), true
 	}
 
-	// 主代理（无 agent 身份）：阻断范围是"代码与 run 状态"（用户 2026-08-09
-	// 明确）。已登记需求/设计文档的编辑（需求更改流程的一部分）放行；非代码、非 run 状态
-	// 文件（P2-BACKLOG.md 等文档）的写入放行；对代码与 run 状态的直接写入阻断。
+	// 主代理只阻断代码与 run 状态写入；已登记需求/设计文档及其他文档放行。
 	if input.agentType == "" {
 		// owner 作用域收窄：只有启动本 run 的对话才拦，其它对话直接放行。owner 未知时
 		// known=false，保守走下面的既有拦截。
@@ -777,8 +772,7 @@ func isPathWithinRoot(path, repoRoot string) bool {
 	return cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
 }
 
-// mainAgentWriteBlocked reports whether the main thread's write targets code or run
-// state — the only writes blocks for the main agent（P2-2 处置，收窄阻断范围）。
+// mainAgentWriteBlocked reports whether the main thread writes code or run state.
 // Edit/Write 按目标路径判定（isCodeOrRunStatePath）；Bash 按命令判定
 // （bashWriteTargetsCodeOrState）。
 func mainAgentWriteBlocked(input writeBlockPayload, command string) bool {
@@ -794,7 +788,7 @@ func mainAgentWriteBlocked(input writeBlockPayload, command string) bool {
 }
 
 // codeFileExtensions 是常见代码 / 脚本 / 构建清单文件扩展名（小写）。 对主线程的
-// 写阻断只覆盖"代码与 run 状态"：非代码、非状态文件（P2-BACKLOG.md、README 等文档）
+// 写阻断只覆盖"代码与 run 状态"：非代码、非状态文件（README 等文档）
 // 放行。此判定是扩展名级通用启发式（千项目通用），不做项目静态路径白名单。
 var codeFileExtensions = map[string]bool{
 	// 源码

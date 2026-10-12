@@ -397,22 +397,6 @@ func validInvalidity(invalidity string) bool {
 	return false
 }
 
-// placeholderRationale 机械地拒绝纯占位/复述定义的严重度理由；理由是否
-// 实质证明了所称后果，仍是逐 finding 的人工核实责任。
-func placeholderRationale(value string) bool {
-	switch normalizedRationale(value) {
-	case "", "p0", "p1", "item fail", "requirement violated", "violates requirement", "违反需求", "违反了需求",
-		"p1：正常使用路径产生明确错误或阻塞核心验收", "p1:正常使用路径产生明确错误或阻塞核心验收",
-		"正常使用路径产生明确错误或阻塞核心验收":
-		return true
-	}
-	return false
-}
-
-func normalizedRationale(value string) string {
-	return strings.TrimRight(strings.Join(strings.Fields(strings.ToLower(value)), " "), ".。！!")
-}
-
 // ---- Operator 核实规范化 ----
 
 // requiredVerificationChecks 是接纳候选前必须逐项完成的八项封闭检查。

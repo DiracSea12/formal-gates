@@ -2190,7 +2190,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
-		if state.validationRole(key, e.cfg.Definition) == "engine.development.batch.v4" || record.Validation != nil && record.Validation.Status == "CONTINUE" {
+		if role := state.validationRole(key, e.cfg.Definition); role == "engine.development.batch.v4" || role == "engine.repair.v5" && record.Validation.Development != nil || record.Validation != nil && record.Validation.Status == "CONTINUE" {
 			if previous, ok := state.Results[record.ActionID]; ok {
 				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
 			}

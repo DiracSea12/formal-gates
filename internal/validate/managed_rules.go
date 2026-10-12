@@ -147,8 +147,8 @@ func rewriteManagedRuleBlocks(text, rule string, install bool) (string, bool, er
 			return "", false, fmt.Errorf("managed rule block end marker at line %d has no matching start marker", index+1)
 		}
 
-		// Migrate an unmarked copy of the current rule when switching to the
-		// marker format. Other text is never guessed to be installer-owned.
+		// Both marked blocks and an exact unmarked current rule are owned.
+		// Other text is preserved.
 		if install && managedBlockMatches(lines, index, ruleLines) {
 			found = true
 			if !wroteReplacement {

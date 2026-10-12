@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -30,15 +31,20 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 	if err != nil {
 		return nil, true, err
 	}
-	var runs []facade.Run
-	var opened []*facade.Facade
+	type runChoice struct {
+		id   string
+		view map[string]any
+	}
+	var runs []runChoice
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		directory := filepath.Join(root, facade.EngineNamespace, entry.Name())
-		if _, err := os.Stat(filepath.Join(directory, "state.json")); os.IsNotExist(err) {
-			if _, err := os.Stat(filepath.Join(directory, "terminal-summary.json")); os.IsNotExist(err) {
+		statePath := filepath.Join(directory, "state.json")
+		if _, err := os.Stat(statePath); os.IsNotExist(err) {
+			statePath = filepath.Join(directory, "terminal-summary.json")
+			if _, err := os.Stat(statePath); os.IsNotExist(err) {
 				continue
 			} else if err != nil {
 				return nil, true, err
@@ -47,17 +53,38 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 			return nil, true, err
 		}
 		f, _, err := openEngineIfPresent(root, entry.Name())
+		var run facade.Run
+		if err == nil {
+			run, err = f.Show()
+		}
+		choice := map[string]any{"runId": entry.Name()}
 		if err != nil {
-			return nil, true, err
+			// An unavailable run remains a visible choice. Its immutable request
+			// identifies children; only raw Diagnose may inspect its old envelope.
+			body, readErr := os.ReadFile(filepath.Join(directory, "request.json"))
+			var request facade.StartRequest
+			if readErr != nil || json.Unmarshal(body, &request) != nil {
+				return nil, true, err
+			}
+			if request.MasterRunID != "" {
+				continue
+			}
+			diagnostic, diagnosticErr := facade.Diagnose(statePath, "", "")
+			if diagnosticErr != nil {
+				return nil, true, err
+			}
+			choice["route"], choice["status"] = request.Route, diagnostic.Summary["status"]
+			choice["available"], choice["error"] = false, err.Error()
+		} else {
+			if run.MasterRunID != "" {
+				continue
+			}
+			choice["status"], choice["route"] = run.Status, run.Route
+			if run.IntakeConfirmationReceipt != nil {
+				choice["requirement"] = run.IntakeConfirmationReceipt.RequirementSource
+			}
 		}
-		run, err := f.Show()
-		if err != nil {
-			return nil, true, err
-		}
-		if run.MasterRunID != "" {
-			continue
-		}
-		runs, opened = append(runs, run), append(opened, f)
+		runs = append(runs, runChoice{id: entry.Name(), view: choice})
 	}
 	if position > len(runs) {
 		return nil, true, fmt.Errorf("run number is not in the current choices")
@@ -65,11 +92,8 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 	if position == 0 && len(runs) > 1 {
 		choices := make([]map[string]any, 0, len(runs))
 		for index, run := range runs {
-			choice := map[string]any{"run": index + 1, "runId": run.RunID, "status": run.Status, "route": run.Route}
-			if run.IntakeConfirmationReceipt != nil {
-				choice["requirement"] = run.IntakeConfirmationReceipt.RequirementSource
-			}
-			choices = append(choices, choice)
+			run.view["run"] = index + 1
+			choices = append(choices, run.view)
 		}
 		_, err := printJSON(out, map[string]any{"runs": choices, "action": "Select the target with --run and its displayed number"})
 		return nil, false, err
@@ -80,6 +104,7 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 	if position == 0 {
 		position = 1
 	}
-	*runID = runs[position-1].RunID
-	return opened[position-1], true, nil
+	*runID = runs[position-1].id
+	f, _, err := openEngineIfPresent(root, *runID)
+	return f, true, err
 }

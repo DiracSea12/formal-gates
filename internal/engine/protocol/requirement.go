@@ -503,8 +503,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	//     P0/P1，且必须 CHANGED、重走范围包含 finding 所在 series——确认
 	//     P0/P1 的新鲜复审义务，用户不可选 PRESERVED。
 	//   - REVIEW_FINDING_P2 ⇔ 有效裁决 CONFIRM/RESEVERITIZE 且有效严重度
-	//     P2/P3（P2/P3 处置默认 meaning-preserved；升级为 CHANGED 走 P1
-	//     来源，标签必须真实）。
+	//     P2/P3；分类按实际语义影响选择，CHANGED 仍保留该 finding 来源。
 	//   - USER_INITIATED 不绑 finding，两种分类皆可。
 	if payload.Source == RequirementSourceReset && (ask.ResetRequestID == "" || payload.ResetRequestID != ask.ResetRequestID) {
 		return reject("reset confirmation must bind the accepted reset request")

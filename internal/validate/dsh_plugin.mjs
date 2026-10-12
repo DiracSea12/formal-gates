@@ -131,7 +131,7 @@ export function apply(ctx, config = {}) {
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
-      const result = await runBinary(ctx, binary, ['hook', 'decide'], payloadFor(ctx, exec), exec.signal, timeoutMs, dshHome)
+      const result = await runBinary(ctx, binary, ['hook', 'decide', '--provider', config.provider], payloadFor(ctx, exec), exec.signal, timeoutMs, dshHome)
       const decision = parseDecision(result)
       if (denyDecision(decision)) return { kind: 'deny', reason: denyReason(decision) }
       if (result.error || (typeof result.code === 'number' && result.code !== 0)) {

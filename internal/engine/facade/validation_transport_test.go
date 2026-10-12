@@ -354,6 +354,9 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 					t.Fatal(err)
 				}
 				ended := snapshot.State.EndedAttempts[key]
+				if snapshot.State.Guard.UsedRetries != 1 {
+					t.Fatal("exhausted original execution facts lost spent retry")
+				}
 				if ended.Attempts != 2 || ended.MaxAttempts != 2 || !ended.RetryExhausted {
 					t.Fatalf("finite endpoint=%+v", ended)
 				}
@@ -385,6 +388,9 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 					t.Fatal(err)
 				}
 				ended = snapshot.State.EndedAttempts[key]
+				if snapshot.State.Guard.UsedRetries != 2 {
+					t.Fatal("additional actual spawn attempt lost spent retry")
+				}
 				if ended.Attempts != 3 || ended.MaxAttempts != 3 || !ended.RetryExhausted {
 					t.Fatalf("extra endpoint=%+v", ended)
 				}
@@ -486,5 +492,30 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSpawnTransportRetryKeepsSpentSlotAfterSuccess(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	id, input := d.action("engine.development.batch.v4")
+	failed, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), id, d.host(), "failed-transport", protocol.SpawnStatusFailed, authoring.FailureTransientEngine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(failed)
+	if driverState(t, d).Guard.UsedRetries != 0 {
+		t.Fatal("first failed execution was charged as a retry")
+	}
+	d.receipt(id)
+	if driverState(t, d).Guard.UsedRetries != 1 {
+		t.Fatal("successful transport retry lost spent slot")
+	}
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
+	d.drive()
+	d.reopen()
+	d.drive()
+	completed := driverState(t, d)
+	if completed.Guard.UsedRetries != 1 || completed.Attempts[input.Binding.Task].ID != "" {
+		t.Fatal("success/reload reclaimed spent transport retry")
 	}
 }

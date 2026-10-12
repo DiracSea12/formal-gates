@@ -2084,8 +2084,10 @@ func installerHookCommands(target installTarget) map[string]bool {
 	}
 	add(gateArgs...)
 	// Remove installer-owned lifecycle hooks from supported disk configurations.
-	for _, event := range retiredLifecycleHookEvents(target.host) {
-		add("lifecycle", "capture", "--provider", target.host, "--event", event)
+	if descriptor, err := host.Lookup(target.host); err == nil {
+		for _, event := range retiredLifecycleHookEvents(descriptor.ID) {
+			add("lifecycle", "capture", "--provider", descriptor.ID, "--event", event)
+		}
 	}
 	for _, command := range []string{
 		"pwsh -File hooks/" + "enforce-" + "gate-sequence.ps1",

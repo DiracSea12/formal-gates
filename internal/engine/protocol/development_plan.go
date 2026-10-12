@@ -960,17 +960,18 @@ func (s *State) developmentPlanCurrent(p *GranularityReview) bool {
 }
 
 func ValidateProjectChecks(p *GranularityReview) error {
-	purposes := map[string]bool{}
-	if p != nil {
-		for _, batch := range p.Batches {
-			for _, check := range batch.Checks {
-				purposes[check.Purpose] = true
-			}
-		}
+	if p == nil || len(p.Batches) == 0 {
+		return validationError("project verification contract is missing " + CheckFullBuild)
 	}
-	for _, purpose := range []string{CheckFullBuild, CheckFullTests} {
-		if !purposes[purpose] {
-			return validationError("project verification contract is missing " + purpose)
+	for _, batch := range p.Batches {
+		purposes := map[string]bool{}
+		for _, check := range batch.Checks {
+			purposes[check.Purpose] = true
+		}
+		for _, purpose := range []string{CheckFullBuild, CheckFullTests} {
+			if !purposes[purpose] {
+				return validationError("batch " + batch.ID + " verification contract is missing " + purpose)
+			}
 		}
 	}
 	return nil

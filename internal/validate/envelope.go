@@ -68,17 +68,13 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		return BaselineReceipt{}, err
 	}
 	sourceAbs = canonicalRegistryPath(sourceAbs)
-	packageDigest, err := PackageDigest(sourceAbs)
-	if err != nil {
-		return BaselineReceipt{}, err
-	}
 	packageManifest, err := PackageReceipt(sourceAbs)
 	if err != nil {
 		return BaselineReceipt{}, err
 	}
 	receipt := BaselineReceipt{
 		VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs,
-		PackageDigest: packageDigest, PackageManifest: packageManifest.Entries,
+		PackageDigest: packageManifest.Digest, PackageManifest: packageManifest.Entries,
 		CanonicalPaths: map[string]string{"sourceRoot": sourceAbs},
 		Disjoint:       map[string]string{}, DisjointProof: map[string]string{},
 		PathIdentities: map[string]PathLstat{},
@@ -168,7 +164,7 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 	}
 	// Identity receipts must be repeatable for unchanged inputs.  A wall-clock
 	// timestamp would make otherwise identical JSON drift between invocations.
-	receipt.GeneratedAt = "sha256:" + packageDigest
+	receipt.GeneratedAt = "sha256:" + packageManifest.Digest
 	return receipt, nil
 }
 
@@ -567,9 +563,8 @@ func admitRegistryUnlocked(path, recordID string) (AdmissionReceipt, error) {
 	return admitRegistryDoc(path, recordID, doc, now, receipt)
 }
 
-// admitRegistryDoc 在 registry 文档已由调用方加载的前提下执行 admit 语义
-// （record 校验、安装目标身份/摘要核验、失败时写拒绝 receipt）。verifyRunState
-// 的准入链已经持有同一份文档时经此复用，避免同一验证内重复 LoadRegistry。
+// admitRegistryDoc validates records and installed identity from the caller's
+// loaded registry document, writing a rejection receipt on admission failure.
 func admitRegistryDoc(path, recordID string, doc RegistryDocument, now string, receipt AdmissionReceipt) (AdmissionReceipt, error) {
 	for _, record := range doc.Records {
 		if record.ID != recordID {

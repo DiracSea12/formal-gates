@@ -11,6 +11,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/validate"
 )
 
 func TestWorkflowReentrySelectsExistingRunWithoutCopyingIdentity(t *testing.T) {
@@ -38,6 +39,76 @@ func TestWorkflowReentrySelectsExistingRunWithoutCopyingIdentity(t *testing.T) {
 	run, err := f.Show()
 	if err != nil || len(run.PendingAsks) != 1 || run.PendingAsks[0].Control != "ABORT" {
 		t.Fatal("request reached another run or was not accepted", err)
+	}
+}
+
+func TestWorkflowReentryRetainsUnavailableRunAndSelectsCurrentRun(t *testing.T) {
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	oldID := "writer-exclusive"
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, oldID, "request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request facade.StartRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	var installation validate.InstallReport
+	if err := readJSONFileInto(request.AdmissionRegistryPath+".install.json", &installation); err != nil {
+		t.Fatal(err)
+	}
+	source := installation.Targets[0].SourceRoot
+	mustWriteCLI(t, filepath.Join(source, "README.md"), "Updated installed documentation.\n")
+	for _, bootstrap := range []bool{false, true} {
+		args := []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}
+		if bootstrap {
+			args = append(args, "--bootstrap")
+		}
+		var out, stderr bytes.Buffer
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+			t.Fatal("normal installation update failed", stderr.String())
+		}
+	}
+	oldBefore := snapshotEngineRunTree(t, root, oldID)
+	var out, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", root}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "UNREGISTERED_INSTALL") {
+		t.Fatal("single unavailable run bypassed its admission barrier", out.String(), stderr.String())
+	}
+	barrier := stderr.String()
+	admission, err := validate.ResolveEngineAdmission(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = facade.StartRequest{RunID: "current-run", Route: request.Route, BaseSnapshot: request.BaseSnapshot, Provider: admission.Provider, DefinitionSource: request.DefinitionSource, DefinitionDigest: request.DefinitionDigest, IntakeConfirmationReceipt: request.IntakeConfirmationReceipt}
+	a := &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}
+	if _, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, Request: request, Admission: a, VCSRunner: frozenGitRunner{}}); err != nil {
+		t.Fatal(err)
+	}
+	currentBefore := snapshotEngineRunTree(t, root, request.RunID)
+	out.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", root}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+		t.Fatal("unavailable run blocked current choices", stderr.String())
+	}
+	var choices struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &choices); err != nil || len(choices.Runs) != 2 || choices.Runs[0]["runId"] != request.RunID || choices.Runs[1]["runId"] != oldID || choices.Runs[1]["available"] != false || choices.Runs[1]["error"] != strings.TrimSpace(barrier) {
+		t.Fatal("unavailable run lost its position or original error", err, out.String())
+	}
+	if _, present := choices.Runs[1]["diagnostic"]; present {
+		t.Fatal("run selection exposed a full raw diagnostic")
+	}
+	for position, wantCode := range map[string]int{"1": 0, "2": 1} {
+		out.Reset()
+		stderr.Reset()
+		if code := Run("formal-gates", []string{"workflow", "show", "--root", root, "--run", position}, IO{Stdout: &out, Stderr: &stderr}); code != wantCode || wantCode != 0 && stderr.String() != barrier || wantCode == 0 && !strings.Contains(out.String(), request.RunID) {
+			t.Fatal("selected run did not use its original admission", position, code, out.String(), stderr.String())
+		}
+	}
+	if !reflect.DeepEqual(oldBefore, snapshotEngineRunTree(t, root, oldID)) || !reflect.DeepEqual(currentBefore, snapshotEngineRunTree(t, root, request.RunID)) {
+		t.Fatal("listing or selection changed a run")
 	}
 }
 

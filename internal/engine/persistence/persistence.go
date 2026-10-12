@@ -159,9 +159,8 @@ func ValidateEnvelope(observed Envelope, packageDigest string) error {
 	return validateEnvelope(observed, Config{PackageDigest: packageDigest})
 }
 
-// ValidateEnvelopeWithIdentity is the candidate-facing write barrier.  It
-// keeps the package-only helper above intact while allowing a façade to
-// require the full definition-source and installed-target identity.
+// ValidateEnvelopeWithIdentity is the candidate-facing write barrier requiring
+// the package digest, definition source and installed-target identity.
 func ValidateEnvelopeWithIdentity(observed Envelope, packageDigest, definitionSource, installedTargetIdentity string) error {
 	if strings.TrimSpace(packageDigest) == "" {
 		return fmt.Errorf("persistence: package digest is required")

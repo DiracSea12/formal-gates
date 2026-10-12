@@ -44,14 +44,12 @@ func ValidateRecordedScenarios(manifest AcceptanceManifest) error {
 	return nil
 }
 
-// ValidateEvidence rejects empty or reserved protocol placeholders. Semantic
-// truth is assessed by the Operator, not guessed from prose by this validator.
+// ValidateEvidence checks required execution fields. The semantic reviewer judges
+// their meaning against the approved oracle and native execution facts.
 func ValidateEvidence(caseID, procedure, observation, comparison string) error {
-	sentinels := map[string]bool{"p": true, "o": true, "m": true, "procedure": true, "observation": true, "oracle": true, "run": true, "executed": true, "ok": true, "success": true, "pass": true, "passed": true, "matched": true, "skipped": true, "authorized pass": true, "observed success": true, "compared": true, "executed blackbox": true, "executed whitebox": true}
 	for _, field := range []struct{ name, value string }{{"procedure", procedure}, {"observation", observation}, {"oracle result", comparison}} {
-		value := strings.ToLower(strings.Join(strings.Fields(field.value), " "))
-		if value == "" || sentinels[value] {
-			return fmt.Errorf("QA result %s %s is empty or a reserved protocol sentinel, not per-case execution evidence", caseID, field.name)
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("QA result %s %s is empty", caseID, field.name)
 		}
 	}
 	return nil

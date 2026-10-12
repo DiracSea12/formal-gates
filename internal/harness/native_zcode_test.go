@@ -715,7 +715,8 @@ func TestZcodeRespondTable(t *testing.T) {
 // through the host-side helper: the apiKey reaches the protocol reply only.
 // Skipped when node is absent (the zcode host itself requires node).
 func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
+	node, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("node is not available")
 	}
 	if runNativePackageTest(t) {
@@ -745,7 +746,7 @@ func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	z := &zcodeClient{directory: directory}
+	z := &zcodeClient{executable: node, directory: directory}
 	reply, err := z.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "p1"})
 	if err != nil {
 		t.Fatal(err)

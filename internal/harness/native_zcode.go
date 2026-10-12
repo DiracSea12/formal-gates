@@ -324,12 +324,8 @@ func zcodeCredentialHelperPath() (string, error) {
 // user decision are involved. The value is never returned into evidence --
 // answers go through the reply loop, which records the method and the status
 // only -- and is never logged, written or reported by this transport.
-func zcodeRequestAuth(provider string, environment map[string]string) string {
+func zcodeRequestAuth(node, provider string, environment map[string]string) string {
 	if provider == "" {
-		return ""
-	}
-	node, lookErr := exec.LookPath("node")
-	if lookErr != nil {
 		return ""
 	}
 	helper, helperErr := zcodeCredentialHelperPath()
@@ -363,6 +359,7 @@ func zcodeRequestAuth(provider string, environment map[string]string) string {
 // the event and resets the drained buffer before waiting for more, and
 // native-events.jsonl is the only durable record of the whole turn.
 type zcodeClient struct {
+	executable  string
 	environment map[string]string
 	hostData    string
 	client      *nativeClient
@@ -468,8 +465,8 @@ var zcodePermissionInteraction = nativeInteractionSpec{
 //   - Reply (the request's result schema rYe): {action:
 //     accept|decline|cancel, content?, reason?}.strict(). Accepting a single
 //     question's option is {action: "accept", content: {answer: <value>}} -
-//     the host's own answer normalizer reads content.answer for a
-//     single-question prompt (and content.answers per question otherwise).
+//     content.answers maps original question text to its value for multiple
+//     questions. Multi-select values are arrays of original option values.
 //   - Cancel is first-class here: {action: "cancel"} (the host maps a
 //     cancelled AskUserQuestion to a denied tool outcome itself).
 var zcodeUserInputInteraction = nativeInteractionSpec{
@@ -522,16 +519,12 @@ var zcodeUserInputInteraction = nativeInteractionSpec{
 		if choice.Cancel {
 			return map[string]any{"result": map[string]any{"action": "cancel"}}, nil
 		}
+		if choice.Answers != nil {
+			return map[string]any{"result": map[string]any{"action": "accept", "content": choice.Answers}}, nil
+		}
 		questions := listOf(getOf(params, "questions"))
 		if len(questions) != 1 {
-			return nil, &blockedError{message: "ZCODE_INTERACTION: an option answer needs exactly one question; cancel otherwise"}
-		}
-		if choice.Answers != nil {
-			answer, ok := getOf(choice.Answers, "answer").(string)
-			if !ok || answer == "" || len(listOf(getOf(questions[0], "options"))) != 0 {
-				return nil, &blockedError{message: "ZCODE_INTERACTION: free text requires an original open question"}
-			}
-			return map[string]any{"result": map[string]any{"action": "accept", "content": map[string]any{"answer": answer}}}, nil
+			return nil, &blockedError{message: "ZCODE_INTERACTION: an option answer needs exactly one question"}
 		}
 		for _, option := range listOf(getOf(questions[0], "options")) {
 			if valuesEqual(getOf(option, "value"), choice.OptionID) {
@@ -598,7 +591,7 @@ func newZcodeClient(launch map[string]any, workspace, directory string, environm
 	if err != nil {
 		return nil, err
 	}
-	z := &zcodeClient{hostData: environment["ZCODE_DATA_BASE_DIR"], environment: environment, directory: directory}
+	z := &zcodeClient{executable: textOf(executableValue), hostData: environment["ZCODE_DATA_BASE_DIR"], environment: environment, directory: directory}
 	z.client, err = newNativeClientWithEnv(nativeHooks{
 		transportPrefix: "ZCODE_TRANSPORT",
 		requestPrefix:   "ZCODE_NATIVE",
@@ -651,7 +644,7 @@ func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 		// credential the reply says so and the host reports the failure itself,
 		// so a missing credential is never laundered into a denied turn.
 		provider, _ := getOf(params, "providerId").(string)
-		secret := zcodeRequestAuth(provider, z.environment)
+		secret := zcodeRequestAuth(z.executable, provider, z.environment)
 		if secret == "" {
 			return &nativeReply{
 				payload: map[string]any{"result": map[string]any{

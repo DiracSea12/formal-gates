@@ -72,7 +72,7 @@ type CompiledHostActionStep struct {
 
 // CompiledAgentStep 是 agent 变体 payload：三值封闭理由枚举必填；
 // worker result 合同由共享 IO 段的 postcondition predicate 承载。
-// ReviewSeries 是可选的审查系列身份标记（随定义编译携带，签发层读取）。
+// ReviewSeries 在 INDEPENDENT_REVIEW 时必填，其余理由不携带；签发层读取该身份。
 type CompiledAgentStep struct {
 	Handler      authoring.HandlerID
 	Reason       authoring.NonProgrammableReason

@@ -142,7 +142,7 @@ func (s Series) validate(runID string, action Action) error {
 				return fail("adjudication %s: %v", adjudication.ID, err)
 			}
 		}
-		if adjudication.Decision == decisionReseveritize && blockingSeverity(adjudication.Severity) && placeholderRationale(adjudication.SeverityRationale) {
+		if adjudication.Decision == decisionReseveritize && blockingSeverity(adjudication.Severity) && strings.TrimSpace(adjudication.SeverityRationale) == "" {
 			return fail("adjudication %s raises a blocking severity without an independent rationale", adjudication.ID)
 		}
 		if adjudication.Decision != decisionReseveritize && (adjudication.Severity != "" || adjudication.SeverityRationale != "") {
@@ -190,7 +190,7 @@ func (s Series) validate(runID string, action Action) error {
 					return fail("correction %s: %v", correction.ID, err)
 				}
 			}
-			if correction.Decision == decisionReseveritize && blockingSeverity(correction.Severity) && placeholderRationale(correction.SeverityRationale) {
+			if correction.Decision == decisionReseveritize && blockingSeverity(correction.Severity) && strings.TrimSpace(correction.SeverityRationale) == "" {
 				return fail("correction %s raises a blocking severity without an independent rationale", correction.ID)
 			}
 			if correction.Decision != decisionReseveritize && (correction.Severity != "" || correction.SeverityRationale != "") {

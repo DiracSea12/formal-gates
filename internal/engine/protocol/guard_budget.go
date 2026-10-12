@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -621,19 +622,44 @@ func (e *Engine) deriveGuardBudget(state *State) (*GuardBudget, error) {
 		budget.TokenCapMax = *state.TokenCapMaxTokens
 		budget.TokenCapDispatch = state.dispatchTokenTotal()
 	}
-	// 已用 retry 与 guard 自身算术同口径（AC-055：retryAllowance=Σ max(0,
-	// MaxAttempts−1)）：每个 TaskKey 的首个执行占用 request 槽，其余执行才是
-	// retry 消耗——执行数读 attempt 账本（当前＋已终合计），下限 0。
-	for task := range issued {
-		executions := 0
-		if attempt, ok := state.Attempts[task]; ok {
-			executions += attempt.Attempts
+	// DispatchBindings retains every issued business action after completion.
+	// Replacements for a user handoff preserve the original retry consumption.
+	handoffs := map[string]bool{}
+	for _, record := range state.RecoveryRecords {
+		if record.Handoff {
+			handoffs[state.ObsoleteActions[record.ActionID].ReplacedBy] = true
 		}
-		if attempt, ok := state.EndedAttempts[task]; ok {
-			executions += attempt.Attempts
+	}
+	executions := map[runtime.TaskKey]int{}
+	for action, binding := range state.DispatchBindings {
+		if !issued[binding.Task] || state.beforeResetBoundary(action) && state.TaskStatusOf(binding.Task) != runtime.TaskTerminal {
+			continue
 		}
-		if executions > 1 {
-			budget.UsedRetries += executions - 1
+		count := len(state.SpawnFailures[action])
+		if receipt, ok := state.SpawnReceipts[action]; ok && !slices.ContainsFunc(state.SpawnFailures[action], func(failed SpawnReceipt) bool { return failed.Digest == receipt.Digest }) {
+			count++
+		}
+		count = max(1, count)
+		if handoffs[action] {
+			count--
+		}
+		executions[binding.Task] += count
+	}
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.Status != HostActionStatusExecuted || receipt.Operation != HostActionResumeAgent {
+			continue
+		}
+		for action, spawn := range state.SpawnReceipts {
+			if spawn.agentIdentity() != receipt.LifecycleEvidence.Identity || !issued[spawn.Task] || state.beforeResetBoundary(action) && state.TaskStatusOf(spawn.Task) != runtime.TaskTerminal {
+				continue
+			}
+			executions[spawn.Task]++
+			break
+		}
+	}
+	for _, count := range executions {
+		if count > 1 {
+			budget.UsedRetries += count - 1
 		}
 	}
 	return budget, nil

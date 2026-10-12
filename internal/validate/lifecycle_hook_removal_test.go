@@ -11,21 +11,21 @@ import (
 )
 
 func TestInstallerRemovesOwnedLifecycleHooksAndPreservesUserEntries(t *testing.T) {
-	for _, provider := range []string{host.Claude, host.Codex, host.Cursor, host.ZCode} {
+	for _, provider := range []string{host.Claude, "claude", host.Codex, host.Cursor, host.ZCode} {
 		for _, upgrade := range []bool{false, true} {
 			t.Run(provider+map[bool]string{true: "/upgrade", false: "/uninstall"}[upgrade], func(t *testing.T) {
 				root := t.TempDir()
 				target := installTarget{host: provider, targetPath: filepath.Join(root, "skill"), launcherPath: filepath.Join(root, "launcher"), hookConfig: filepath.Join(root, "hooks.json")}
 				descriptor, _ := host.Lookup(provider)
 				events := map[string]any{}
-				for _, event := range retiredLifecycleHookEvents(provider) {
+				for _, event := range retiredLifecycleHookEvents(descriptor.ID) {
 					if provider == host.ZCode {
-						args := []string{"lifecycle", "capture", "--provider", provider, "--event", event}
+						args := []string{"lifecycle", "capture", "--provider", descriptor.ID, "--event", event}
 						events[event] = []any{zcodeHookGroup("Agent|Task", zcodeProcessEntry(target.launcherPath, args)), zcodeHookGroup("Agent|Task", zcodeProcessEntry("user-launcher", args))}
 					} else {
 						entries := []any{}
 						for _, launcher := range []string{target.launcherPath, filepath.Join(target.targetPath, "bin", nativeBinaryName()), "user-launcher"} {
-							command := nativeInstallCommand(launcher, "lifecycle", "capture", "--provider", provider, "--event", event)
+							command := nativeInstallCommand(launcher, "lifecycle", "capture", "--provider", descriptor.ID, "--event", event)
 							if descriptor.Hook.Kind == host.HookFlat {
 								entries = append(entries, flatHookEntry(command))
 							} else {
@@ -55,7 +55,7 @@ func TestInstallerRemovesOwnedLifecycleHooksAndPreservesUserEntries(t *testing.T
 					originalEvents = zcodeHookEvents(zcodeHookRoot(original))
 				}
 				userEntries := map[string]any{}
-				for _, event := range retiredLifecycleHookEvents(provider) {
+				for _, event := range retiredLifecycleHookEvents(descriptor.ID) {
 					entries := originalEvents[event].([]any)
 					userEntries[event] = entries[len(entries)-1]
 				}
@@ -91,7 +91,7 @@ func TestInstallerRemovesOwnedLifecycleHooksAndPreservesUserEntries(t *testing.T
 					t.Fatal(err)
 				}
 				text := string(raw)
-				expected := len(retiredLifecycleHookEvents(provider))
+				expected := len(retiredLifecycleHookEvents(descriptor.ID))
 				captureMarker := "lifecycle capture"
 				if provider == host.ZCode {
 					captureMarker = `"lifecycle"`

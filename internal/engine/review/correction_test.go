@@ -27,7 +27,7 @@ func TestFindingDecisionMatrixProjectsSeverityAndBlocking(t *testing.T) {
 		{name: "re-severity P2 up to P1 turns blocking", severity: "P2", decision: "RESEVERITIZE", newSeverity: "P1", rationale: "the defect blocks the documented entry path", wantStatus: "FAIL", wantBlocking: 1},
 		{name: "re-severity P3 stays advisory", severity: "P3", decision: "RESEVERITIZE", newSeverity: "P3", wantStatus: "PASS", wantAdvisory: 1},
 		{name: "re-severity to P0 without rationale is rejected", severity: "P2", decision: "RESEVERITIZE", newSeverity: "P0", wantErr: "rationale"},
-		{name: "re-severity to P0 with a placeholder rationale is rejected", severity: "P2", decision: "RESEVERITIZE", newSeverity: "P0", rationale: "违反需求", wantErr: "rationale"},
+		{name: "re-severity to P0 with a blank rationale is rejected", severity: "P2", decision: "RESEVERITIZE", newSeverity: "P0", rationale: " ", wantErr: "rationale"},
 		{name: "confirm cannot carry a severity", severity: "P1", decision: "CONFIRM", newSeverity: "P2", wantErr: "only for RESEVERITIZE"},
 		{name: "dismiss cannot carry a rationale", severity: "P1", decision: "DISMISS", rationale: "extra", wantErr: "only for RESEVERITIZE"},
 		{name: "re-severity requires a severity", severity: "P2", decision: "RESEVERITIZE", wantErr: "requires a severity"},

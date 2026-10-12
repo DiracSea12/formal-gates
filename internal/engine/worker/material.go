@@ -152,7 +152,21 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	case "engine.gate.v2":
 		ruleIDs = []string{"gate"}
 	case "engine.repair.verify.v2":
-		ruleIDs = []string{"qa-execution-blackbox", "qa-execution-whitebox"}
+		for _, caseID := range input.Validation.Repair.VerificationCases {
+			for _, manifest := range input.Validation.Contract.Manifests {
+				if !slices.ContainsFunc(manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == caseID }) {
+					continue
+				}
+				mode := "blackbox"
+				if manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+					mode = "whitebox"
+				}
+				id := "qa-execution-" + mode
+				if !slices.Contains(ruleIDs, id) {
+					ruleIDs = append(ruleIDs, id)
+				}
+			}
+		}
 	case "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
 		mode := "blackbox"
 		if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
@@ -310,6 +324,12 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			var repair map[string]json.RawMessage
 			if err := json.Unmarshal(validation["repair"], &repair); err != nil {
 				return Material{}, err
+			}
+			if repair["checks"] != nil {
+				repair["checks"], err = json.Marshal(promptChecks(input.Validation.Repair.Checks))
+				if err != nil {
+					return Material{}, err
+				}
 			}
 			if repair["result"] != nil {
 				result, err := promptWorkerResult(input.Validation.Repair.Result)

@@ -125,7 +125,7 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 	for _, required := range []string{
 		"export const name = 'formal-gates-dsh'",
 		"ctx.on('tools/pre-execute'",
-		"['hook', 'decide']",
+		"['hook', 'decide', '--provider', config.provider]",
 		"normalizeArguments",
 		"config.skillRoot",
 		"process.platform",

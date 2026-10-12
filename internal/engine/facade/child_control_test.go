@@ -332,6 +332,20 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 			d.confirmRoute(routeDecisionForGates(gates))
 			d.drive()
 			id, input := planBatchAction(d, "command")
+			if gates[0] == "quality" {
+				d.receipt(id)
+				invalid := protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "implementation without required completion evidence"}}
+				acceptance := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "missing-completion", Validation: &invalid}})
+				if acceptance.Status != "REJECTED_INVALID_RESULT" {
+					t.Fatalf("missing completion was not rejected: %+v", acceptance)
+				}
+				d.drive()
+				retry, current := planBatchAction(d, "command")
+				if retry == id || current.Binding.Task != input.Binding.Task || driverState(t, d).Guard.UsedRetries != 1 {
+					t.Fatal("retry lost original task or consumption")
+				}
+				id, input = retry, current
+			}
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -354,6 +368,9 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 			}
 			freezeCases()
 			before := driverState(t, d)
+			if gates[0] == "quality" && before.Guard.UsedRetries != 1 {
+				t.Fatal("completed development lost retry consumption")
+			}
 			for id := range d.run.PendingActions {
 				d.receipt(id)
 			}
@@ -365,6 +382,9 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 			passPreDevelopmentReviews(t, d, commandPlan())
 			freezeCases()
 			fresh := driverState(t, d)
+			if gates[0] == "quality" && fresh.Guard.UsedRetries != 1 {
+				t.Fatal("reset lost retry consumption of retained completed development")
+			}
 			if fresh.Validation.DevelopmentSnapshot != before.Validation.DevelopmentSnapshot || fresh.BaseSnapshot != before.BaseSnapshot || fresh.AcceptedNativeSnapshot() != before.AcceptedNativeSnapshot() || len(fresh.Validation.Waves) != 1 {
 				t.Fatal("standalone reset changed retained development or failed to rebuild validation")
 			}

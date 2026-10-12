@@ -117,6 +117,8 @@ formal-gates workflow diagnose --path <state-or-summary.json>
 
 show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。精确 `submit --confirmation` 供人工或程序集成，仍从原候选自动绑定目标。
 
+不可打开的顶层 run 保留在选择列表中并显示原错误；选择它仍按原准入规则拒绝，其他当前 run 可按显示序号选择。完整只读诊断使用原 `workflow diagnose` 入口。
+
 start/show/status/next/drive/submit 默认展示当前语义问题、短选择、必要确认材料及实际执行边界，
 不输出内部派发材料或 adapter 指令。程序调用者需要完整原投影时显式使用 `--machine`；
 语义 next/replan 默认在原 run 的 payloads/control 目录保存完整原对象并公布

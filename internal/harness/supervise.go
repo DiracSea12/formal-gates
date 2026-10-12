@@ -264,11 +264,8 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 		errF.Close()
 	}()
 
-	// Cancellation: Store.cancel_jobs sends SIGTERM to the supervisor's process
-	// group (the supervisor is the session leader via start_new_session). The
-	// signal handler is installed here, BEFORE the first child is started, so no
-	// new race window is introduced. We only forward the signal to the direct
-	// child, never broadcast to our own group.
+	// Install the cancellation handler before starting a child. Cancellation
+	// terminates the child's own process group when available, never our group.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -392,9 +389,7 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, grouped bool) (int, string, 
 	}
 	select {
 	case <-sigCh:
-		// Supervisor cancelled while waiting. Forward SIGTERM to the direct
-		// child (it may already be dead from the group signal) and settle with a
-		// 5s kill timeout.
+		// Terminate the owned child or child group, then settle its exit.
 		terminate()
 		return 130, "owned job was cancelled", true
 	case s := <-resCh:

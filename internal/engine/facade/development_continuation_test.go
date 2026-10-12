@@ -271,3 +271,73 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 	}
 	return event
 }
+
+func TestRepairFailedProjectCheckRetainsIssuedObligation(t *testing.T) {
+	d, input, id := nativeRepairReady(t, "P1")
+	d.receipt(id)
+	issued := driverState(t, d).Attempts[input.Binding.Task]
+	spawn := driverState(t, d).SpawnReceipts[id]
+	partial := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "read-current-repair", Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "CONTINUE", Development: &protocol.DevelopmentEvidence{Paths: []string{}, Summary: "Read the authorized repair", RemainingWork: "Correct the command output"}}}}
+	d.submit(partial)
+	d.reopen()
+	d.drive()
+	if d.run.ValidationInputs[id].Repair.Result == nil || d.run.ValidationInputs[id].Repair.Result.Digest != driverState(t, d).Results[id].Digest {
+		t.Fatal("repair continuation lost original progress")
+	}
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main(){ missing syntax\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := gateRepairResult(input)
+	submit := func(body protocol.ValidationResult, digest string) protocol.Event {
+		t.Helper()
+		event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: digest, SourceResult: driverState(t, d).Results[id].Digest, Validation: &body}}
+		d.submit(event)
+		d.drive()
+		return event
+	}
+	failedEvent := submit(result, "actual-repair-edit")
+	failed := driverState(t, d)
+	if failed.PendingActions[id].AttemptID != issued.ID || failed.TaskStatusOf(input.Binding.Task) == runtime.TaskTerminal {
+		t.Fatal("repair PASS removed its original execution before approved checks passed")
+	}
+	d.submit(failedEvent)
+	d.reopen()
+	d.drive()
+	material := d.run.WorkerMaterials[id]
+	body, err := os.ReadFile(material.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered worker.Material
+	if err := json.Unmarshal(body, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	feedback := rendered.Input.Validation.Repair
+	if feedback.Result == nil || feedback.Result.Digest != failed.Results[id].Digest || len(feedback.Checks) != 1 || feedback.Checks[0].ExitCode == 0 || feedback.Checks[0].Stdout.SHA256 == "" || feedback.Checks[0].Stderr.SHA256 == "" {
+		t.Fatalf("original repair has no exact failed native-check feedback: %+v", feedback)
+	}
+	if !strings.Contains(rendered.Prompt, "checks") || strings.Contains(rendered.Prompt, feedback.Checks[0].Directory) {
+		t.Fatal("repair prompt did not project original check facts without physical evidence paths")
+	}
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n// repaired command\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	final := submit(result, "completed-repair-edit")
+	completed := driverState(t, d)
+	if completed.TaskStatusOf(input.Binding.Task) != runtime.TaskTerminal || completed.PendingActions[id].ActionID != "" || completed.Attempts[input.Binding.Task].ID != "" || !reflect.DeepEqual(completed.SpawnReceipts[id], spawn) {
+		t.Fatal("successful native full checks did not settle the original repair")
+	}
+	if len(completed.RecoverableResults[id]) != 2 || completed.RecoverableResults[id][0].Digest != failed.RecoverableResults[id][0].Digest {
+		t.Fatal("repair lost its previous original-action evidence")
+	}
+	before, _ := json.Marshal(completed.HostActionReceipts)
+	d.submit(final)
+	d.submit(failedEvent)
+	d.submit(partial)
+	d.reopen()
+	d.drive()
+	after, _ := json.Marshal(driverState(t, d).HostActionReceipts)
+	if !bytes.Equal(before, after) {
+		t.Fatal("duplicate/reload re-executed settled repair checks")
+	}
+}

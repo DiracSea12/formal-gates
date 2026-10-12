@@ -345,7 +345,7 @@ func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefi
 		return false
 	}
 	role := s.validationRole(pending.Task, cd)
-	return (role == "engine.development.batch.v4" || role == "engine.repair.v5") && result.Validation.Status == "CONTINUE" || role == "engine.development.batch.v4" && s.developmentChecksFailed(result)
+	return (role == "engine.development.batch.v4" || role == "engine.repair.v5") && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(result))
 }
 
 func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
@@ -419,7 +419,7 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if len(s.editChecks(r)) == 0 {
 			continue
 		}
-		if s.developmentChecksPassed(r) && s.validationRole(r.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v4" {
+		if role := s.validationRole(r.Validation.Binding.Task, e.cfg.Definition); s.developmentChecksPassed(r) && (role == "engine.development.batch.v4" || role == "engine.repair.v5") {
 			if _, outstanding := s.PendingActions[action]; outstanding {
 				if err := s.terminalizeTask(r.Validation.Binding.Task); err != nil {
 					return false, err

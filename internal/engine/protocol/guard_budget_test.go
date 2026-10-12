@@ -208,13 +208,14 @@ func TestGuardIssuanceBlocksExhaustedRetry(t *testing.T) {
 
 // TestGuardUsedRetriesCountsExecutionsBeyondTheFirst：UsedRetries 与 guard
 // 自身算术同口径（AC-055：retryAllowance=Σ max(0, MaxAttempts−1)）——每个
-// TaskKey 的首个执行占 request 槽，其余执行才计 retry。两形：耗尽账本
-// （2/2）与在途账本（首个执行已占用、retry 仍可用且闸放行）。
+// TaskKey 的首个执行占 request 槽，其余执行才计 retry。执行由原派发
+// bindings 证明，当前或已终 Attempt 仅提供有限策略。
 func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
 	engine, state, qaTask := guardPipelineFixture(t)
+	state.DispatchBindings["act:qa-2"] = state.DispatchBindings["act:qa-1"]
 	state.EndedAttempts[qaTask] = Attempt{
-		ID: "att:qa-1", Attempts: 2, MaxAttempts: 2, RetryExhausted: true,
-		IssuedAction: decision.IssuedAction{ActionID: "act:qa-1", Task: qaTask},
+		ID: "att:qa-2", Attempts: 2, MaxAttempts: 2, RetryExhausted: true,
+		IssuedAction: decision.IssuedAction{ActionID: "act:qa-2", Task: qaTask},
 	}
 	exhausted, err := engine.deriveGuardBudget(state)
 	if err != nil {

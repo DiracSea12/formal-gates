@@ -12,7 +12,7 @@ import (
 
 // decode.go 承载 Decode 的 wire→IR 方向：单步重组与 payload 严格解析。
 // payload 判别按公共头 kind 路由（与 encode 侧 switch 对称），每变体单独
-// DisallowUnknownFields 解析——closed world 不被未知字段穿透（spike 坑 3）。
+// DisallowUnknownFields 解析——closed world 不被未知字段穿透。
 
 // stepFromWire 把单步 wire 重组为 CompiledStep。version 是制品信封版本，
 // 用于步骤版本绑定（checkCoherence 复核其与信封一致）。

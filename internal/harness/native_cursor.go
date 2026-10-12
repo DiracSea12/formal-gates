@@ -95,7 +95,7 @@ func cursorVerifySource(directory string, source any) error {
 	if err := verifyNativeSource(directory, source, "cursor"); err != nil {
 		return err
 	}
-	observed, err := cursorObserve(directory, false)
+	observed, err := cursorObserve(directory)
 	if err != nil {
 		return err
 	}
@@ -510,7 +510,7 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	if streamErr != nil {
 		return nil, streamErr
 	}
-	source, err := cursorObserve(directory, true)
+	source, err := cursorObserve(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +520,7 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	return source, nil
 }
 
-func cursorObserve(directory string, materialize bool) (map[string]any, error) {
+func cursorObserve(directory string) (map[string]any, error) {
 	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
 	if err != nil {
 		return nil, err
@@ -609,5 +609,5 @@ func cursorObserve(directory string, materialize bool) (map[string]any, error) {
 	return evidenceSource(directory, "cursor", identity, map[string]any{"native_store": store, "selection": selection, "native_request": terminal["request_id"], "native_result": terminal, "usage_evidence": terminal["usage"]})
 }
 func cursorReconcile(directory string, process any) (map[string]any, error) {
-	return recoverNativeSource(directory, process, "CURSOR", func() (map[string]any, error) { return cursorObserve(directory, true) })
+	return recoverNativeSource(directory, process, "CURSOR", func() (map[string]any, error) { return cursorObserve(directory) })
 }

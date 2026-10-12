@@ -547,3 +547,33 @@ func TestRepairComparisonMaterialPreservesBothApprovedModes(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairComparisonReceivesOnlyIssuedCaseRules(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cases := range [][]string{{"black"}, {"white"}, {"black", "white"}} {
+		input := semanticInput()
+		input.Handler = "engine.repair.verify.v2"
+		input.RequirementDocument.Content = "Confirmed requirement"
+		input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "issued-candidate"}, VerificationCases: cases}
+		input.Validation.Contract.Manifests = []coverage.AcceptanceManifest{
+			{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "black"}}},
+			{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{{CaseID: "white"}}},
+		}
+		material, err := Render(input, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []string{"black", "white"} {
+			rule, ok := catalog.RoleRule("qa-execution-" + mode + "box")
+			if !ok {
+				t.Fatal("missing rule", mode)
+			}
+			if strings.Contains(material.Prompt, rule.Content) != slices.Contains(cases, mode) {
+				t.Fatalf("case duties %v received wrong %s rules", cases, mode)
+			}
+		}
+	}
+}

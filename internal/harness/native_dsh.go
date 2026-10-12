@@ -241,7 +241,7 @@ func makeDSHPatch(directory string, readOnly bool, probe bool, services ...Execu
 }
 
 // observeNative turns committed native turn evidence into the bound source
-// receipt (native_dsh.observe). The events file is streamed line by line: only
+// receipt. The events file is streamed line by line: only
 // one decoded event is alive at a time.
 func observeNative(directory string, identity any) (map[string]any, error) {
 	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
@@ -549,7 +549,7 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 }
 
 // dshCaptureBinding binds dsh to the resolved binary it will execute
-// (native_dsh.capture_binding): PATH lookup, symlink resolution, then the
+// through PATH lookup, symlink resolution, then the
 // shared launch/files proof shape.
 func dshCaptureBinding() (map[string]any, error) { return dshConfiguredBinding(settings.Values{}) }
 
@@ -575,9 +575,8 @@ func dshVerifyStart(_ any, acknowledgement any, identity string) error {
 	return nil
 }
 
-// dshVerifySource is the registry's verify_source: provider/identity must
-// match, the proof set must be exactly the four evidence files, and each proof
-// must still hold against the directory.
+// dshVerifySource checks the bound provider, identity and required evidence
+// files against the original directory.
 func dshVerifySource(directory string, source any) error {
 	return verifyNativeSource(directory, source, "dsh")
 }
