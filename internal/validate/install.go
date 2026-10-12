@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -575,7 +576,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if loadErr != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge load failed: %w", loadErr))
 		}
-		records = append(records, refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, vcsIdentity, sourcePackage.Digest, records)...)
+		records = append(records, refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, records)...)
 		committed, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records)
 		if err != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge commit failed: %w", err))
@@ -1340,7 +1341,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		}
 		return InstallReport{}, rollback(loadErr)
 	}
-	siblingRefresh := refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, outer.VCSIdentity, source.Digest, records)
+	siblingRefresh := refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, records)
 	if len(siblingRefresh) != 0 {
 		records = append(records, siblingRefresh...)
 		mutatesRegistry = true
@@ -1408,9 +1409,9 @@ func bootstrapReleasePreservesIdentity(record RegistryRecord, sourceRoot, instal
 }
 
 // Global installs have one canonical host record, but workflow state and
-// resources remain project-local. bindGlobalInvocationRoot therefore creates
-// project-derived sibling records that share the same installed target. They
-// are not a competing installation identity and must be refreshed whenever the
+// resources remain project-local. Project-derived sibling records share the
+// same stable installation family and target. Their shared installation
+// binding must be refreshed whenever the
 // canonical global target is upgraded or bootstrapped.
 func isGlobalInvocationRecord(record, desired RegistryRecord) bool {
 	return desired.Scope == "global" && record.Scope == "global" &&
@@ -1418,10 +1419,10 @@ func isGlobalInvocationRecord(record, desired RegistryRecord) bool {
 		canonicalRegistryPath(record.Target) == canonicalRegistryPath(desired.Target) &&
 		canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(desired.LauncherPath) &&
 		record.Host == desired.Host && record.HookConfig == desired.HookConfig &&
-		record.RuntimeSibling == desired.RuntimeSibling && record.ReleaseRoot == desired.ReleaseRoot
+		record.RuntimeSibling == desired.RuntimeSibling
 }
 
-func refreshedGlobalInvocationRecords(existing []RegistryRecord, targets []installTarget, options InstallOptions, vcsIdentity, packageDigest string, already []RegistryRecord) []RegistryRecord {
+func refreshedGlobalInvocationRecords(existing []RegistryRecord, targets []installTarget, options InstallOptions, already []RegistryRecord) []RegistryRecord {
 	refreshed := []RegistryRecord{}
 	for _, record := range existing {
 		for index, target := range targets {
@@ -1429,13 +1430,15 @@ func refreshedGlobalInvocationRecords(existing []RegistryRecord, targets []insta
 			if !isGlobalInvocationRecord(record, desired) {
 				continue
 			}
-			updated := record
-			updated.VCSIdentity = vcsIdentity
-			updated.PackageDigest = packageDigest
-			if index < len(already) {
-				updated.InstalledDigest = already[index].InstalledDigest
+			updated := already[index]
+			updated.ID, updated.Status = record.ID, record.Status
+			updated.Generation, updated.Lease, updated.Token = record.Generation, record.Lease, record.Token
+			updated.ProjectRoot, updated.StateRoot, updated.ResourceRoot = record.ProjectRoot, record.StateRoot, record.ResourceRoot
+			updated.CanonicalPaths = maps.Clone(updated.CanonicalPaths)
+			for _, key := range []string{"projectRoot", "stateRoot", "resourceRoot"} {
+				updated.CanonicalPaths[key] = record.CanonicalPaths[key]
 			}
-			if sameRegistryIdentity(record, updated) {
+			if sameRegistryBinding(record, updated) && sameRegistryIdentity(record, updated) {
 				continue
 			}
 			refreshed = append(refreshed, updated)

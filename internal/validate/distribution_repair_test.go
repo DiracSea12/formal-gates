@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,18 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	sibling.CanonicalPaths["stateRoot"] = sibling.StateRoot
 	sibling.CanonicalPaths["resourceRoot"] = sibling.ResourceRoot
 	repairCommitRegistry(t, registry, sibling)
+	otherProject := t.TempDir()
+	otherSibling := sibling
+	otherSibling.ID += "-other"
+	otherSibling.ProjectRoot = canonicalRegistryPath(otherProject)
+	otherSibling.StateRoot = canonicalRegistryPath(filepath.Join(otherProject, ".gates"))
+	otherSibling.ResourceRoot = canonicalRegistryPath(filepath.Join(otherProject, ".formal-gates-resources"))
+	otherSibling.CanonicalPaths = maps.Clone(sibling.CanonicalPaths)
+	otherSibling.CanonicalPaths["projectRoot"] = otherSibling.ProjectRoot
+	otherSibling.CanonicalPaths["stateRoot"] = otherSibling.StateRoot
+	otherSibling.CanonicalPaths["resourceRoot"] = otherSibling.ResourceRoot
+	repairCommitRegistry(t, registry, otherSibling)
+	originalContexts := []RegistryRecord{sibling, otherSibling}
 	admission, err := ResolveEngineAdmission(project, first.Targets[0].TargetPath, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -76,9 +89,10 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("upgraded package\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	releaseRoot := filepath.Join(t.TempDir(), "release")
 	second, err := Install(InstallOptions{
 		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
-		BinaryTarget: launcher, Force: true,
+		ReleaseRoot: releaseRoot, BinaryTarget: launcher, Force: true,
 	})
 	if err != nil {
 		t.Fatalf("global upgrade rejected the project-local sibling: %v", err)
@@ -93,11 +107,54 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 			t.Fatalf("global project-local sibling was not refreshed: %+v", record)
 		}
 	}
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "global", RegistryPath: registry,
-		BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
+	// A canonical upgrade can encounter project admissions from its original
+	// installation. Bootstrap must reconcile them through the same owner.
+	for _, original := range originalContexts {
+		repairCommitRegistry(t, registry, original)
+	}
+	bootstrap := InstallOptions{Source: releaseRoot, ReleaseRoot: releaseRoot, Host: "claude", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true}
+	if _, err := Install(bootstrap); err != nil {
 		t.Fatalf("bootstrap rejected the refreshed global sibling: %v", err)
+	}
+	document, err = LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]RegistryRecord{}
+	for _, record := range document.Records {
+		byID[record.ID] = record
+	}
+	canonical := byID[first.Targets[0].RegistryRecordID]
+	for _, original := range originalContexts {
+		current := byID[original.ID]
+		if current.ProjectRoot != original.ProjectRoot || current.StateRoot != original.StateRoot || current.ResourceRoot != original.ResourceRoot {
+			t.Fatal("upgrade changed original project context")
+		}
+		for _, key := range []string{"projectRoot", "stateRoot", "resourceRoot"} {
+			if current.CanonicalPaths[key] != original.CanonicalPaths[key] {
+				t.Fatal("upgrade changed original canonical project paths")
+			}
+		}
+		if current.ReleaseRoot != canonical.ReleaseRoot || current.SkipHooks != canonical.SkipHooks || current.HookConfig != canonical.HookConfig || !sameRegistryIdentity(current, canonical) {
+			t.Fatal("project sibling did not inherit original canonical installation")
+		}
+		if current.CanonicalPaths["releaseRoot"] != canonical.CanonicalPaths["releaseRoot"] {
+			t.Fatal("project sibling retained a different release root")
+		}
+	}
+	foreign := sibling
+	foreign.ID = "unrelated-installation-project"
+	repairCommitRegistry(t, registry, foreign)
+	before, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(bootstrap); err == nil || !strings.Contains(err.Error(), "unaccounted registry identity") {
+		t.Fatal("bootstrap accepted an unrelated identity family", err)
+	}
+	after, err := os.ReadFile(registry)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("rejected unrelated family changed registry bytes", err)
 	}
 }
 
