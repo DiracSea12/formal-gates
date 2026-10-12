@@ -1191,18 +1191,6 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 				writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, "an existing registry record cannot be reconciled")
 				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry record %q cannot be reconciled", record.ID))
 			}
-			if strings.EqualFold(record.Status, "active") {
-				if targetErr := assertInstallSource(record.Target); targetErr != nil {
-					writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr))
-					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target %q is not an installed artifact", record.Target))
-				}
-				if _, targetErr := PackageReceipt(record.Target); targetErr != nil {
-					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target receipt failed: %w", targetErr))
-				}
-				if targetErr := validateInstallPackage(record.Target); targetErr != nil {
-					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target package validation failed: %w", targetErr))
-				}
-			}
 		}
 	}
 	expected, expectedErr := selectInstallPackageFiles(source, true)
@@ -1234,6 +1222,26 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		if targetErr := runInstalledBinarySmoke(filepath.Join(target.targetPath, "bin", nativeBinaryName())); targetErr != nil {
 			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target smoke failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target smoke failed: %w", targetErr))
+		}
+	}
+	if registryWasPresent {
+		for _, record := range existingRegistry.Records {
+			targetKey := canonicalRegistryPath(record.Target)
+			if !strings.EqualFold(record.Status, "active") || targetDigests[targetKey] != "" {
+				continue
+			}
+			if targetErr := assertInstallSource(record.Target); targetErr != nil {
+				writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr))
+				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target %q is not an installed artifact", record.Target))
+			}
+			targetReceipt, targetErr := PackageReceipt(record.Target)
+			if targetErr != nil {
+				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target receipt failed: %w", targetErr))
+			}
+			if targetErr := validateInstallPackage(record.Target); targetErr != nil {
+				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target package validation failed: %w", targetErr))
+			}
+			targetDigests[targetKey] = targetReceipt.Digest
 		}
 	}
 	if targetErr := runInstalledBinarySmoke(targets[0].launcherPath); targetErr != nil {

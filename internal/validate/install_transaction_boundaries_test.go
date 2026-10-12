@@ -1322,3 +1322,78 @@ func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 }
 
 var _ = fmt.Sprintf
+
+func TestBootstrapValidatesSharedPackagesAndEveryAdmission(t *testing.T) {
+	source := installFixtureSource(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	registry := filepath.Join(home, ".formal-gates", "registry.json")
+	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
+	options := InstallOptions{Source: source, Host: "codex", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
+	first, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := options
+	other.Host = "claude"
+	second, err := Install(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, original := range document.Records {
+		for index := range 3 {
+			project := t.TempDir()
+			sibling := original
+			sibling.ID += fmt.Sprintf("-project-%d", index)
+			sibling.ProjectRoot = canonicalRegistryPath(project)
+			sibling.StateRoot = canonicalRegistryPath(filepath.Join(project, ".gates"))
+			sibling.ResourceRoot = canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
+			sibling.CanonicalPaths = map[string]string{}
+			for key, value := range original.CanonicalPaths {
+				sibling.CanonicalPaths[key] = value
+			}
+			sibling.CanonicalPaths["projectRoot"] = sibling.ProjectRoot
+			sibling.CanonicalPaths["stateRoot"] = sibling.StateRoot
+			sibling.CanonicalPaths["resourceRoot"] = sibling.ResourceRoot
+			repairCommitRegistry(t, registry, sibling)
+		}
+	}
+	log := filepath.Join(t.TempDir(), "validation.log")
+	t.Setenv("PACKAGE_OWNER_VALIDATION_LOG", log)
+	options.Bootstrap = true
+	report, err := Install(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, path := range strings.Split(strings.TrimSpace(string(installReadFile(t, log))), "\n") {
+		counts[canonicalRegistryPath(path)]++
+	}
+	for _, path := range []string{source, first.Targets[0].TargetPath, second.Targets[0].TargetPath} {
+		if counts[canonicalRegistryPath(path)] != 1 {
+			t.Fatalf("physical package validation repeated or omitted for %s: %v", path, counts)
+		}
+	}
+	after, err := LoadRegistry(registry)
+	if err != nil || len(after.Records) != 8 {
+		t.Fatal("bootstrap lost namespace records", after, err)
+	}
+	var receipt BootstrapReceipt
+	if err := json.Unmarshal(installReadFile(t, report.BootstrapReceiptPath), &receipt); err != nil || !reflect.DeepEqual(receipt.Records, after.Records) {
+		t.Fatal("bootstrap receipt changed original admission contents", err)
+	}
+	after.Records[len(after.Records)-1].Token = ""
+	before := installWriteRegistry(t, registry, after.Epoch, after.Records...)
+	if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "cannot be reconciled") {
+		t.Fatal("shared target bypassed an invalid admission record", err)
+	}
+	if !bytes.Equal(before, installReadFile(t, registry)) {
+		t.Fatal("rejected bootstrap changed original registry bytes")
+	}
+}
