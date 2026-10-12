@@ -663,6 +663,44 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 	if len(inputs) == 0 {
 		return refs, nil
 	}
+	if !write {
+		entries, err := os.ReadDir(filepath.Join(f.stateDir, "materials"))
+		if os.IsNotExist(err) {
+			return refs, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			path := filepath.Join(f.stateDir, "materials", entry.Name())
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			var value worker.Material
+			if err := json.Unmarshal(body, &value); err != nil {
+				return nil, err
+			}
+			ref := WorkerMaterial{ActionID: value.Input.Pending.ActionID, AttemptID: value.Input.Pending.AttemptID, Path: path, Digest: "sha256:" + strings.TrimSuffix(entry.Name(), ".json"), ReadOnly: value.ReadOnly}
+			value, err = readWorkerMaterial(ref)
+			if err != nil {
+				return nil, err
+			}
+			input, current := inputs[ref.ActionID]
+			if !current {
+				continue
+			}
+			input.Materials = value.Input.Materials
+			input.AvailableRouteCandidates = value.Input.AvailableRouteCandidates
+			if jsonValuesEqual(input, value.Input) {
+				refs[ref.ActionID] = ref
+			}
+		}
+		return refs, nil
+	}
 	catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
 	if err != nil {
 		return nil, err

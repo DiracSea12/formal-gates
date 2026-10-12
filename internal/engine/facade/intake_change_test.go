@@ -186,6 +186,19 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 			if err = os.WriteFile(filepath.Join(root, "reference.md"), []byte("Post-confirmation external edit\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
+			for _, show := range []func() (Run, error){reopened.Show, reopened.Status} {
+				shown, err := show()
+				if err != nil || !reflect.DeepEqual(shown.WorkerMaterials, updated.WorkerMaterials) || !reflect.DeepEqual(shown.IntakeConfirmationReceipt, current) {
+					t.Fatal("read-only view lost original confirmed materials", err)
+				}
+			}
+			next, err := reopened.Next()
+			if err != nil || !reflect.DeepEqual(next, updated.Next) {
+				t.Fatal("read-only next changed after source edit", err)
+			}
+			if _, err = reopened.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange}); err != nil {
+				t.Fatal("source edit blocked requirement change preparation", err)
+			}
 			replay, _, err := reopened.SubmitControl(restored)
 			if err != nil || !reflect.DeepEqual(accepted, replay) {
 				t.Fatal("original confirmation replay lost its accepted identity", err)
