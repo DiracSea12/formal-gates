@@ -111,3 +111,41 @@ func TestRequirementReadNeverSelectsPhysicalDeliveryIdentity(t *testing.T) {
 		t.Fatal("physical negative controls mutated original source facts")
 	}
 }
+
+func TestConfirmedMaterialReadsKeepSemanticAndPhysicalAuthoritySeparate(t *testing.T) {
+	input := semanticInput()
+	input.Handler = "engine.review.worker.v2"
+	input.Validation = nil
+	input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
+	input.Materials = []protocol.IntakeMaterial{{Path: "design.md", Content: "# Plan\nUse original command.\n", Revision: "original-plan"}}
+	facts := []LocationFact{{Kind: "material", Paths: []string{"design.md"}, Content: []byte(input.Materials[0].Content)}}
+	body := Review{Findings: []Finding{{Severity: "P3", Message: "The confirmed plan needs clarification", Locations: []Location{{Read: 1, Line: 2}}}}}
+	for range review.RequiredVerificationChecks() {
+		body.Verification = append(body.Verification, "Inspected the original confirmed plan")
+	}
+	raw, _ := json.Marshal(body)
+	before, _ := json.Marshal(facts)
+	if err := ValidateSemanticBody(input, raw, facts); err != nil {
+		t.Fatal("published original material finding rejected", err)
+	}
+	event, err := DecodeResultWithFacts(input, "material-result", raw, "original-source", nil, facts)
+	if err != nil || event.Result.Review.Findings[0].Locations[0] != "design.md:2" {
+		t.Fatal("finding did not bind the confirmed material source", err)
+	}
+	command, err := sourceReadText(facts, 1, 2, 2, nil, nil)
+	if err != nil || command != "Use original command.\n" {
+		t.Fatal("semantic value lost original material bytes", err)
+	}
+	if _, err = LocationPaths([]Location{{Read: 1}}, facts, input.RequirementDocument); err == nil {
+		t.Fatal("virtual confirmed material granted physical delivery selection")
+	}
+	changed := append([]LocationFact(nil), facts...)
+	changed[0].Content = []byte("different unconfirmed plan\n")
+	if err = ValidateSemanticBody(input, raw, changed); err == nil {
+		t.Fatal("unconfirmed material bytes obtained the source path")
+	}
+	after, _ := json.Marshal(facts)
+	if !bytes.Equal(before, after) || facts[0].Kind != "material" {
+		t.Fatal("semantic projection mutated original fact authority")
+	}
+}

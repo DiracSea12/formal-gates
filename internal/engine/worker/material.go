@@ -171,6 +171,25 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	document.Content = ""
 	document.Requirements = nil
 	contextValue := map[string]any{"requirementDocument": document}
+	if len(input.Materials) > 0 {
+		selected := make([]map[string]any, len(input.Materials))
+		for i, material := range input.Materials {
+			role := "reference"
+			if material.Path == input.RequirementDocument.Path {
+				role = "requirement"
+			}
+			if input.Intake != nil && (material.Path == input.Intake.SolutionSource || input.Intake.SolutionSource == "" && material.Path == input.Intake.RequirementSource) {
+				if role == "requirement" {
+					role = "requirement and solution"
+				} else {
+					role = "solution"
+				}
+			}
+			selected[i] = map[string]any{"material": i + 1, "role": role}
+		}
+		contextValue["materials"] = selected
+		instructions += " Read confirmed material texts with workspace requirement and its material number; omitting material selects the complete formal requirement. These frozen texts supply semantic context only, not physical file selections."
+	}
 	if input.Scope != nil {
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."

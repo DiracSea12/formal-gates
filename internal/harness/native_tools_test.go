@@ -229,7 +229,10 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 					t.Fatalf("tool has no valid object declaration: %v", tool)
 				}
 			}
-			actions := listOf(getOf(getOf(getOf(getOf(declared[0], "inputSchema"), "properties"), "action"), "enum"))
+			var actions []any
+			for _, branch := range listOf(getOf(getOf(declared[0], "inputSchema"), "oneOf")) {
+				actions = append(actions, getOf(getOf(getOf(branch, "properties"), "action"), "const"))
+			}
 			if !slices.Contains(actions, any("replace")) {
 				t.Fatal("writable workspace lost its original operation declaration")
 			}

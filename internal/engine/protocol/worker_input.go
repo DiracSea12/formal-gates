@@ -44,6 +44,8 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 // WorkerInput is a projection of an issued action, not another work ledger.
 // Review and Validation carry their existing owners' exact business context.
 type WorkerInput struct {
+	Intake                   *IntakeConfirmationReceipt              `json:"intake,omitempty"`
+	Materials                []IntakeMaterial                        `json:"materials,omitempty"`
 	AvailableRouteCandidates []string                                `json:"availableRouteCandidates,omitempty"`
 	RunID                    string                                  `json:"runId"`
 	Provider                 string                                  `json:"provider"`
@@ -100,7 +102,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v4" || s.validationRole(pending.Task, cd) == "engine.repair.v5") && !s.developmentContinuation(id, cd) {
 		return WorkerInput{}, false
 	}
-	input := WorkerInput{RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
+	input := WorkerInput{Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
 	if s.SliceChild != nil {
 		input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
 	}

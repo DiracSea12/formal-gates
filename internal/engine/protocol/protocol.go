@@ -672,6 +672,13 @@ type ConfirmedRevision struct {
 	StateRevision uint64 `json:"stateRevision"`
 }
 
+// IntakeMaterial is the normalized confirmed text carried by a worker payload.
+type IntakeMaterial struct {
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Revision string `json:"revision"`
+}
+
 // IntakeArtifact is one canonical requirement/solution artifact binding.
 type IntakeArtifact struct {
 	Path     string `json:"path"`

@@ -343,7 +343,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			return protocol.Event{}, fmt.Errorf("worker review result has wrong role")
 		}
 		r := value.Review
-		items, err := findings(r.Findings, locationFacts, input.RequirementDocument)
+		items, err := findings(r.Findings, locationFacts, input.RequirementDocument, input.Materials)
 		if err != nil {
 			return protocol.Event{}, err
 		}
@@ -379,7 +379,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		if v.Development != nil && v.Development.Completion != nil && completionBatch(input) == nil && (v.GranularityReview == nil || len(v.GranularityReview.Batches) != 1) {
 			return protocol.Event{}, fmt.Errorf("completion requires the issued or proposed single development batch")
 		}
-		items, err := findings(v.Findings, locationFacts, input.RequirementDocument)
+		items, err := findings(v.Findings, locationFacts, input.RequirementDocument, input.Materials)
 		if err != nil {
 			return protocol.Event{}, err
 		}
@@ -938,7 +938,7 @@ func decisions(values []*Decision, ids []string, inherited []coverage.ReviewDeci
 	return result, nil
 }
 
-func findings(values []Finding, facts []LocationFact, document requirement.FrozenRequirementProjection) ([]review.Finding, error) {
+func findings(values []Finding, facts []LocationFact, document requirement.FrozenRequirementProjection, materials []protocol.IntakeMaterial) ([]review.Finding, error) {
 	if values == nil {
 		return nil, nil
 	}
@@ -948,6 +948,14 @@ func findings(values []Finding, facts []LocationFact, document requirement.Froze
 	for index, fact := range locationFacts {
 		if fact.Kind == "requirement" && document.Path != "" && string(fact.Content) == document.Content {
 			locationFacts[index] = LocationFact{Kind: "read", Paths: []string{document.Path}, Content: fact.Content}
+		}
+		if fact.Kind == "material" && len(fact.Paths) == 1 && len(materials) > 0 {
+			for _, material := range materials {
+				if fact.Paths[0] == material.Path && string(fact.Content) == material.Content {
+					locationFacts[index] = LocationFact{Kind: "read", Paths: fact.Paths, Content: fact.Content}
+					break
+				}
+			}
 		}
 	}
 	result := make([]review.Finding, 0, len(values))
@@ -1024,12 +1032,12 @@ func ValidateSemanticBody(input protocol.WorkerInput, raw []byte, facts ...[]Loc
 		locations = facts[0]
 	}
 	if value.Review != nil {
-		if _, err := findings(value.Review.Findings, locations, input.RequirementDocument); err != nil {
+		if _, err := findings(value.Review.Findings, locations, input.RequirementDocument, input.Materials); err != nil {
 			return err
 		}
 	}
 	if value.Validation != nil {
-		_, err = findings(value.Validation.Findings, locations, input.RequirementDocument)
+		_, err = findings(value.Validation.Findings, locations, input.RequirementDocument, input.Materials)
 	}
 	return err
 }

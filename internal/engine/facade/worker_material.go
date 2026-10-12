@@ -234,19 +234,8 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	if err != nil {
 		return release, err
 	}
-	catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
-	if err != nil {
-		return release, err
-	}
-	expected, err := f.workerMaterial(input, catalog, false)
-	if err != nil {
-		return release, err
-	}
 	var value worker.Material
-	if expected != material {
-		if _, err := os.Stat(filepath.Join(directory, "owner")); err != nil {
-			return release, fmt.Errorf("worker execution material differs from current issuance: %w", err)
-		}
+	if _, ownerErr := os.Stat(filepath.Join(directory, "owner")); ownerErr == nil {
 		original, err := readNativeWorkerInvocation(f.root, f.runID, directory)
 		if err != nil {
 			return release, err
@@ -255,7 +244,20 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 			return release, fmt.Errorf("worker execution differs from its claimed original action/attempt")
 		}
 		value = original.material
+	} else if !os.IsNotExist(ownerErr) {
+		return release, ownerErr
 	} else {
+		catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
+		if err != nil {
+			return release, err
+		}
+		expected, err := f.workerMaterial(input, catalog, false)
+		if err != nil {
+			return release, err
+		}
+		if expected != material {
+			return release, fmt.Errorf("worker execution material differs from current issuance")
+		}
 		value, err = readWorkerMaterial(material)
 		if err != nil {
 			return release, err
@@ -676,6 +678,24 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 }
 
 func (f *Facade) workerMaterial(input protocol.WorkerInput, catalog prompts.PromptCatalog, write bool) (WorkerMaterial, error) {
+	if input.Intake != nil {
+		for _, artifact := range input.Intake.Artifacts {
+			var data []byte
+			if artifact.Path == input.RequirementDocument.Path {
+				data = []byte(input.RequirementDocument.Content)
+			} else {
+				var err error
+				data, err = os.ReadFile(filepath.Join(f.root, filepath.FromSlash(artifact.Path)))
+				if err != nil {
+					return WorkerMaterial{}, err
+				}
+			}
+			if requirementContentRevision(data) != artifact.Revision {
+				return WorkerMaterial{}, fmt.Errorf("confirmed material %s differs from its original revision", artifact.Path)
+			}
+			input.Materials = append(input.Materials, protocol.IntakeMaterial{Path: artifact.Path, Content: strings.ReplaceAll(string(data), "\r\n", "\n"), Revision: artifact.Revision})
+		}
+	}
 	material, err := worker.Render(input, catalog)
 	if err != nil {
 		return WorkerMaterial{}, err

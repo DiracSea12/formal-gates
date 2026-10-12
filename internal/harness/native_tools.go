@@ -359,6 +359,7 @@ func (t *nativeWorkspaceTools) writable(path string) error {
 }
 
 type nativeWorkspaceArguments struct {
+	Material      int    `json:"material,omitempty"`
 	Action        string `json:"action"`
 	Query         string `json:"query,omitempty"`
 	Listing       int    `json:"listing,omitempty"`
@@ -467,6 +468,18 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			return nil, fmt.Errorf("action has no confirmed requirement material")
 		}
 		document := t.material.Input.RequirementDocument
+		kind := "requirement"
+		var paths []string
+		if a.Material != 0 {
+			if a.Material < 1 || a.Material > len(t.material.Input.Materials) {
+				return nil, fmt.Errorf("select a confirmed material number")
+			}
+			material := t.material.Input.Materials[a.Material-1]
+			document.Path, document.Content, document.ContentDigest = material.Path, material.Content, material.Revision
+			if document.Path != t.material.Input.RequirementDocument.Path {
+				kind, paths = "material", []string{document.Path}
+			}
+		}
 		lines := strings.SplitAfter(document.Content, "\n")
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
@@ -481,7 +494,7 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if from < 1 || to < from || to > len(lines) {
 			return nil, fmt.Errorf("requirement line range is outside the bound original document")
 		}
-		number, err := t.publish(nativeToolFact{Kind: "requirement", Content: []byte(document.Content)})
+		number, err := t.publish(nativeToolFact{Kind: kind, Paths: paths, Content: []byte(document.Content)})
 		return map[string]any{"read": number, "path": document.Path, "contentDigest": document.ContentDigest, "from": from, "to": to, "lines": lines[from-1 : to]}, err
 	case "comparison":
 		if t.material == nil || t.material.Input.Validation == nil || t.material.Input.Validation.Workspace == nil {
@@ -947,7 +960,11 @@ func (t *nativeWorkspaceTools) schemas() []any {
 	if t.provider == "zcode" {
 		schema = zcodeSemanticToolSchema(schema)
 	}
-	return []any{nativeWorkspaceToolSchema(t.readOnly, t.material), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": schema}}
+	workspace := nativeWorkspaceToolSchema(t.readOnly, t.material)
+	if t.provider == "zcode" {
+		workspace["inputSchema"] = zcodeSemanticToolSchema(objectOrEmpty(workspace["inputSchema"]))
+	}
+	return []any{workspace, map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": schema}}
 }
 
 func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map[string]any {
@@ -955,34 +972,50 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 	if len(materials) > 0 {
 		material = materials[0]
 	}
-	actions := []any{"list", "read", "search"}
-	properties := map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "listing": map[string]any{"type": "integer", "minimum": 1}, "entry": map[string]any{"type": "integer", "minimum": 1}}
-	description := "Search performs recursive literal content matching in the selected directory (omit listing/entry for root), publishing original listing/read numbers and matching lines. Select existing files by original listing and entry numbers. Numbers remain bound across continuation and resume."
+	positive := map[string]any{"type": "integer", "minimum": 1}
+	fields := map[string]any{"listing": positive, "entry": positive, "read": positive, "sourceRead": positive, "sourceFrom": positive, "sourceTo": positive, "from": positive, "to": map[string]any{"type": "integer", "minimum": 0}, "targetListing": positive, "targetEntry": positive, "material": positive, "query": map[string]any{"type": "string", "minLength": 1}, "name": map[string]any{"type": "string", "minLength": 1}, "content": map[string]any{"type": "string"}, "executable": map[string]any{"type": "boolean"}}
+	alternatives := []any{}
+	add := func(action string, names, required []string) {
+		properties := map[string]any{"action": map[string]any{"type": "string", "const": action}}
+		for _, name := range names {
+			properties[name] = fields[name]
+		}
+		demands := []string{"action"}
+		demands = append(demands, required...)
+		alternatives = append(alternatives, map[string]any{"type": "object", "properties": properties, "required": demands, "additionalProperties": false})
+	}
+	add("list", nil, nil)
+	add("list", []string{"listing", "entry"}, []string{"listing", "entry"})
+	add("read", []string{"listing", "entry"}, []string{"listing", "entry"})
+	add("search", []string{"query"}, []string{"query"})
+	add("search", []string{"query", "listing", "entry"}, []string{"query", "listing", "entry"})
+	description := "Choose one action and only its declared fields. Search uses literal query text. Existing files select original listing/entry numbers. Published reads and numbers keep their original bytes and identities across continuation and resume."
 	if material != nil && material.Input.RequirementDocument.Content != "" {
-		actions = append(actions, "requirement")
-		description += " Requirement reads the bound original confirmed document, optionally by from/to lines, and publishes a read number for original semantic value selection only; it does not select a physical file."
-		properties["from"] = map[string]any{"type": "integer", "minimum": 1}
-		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
+		add("requirement", []string{"material", "from", "to"}, nil)
+		description += " Requirement reads the frozen confirmed text: omit material for the formal requirement or select its issued material number, optionally from/to lines. It publishes semantic source evidence, without physical file authority."
 	}
 	if material != nil && material.Input.Validation != nil && (material.Input.Validation.Gate != nil || material.Input.Validation.ReviewArtifact != nil) {
-		actions = append(actions, "comparison")
-		description += " Comparison reads the issued native versions."
+		add("comparison", nil, nil)
+		description += " Comparison reads issued native versions."
 	}
 	if !readOnly {
-		actions = append(actions, "replace", "copy-range", "create", "mkdir", "remove", "copy", "move", "executable")
-		description += " Replace uses an original read and from/to line range (empty: 1/0). Copy-range takes sourceRead/sourceFrom/sourceTo and target read/from/to; to=from-1 inserts original bytes. Copy/move use source listing/entry and targetListing/targetEntry (omit for root); omit name to retain the original basename."
-		for _, key := range []string{"read", "from", "sourceRead", "sourceFrom", "sourceTo", "targetListing", "targetEntry"} {
-			properties[key] = map[string]any{"type": "integer", "minimum": 1}
+		add("replace", []string{"read", "from", "to", "content"}, []string{"read", "from", "to", "content"})
+		add("copy-range", []string{"read", "from", "to", "sourceRead", "sourceFrom", "sourceTo"}, []string{"read", "from", "to", "sourceRead", "sourceFrom", "sourceTo"})
+		add("create", []string{"name", "content", "executable"}, []string{"name", "content"})
+		add("create", []string{"listing", "entry", "name", "content", "executable"}, []string{"listing", "entry", "name", "content"})
+		add("mkdir", []string{"name"}, []string{"name"})
+		add("mkdir", []string{"listing", "entry", "name"}, []string{"listing", "entry", "name"})
+		add("remove", []string{"listing", "entry"}, []string{"listing", "entry"})
+		for _, action := range []string{"copy", "move"} {
+			add(action, []string{"listing", "entry", "name"}, []string{"listing", "entry"})
+			add(action, []string{"listing", "entry", "name", "targetListing", "targetEntry"}, []string{"listing", "entry", "targetListing", "targetEntry"})
 		}
-		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
-		properties["name"] = map[string]any{"type": "string"}
-		properties["content"] = map[string]any{"type": "string"}
-		properties["executable"] = map[string]any{"type": "boolean"}
-		description += " Create optionally declares executable. The executable action selects an original read or listing/entry and changes only execution bits with its executable boolean; original bytes and other mode bits are preserved."
+		add("executable", []string{"read", "executable"}, []string{"read", "executable"})
+		add("executable", []string{"listing", "entry", "executable"}, []string{"listing", "entry", "executable"})
+		description += " Replace selects an original physical read; from/to selects its line range and to=from-1 inserts bytes. Copy-range selects original physical source lines. Create may set executable. Copy/move may retain the original name and target root. Executable changes only execution bits of the selected physical file."
 	}
-	description += " Read publishes Go testSymbols from the original full source for result selection."
-	properties["action"] = map[string]any{"type": "string", "enum": actions}
-	return map[string]any{"name": nativeWorkspaceTool, "description": description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": []any{"action"}, "additionalProperties": false}}
+	description += " Physical reads publish original Go test symbol numbers."
+	return map[string]any{"name": nativeWorkspaceTool, "description": description, "inputSchema": map[string]any{"type": "object", "oneOf": alternatives}}
 }
 
 // NativeTools serves only MCP's handshake, discovery and tool-call methods.

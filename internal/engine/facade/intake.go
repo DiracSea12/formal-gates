@@ -7,15 +7,12 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/requirement"
 )
 
 // IntakeMaterial is the complete normalized content shown for confirmation.
-type IntakeMaterial struct {
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Revision string `json:"revision"`
-}
+type IntakeMaterial = protocol.IntakeMaterial
 
 // IntakePreview prepares bindings without confirming them or creating a run.
 type IntakePreview struct {

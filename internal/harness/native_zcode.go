@@ -49,6 +49,9 @@ var zcodeManagedTools = []any{"mcp__formal-gates__workspace", "mcp__formal-gates
 func zcodeSemanticToolSchema(schema map[string]any) map[string]any {
 	alternatives := listOf(schema["anyOf"])
 	if len(alternatives) == 0 {
+		alternatives = listOf(schema["oneOf"])
+	}
+	if len(alternatives) == 0 {
 		return schema
 	}
 	properties := map[string]any{}

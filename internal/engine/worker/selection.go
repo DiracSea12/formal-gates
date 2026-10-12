@@ -450,7 +450,7 @@ func contentID(kind string, value any, index int) string {
 // Columns are paired 1-based Unicode positions on the first and last selected
 // lines, inclusive of CR/LF characters. Omitted columns retain complete lines.
 func sourceReadText(facts []LocationFact, read, from, to int, fromColumn, toColumn *int) (string, error) {
-	if read < 1 || read > len(facts) || (facts[read-1].Kind != "read" && facts[read-1].Kind != "requirement") {
+	if read < 1 || read > len(facts) || (facts[read-1].Kind != "read" && facts[read-1].Kind != "requirement" && facts[read-1].Kind != "material") {
 		return "", fmt.Errorf("source requires an original published read")
 	}
 	lines := strings.SplitAfter(string(facts[read-1].Content), "\n")

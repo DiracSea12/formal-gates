@@ -79,13 +79,13 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	qaTask := pipelineTask(cd, "engine.qa.execution.v3", "wave-1:BLACKBOX")
 	gateTask := pipelineTask(cd, "engine.gate.v2", "wave-1:quality")
 	state.Validation = &Validation{
-		RequirementRevision: "rev-1", Generation: 1,
+		RequirementRevision: "rev-1", Generation: 0,
 		Sets:     map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Version: "case-v1", Status: "FROZEN"}},
 		Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{},
 		Waves: []ValidationWave{{
 			ID: "wave-1", Status: "COLLECTING", Scope: coverage.ScopeFull,
 			Candidate:           coverage.ValidationCandidate{Identity: "native-1", Digest: "sha256:native-1"},
-			RequirementRevision: "rev-1", Generation: 1, RouteDigest: state.validationRouteDigest(),
+			RequirementRevision: "rev-1", Generation: 0, RouteDigest: state.validationRouteDigest(),
 			Versions:       map[coverage.ReviewKind]string{coverage.ReviewBlackbox: "case-v1"},
 			ExpectedDigest: "sha256:expected-1",
 			Targets: map[string]*ValidationTarget{
@@ -95,7 +95,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		}},
 	}
 	// 一条已签发 QA execution 事实：DispatchBindings 承载 actionID→task。
-	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", Generation: 1}
+	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", Generation: 0}
 	return engine, state, qaTask
 }
 
