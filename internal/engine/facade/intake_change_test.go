@@ -228,13 +228,10 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := f.Drive()
+	run, err := f.Show()
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver := &validationDriver{t: t, f: f, run: run, revision: initial.IntakeCandidate.RequirementRevision, provider: DefaultProvider, git: vcs.New(root, nil)}
-	passPreDevelopmentReviews(t, driver, commandPlan())
-	run = driver.run
 	initialState, err := f.engine.Load()
 	if err != nil {
 		t.Fatal(err)

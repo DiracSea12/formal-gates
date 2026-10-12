@@ -169,7 +169,8 @@ func (s *State) requirementRevisionAt(stateRevision uint64) string {
 }
 
 func (s *State) requirementGeneration() uint64 {
-	if len(s.RequirementRevisions) == 0 || s.SliceChild != nil && len(s.RequirementRevisions) == 1 {
+	// Initial intake registration records the authorization already supplied at Start.
+	if len(s.RequirementRevisions) <= 1 {
 		return 0
 	}
 	return s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision
