@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -231,5 +232,84 @@ func TestRepairComparisonDerivesExecutionFactsAndStatus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDeveloperSuppliesOnlyUnfinishedVerificationGoals(t *testing.T) {
+	batch := protocol.DevelopmentBatch{ID: "command", Checks: []protocol.DevelopmentCheck{
+		{ID: "edit", Purpose: protocol.CheckEdit, Command: "original-format"},
+		{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build every production input"},
+		{ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Run the complete project suite"},
+	}}
+	input := protocol.WorkerInput{Handler: "engine.development.batch.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+	partial, err := DecodeResultWithPaths(input, "progress", []byte(`{"summary":"Prepared project source","remainingWork":"Prepare the complete test calls"}`), "progress-output", []string{"app.ext"})
+	if err != nil || len(partial.Result.Validation.Development.Commands) != 0 {
+		t.Fatalf("unfinished goals invented command slots: %v", err)
+	}
+	input.Validation.Development.Result = &protocol.WorkerResult{Digest: "progress", Validation: partial.Result.Validation}
+	initialCompletionSchema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := initialCompletionSchema["anyOf"].([]any)[0].(map[string]any)["required"].([]any)
+	if !slices.Contains(required, any("commands")) {
+		t.Fatal("partial source removed the missing-call completion requirement")
+	}
+	if _, err := DecodeResultWithPaths(input, "missing-calls", []byte(`{"summary":"Completed without calls"}`), "missing-calls-output", []string{"app.ext"}); err == nil {
+		t.Fatal("partial source completed without preparing its calls")
+	}
+	continued, err := DecodeResultWithPaths(input, "more-progress", []byte(`{"summary":"Prepared test source","remainingWork":"Prepare the complete test calls"}`), "more-progress-output", []string{"tests.ext"})
+	if err != nil || len(continued.Result.Validation.Development.Commands) != 0 {
+		t.Fatalf("continuation invented command slots: %v", err)
+	}
+	input.Validation.Development.Result = nil
+	facts := []LocationFact{{Kind: "read", Content: []byte("project-build --label '原文'\r\n")}}
+	raw := []byte(`{"summary":"Implemented","commands":[{"read":1,"from":1,"to":1},"missing-project-tests"]}`)
+	event, err := DecodeResultWithFacts(input, "result", raw, "native-output", []string{"app.ext"}, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"project-build --label '原文'\r\n", "missing-project-tests"}
+	if !reflect.DeepEqual(event.Result.Validation.Development.Commands, expected) {
+		t.Fatal("source bytes or goal order changed")
+	}
+	original := protocol.WorkerResult{ActionID: input.Pending.ActionID, Digest: "accepted", Validation: event.Result.Validation}
+	input.Validation.Development.Result = &original
+	input.Validation.Development.Checks = []protocol.CheckEvidence{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 127}}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["commands"].(map[string]any)
+	if commands["minItems"] != 1 || commands["maxItems"] != 1 {
+		t.Fatal("passed calls were offered for replacement")
+	}
+	corrected, err := DecodeResultWithFacts(input, "corrected", []byte(`{"summary":"Prepared the missing test call","commands":["new-project-tests"]}`), "corrected-output", []string{"tests.ext"}, facts)
+	if err != nil || !reflect.DeepEqual(corrected.Result.Validation.Development.Commands, []string{expected[0], "new-project-tests"}) {
+		t.Fatalf("failed call cannot be corrected without rewriting passed calls: %v", err)
+	}
+	carried, err := DecodeResultWithFacts(input, "carried", []byte(`{"summary":"Continued implementation"}`), "continued-output", []string{"app.ext"}, facts)
+	if err != nil || !reflect.DeepEqual(carried.Result.Validation.Development.Commands, expected) {
+		t.Fatalf("original calls require model repetition: %v", err)
+	}
+	stored, _ := json.Marshal(input)
+	var reopened protocol.WorkerInput
+	if err := json.Unmarshal(stored, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := DecodeResultWithFacts(reopened, "corrected", []byte(`{"summary":"Prepared the missing test call","commands":["new-project-tests"]}`), "corrected-output", []string{"tests.ext"}, facts)
+	if err != nil || !reflect.DeepEqual(replay, corrected) {
+		t.Fatalf("normal and recovered command binding diverged: %v", err)
+	}
+	if _, err := DecodeResultWithFacts(input, "invalid", []byte(`{"summary":"Wrong","commands":["replace-build","replace-tests"]}`), "wrong-output", []string{"app.ext"}, facts); err == nil {
+		t.Fatal("passed check could be overwritten")
+	}
+	input.Validation.Development.Checks[2].ExitCode = 0
+	schema, err = ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["commands"] != nil {
+		t.Fatal("finished goals still expose command authorship")
 	}
 }

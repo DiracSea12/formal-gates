@@ -48,7 +48,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else if input.Validation != nil {
 		switch input.Handler {
 		case "engine.development.batch.v4":
-			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. If work remains, return summary and actual remainingWork instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
+			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. Supply commands only for its missing verification goals in their issued order; select existing read bytes or author genuinely new calls. Accepted calls are retained by the program. If work remains, return summary and actual remainingWork instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
 			value.ReadOnly = false
 		case "engine.repair.verify.v2":
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
@@ -372,7 +372,12 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {
-		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files. A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional checks reuse a number, select a new local command by original read/from/to lines, or author a new local invocation."
+		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files."
+		if input.Review != nil {
+			instructions += " Verification calls select original read bytes or approved check numbers. Missing calls declare only goal and purpose for the developer; EDIT requires an existing call."
+		} else {
+			instructions += " A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional repair checks reuse a number, select a new local command by original read/from/to lines, or author a new local invocation."
+		}
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}
 	instructions += " The workspace requirement operation reads the complete original confirmed document (optional from/to line range); its path and contentDigest are in Action input. Its published read number selects original value bytes without physical file identity. Keep the full requirement and acceptance scope; read the relevant original sections as your role requires."

@@ -236,3 +236,51 @@ func TestDevelopmentCheckSharedFrontierFreezesAfterWriters(t *testing.T) {
 		t.Fatalf("dependency checks did not unlock separately %#v", found)
 	}
 }
+
+func TestMissingVerificationCallsRequireBoundActualReceipts(t *testing.T) {
+	s, batch, _ := developmentCheckState(t)
+	cd := compiledCanonicalWorkflow(t)
+	for i := range batch.Checks {
+		batch.Checks[i].Goal, batch.Checks[i].Command = "Verify the confirmed project boundary", ""
+	}
+	plan := s.Results["readiness"].Review.GranularityReview
+	plan.Batches[0] = batch
+	task := planTask(cd, plan, batch.ID)
+	source := s.Results["edit-action"]
+	source.Validation.Binding.Task = task
+	s.DispatchBindings[source.ActionID] = source.Validation.Binding
+	s.Results[source.ActionID] = source
+	if s.developmentResult(task) != nil {
+		t.Fatal("missing calls completed development")
+	}
+	if _, err := bindDevelopmentChecks(batch, nil); err == nil {
+		t.Fatal("missing calls counted as skipped checks")
+	}
+	if _, err := bindDevelopmentChecks(batch, []string{"one"}); err == nil {
+		t.Fatal("partial binding accepted")
+	}
+	source.Validation.Development.Commands = []string{"build-project", "tests-project"}
+	s.Results[source.ActionID] = source
+	addDevelopmentSource(t, s)
+	first, ready := s.nextCheckParameters(source.ActionID, cd)
+	if !ready || first.Check.ID != batch.Checks[0].ID || first.Check.Command != "build-project" || first.Check.Goal != "" {
+		t.Fatalf("program did not bind the confirmed obligation: %+v", first)
+	}
+	addCheckReceipt(t, s, first, 0)
+	second, ready := s.nextCheckParameters(source.ActionID, cd)
+	if !ready || second.Check.Command != "tests-project" {
+		t.Fatal("second missing call was lost")
+	}
+	addCheckReceipt(t, s, second, 127)
+	if s.developmentResult(task) != nil || !s.developmentChecksFailed(source) {
+		t.Fatal("actual missing-command failure completed development")
+	}
+	data, _ := json.Marshal(s)
+	var reopened State
+	if err := json.Unmarshal(data, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.developmentChecksFailed(source) || reopened.developmentResult(task) != nil {
+		t.Fatal("recovery changed failed command qualification")
+	}
+}

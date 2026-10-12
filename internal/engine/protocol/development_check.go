@@ -289,6 +289,10 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 		if err != nil || p.SourceActionID != action || p.Check.ID != check || s.validateNativeCheckReceipt(intent, receipt) != nil {
 			continue
 		}
+		result := s.Results[action]
+		if !slices.ContainsFunc(s.editChecks(result), func(current DevelopmentCheck) bool { return current == p.Check }) {
+			continue
+		}
 		if source, ok := s.editSourceProof(action); ok && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
 			continue
 		}
@@ -481,7 +485,11 @@ func checkTextProof(text string, proof CheckStreamProof) bool {
 func (s *State) editChecks(r WorkerResult) []DevelopmentCheck {
 	var checks []DevelopmentCheck
 	if batch, ok := s.editBatch(r); ok {
-		checks = slices.Clone(batch.Checks)
+		commands := []string(nil)
+		if r.Validation.Development != nil {
+			commands = r.Validation.Development.Commands
+		}
+		checks, _ = bindDevelopmentChecks(batch, commands)
 	}
 	if r.Validation.Binding.Task.Step == "development.repair" {
 		for _, check := range s.fullProjectChecks() {

@@ -110,6 +110,7 @@ type Check struct {
 	ToColumn   *int            `json:"toColumn,omitempty"`
 	Parts      *[]StringChange `json:"parts,omitempty"`
 	Purpose    string          `json:"purpose,omitempty"`
+	Goal       string          `json:"goal,omitempty"`
 	Command    string          `json:"command,omitempty"`
 }
 
@@ -123,7 +124,9 @@ func (item *Check) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	allowed, required := []string{"command", "purpose"}, []string{"command"}
-	if _, present := fields["reuse"]; present {
+	if _, present := fields["goal"]; present {
+		allowed, required = []string{"goal", "purpose"}, []string{"goal"}
+	} else if _, present := fields["reuse"]; present {
 		allowed, required = []string{"reuse"}, []string{"reuse"}
 	} else if _, present := fields["read"]; present {
 		allowed, required = []string{"read", "from", "to", "fromColumn", "toColumn", "purpose"}, []string{"read", "from", "to"}
@@ -135,7 +138,7 @@ func (item *Check) UnmarshalJSON(raw []byte) error {
 	}
 	for name := range fields {
 		if !slices.Contains(allowed, name) {
-			return fmt.Errorf("check selects one approved check, original read range, or new command")
+			return fmt.Errorf("check selects exactly one call source or verification goal")
 		}
 	}
 	for _, name := range required {
@@ -173,8 +176,9 @@ type Finding struct {
 	Locations         []Location                 `json:"locations,omitempty"`
 }
 type Development struct {
-	RemainingWork string      `json:"-"`
-	Completion    *Completion `json:"completion,omitempty"`
+	Commands      []StringChange `json:"commands,omitempty"`
+	RemainingWork string         `json:"-"`
+	Completion    *Completion    `json:"completion,omitempty"`
 	paths         []string
 	Summary       string `json:"summary"`
 }
@@ -392,6 +396,13 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				batch = &body.GranularityReview.Batches[0]
 			}
 			var err error
+			source := developmentSource(input)
+			if v.Status != "CONTINUE" || len(v.Development.Commands) != 0 || source != nil && len(source.Validation.Development.Commands) > 0 {
+				body.Development.Commands, err = assembleDevelopmentCommands(input, v.Development.Commands, locationFacts)
+			}
+			if err != nil {
+				return protocol.Event{}, err
+			}
 			body.Development.Completion, err = assembleCompletion(v.Development.Completion, batch)
 			if err != nil {
 				return protocol.Event{}, err
@@ -1040,4 +1051,60 @@ func ValidateSemanticBody(input protocol.WorkerInput, raw []byte, facts ...[]Loc
 		_, err = findings(value.Validation.Findings, locations, input.RequirementDocument, input.Materials)
 	}
 	return err
+}
+
+func pendingDevelopmentCommands(input protocol.WorkerInput) ([]protocol.DevelopmentCheck, []int, []string) {
+	batch := completionBatch(input)
+	if batch == nil {
+		return nil, nil, nil
+	}
+	source := developmentSource(input)
+	commands := []string{}
+	if source != nil && source.Validation.Development != nil {
+		commands = slices.Clone(source.Validation.Development.Commands)
+	}
+	duties, positions := []protocol.DevelopmentCheck{}, []int{}
+	ordinal := 0
+	for index, check := range batch.Checks {
+		if check.Command != "" {
+			continue
+		}
+		if ordinal == len(commands) {
+			commands = append(commands, "")
+		}
+		passed := false
+		if input.Validation.Development != nil && index < len(input.Validation.Development.Checks) {
+			evidence := input.Validation.Development.Checks[index]
+			passed = evidence.ExitCode == 0 && evidence.Error == ""
+		}
+		if !passed {
+			duties, positions = append(duties, check), append(positions, ordinal)
+		}
+		ordinal++
+	}
+	return duties, positions, commands
+}
+
+func assembleDevelopmentCommands(input protocol.WorkerInput, values []StringChange, facts []LocationFact) ([]string, error) {
+	duties, positions, commands := pendingDevelopmentCommands(input)
+	if len(values) == 0 && developmentSource(input) != nil {
+		if slices.Contains(commands, "") {
+			return nil, fmt.Errorf("unfinished verification goals require their prepared calls")
+		}
+		return commands, nil
+	}
+	if len(values) != len(duties) {
+		return nil, fmt.Errorf("commands must follow the issued unfinished verification goals in order")
+	}
+	for i, value := range values {
+		command, err := value.text(nil, facts)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(command) == "" {
+			return nil, fmt.Errorf("verification call is empty")
+		}
+		commands[positions[i]] = command
+	}
+	return commands, nil
 }

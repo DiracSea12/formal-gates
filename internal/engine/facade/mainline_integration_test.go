@@ -20,7 +20,7 @@ import (
 
 // These trajectories use the public drive/submit surface and actual Git
 // branches, conflicts, modes, artifacts, validation targets and cleanup.
-func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDriver, []*validationDriver) {
+func mainlineReady(t *testing.T, conflict string, identical bool, supplied ...*protocol.GranularityReview) (*validationDriver, []*validationDriver) {
 	t.Helper()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
@@ -46,6 +46,9 @@ func mainlineReady(t *testing.T, conflict string, identical bool) (*validationDr
 	}
 	master := nativeMasterAt(t, root, base, nil)
 	plan := splitCommandPlan("parser", "command", "tooling")
+	if len(supplied) > 0 {
+		plan = supplied[0]
+	}
 	plan.Batches[0].ID = plan.Batches[0].Owner
 	passPreDevelopmentReviews(t, master, plan)
 
@@ -964,4 +967,70 @@ func TestConflictContextPreservesSeparatorsBetweenNativeHunks(t *testing.T) {
 			t.Fatal("context edit or unresolved native hunk was accepted")
 		}
 	}
+}
+
+func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
+	plan := splitCommandPlan("parser", "command", "tooling")
+	var master *protocol.DevelopmentBatch
+	for i := range plan.Batches {
+		if plan.Batches[i].Owner == "master-merge" {
+			master = &plan.Batches[i]
+		}
+	}
+	if master == nil {
+		t.Fatal("fixture has no master-owned contract")
+	}
+	for i := range master.Checks {
+		master.Checks[i].Command, master.Checks[i].Goal = "", "Verify the integrated project"
+	}
+	d, _ := mainlineReady(t, "", false, plan)
+	d.drive()
+	action, input := planBatchAction(d, master.ID)
+	if input.Workspace == nil || input.Workspace.Role != "merge" {
+		t.Fatal("master goal did not use the original integration workspace")
+	}
+	state := driverState(t, d)
+	finished := 0
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.AdapterOperation != "op.candidate" || receipt.Status != protocol.HostActionStatusExecuted {
+			continue
+		}
+		var params protocol.CandidateParameters
+		if intent := state.ReconciledEffects[receipt.ActionID].Intent; intent != nil && decodeNativeParams(*intent, &params) == nil && params.Stage == "MERGE_FINISH" {
+			finished++
+		}
+	}
+	if finished != 3 {
+		t.Fatalf("master developer started before all native merges: %d", finished)
+	}
+	evidence := batchEvidence(input)
+	evidence.Paths = []string{"parser.go", "command.go", "tooling.go"}
+	for range master.Checks {
+		evidence.Commands = append(evidence.Commands, "true")
+	}
+	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	for {
+		d.drive()
+		state = driverState(t, d)
+		if state.Validation.DevelopmentSnapshot != "" {
+			break
+		}
+	}
+	checks := 0
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != protocol.HostActionStatusExecuted {
+			continue
+		}
+		var value protocol.CheckEvidence
+		if err := decodeReceiptEvidence(receipt, &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.SourceActionID == action && value.ExitCode == 0 {
+			checks++
+		}
+	}
+	if checks != len(master.Checks) {
+		t.Fatalf("master source passed without every actual check: %d", checks)
+	}
+	retainNativeEvidence(t, d.f)
 }

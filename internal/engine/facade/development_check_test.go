@@ -443,3 +443,113 @@ func TestDevelopmentCheckSourceChangeCannotProveInput(t *testing.T) {
 		t.Fatalf("changed source falsely verified %#v", result)
 	}
 }
+
+func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := nativeMasterAt(t, root, base, nil)
+	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
+	build.Dir = "../../.."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build runtime: %v %s", err, out)
+	}
+	plan := commandPlan()
+	batch := &plan.Batches[0]
+	batch.Checks[0].Command, batch.Checks[0].Goal = "", "Build the complete project"
+	batch.Checks[1].Command, batch.Checks[1].Goal = "", "Run every project test"
+	consumer := *batch
+	consumer.ID, consumer.DependsOn = "consumer", []string{batch.ID}
+	consumer.Subtasks = []protocol.DevelopmentSubtask{{ID: "consume", Description: "Consume verified implementation"}}
+	consumer.Artifacts, consumer.Checks = []string{"consumer.go"}, []protocol.DevelopmentCheck{{ID: "consumer-check", Command: "true"}}
+	plan.Batches = append(plan.Batches, consumer)
+	d.reviewPass(plan)
+	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One verified dependency"}})
+	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+	d.drive()
+	action, input := planBatchAction(d, "command")
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main // implemented input\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := batchEvidence(input)
+	evidence.Commands = []string{"printf 'actual build'", "./missing-project-test"}
+	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	var failed protocol.HostActionReceipt
+	var failure protocol.CheckEvidence
+	for failed.ActionID == "" {
+		d.drive()
+		state := driverState(t, d)
+		for _, receipt := range state.HostActionReceipts {
+			if receipt.AdapterOperation != "op.check" || receipt.Status != protocol.HostActionStatusExecuted {
+				continue
+			}
+			var observed protocol.CheckEvidence
+			if err := decodeReceiptEvidence(receipt, &observed); err != nil {
+				t.Fatal(err)
+			}
+			if observed.SourceActionID == action && observed.ExitCode == 127 {
+				failed, failure = receipt, observed
+			}
+		}
+		if failed.ActionID == "" {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	state := driverState(t, d)
+	for _, binding := range state.DispatchBindings {
+		if binding.BatchID == consumer.ID {
+			t.Fatal("failed call released its dependent")
+		}
+	}
+	stderr, err := os.ReadFile(filepath.Join(failure.Directory, "stderr.log"))
+	if err != nil || !strings.Contains(string(stderr), "missing-project-test") {
+		t.Fatalf("actual missing-call evidence absent: %q %v", stderr, err)
+	}
+	reopened, err := Open(root, d.f.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.f = reopened
+	d.drive()
+	continued, next := planBatchAction(d, "command")
+	if continued != action || next.Development.Result == nil {
+		t.Fatal("failure did not retain its original development obligation")
+	}
+	correction := batchEvidence(next)
+	correction.Commands = []string{evidence.Commands[0], "printf 'actual tests'"}
+	accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), SourceResult: next.Development.Result.Digest, Validation: &protocol.ValidationResult{Binding: next.Binding, Status: "PASS", Development: correction}}})
+	if accepted.Status != "ACCEPTED" {
+		t.Fatalf("corrected call rejected: %+v", accepted)
+	}
+	issued := false
+	for !issued {
+		d.drive()
+		state = driverState(t, d)
+		for _, binding := range state.DispatchBindings {
+			issued = issued || binding.BatchID == consumer.ID
+		}
+		if !issued {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if state.HostActionReceipts[failed.ActionID].Digest != failed.Digest {
+		t.Fatal("original failure receipt was overwritten")
+	}
+	actualSuccesses := 0
+	for _, receipt := range state.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != protocol.HostActionStatusExecuted {
+			continue
+		}
+		var observed protocol.CheckEvidence
+		if err := decodeReceiptEvidence(receipt, &observed); err != nil {
+			t.Fatal(err)
+		}
+		if observed.SourceActionID == action && observed.ExitCode == 0 {
+			actualSuccesses++
+		}
+	}
+	if actualSuccesses != 2 {
+		t.Fatalf("corrected source did not pass both actual checks: %d", actualSuccesses)
+	}
+	retainNativeEvidence(t, d.f)
+}

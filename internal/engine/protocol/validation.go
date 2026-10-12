@@ -73,6 +73,7 @@ type RepairCaseEvidence struct {
 	Result      coverage.ExecutionStatus `json:"result"`
 }
 type DevelopmentEvidence struct {
+	Commands      []string               `json:"commands,omitempty"`
 	RemainingWork string                 `json:"remainingWork,omitempty"`
 	Completion    *DevelopmentCompletion `json:"completion,omitempty"`
 	CaseRuns      []RepairCaseEvidence   `json:"caseRuns,omitempty"`

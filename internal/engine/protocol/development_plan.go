@@ -62,7 +62,8 @@ func DevelopmentCheckPurposes() []string {
 type DevelopmentCheck struct {
 	Purpose string `json:"purpose,omitempty"`
 	ID      string `json:"id"`
-	Command string `json:"command"`
+	Command string `json:"command,omitempty"`
+	Goal    string `json:"goal,omitempty"`
 }
 type DevelopmentCompletion struct {
 	DoD     map[string]string `json:"dod"`
@@ -111,7 +112,8 @@ type DevelopmentInput struct {
 	Batch        DevelopmentBatch        `json:"batch"`
 	Dependencies map[string]WorkerResult `json:"dependencies"`
 	Result       *WorkerResult           `json:"result,omitempty"`
-	Checks       []CheckEvidence         `json:"checks,omitempty"`
+	// Checks retains the executed prefix of Batch.Checks for its frozen source.
+	Checks []CheckEvidence `json:"checks,omitempty"`
 }
 
 // GranularityVerificationTiers is the finite proposal tier domain; empty uses FINAL.
@@ -160,8 +162,11 @@ func ValidateGranularity(p *GranularityReview) error {
 		}
 		checks := map[string]bool{}
 		for _, c := range b.Checks {
-			if c.ID == "" || c.Command == "" || checks[c.ID] || !slices.Contains(DevelopmentCheckPurposes(), c.Purpose) {
-				return validationError("verification IDs and commands must be unique and complete")
+			if c.ID == "" || checks[c.ID] || !slices.Contains(DevelopmentCheckPurposes(), c.Purpose) {
+				return validationError("verification IDs and purposes must be unique and complete")
+			}
+			if (strings.TrimSpace(c.Command) == "" && strings.TrimSpace(c.Goal) == "") || (c.Command != "" && c.Goal != "") || (c.Purpose == CheckEdit && c.Command == "") {
+				return validationError("verification requires a command or goal; EDIT requires a command")
 			}
 			checks[c.ID] = true
 		}
@@ -280,7 +285,10 @@ func (s *State) ReadinessProposal() *GranularityReview {
 	return proposal
 }
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return pipelineTask(cd, "engine.development.batch.v4", "plan:"+strings.TrimPrefix(planContractDigest(p), "sha256:")+":"+id)
+	return pipelineTask(cd, "engine.development.batch.v4", planTaskScope(p, id))
+}
+func planTaskScope(plan *GranularityReview, id string) string {
+	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
 }
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
 	id, p := s.readinessProposal()
@@ -545,10 +553,12 @@ func (s *State) latestSlicePlanProposal() *GranularityReview {
 	}
 	return p
 }
-func (s *State) plannedBatchSource(task runtime.TaskKey, cd *compiler.CompiledDefinition) (DevelopmentBatch, bool) {
-	if s.mergeMaster() {
-		return DevelopmentBatch{}, false
-	}
+
+func (s *State) developmentBatchRequired(batch DevelopmentBatch) bool {
+	return !s.mergeMaster() || batch.Owner == masterMergeOwner && slices.ContainsFunc(batch.Checks, func(check DevelopmentCheck) bool { return check.Command == "" })
+}
+
+func (s *State) plannedBatchSource(task runtime.TaskKey) (DevelopmentBatch, bool) {
 	original := s.sourceValidationTask(task)
 	for _, d := range s.Decisions {
 		p := s.decisionPlanProposal(d)
@@ -556,7 +566,7 @@ func (s *State) plannedBatchSource(task runtime.TaskKey, cd *compiler.CompiledDe
 			continue
 		}
 		for _, b := range p.Batches {
-			if planTask(cd, p, b.ID) == original {
+			if original.Scope == planTaskScope(p, b.ID) {
 				return b, true
 			}
 		}
@@ -564,7 +574,10 @@ func (s *State) plannedBatchSource(task runtime.TaskKey, cd *compiler.CompiledDe
 	return DevelopmentBatch{}, false
 }
 func (s *State) currentPlanTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	task := planTask(cd, p, id)
+	return s.currentPlanTaskFrom(planTask(cd, p, id), p, id)
+}
+func (s *State) currentPlanTaskFrom(task runtime.TaskKey, p *GranularityReview, id string) runtime.TaskKey {
+	task.Scope = planTaskScope(p, id)
 	var batch DevelopmentBatch
 	for _, b := range p.Batches {
 		if b.ID == id {
@@ -573,7 +586,7 @@ func (s *State) currentPlanTask(cd *compiler.CompiledDefinition, p *GranularityR
 	}
 	for _, entry := range s.RequirementRevisions {
 		for i, c := range entry.WorkDecisions {
-			prior, known := s.plannedBatchSource(c.Work.Task, cd)
+			prior, known := s.plannedBatchSource(c.Work.Task)
 			if c.Work.Task == task || known && prior.ID == id && (c.Disposition == RequirementWorkRedo || digestOfCanonical(prior) == digestOfCanonical(batch)) {
 				if c.Disposition == RequirementWorkRedo {
 					task = replacementWorkTask(entry, i)
@@ -610,7 +623,32 @@ func (s *State) developmentResult(task runtime.TaskKey) *DevelopmentEvidence {
 	}
 	return record.Validation.Development
 }
+
+// bindDevelopmentChecks fills only the confirmed plan's missing calls in order.
+// The accepted development result owns these values; the plan owns their duties.
+func bindDevelopmentChecks(batch DevelopmentBatch, commands []string) ([]DevelopmentCheck, error) {
+	checks := slices.Clone(batch.Checks)
+	count := 0
+	for i := range checks {
+		if checks[i].Command != "" {
+			continue
+		}
+		if count >= len(commands) || strings.TrimSpace(commands[count]) == "" {
+			return nil, validationError("development must supply every missing verification call")
+		}
+		checks[i].Command, checks[i].Goal = commands[count], ""
+		count++
+	}
+	if count != len(commands) {
+		return nil, validationError("development cannot replace an existing verification call")
+	}
+	return checks, nil
+}
+
 func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidence) error {
+	if _, err := bindDevelopmentChecks(batch, e.Commands); err != nil {
+		return err
+	}
 	if e.RemainingWork != "" {
 		return validationError("completion cannot retain unfinished work")
 	}
@@ -628,28 +666,25 @@ func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidenc
 	return nil
 }
 func (s *State) developmentBatch(task runtime.TaskKey, cd *compiler.CompiledDefinition) (string, *GranularityReview, DevelopmentBatch, bool) {
-	if s.mergeMaster() {
-		return "", nil, DevelopmentBatch{}, false
-	}
 	request, p, _ := s.confirmedDevelopmentPlan()
 	if p == nil {
 		return "", nil, DevelopmentBatch{}, false
 	}
 	for _, b := range p.Batches {
-		if s.currentPlanTask(cd, p, b.ID) == task {
+		if s.developmentBatchRequired(b) && s.currentPlanTask(cd, p, b.ID) == task {
 			return request, p, b, true
 		}
 	}
 	return "", nil, DevelopmentBatch{}, false
 }
 func (s *State) planTasks(cd *compiler.CompiledDefinition) []runtime.TaskKey {
-	if s.mergeMaster() {
-		return nil
-	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	var tasks []runtime.TaskKey
 	if p != nil {
 		for _, b := range p.Batches {
+			if !s.developmentBatchRequired(b) {
+				continue
+			}
 			tasks = append(tasks, s.currentPlanTask(cd, p, b.ID))
 		}
 	}
@@ -729,10 +764,7 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 
 // planCheckpoint selects the first uncleared group using the original waves.
 func (s *State) planCheckpoint(cd *compiler.CompiledDefinition, p *GranularityReview) ([]runtime.TaskKey, bool) {
-	if s.mergeMaster() {
-		return nil, false
-	}
-	if p.VerificationTier != "CHECKPOINT" {
+	if s.mergeMaster() || p.VerificationTier != "CHECKPOINT" {
 		return s.planTasks(cd), false
 	}
 	var tasks []runtime.TaskKey
@@ -783,14 +815,20 @@ func sameTaskSet(a, b []runtime.TaskKey) bool {
 }
 func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.CompiledDefinition) {
 	if s.mergeMaster() {
-		return
+		_, _, _, complete := s.integratedSources()
+		if !complete {
+			return
+		}
 	}
 	_, p, _ := s.confirmedDevelopmentPlan()
-	if p == nil || !s.developmentPlanCurrent(p) {
+	if p == nil || !s.mergeMaster() && !s.developmentPlanCurrent(p) {
 		return
 	}
 	allowed, _ := s.planCheckpoint(cd, p)
 	for _, b := range p.Batches {
+		if !s.developmentBatchRequired(b) {
+			continue
+		}
 		key := s.currentPlanTask(cd, p, b.ID)
 		if s.developmentEditResult(key) != nil {
 			continue
@@ -798,6 +836,9 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 		blocked := !slices.Contains(allowed, key) || !s.workspaceReady(key, cd)
 		group := runtime.Batch{ID: runtime.BatchID(b.ID)}
 		for _, dep := range b.DependsOn {
+			if s.mergeMaster() && !slices.ContainsFunc(p.Batches, func(batch DevelopmentBatch) bool { return batch.ID == dep && s.developmentBatchRequired(batch) }) {
+				continue
+			}
 			task := s.currentPlanTask(cd, p, dep)
 			group.Tasks = append(group.Tasks, task)
 			if s.developmentResult(task) == nil {
@@ -819,7 +860,25 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 }
 func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.TaskKey, []string, string, bool) {
 	if s.mergeMaster() {
-		return s.integratedSources()
+		sources, paths, base, complete := s.integratedSources()
+		if !complete {
+			return nil, nil, "", false
+		}
+		for _, task := range s.planTasks(cd) {
+			result := s.developmentResultRecord(task)
+			if result == nil {
+				return nil, nil, "", false
+			}
+			source, ok := s.editSourceProof(result.ActionID)
+			if !ok {
+				return nil, nil, "", false
+			}
+			sources = append(sources, task)
+			paths = append(paths, result.Validation.Development.Paths...)
+			base = source.Identity
+		}
+		slices.Sort(paths)
+		return sources, slices.Compact(paths), base, true
 	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	if p == nil || !s.developmentPlanCurrent(p) {
@@ -917,8 +976,30 @@ func ValidateProjectChecks(p *GranularityReview) error {
 	return nil
 }
 
+func (s *State) plannedDevelopmentChecks(plan *GranularityReview, batch DevelopmentBatch) []DevelopmentCheck {
+	for _, binding := range s.DispatchBindings {
+		if binding.BatchID != batch.ID || s.currentPlanTaskFrom(binding.Task, plan, batch.ID) != binding.Task {
+			continue
+		}
+		result := s.developmentEditResult(binding.Task)
+		if result == nil || !s.editResultCurrent(*result) {
+			continue
+		}
+		if result.Validation.Status == "CONTINUE" && len(result.Validation.Development.Commands) == 0 {
+			return batch.Checks
+		}
+		checks, err := bindDevelopmentChecks(batch, result.Validation.Development.Commands)
+		if err != nil {
+			return nil
+		}
+		return checks
+	}
+	return batch.Checks
+}
+
 func (s *State) fullProjectChecks() []DevelopmentCheck {
-	_, p, _ := s.confirmedDevelopmentPlan()
+	_, confirmed, _ := s.confirmedDevelopmentPlan()
+	p := confirmed
 	if s.mergeMaster() {
 		p = masterDevelopmentPlan(p)
 	}
@@ -927,6 +1008,7 @@ func (s *State) fullProjectChecks() []DevelopmentCheck {
 	}
 	var checks []DevelopmentCheck
 	for _, batch := range p.Batches {
+		batch.Checks = s.plannedDevelopmentChecks(confirmed, batch)
 		for _, check := range batch.Checks {
 			if check.Purpose != CheckFullBuild && check.Purpose != CheckFullTests {
 				continue

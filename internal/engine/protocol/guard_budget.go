@@ -137,7 +137,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		return guard.Basis{}, fmt.Errorf("guard budget: no confirmed development plan backs the dispatch budget")
 	}
 	batchIdentity := guard.Identity{ID: "development-plan", Revision: planContractDigest(plan)}
-	if state.mergeMaster() {
+	if state.mergeMaster() && len(state.planTasks(e.cfg.Definition)) == 0 {
 		batchIdentity = guard.Identity{ID: "merge-topology", Revision: digestOfCanonical(state.Topology)}
 	}
 	routeDigest := state.validationRouteDigest()
@@ -483,7 +483,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		// currentPlanTask 或任一已确认计划的批次任务——重走替换经
 		// sourceValidationTask 折叠后核对）；计划外的 batch scope 无授权来源。
 		if _, _, _, current := state.developmentBatch(task, e.cfg.Definition); !current {
-			if _, planned := state.plannedBatchSource(task, e.cfg.Definition); !planned {
+			if _, planned := state.plannedBatchSource(task); !planned {
 				return guard.Provenance{}, 0, false
 			}
 		}

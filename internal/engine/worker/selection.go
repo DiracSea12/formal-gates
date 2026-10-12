@@ -267,9 +267,16 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 				}
 			}
 			for i, check := range item.Checks {
-				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
-				if check.Reuse != 0 {
-					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil || check.Parts != nil {
+				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command, Goal: check.Goal}
+				if input.Review != nil && (check.Command != "" || check.Parts != nil) {
+					return nil, fmt.Errorf("review selects an original verification call or proposes its goal")
+				}
+				if check.Goal != "" {
+					if input.Review == nil || check.Purpose == protocol.CheckEdit || check.Command != "" || check.Reuse != 0 || check.Read != 0 || check.Parts != nil {
+						return nil, fmt.Errorf("verification goal belongs to a missing batch-boundary call")
+					}
+				} else if check.Reuse != 0 {
+					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil || check.Parts != nil || check.Goal != "" {
 						return nil, fmt.Errorf("check reuse selects only an original approved check")
 					}
 					selected = input.ApprovedChecks[check.Reuse-1]

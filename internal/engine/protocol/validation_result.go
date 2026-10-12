@@ -356,6 +356,18 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			if !ok {
 				return validationError("development task is not a confirmed batch")
 			}
+			if prior, ok := s.Results[record.ActionID]; ok && prior.Validation != nil && prior.Validation.Development != nil {
+				ordinal := 0
+				for _, check := range batch.Checks {
+					if check.Command != "" {
+						continue
+					}
+					if evidence, done := s.checkReceipt(record.ActionID, check.ID); done && evidence.ExitCode == 0 && evidence.Error == "" && (ordinal >= len(p.Development.Commands) || ordinal >= len(prior.Validation.Development.Commands) || prior.Validation.Development.Commands[ordinal] != p.Development.Commands[ordinal]) {
+						return validationError("continued development retains passed verification calls")
+					}
+					ordinal++
+				}
+			}
 			if p.Status == "CONTINUE" {
 				if err := validateDevelopmentContinuation(p.Development); err != nil {
 					return err

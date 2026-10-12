@@ -132,13 +132,17 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair.v5" {
-		input.ApprovedChecks = s.fullProjectChecks()
+	if input.Handler == "engine.repair.v5" || input.Review != nil && input.Review.Action == review.StartReadiness {
+		for _, check := range s.fullProjectChecks() {
+			if check.Command != "" {
+				input.ApprovedChecks = append(input.ApprovedChecks, check)
+			}
+		}
 		_, plan, _ := s.confirmedDevelopmentPlan()
 		if plan != nil {
 			for _, batch := range plan.Batches {
-				for _, check := range batch.Checks {
-					if check.Purpose == "" || check.Purpose == CheckEdit {
+				for _, check := range s.plannedDevelopmentChecks(plan, batch) {
+					if check.Command != "" && (check.Purpose == "" || check.Purpose == CheckEdit) {
 						check.ID = batch.ID + ":" + check.ID
 						input.ApprovedChecks = append(input.ApprovedChecks, check)
 					}

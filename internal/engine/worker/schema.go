@@ -133,6 +133,19 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 			properties["artifacts"] = map[string]any{"type": "array", "items": location}
 			check := properties["checks"].(map[string]any)["items"].(map[string]any)
 			check["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": append(protocol.DevelopmentCheckPurposes(), "")}
+			if input.Review != nil {
+				source := stringSourceSchema()["anyOf"].([]any)
+				choices := []any{fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})}
+				for _, original := range source[1:3] {
+					branch := original.(map[string]any)
+					branch["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
+					choices = append(choices, branch)
+				}
+				choices = append(choices, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": []string{"", protocol.CheckFullBuild, protocol.CheckFullTests}}}, []string{"goal"}))
+				properties["checks"] = map[string]any{"type": "array", "items": map[string]any{"anyOf": choices}}
+			} else {
+				delete(check["properties"].(map[string]any), "goal")
+			}
 			for _, name := range []string{"subtasks", "dod"} {
 				array := properties[name].(map[string]any)
 				item := array["items"].(map[string]any)
@@ -233,14 +246,24 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 		sources := stringSourceSchema()
 		for _, source := range sources["anyOf"].([]any)[1:] {
+			if input.Review != nil && source.(map[string]any)["properties"].(map[string]any)["parts"] != nil {
+				continue
+			}
 			original := maps.Clone(source.(map[string]any))
 			properties := maps.Clone(original["properties"].(map[string]any))
 			properties["purpose"] = purpose
 			original["properties"] = properties
 			alternatives = append(alternatives, original)
 		}
-		alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
+		if input.Review != nil {
+			alternatives = append(alternatives, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": []string{"", protocol.CheckFullBuild, protocol.CheckFullTests}}}, []string{"goal"}))
+		} else {
+			alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
+		}
 		check := map[string]any{"anyOf": alternatives, "description": sources["description"]}
+		if input.Review != nil {
+			check["description"] = "Select an original approved check or read range; a missing call declares only its verification goal."
+		}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
 		delete(properties, "route")
 		if len(input.AvailableRouteCandidates) > 0 {
@@ -275,6 +298,23 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			changed["required"] = []any{"reuse"}
 			changed["description"] = "Select an original confirmed batch and supply only changed semantics. Omitted content, identities, dependencies, checks and route are carried by the program."
 			plan["properties"].(map[string]any)["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{batch, changed}}
+		}
+	}
+	if input.Handler == "engine.development.batch.v4" {
+		pending, positions, commands := pendingDevelopmentCommands(input)
+		duties := []any{}
+		for _, check := range pending {
+			item := stringSourceSchema()
+			item["description"] = check.Goal
+			duties = append(duties, item)
+		}
+		if len(duties) > 0 {
+			fields["commands"] = orderedSchema(duties)
+			if slices.ContainsFunc(positions, func(position int) bool { return commands[position] == "" }) {
+				body["required"] = append(body["required"].([]any), "commands")
+			}
+		} else {
+			delete(fields, "commands")
 		}
 	}
 	if input.Review != nil {

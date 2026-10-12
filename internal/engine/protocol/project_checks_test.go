@@ -229,3 +229,26 @@ func TestSliceCheckpointTierFollowsItsFilteredGroups(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitMasterMissingCallsUseConfirmedTaskIdentity(t *testing.T) {
+	cd := compiledCanonicalWorkflow(t)
+	plan := ownedDevelopmentPlan()
+	existing := plan.Batches[2]
+	missing := existing
+	missing.ID = "missing-integration-calls"
+	missing.DependsOn = []string{existing.ID}
+	missing.Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Goal: "Build the integrated project"}, {ID: "tests", Purpose: CheckFullTests, Goal: "Test all integrated behavior"}}
+	plan.Batches = append(plan.Batches, missing)
+	s := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: plan}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}}
+	tasks := s.planTasks(cd)
+	if len(tasks) != 1 || tasks[0] != planTask(cd, plan, missing.ID) {
+		t.Fatalf("master invented a plan identity or dispatched an existing call: %+v", tasks)
+	}
+	_, projected, batch, ok := s.developmentBatch(tasks[0], cd)
+	if !ok || projected != plan || !reflect.DeepEqual(batch, missing) {
+		t.Fatal("master lost the confirmed plan's ownership")
+	}
+	if s.developmentBatchRequired(existing) || s.developmentBatchRequired(plan.Batches[0]) {
+		t.Fatal("existing or child calls caused extra master development")
+	}
+}

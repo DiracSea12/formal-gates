@@ -150,6 +150,9 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	scope := s.Validation.RequirementRevision
 	switch role {
 	case "engine.development.batch.v4":
+		if s.mergeMaster() {
+			return s.integrationResource()
+		}
 		source = s.AcceptedNativeSnapshot()
 		request, _, _ := s.confirmedDevelopmentPlan()
 		scope = request + ":" + s.Validation.RequirementRevision + ":" + strconv.FormatUint(s.Validation.Generation, 10)

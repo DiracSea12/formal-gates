@@ -811,14 +811,14 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	}
 	qaTask := runtime.TaskKey{Node: "funnel", Step: "qa.execution", Scope: "wave-1:BLACKBOX"}
 	state.Validation = &Validation{
-		RequirementRevision: "rev-1", Generation: 1,
+		RequirementRevision: "rev-1", Generation: state.requirementGeneration(),
 		Sets:     map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Version: "case-v1", Status: "FROZEN"}},
 		Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{},
 		Waves: []ValidationWave{{
 			ID: "wave-1", Status: "COLLECTING", Scope: coverage.ScopeFull,
 			Candidate:           coverage.ValidationCandidate{Identity: "native-1", Digest: "sha256:native-1"},
 			RequirementRevision: "rev-1",
-			Generation:          1,
+			Generation:          state.requirementGeneration(),
 			RouteDigest:         state.validationRouteDigest(),
 			Versions:            map[coverage.ReviewKind]string{coverage.ReviewBlackbox: "case-v1"},
 			ExpectedDigest:      "sha256:expected-1",
@@ -827,7 +827,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 			},
 		}},
 	}
-	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: 1}
+	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: state.requirementGeneration()}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
 	w := &state.Validation.Waves[0]
 	w.Coverage = state.coverageContract(&w.Candidate)

@@ -797,3 +797,29 @@ func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T
 		t.Fatal("case revisions replaced the registered role", err)
 	}
 }
+
+func TestReadinessExposesOnlyOriginalCallsAndVerificationGoals(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	for _, generate := range []func(protocol.WorkerInput) (map[string]any, error){ResultSchema, StableResultSchema} {
+		schema, err := generate(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(schema)
+		var result map[string]any
+		_ = json.Unmarshal(raw, &result)
+		body := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+		plan, _ := json.Marshal(body["granularityReview"])
+		if strings.Contains(string(plan), `"command"`) || strings.Contains(string(plan), `"parts"`) {
+			t.Fatal("read-only plan still exposes command creation", string(plan))
+		}
+		if !strings.Contains(string(plan), `"goal"`) || !strings.Contains(string(plan), `"read"`) {
+			t.Fatal("missing original selection or verification goal")
+		}
+	}
+	for _, check := range []Check{{Command: "invented-tests"}, {Parts: &[]StringChange{{value: "invented-tests"}}}} {
+		if _, err := DecodeGranularity(input, &Granularity{Batches: []Batch{{Checks: []Check{check}}}}, nil, nil, false); err == nil {
+			t.Fatal("read-only authoring bypass reached plan assembly")
+		}
+	}
+}
