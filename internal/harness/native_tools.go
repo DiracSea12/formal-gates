@@ -480,7 +480,8 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if from < 1 || to < from || to > len(lines) {
 			return nil, fmt.Errorf("requirement line range is outside the bound original document")
 		}
-		return map[string]any{"path": document.Path, "contentDigest": document.ContentDigest, "from": from, "to": to, "lines": lines[from-1 : to]}, nil
+		number, err := t.publish(nativeToolFact{Kind: "requirement", Content: []byte(document.Content)})
+		return map[string]any{"read": number, "path": document.Path, "contentDigest": document.ContentDigest, "from": from, "to": to, "lines": lines[from-1 : to]}, err
 	case "comparison":
 		if t.material == nil || t.material.Input.Validation == nil || t.material.Input.Validation.Workspace == nil {
 			return nil, fmt.Errorf("action has no issued native comparison")
@@ -955,7 +956,7 @@ func nativeWorkspaceToolSchema(readOnly bool, materials ...*worker.Material) map
 	description := "Search performs recursive literal content matching in the selected directory (omit listing/entry for root), publishing original listing/read numbers and matching lines. Select existing files by original listing and entry numbers. Numbers remain bound across continuation and resume."
 	if material != nil && material.Input.RequirementDocument.Content != "" {
 		actions = append(actions, "requirement")
-		description += " Requirement reads the bound original confirmed document, optionally by from/to lines."
+		description += " Requirement reads the bound original confirmed document, optionally by from/to lines, and publishes a read number for original semantic value selection only; it does not select a physical file."
 		properties["from"] = map[string]any{"type": "integer", "minimum": 1}
 		properties["to"] = map[string]any{"type": "integer", "minimum": 0}
 	}

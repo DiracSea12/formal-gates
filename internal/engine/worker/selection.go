@@ -444,7 +444,7 @@ func contentID(kind string, value any, index int) string {
 
 // sourceReadText preserves the exact bytes in a published read's line range.
 func sourceReadText(facts []LocationFact, read, from, to int) (string, error) {
-	if read < 1 || read > len(facts) || facts[read-1].Kind != "read" {
+	if read < 1 || read > len(facts) || (facts[read-1].Kind != "read" && facts[read-1].Kind != "requirement") {
 		return "", fmt.Errorf("source requires an original published read")
 	}
 	lines := strings.SplitAfter(string(facts[read-1].Content), "\n")

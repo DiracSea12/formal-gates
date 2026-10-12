@@ -33,6 +33,19 @@ func TestReadinessCommandsSelectOriginalReadBytes(t *testing.T) {
 	if plan.Batches[0].Checks[0].Command != command || plan.Batches[0].Checks[0].Purpose != protocol.CheckEdit {
 		t.Fatalf("original command bytes changed: %q", plan.Batches[0].Checks[0].Command)
 	}
+	t.Run("bound-requirement-command", func(t *testing.T) {
+		requirementFacts := append(append([]LocationFact{}, facts...), LocationFact{Kind: "requirement", Content: facts[1].Content})
+		value.GranularityReview.Batches[0].Checks[0].Read = 3
+		requirementRaw, err := json.Marshal(value)
+		value.GranularityReview.Batches[0].Checks[0].Read = 2
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := DecodeResultWithFacts(input, "result", requirementRaw, "verified-native-source", nil, requirementFacts)
+		if err != nil || !reflect.DeepEqual(event, original) {
+			t.Fatal("bound requirement command changed its bytes or physical artifact evidence", err)
+		}
+	})
 	stored, _ := json.Marshal(struct {
 		Input protocol.WorkerInput
 		Facts []LocationFact

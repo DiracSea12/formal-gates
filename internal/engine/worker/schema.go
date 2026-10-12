@@ -105,7 +105,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 		selection := map[string]any{"type": "integer", "minimum": 1}
 		original := fixedObject(map[string]any{"read": selection, "from": selection, "to": selection, "purpose": purpose}, []string{"read", "from", "to"})
-		original["description"] = "Select an original workspace read and its inclusive line range; the program retains its exact command bytes, including line endings."
+		original["description"] = "Select an original workspace or bound requirement read and its inclusive line range; the program retains its exact command bytes, including line endings."
 		alternatives = append(alternatives, original, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
 		check := map[string]any{"anyOf": alternatives}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
@@ -651,7 +651,7 @@ func stringSourceSchema() map[string]any {
 		"from": map[string]any{"type": "integer", "minimum": 1},
 		"to":   map[string]any{"type": "integer", "minimum": 1},
 	}, "required": []any{"read", "from", "to"}, "additionalProperties": false}
-	return map[string]any{"anyOf": []any{map[string]any{"type": "string"}, source}, "description": "Author new semantic text, or select an inclusive line range from the 1-based original workspace read. The program preserves the selected bytes, including line endings; it does not parse shell words or trim arguments."}
+	return map[string]any{"anyOf": []any{map[string]any{"type": "string"}, source}, "description": "Author new semantic text, or select an inclusive line range from the 1-based original workspace or bound requirement read. The program preserves the selected bytes, including line endings; it does not parse shell words or trim arguments."}
 }
 func newOperationSchema() (map[string]any, error) {
 	result, err := resultTypeSchema(reflect.TypeOf(OperationChange{}))
