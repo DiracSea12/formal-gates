@@ -232,7 +232,7 @@ func repairCommitRegistry(t *testing.T, path string, record RegistryRecord) {
 	}
 }
 
-// CASE-013 回归：payload manifest 未把请求的 host 登记为可安装 host-target
+// payload manifest 未把请求的 host 登记为可安装 host-target
 // （缺失或降级为 explanation-level）时，install 必须在创建任何 target/state
 // 之前非零拒绝，而不是以 exit 0 接受一个未登记 target。
 func TestInstallRejectsManifestUnregisteredHostTargetBeforeTargetCreation(t *testing.T) {

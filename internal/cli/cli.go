@@ -997,6 +997,7 @@ func runHook(program string, args []string, streams IO) (int, error) {
 	}
 	fs := newFlagSet("hook decide", streams)
 	provider := fs.String("provider", "", "hook host provider: "+providerHelp()+", or empty for the generic protocol")
+	recordDir := fs.String("record-dir", "", "record the original payload and this hook decision in a directory")
 	if code, err, done := parseFlagSet(fs, args[1:], streams.Stdout); done {
 		return code, err
 	}
@@ -1014,11 +1015,26 @@ func runHook(program string, args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	var response []byte
 	if resp := validate.HookResponse(*provider, decision); resp != nil {
-		data, _ := json.Marshal(resp)
-		fmt.Fprintln(streams.Stdout, string(data))
+		response, err = json.Marshal(resp)
+		if err != nil {
+			return 1, err
+		}
+		response = append(response, '\n')
 	}
-	return validate.HookExitCode(*provider, decision), nil
+	exitCode := validate.HookExitCode(*provider, decision)
+	if *recordDir != "" {
+		if err := validate.RecordHookDecision(*recordDir, payload, *provider, decision, response, exitCode); err != nil {
+			return 1, err
+		}
+	}
+	if len(response) != 0 {
+		if _, err := streams.Stdout.Write(response); err != nil {
+			return 1, err
+		}
+	}
+	return exitCode, nil
 }
 
 func runLifecycle(program string, args []string, streams IO) (int, error) {
@@ -1118,7 +1134,7 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 		fs := newFlagSet("canary codex-hook", streams)
 		worktree := fs.String("worktree", ".", "repository root")
 		command := fs.String("codex-command", "codex", "Codex command")
-		keep := fs.Bool("keep-temp", false, "keep temporary files")
+		keep := fs.Bool("keep-temp", false, "keep the isolated workspace")
 		binary := fs.String("binary", "", "formal-gates binary")
 		format := fs.String("format", "json", "text or json")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -1365,7 +1381,7 @@ func printGateUsage(w io.Writer, program string) {
 }
 
 func printHookUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <%s|''>  hook host provider (Codex and ZCode use host-specific JSON protocols)\n", program, providerHelp())
+	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <%s|''>  hook host provider (Codex and ZCode use host-specific JSON protocols)\n  --record-dir DIR  save original payload and the emitted local decision\n", program, providerHelp())
 }
 
 func printLifecycleUsage(w io.Writer, program string) {
@@ -1373,7 +1389,7 @@ func printLifecycleUsage(w io.Writer, program string) {
 }
 
 func printCanaryUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n                  --fixture copy-component:prompts|verify-stage:installed-target selects one fixture\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n                  --fixture copy-component:prompts|verify-stage:installed-target selects one fixture\n  codex-hook      report Codex native hook interception qualification\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 // printVersion reports the binary's version situation. The project keeps no

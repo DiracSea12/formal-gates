@@ -10,6 +10,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	engineRuntime "formal-gates/internal/engine/runtime"
+	"formal-gates/internal/validate"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,4 +120,75 @@ func currentDeniedHookPayload(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(payload)
+}
+
+func TestRunHookRecordsOriginalPayloadAndEmittedDecision(t *testing.T) {
+	for _, provider := range []string{"codex", "zcode", ""} {
+		t.Run(provider, func(t *testing.T) {
+			payload := " " + currentDeniedHookPayload(t) + "\n"
+			dir := t.TempDir()
+			var out, errOut bytes.Buffer
+			code := Run("formal-gates", []string{"hook", "decide", "--provider", provider, "--record-dir", dir}, IO{
+				Stdin: strings.NewReader(payload), Stdout: &out, Stderr: &errOut,
+			})
+			paths, err := filepath.Glob(filepath.Join(dir, "*.decision.json"))
+			if err != nil || len(paths) != 1 {
+				t.Fatalf("one decision receipt required: %v %v stderr=%s", paths, err, errOut.String())
+			}
+			data, err := os.ReadFile(paths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record validate.HookDecisionRecord
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Provider != provider || record.Decision.PermissionDecision != "deny" || record.Response != out.String() || record.ExitCode != code {
+				t.Fatalf("record must match emitted protocol: %+v stdout=%q exit=%d", record, out.String(), code)
+			}
+			raw, err := os.ReadFile(record.PayloadPath)
+			if err != nil || string(raw) != payload {
+				t.Fatalf("raw input bytes changed: %q %v", raw, err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 2 {
+				t.Fatalf("one raw/decision pair required: %v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestRunHookRecordingRetainsStartOwnerAndAllowNoop(t *testing.T) {
+	root, dir := t.TempDir(), t.TempDir()
+	payload := fmt.Sprintf(`{"hook_event_name":"PreToolUse","tool_name":"exec","tool_input":{"command":%q},"transcript_path":"/owner.jsonl","session_id":"owner"}`, "formal-gates workflow start --root "+fmt.Sprintf("%q", root)+" --split no") + "\n"
+	var out, errOut bytes.Buffer
+	code := Run("formal-gates", []string{"hook", "decide", "--provider", "codex", "--record-dir", dir}, IO{
+		Stdin: strings.NewReader(payload), Stdout: &out, Stderr: &errOut,
+	})
+	if code != 0 || out.Len() != 0 {
+		t.Fatalf("allow protocol changed: %d %q %s", code, out.String(), errOut.String())
+	}
+	owner, err := os.ReadFile(filepath.Join(root, ".gates", "tmp", "start-owner.json"))
+	if err != nil || string(owner) != `{"provider":"codex","session":"owner","transcript":"/owner.jsonl"}` {
+		t.Fatalf("owner capture bytes changed: %q %v", owner, err)
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "*.decision.json"))
+	if len(paths) != 1 {
+		t.Fatalf("one actual decision required: %v", paths)
+	}
+	data, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record validate.HookDecisionRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Decision.PermissionDecision != "allow" || record.Response != "" || record.ExitCode != 0 {
+		t.Fatalf("allow receipt: %+v", record)
+	}
+	raw, err := os.ReadFile(record.PayloadPath)
+	if err != nil || string(raw) != payload {
+		t.Fatalf("raw owner input changed: %q %v", raw, err)
+	}
 }

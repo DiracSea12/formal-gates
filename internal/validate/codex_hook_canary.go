@@ -1,16 +1,15 @@
 package validate
 
 import (
-	"context"
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"time"
 
 	"formal-gates/internal/lifecycle"
 )
@@ -27,7 +26,9 @@ type CodexHookCanarySummary struct {
 	Case                   string `json:"case"`
 	CodexCommand           string `json:"codexCommand"`
 	CodexVersion           string `json:"codexVersion"`
-	ProfileFlag            string `json:"profileFlag,omitempty"`
+	ThreadID               string `json:"threadId,omitempty"`
+	TurnID                 string `json:"turnId,omitempty"`
+	ToolUseID              string `json:"toolUseId,omitempty"`
 	Attempts               int    `json:"attempts"`
 	ExitCode               int    `json:"exitCode"`
 	MarkerExists           bool   `json:"markerExists"`
@@ -59,136 +60,292 @@ type CodexHookProbeResult struct {
 	ExitCode     int    `json:"exitCode"`
 }
 
+// HookDecisionRecord holds the local decision emitted by hook decide. It does
+// not establish whether the host honored the response.
+type HookDecisionRecord struct {
+	PayloadPath string       `json:"payloadPath"`
+	Provider    string       `json:"provider"`
+	Decision    HookDecision `json:"decision"`
+	Response    string       `json:"response"`
+	ExitCode    int          `json:"exitCode"`
+}
+
+func RecordHookDecision(dir string, payload []byte, provider string, decision HookDecision, response []byte, exitCode int) error {
+	probe, err := recordHookPayload(dir, payload)
+	if err != nil {
+		return err
+	}
+	return writeJSON(probe.PayloadPath+".decision.json", HookDecisionRecord{
+		PayloadPath: probe.PayloadPath,
+		Provider:    provider,
+		Decision:    decision,
+		Response:    string(response),
+		ExitCode:    exitCode,
+	})
+}
+
 func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Result) {
 	var result Result
 	codexCommand := strings.TrimSpace(options.CodexCommand)
 	if codexCommand == "" {
 		codexCommand = "codex"
 	}
-	worktree := cleanWorktree(options.Worktree)
-	outputRoot := filepath.Join(worktree, ".gates", "tmp", "codex-hook-canary")
+	outputRoot := filepath.Join(cleanWorktree(options.Worktree), ".gates", "tmp", "codex-hook-canary")
 	if err := os.MkdirAll(outputRoot, 0o700); err != nil {
 		result.add("codex-hook-canary", err.Error())
 		return CodexHookCanarySummary{Status: "FAIL"}, result
 	}
-
 	caseDir, err := os.MkdirTemp(outputRoot, "codex-hook-client-canary-")
 	if err != nil {
 		result.add("codex-hook-canary", err.Error())
 		return CodexHookCanarySummary{Status: "FAIL"}, result
 	}
 	caseName := filepath.Base(caseDir)
-	payloadDir := filepath.Join(caseDir, "payloads")
-	if err := os.MkdirAll(payloadDir, 0o700); err != nil {
-		result.add("codex-hook-canary", err.Error())
-		return CodexHookCanarySummary{Status: "FAIL"}, result
-	}
-
-	stdoutPath := filepath.Join(caseDir, "codex.stdout.jsonl")
-	stderrPath := filepath.Join(caseDir, "codex.stderr.txt")
-	finalPath := filepath.Join(caseDir, "codex.final.txt")
-	promptPath := filepath.Join(caseDir, "prompt.txt")
-	markerPath := filepath.Join(caseDir, "marker.txt")
 	summaryPath := filepath.Join(outputRoot, caseName+".summary.json")
-
 	summary := CodexHookCanarySummary{
 		Status:                "FAIL",
 		Case:                  caseName,
 		CodexCommand:          codexCommand,
-		CodexVersion:          codexVersion(codexCommand),
 		ExitCode:              -1,
 		ArtifactDir:           slash(caseDir),
-		Stdout:                slash(stdoutPath),
-		Stderr:                slash(stderrPath),
-		Final:                 slash(finalPath),
-		Prompt:                slash(promptPath),
-		PayloadDir:            slash(payloadDir),
 		Summary:               slash(summaryPath),
-		ExpectedPassCondition: "At least one PreToolUse hook payload is captured by the passive recorder, the native formal-gates hook decide --provider codex blocks the invalid formal PASS command, and marker.txt is not created.",
+		ExpectedPassCondition: "One original MCP apply_patch call has matching PreToolUse deny evidence and native hook/completed status blocked in the same thread/turn, the tool handler did not execute, the client and turn completed successfully, and no marker exists.",
+		NextAction:            "Use explicit formal-gates workflow validation; a native target invocation and host blocking evidence are required to qualify automatic interception.",
 	}
-
-	binary, err := resolveCanaryBinary(options.Binary)
-	if err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-	profileFlag, err := codexProfileFlag(codexCommand)
-	if err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-	summary.ProfileFlag = profileFlag
-
-	codexHome, err := codexHomeDir()
-	if err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-	if err := os.MkdirAll(codexHome, 0o700); err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-	profileName := "formal-gates-hook-canary-" + caseName
-	profilePath := filepath.Join(codexHome, profileName+".config.toml")
-	defer os.Remove(profilePath)
-	if err := writeCodexCanaryProfile(profilePath, binary, payloadDir); err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-	if err := os.WriteFile(promptPath, []byte(codexHookPrompt(binary, caseDir, markerPath)), 0o600); err != nil {
-		appendText(stderrPath, err.Error()+"\n")
-		finishCodexHookCanary(summaryPath, summary, &result)
-		return summary, result
-	}
-
-	exitCode, runErr := runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath)
-	summary.ExitCode = exitCode
-	summary.Attempts = 1
-	if runErr != nil {
-		appendText(stderrPath, runErr.Error()+"\n")
-	}
-
-	summary.MarkerExists = isFile(markerPath)
-	summary.HookPayloadCount, summary.PreToolUsePayloadCount = countCodexHookPayloads(payloadDir)
-	// A session that finished without any PreToolUse payload and without the
-	// forbidden marker answered the prompt in text instead of calling the
-	// shell tool, so no host payload ever reached the hooks. Retry the driven
-	// session once before concluding that the host cannot emit PreToolUse
-	// payloads; the payload directory keeps accumulating evidence across both
-	// attempts.
-	if summary.PreToolUsePayloadCount == 0 && !summary.MarkerExists {
-		summary.Attempts = 2
-		exitCode, runErr = runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath)
-		summary.ExitCode = exitCode
-		if runErr != nil {
-			appendText(stderrPath, runErr.Error()+"\n")
+	for invocation := 1; invocation <= 2; invocation++ {
+		directory := filepath.Join(caseDir, fmt.Sprintf("invocation-%d", invocation))
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			summary.FailureReason = err.Error()
+			break
 		}
-		summary.MarkerExists = isFile(markerPath)
-		summary.HookPayloadCount, summary.PreToolUsePayloadCount = countCodexHookPayloads(payloadDir)
-	}
-	proof := summary.PreToolUsePayloadCount > 0 && !summary.MarkerExists
-	if proof {
-		summary.Status = "PASS"
-		if summary.Attempts > 1 {
-			summary.Diagnostic = "the driven session answered the first prompt without a tool call; the retry produced the PreToolUse proof"
+		err := runCodexHookCanary(options, directory, &summary)
+		if errors.Is(err, errCodexHookNoCall) && invocation == 1 {
+			summary.Diagnostic = "The text-only native turn produced no target call; retrying once."
+			continue
 		}
-	}
-
-	if summary.Status != "PASS" {
-		summary.FailureReason = codexHookCanaryFailureReason(summary)
-		summary.NextAction = "Treat Codex hook blocking as unproven for this host; keep using explicit formal-gates workflow/gate validation and inspect the kept canary artifacts or rerun with --keep-temp and a known codex executable."
-	}
-
-	if !options.KeepTemp && summary.Status == "PASS" {
-		_ = os.RemoveAll(caseDir)
+		if err != nil {
+			summary.FailureReason = err.Error()
+		} else {
+			summary.Status = "PASS"
+			summary.NextAction = ""
+		}
+		break
 	}
 	finishCodexHookCanary(summaryPath, summary, &result)
 	return summary, result
+}
+
+func runCodexHookCanary(options CodexHookCanaryOptions, caseDir string, summary *CodexHookCanarySummary) error {
+	codex, err := exec.LookPath(summary.CodexCommand)
+	if err != nil {
+		return err
+	}
+	binary := options.Binary
+	if binary == "" {
+		binary, err = os.Executable()
+	}
+	if err != nil {
+		return err
+	}
+	binary = absPath(binary)
+	workspace := filepath.Join(caseDir, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		return err
+	}
+	if !options.KeepTemp {
+		defer os.RemoveAll(workspace)
+	}
+	prompt := "Call the hook_canary MCP tool apply_patch exactly once with {}. Its target and patch are supplied by the program. Do not call any other tool. After the response, finish with a brief explanation."
+	summary.Prompt = slash(filepath.Join(caseDir, "prompt.txt"))
+	summary.PayloadDir = slash(filepath.Join(caseDir, "payloads"))
+	summary.Stdout = slash(filepath.Join(caseDir, "client.stdout"))
+	summary.Stderr = slash(filepath.Join(caseDir, "client.stderr"))
+	summary.Final = slash(filepath.Join(caseDir, "terminal.json"))
+	for path, data := range map[string]string{summary.Prompt: prompt, filepath.Join(caseDir, "marker.patch"): "diff --git a/marker.go b/marker.go\nnew file mode 100644\n--- /dev/null\n+++ b/marker.go\n@@ -0,0 +1 @@\n+package canary\n"} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			return err
+		}
+	}
+	if err := writeJSON(filepath.Join(caseDir, "request.json"), map[string]any{"codex": absPath(codex), "binary": binary, "workspace": workspace, "prompt": prompt}); err != nil {
+		return err
+	}
+	stdout, err := os.Create(summary.Stdout)
+	if err != nil {
+		return err
+	}
+	defer stdout.Close()
+	stderr, err := os.Create(summary.Stderr)
+	if err != nil {
+		return err
+	}
+	defer stderr.Close()
+	cmd := exec.Command(binary, "harness", "codex-hook-client", caseDir)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	summary.Attempts++
+	summary.HookPayloadCount, summary.PreToolUsePayloadCount = 0, 0
+	runErr := cmd.Run()
+	if cmd.ProcessState != nil {
+		summary.ExitCode = cmd.ProcessState.ExitCode()
+	}
+	summary.MarkerExists = isFile(filepath.Join(workspace, "marker.go"))
+	payloads, err := filepath.Glob(filepath.Join(summary.PayloadDir, "hook-*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range payloads {
+		if strings.HasSuffix(path, ".decision.json") {
+			continue
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		summary.HookPayloadCount++
+		if event, _ := hookPayloadNames(payload); event == "PreToolUse" {
+			summary.PreToolUsePayloadCount++
+		}
+	}
+	if runErr != nil {
+		return fmt.Errorf("native client failed: %w; see %s", runErr, summary.Stderr)
+	}
+	return qualifyCodexHookCanary(caseDir, workspace, summary)
+}
+
+var errCodexHookNoCall = errors.New("native turn completed without a PreToolUse target call")
+
+// A single tool attempt makes the host's hook run attributable to the original
+// call without inventing an identity the native HookRunSummary does not carry.
+func qualifyCodexHookCanary(directory, workspace string, summary *CodexHookCanarySummary) error {
+	identity, err := os.ReadFile(filepath.Join(directory, "identity.json"))
+	if err != nil {
+		return err
+	}
+	var ids struct {
+		Thread string `json:"threadId"`
+		Turn   string `json:"turnId"`
+	}
+	if err := json.Unmarshal(identity, &ids); err != nil || ids.Thread == "" || ids.Turn == "" {
+		return fmt.Errorf("missing original native thread/turn identity")
+	}
+	summary.ThreadID, summary.TurnID = ids.Thread, ids.Turn
+	events, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer events.Close()
+	scan := bufio.NewScanner(events)
+	scan.Buffer(make([]byte, 4096), int(^uint(0)>>1))
+	started, blocked, completed, terminal := 0, 0, 0, false
+	completedCall := ""
+	for scan.Scan() {
+		var frame struct {
+			Method string `json:"method"`
+			Params struct {
+				Thread string `json:"threadId"`
+				Turn   string `json:"turnId"`
+				Item   struct {
+					ID, Type, Server, Tool, Status string
+					Arguments                      map[string]any
+				}
+				Run      struct{ ID, EventName, Status string }
+				Terminal struct{ ID, Status string } `json:"turn"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(scan.Bytes(), &frame); err != nil {
+			return err
+		}
+		p := frame.Params
+		if p.Thread != ids.Thread {
+			continue
+		}
+		if frame.Method == "turn/completed" {
+			terminal = p.Terminal.ID == ids.Turn && p.Terminal.Status == "completed"
+			continue
+		}
+		if p.Turn != ids.Turn {
+			continue
+		}
+		switch frame.Method {
+		case "item/started":
+			if p.Item.Type == "mcpToolCall" {
+				if p.Item.Server != "hook_canary" || p.Item.Tool != "apply_patch" || p.Item.ID == "" || p.Item.Arguments == nil || len(p.Item.Arguments) != 0 {
+					return fmt.Errorf("native turn attempted an unrelated tool")
+				}
+				started++
+				summary.ToolUseID = p.Item.ID
+			}
+		case "hook/completed":
+			if p.Run.EventName == "preToolUse" {
+				if p.Run.Status != "blocked" || p.Run.ID == "" {
+					return fmt.Errorf("native PreToolUse does not prove the target call was blocked")
+				}
+				blocked++
+			}
+		case "item/completed":
+			if p.Item.Type == "mcpToolCall" {
+				if p.Item.ID == "" || p.Item.Server != "hook_canary" || p.Item.Tool != "apply_patch" || p.Item.Status != "failed" || p.Item.Arguments == nil || len(p.Item.Arguments) != 0 {
+					return fmt.Errorf("native target completion differs from the blocked call")
+				}
+				completed++
+				completedCall = p.Item.ID
+			}
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
+	if started == 0 && blocked == 0 && completed == 0 && terminal && !summary.MarkerExists && !isFile(filepath.Join(directory, "target-call.json")) {
+		return errCodexHookNoCall
+	}
+	if started != 1 || blocked != 1 || completed != 1 || completedCall != summary.ToolUseID || !terminal {
+		return fmt.Errorf("no single original target call with native hook blocking and successful terminal")
+	}
+	paths, err := filepath.Glob(filepath.Join(directory, "payloads", "*.decision.json"))
+	if err != nil {
+		return err
+	}
+	matching := 0
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var record HookDecisionRecord
+		if err := json.Unmarshal(body, &record); err != nil {
+			return err
+		}
+		payload, err := os.ReadFile(record.PayloadPath)
+		if err != nil {
+			return err
+		}
+		var input struct {
+			Event     string         `json:"hook_event_name"`
+			Tool      string         `json:"tool_name"`
+			Session   string         `json:"session_id"`
+			Turn      string         `json:"turn_id"`
+			Call      string         `json:"tool_use_id"`
+			Cwd       string         `json:"cwd"`
+			Arguments map[string]any `json:"tool_input"`
+		}
+		if err := json.Unmarshal(payload, &input); err != nil {
+			return err
+		}
+		if input.Event != "PreToolUse" {
+			continue
+		}
+		if input.Tool != "mcp__hook_canary__apply_patch" || input.Session != ids.Thread || input.Turn != ids.Turn || input.Call != summary.ToolUseID || cleanWorktree(input.Cwd) != cleanWorktree(workspace) || input.Arguments == nil || len(input.Arguments) != 0 || record.Provider != "codex" || record.Decision.Decision != "block" || record.ExitCode != 0 {
+			return fmt.Errorf("original PreToolUse decision differs from the native target call")
+		}
+		response, err := json.Marshal(HookResponse("codex", record.Decision))
+		if err != nil || !bytes.Equal(bytes.TrimSpace([]byte(record.Response)), response) {
+			return fmt.Errorf("original hook response is not the recorded deny")
+		}
+		matching++
+	}
+	if matching != 1 || summary.PreToolUsePayloadCount != 1 || summary.MarkerExists || isFile(filepath.Join(directory, "target-call.json")) {
+		return fmt.Errorf("target execution was not prevented by one original hook deny")
+	}
+	return nil
 }
 
 func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result) {
@@ -197,308 +354,50 @@ func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result
 		result.add("codex-hook-probe", "--payload-dir is required")
 		return CodexHookProbeResult{ExitCode: 1}, result
 	}
-	if err := os.MkdirAll(options.PayloadDir, 0o700); err != nil {
+	probe, err := recordHookPayload(options.PayloadDir, options.Payload)
+	if err != nil {
 		result.add("codex-hook-probe", err.Error())
 		return CodexHookProbeResult{ExitCode: 1}, result
-	}
-	eventName, toolName := hookPayloadNames(options.Payload)
-	name := fmt.Sprintf("hook-%s-%s-%s.json", safeFilePart(eventName), safeFilePart(toolName), time.Now().UTC().Format("20060102-150405.000000000"))
-	payloadPath := filepath.Join(options.PayloadDir, name)
-	if err := os.WriteFile(payloadPath, options.Payload, 0o600); err != nil {
-		result.add("codex-hook-probe", err.Error())
-		return CodexHookProbeResult{ExitCode: 1}, result
-	}
-	probe := CodexHookProbeResult{
-		EventName:    eventName,
-		ToolName:     toolName,
-		PayloadPath:  slash(payloadPath),
-		PayloadBytes: len(options.Payload),
-		ExitCode:     0,
 	}
 	return probe, result
 }
 
+func recordHookPayload(dir string, payload []byte) (CodexHookProbeResult, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return CodexHookProbeResult{}, err
+	}
+	eventName, toolName := hookPayloadNames(payload)
+	file, err := os.CreateTemp(dir, fmt.Sprintf("hook-%s-%s-*.json", safeFilePart(eventName), safeFilePart(toolName)))
+	if err != nil {
+		return CodexHookProbeResult{}, err
+	}
+	payloadPath := file.Name()
+	_, writeErr := file.Write(payload)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return CodexHookProbeResult{}, err
+	}
+	return CodexHookProbeResult{
+		EventName:    eventName,
+		ToolName:     toolName,
+		PayloadPath:  slash(payloadPath),
+		PayloadBytes: len(payload),
+		ExitCode:     0,
+	}, nil
+}
+
 func finishCodexHookCanary(path string, summary CodexHookCanarySummary, result *Result) {
-	_ = writeJSON(path, summary)
-	if summary.Status != "PASS" {
-		detail := "Codex hook canary status=" + summary.Status
-		if strings.TrimSpace(summary.FailureReason) != "" {
-			detail += ": " + summary.FailureReason
-		}
-		result.add("codex-hook-canary", detail)
+	if err := writeJSON(path, summary); err != nil {
+		result.add("codex-hook-canary", err.Error())
 	}
-}
-
-func codexHookCanaryFailureReason(summary CodexHookCanarySummary) string {
-	if summary.PreToolUsePayloadCount == 0 {
-		return "no PreToolUse hook payload was captured from the Codex host"
+	if summary.Status == "PASS" {
+		return
 	}
-	if summary.MarkerExists {
-		return "the invalid command created the marker file, so the host did not block execution"
+	detail := "Codex hook canary status=" + summary.Status
+	if strings.TrimSpace(summary.FailureReason) != "" {
+		detail += ": " + summary.FailureReason
 	}
-	return "the canary did not satisfy every required proof condition"
-}
-
-func resolveCanaryBinary(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return "", err
-		}
-		path = exe
-	}
-	full := absPath(path)
-	if !isFile(full) {
-		return "", fmt.Errorf("formal-gates binary not found: %s", full)
-	}
-	return full, nil
-}
-
-func codexHomeDir() (string, error) {
-	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
-		return absPath(value), nil
-	}
-	home, err := installHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".codex"), nil
-}
-
-func codexVersion(command string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	out, err := runCodexOutput(ctx, command, "--version")
-	if ctx.Err() == context.DeadlineExceeded {
-		return "unavailable: version command timed out"
-	}
-	if err != nil {
-		return "unavailable: " + err.Error()
-	}
-	text := strings.TrimSpace(out)
-	if text == "" {
-		return "unavailable: empty version output"
-	}
-	return firstLine(text)
-}
-
-func codexProfileFlag(command string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	out, err := runCodexOutput(ctx, command, "exec", "--help")
-	if ctx.Err() == context.DeadlineExceeded {
-		return "", errors.New("codex exec --help timed out")
-	}
-	if err != nil {
-		return "", fmt.Errorf("codex exec --help failed: %w", err)
-	}
-	if strings.Contains(out, "--profile-v2") {
-		return "--profile-v2", nil
-	}
-	if strings.Contains(out, "--profile") {
-		return "--profile", nil
-	}
-	return "", fmt.Errorf("Codex command %q does not expose --profile or --profile-v2 for temporary hook config", command)
-}
-
-func runCodexOutput(ctx context.Context, command string, args ...string) (string, error) {
-	path, prefix, err := codexLaunch(command)
-	if err != nil {
-		return "", err
-	}
-	cmd := exec.CommandContext(ctx, path, append(prefix, args...)...)
-	data, err := cmd.CombinedOutput()
-	return string(data), err
-}
-
-func codexLaunch(command string) (string, []string, error) {
-	resolved, err := exec.LookPath(command)
-	if err != nil {
-		if isPathLike(command) && isFile(command) {
-			resolved = command
-		} else {
-			return "", nil, err
-		}
-	}
-	if runtime.GOOS == "windows" && strings.EqualFold(filepath.Ext(resolved), ".ps1") {
-		return "", nil, fmt.Errorf("Codex command resolved to PowerShell wrapper %s; pass a codex.exe or codex.cmd path to keep this canary script-free", resolved)
-	}
-	return resolved, nil, nil
-}
-
-func isPathLike(value string) bool {
-	return strings.ContainsAny(value, `/\`)
-}
-
-// writeCodexCanaryProfile writes the temporary Codex profile for the canary.
-// Every matcher is the regex ".*": Codex matchers are regular expressions, so
-// the glob "*" is an invalid pattern that matches nothing and the hook never
-// fires. The PreToolUse chain pairs the passive payload recorder with the
-// native formal-gates hook decide so one driven session yields both the raw
-// host payloads and the real block decision.
-func writeCodexCanaryProfile(path, binary, payloadDir string) error {
-	nativeHookCommand := strings.Join([]string{
-		quoteCommandArg(binary),
-		"hook",
-		"decide",
-		"--provider",
-		"codex",
-	}, " ")
-	probeCommand := strings.Join([]string{
-		quoteCommandArg(binary),
-		"canary",
-		"codex-hook-probe",
-		"--payload-dir",
-		quoteCommandArg(payloadDir),
-		"--quiet",
-	}, " ")
-	content := fmt.Sprintf(`[features]
-hooks = true
-
-[[hooks.UserPromptSubmit]]
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = %s
-timeout = 30
-statusMessage = "formal-gates Codex hook canary user prompt"
-
-[[hooks.PreToolUse]]
-matcher = ".*"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = %s
-timeout = 30
-statusMessage = "formal-gates Codex hook canary pre tool"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = %s
-timeout = 30
-statusMessage = "formal-gates Codex hook canary native formal-gates hook"
-
-[[hooks.PostToolUse]]
-matcher = ".*"
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = %s
-timeout = 30
-statusMessage = "formal-gates Codex hook canary post tool"
-
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = %s
-timeout = 30
-statusMessage = "formal-gates Codex hook canary stop"
-`, tomlString(probeCommand), tomlString(probeCommand), tomlString(nativeHookCommand), tomlString(probeCommand), tomlString(probeCommand))
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func tomlString(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
-	return `"` + replacer.Replace(value) + `"`
-}
-
-// codexHookPrompt is the exact instruction the canary drives through codex
-// exec. The instruction must force a real shell tool call: answering in text
-// produces no PreToolUse payload, which is exactly the "hook payload captured
-// but no PreToolUse payload" failure mode, so the prompt explicitly forbids a
-// text-only reply and the command paths stay absolute (the driven session
-// must not depend on a PATH alias for the formal-gates binary).
-func codexHookPrompt(binary, caseDir, markerPath string) string {
-	record := strings.Join([]string{
-		quoteCommandArg(binary),
-		"workflow",
-		"record-gate",
-		"--root",
-		quoteCommandArg(caseDir),
-		"--gate",
-		"complexity-gate",
-		"--status",
-		"PASS",
-		"--run-id",
-		"hook-canary",
-	}, " ")
-	if runtime.GOOS == "windows" {
-		return "You must call the shell tool now; do not answer in text, a text-only reply is a failure. Run exactly this command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"
-	}
-	return "You must call the shell tool now; do not answer in text, a text-only reply is a failure. Run exactly this command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
-}
-
-func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath string) (int, error) {
-	path, prefix, err := codexLaunch(codexCommand)
-	if err != nil {
-		return -1, err
-	}
-	args := append(prefix,
-		"exec",
-		"--json",
-		profileFlag,
-		profileName,
-		"--enable",
-		"hooks",
-		"--dangerously-bypass-hook-trust",
-		"--sandbox",
-		"danger-full-access",
-		"--skip-git-repo-check",
-		"-c",
-		`approval_policy="never"`,
-		"-o",
-		finalPath,
-		"-",
-	)
-	cmd := exec.Command(path, args...)
-	cmd.Dir = worktree
-
-	stdin, err := os.Open(promptPath)
-	if err != nil {
-		return -1, err
-	}
-	defer stdin.Close()
-	stdout, err := os.Create(stdoutPath)
-	if err != nil {
-		return -1, err
-	}
-	defer stdout.Close()
-	stderr, err := os.Create(stderrPath)
-	if err != nil {
-		return -1, err
-	}
-	defer stderr.Close()
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	err = cmd.Run()
-	if err == nil {
-		return 0, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), nil
-	}
-	return -1, err
-}
-
-func countCodexHookPayloads(dir string) (int, int) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, 0
-	}
-	total := 0
-	pre := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "hook-") || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		total++
-		if strings.HasPrefix(entry.Name(), "hook-PreToolUse-") {
-			pre++
-		}
-	}
-	return total, pre
+	result.add("codex-hook-canary", detail)
 }
 
 func hookPayloadNames(payload []byte) (string, string) {
@@ -529,25 +428,4 @@ func safeFilePart(value string) string {
 		builder.WriteByte('_')
 	}
 	return builder.String()
-}
-
-func firstLine(value string) string {
-	for _, line := range strings.Split(value, "\n") {
-		if text := strings.TrimSpace(line); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func appendText(path, text string) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.WriteString(text)
 }

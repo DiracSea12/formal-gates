@@ -988,6 +988,16 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, services
 		fmt.Fprintln(errout, err)
 		return 1
 	}
+	return serveNativeTools(in, out, errout, tools.schemas(), func(name string, arguments json.RawMessage) (any, error) {
+		if name != nativeWorkspaceTool && name != nativeSemanticTool {
+			return nil, fmt.Errorf("unknown native tool")
+		}
+		return tools.invoke(name, arguments)
+	}, tools.recordCall)
+}
+
+func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(string, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
+	var err error
 	decoder := json.NewDecoder(in)
 	encoder := json.NewEncoder(out)
 	for {
@@ -1020,19 +1030,16 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, services
 			err = json.Unmarshal(request.Params, &params)
 			result = map[string]any{"protocolVersion": params.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "formal-gates", "version": "1"}}
 		case "tools/list":
-			result = map[string]any{"tools": tools.schemas()}
+			result = map[string]any{"tools": schemas}
 		case "tools/call":
 			var params struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
 			err = json.Unmarshal(request.Params, &params)
-			if err == nil && params.Name != nativeWorkspaceTool && params.Name != nativeSemanticTool {
-				err = fmt.Errorf("unknown native tool")
-			}
 			var value any
 			if err == nil {
-				value, err = tools.invoke(params.Name, params.Arguments)
+				value, err = call(params.Name, params.Arguments)
 			}
 			text := ""
 			if err != nil {
@@ -1044,7 +1051,7 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, services
 			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": err != nil}
 			err = nil
-			if err := tools.recordCall(rawRequest, result); err != nil {
+			if err := record(rawRequest, result); err != nil {
 				fmt.Fprintln(errout, err)
 				return 1
 			}

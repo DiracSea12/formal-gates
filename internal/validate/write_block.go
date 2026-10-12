@@ -54,15 +54,20 @@ type writeBlockPayload struct {
 
 // hookToolName 从 payload 提取 PreToolUse 的 tool_name。Codex / Claude Code /
 // Cursor 的 PreToolUse 载荷都以 tool_name 标识工具。
-func hookToolName(value any) string {
+func hookToolName(value any, providers ...string) string {
 	if object, ok := value.(map[string]any); ok {
 		for _, name := range []string{"tool_name", "toolName", "tool"} {
 			if scalar := scalarHookString(object[name]); scalar != "" {
+				if len(providers) > 0 && providers[0] == "codex" && strings.HasPrefix(scalar, "mcp__") {
+					if _, tool, ok := strings.Cut(strings.TrimPrefix(scalar, "mcp__"), "__"); ok {
+						return tool
+					}
+				}
 				return scalar
 			}
 		}
 		if nested, ok := object["value"].(map[string]any); ok {
-			return hookToolName(nested)
+			return hookToolName(nested, providers...)
 		}
 	}
 	return ""
@@ -484,8 +489,8 @@ func registeredHookArtifacts(statePath string) []string {
 // (HookDecision{}, false) 表示非写入（只读）、formal-gates CLI 命令或不属于本判定范围，
 // 交由既有 hook 逻辑处理。从载荷 cwd 定位已进入开发阶段的活动 run；找不到时放行（包括
 // 产品审、技术审等开发前阶段与无活动 run，不干扰文档修订或普通项目）。
-func decideWriteBlockValue(decoded any) (HookDecision, bool) {
-	toolName := hookToolName(decoded)
+func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool) {
+	toolName := hookToolName(decoded, providers...)
 	if toolName == "" {
 		return HookDecision{}, false
 	}

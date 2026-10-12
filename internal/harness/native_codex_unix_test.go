@@ -572,7 +572,7 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 	}
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	command := quote(executable) + " harness codex-tool-permission " + quote(s.directory)
-	s.peer.ToolArgument = `hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`
+	s.peer.ToolArgument = `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`
 	if s.request["read_only"] == true {
 		s.peer.ThreadParams["sandbox"] = "read-only"
 	}

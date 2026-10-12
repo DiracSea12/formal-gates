@@ -32,7 +32,7 @@ func codexToolArguments(directory string) ([]string, error) {
 	}
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	command := quote(textOf(server["command"])) + " harness codex-tool-permission " + quote(directory)
-	return []string{"-c", `hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`}, nil
+	return []string{"-c", `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=` + strconv.Quote(command) + `}]}]`}, nil
 }
 
 func CodexToolPermission(directory string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {

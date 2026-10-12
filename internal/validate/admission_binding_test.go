@@ -13,10 +13,10 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/prompts"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -491,142 +491,6 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 	}
 	if _, statErr := os.Stat(admissionEngineDirectory(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
 		t.Fatalf("re-edited stale-digest start created a run directory: %v", statErr)
-	}
-}
-
-// admissionFakeCodex writes a stub codex command used through the documented
-// CodexCommand option. It answers --version and "exec --help" (exposing
-// --profile) and drives the canary session according to FAKE_CODEX_MODE:
-// "retry-proof" emits no PreToolUse payload on the first exec run and one on
-// the second, "never" never emits a payload, and "marker-proof" emits a
-// payload together with the forbidden marker file on the first run.
-func admissionFakeCodex(t *testing.T, stateFile string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-codex")
-	if runtime.GOOS == "windows" {
-		path += ".exe"
-	}
-	t.Setenv("FAKE_CODEX_STATE_FILE", stateFile)
-	writeExecutableFixture(t, path, `package main
-
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-)
-
-func main() {
-	args := os.Args[1:]
-	if len(args) == 1 && args[0] == "--version" {
-		fmt.Println("fake-codex 0.0.0")
-		return
-	}
-	if len(args) >= 2 && args[0] == "exec" && args[1] == "--help" {
-		fmt.Println("usage: codex exec --profile NAME")
-		return
-	}
-
-	stateFile := os.Getenv("FAKE_CODEX_STATE_FILE")
-	runs := 0
-	if data, err := os.ReadFile(stateFile); err == nil {
-		runs, _ = strconv.Atoi(strings.TrimSpace(string(data)))
-	}
-	runs++
-	if err := os.WriteFile(stateFile, []byte(strconv.Itoa(runs)+"\n"), 0o600); err != nil {
-		panic(err)
-	}
-	mode := os.Getenv("FAKE_CODEX_MODE")
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	payloadDirs, err := filepath.Glob(filepath.Join(workingDirectory, ".gates", "tmp", "codex-hook-canary", "*", "payloads"))
-	if err != nil {
-		panic(err)
-	}
-	for _, dir := range payloadDirs {
-		if mode == "marker-proof" || (mode == "retry-proof" && runs >= 2) {
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				panic(err)
-			}
-			payload := filepath.Join(dir, "hook-PreToolUse-shell-fake-codex.json")
-			if err := os.WriteFile(payload, []byte("{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"shell\"}\n"), 0o600); err != nil {
-				panic(err)
-			}
-		}
-		if mode == "marker-proof" {
-			if err := os.WriteFile(filepath.Join(dir, "..", "marker.txt"), []byte("HIT\n"), 0o600); err != nil {
-				panic(err)
-			}
-		}
-	}
-}
-`)
-	return path
-}
-
-// TestCodexHookCanaryRetriesTextOnlySession pins the
-// documented live-proof retry behavior of the Codex hook canary: a driven
-// session that answers the prompt in text (no PreToolUse payload, no marker)
-// is retried exactly once and passes when the retry produces the payload
-// proof; a session that never emits a payload stays FAIL after the single
-// retry, and a session whose proof includes the forbidden marker fails
-// without consuming a retry.
-func TestCodexHookCanaryRetriesTextOnlySession(t *testing.T) {
-	cases := []struct {
-		name        string
-		mode        string
-		wantStatus  string
-		wantAttempt int
-		wantReason  string
-	}{
-		{name: "text-only-then-retry-proof", mode: "retry-proof", wantStatus: "PASS", wantAttempt: 2},
-		{name: "never-emits-payload", mode: "never", wantStatus: "FAIL", wantAttempt: 2, wantReason: "no PreToolUse"},
-		{name: "marker-proof-no-retry", mode: "marker-proof", wantStatus: "FAIL", wantAttempt: 1, wantReason: "marker file"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			worktree := t.TempDir()
-			t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
-			t.Setenv("FAKE_CODEX_MODE", tc.mode)
-			stateFile := filepath.Join(t.TempDir(), "runs")
-			stub := admissionFakeCodex(t, stateFile)
-			summary, result := CodexHookCanary(CodexHookCanaryOptions{
-				Worktree: worktree, CodexCommand: stub, KeepTemp: true,
-			})
-			if summary.Status != tc.wantStatus {
-				t.Fatalf("canary status=%q want %q (summary=%+v)", summary.Status, tc.wantStatus, summary)
-			}
-			if summary.Attempts != tc.wantAttempt {
-				t.Fatalf("canary attempts=%d want %d (summary=%+v)", summary.Attempts, tc.wantAttempt, summary)
-			}
-			if tc.wantStatus == "PASS" {
-				if !result.OK() {
-					t.Fatalf("passing canary reported failures: %#v", result.Failures)
-				}
-				if summary.PreToolUsePayloadCount == 0 || summary.MarkerExists {
-					t.Fatalf("passing canary lost its proof conditions: %+v", summary)
-				}
-				if !strings.Contains(summary.Diagnostic, "retry") {
-					t.Fatalf("retry-produced proof was not diagnosed: %+v", summary)
-				}
-				if !isFile(filepath.Join(summary.ArtifactDir, "payloads", "hook-PreToolUse-shell-fake-codex.json")) {
-					t.Fatalf("retry proof payload was not kept as evidence: %+v", summary)
-				}
-				return
-			}
-			if result.OK() {
-				t.Fatalf("failing canary reported no failures: %#v", result.Failures)
-			}
-			if !strings.Contains(summary.FailureReason, tc.wantReason) {
-				t.Fatalf("failure reason %q does not contain %q: %+v", summary.FailureReason, tc.wantReason, summary)
-			}
-			if tc.mode == "marker-proof" && !summary.MarkerExists {
-				t.Fatalf("marker-proof session did not record the forbidden marker: %+v", summary)
-			}
-		})
 	}
 }
 

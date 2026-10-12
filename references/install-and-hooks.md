@@ -133,6 +133,10 @@ DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON �
 嵌套的 `hookSpecificOutput`/`permissionDecision` 决策对象，允许时不输出 JSON，拒绝时
 使用文档化的退出码 2 快速阻断。
 
+维护时可给同一入口加 `--record-dir <dir>`，保存原始 stdin 字节及该次决策的 provider、
+response 与退出码；记录不会重新调用 Hook。这些文件证明本地决策，不证明宿主实际阻断。
+`canary codex-hook-probe` 只保存载荷，不执行决策或捕获 workflow start owner。
+
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
@@ -193,13 +197,28 @@ Git 非分片完整 canary 通过。不同宿主、版本和安装副本的证�
 标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自
 动阻塞。在一个 host 上做的 canary 不能证明另一个 host。
 
-Codex 实机检查：
+Codex hook 维护检查入口：
 
 ```bash
 bin/formal-gates canary codex-hook --worktree <repo>
 ```
 
-失败意味着该客户端/版本没有证明闭环的自动拦截。显式的 `formal-gates workflow ...`
+该入口通过原生 app-server 启动隔离线程，取得真实 thread 身份后，用同一 engine
+state/envelope owner 绑定该线程，再启动 turn。维护 MCP 工具 `apply_patch` 无参数；
+程序持有固定补丁和隔离目标，模型只调用 `{}`。允许调用时工具会真正应用补丁，写入
+`marker.go`；阻断检查使用原有主线程写墙。
+
+`PASS` 要求同一 thread/turn 恰有一次目标 MCP 调用，原始 `PreToolUse` 载荷的
+session、turn、tool_use_id、cwd、工具名和空参数均对应此调用；同次 hook 必须保存
+Codex deny 原响应与退出码 0，宿主原 `hook/completed` 必须报告 `blocked`，同一
+MCP 调用必须失败，turn 和 client 必须正常完成，且工具处理器未执行、marker 不存在。
+仅本地 deny、无关工具载荷、失败的 client/turn 或 marker 缺失都不足以通过。完成但
+未调用目标的纯文本 turn 只重试一次，每次调用的证据独立保存；其他失败不重试。
+
+汇总与原 payload/decision、native events、thread/turn 身份及终态保存在工作区
+`.gates/tmp/codex-hook-canary/` 的唯一检查目录下；`--keep-temp` 保留隔离工作区。
+检查会启动真实模型 turn，执行前须按真实调用授权规则取得授权。`FAIL` 表示本次未证明
+自动拦截，不能据此判定客户端没有 hook 能力。显式的 `formal-gates workflow ...`
 命令仍然是该 run 的正常权威。
 
 ## 候选包检查

@@ -26,6 +26,20 @@ func admitExecution(directory string, request map[string]any, services []Executi
 
 // RunCommand serves the engine’s native subprocess and tool boundaries.
 func RunCommand(args []string, in io.Reader, out, errout io.Writer, services ...ExecutionServices) int {
+	if len(args) > 0 && (args[0] == "codex-hook-client" || args[0] == "codex-hook-target") {
+		if len(args) != 2 {
+			fmt.Fprintln(errout, "Codex hook maintenance requires its original evidence directory")
+			return 2
+		}
+		if args[0] == "codex-hook-target" {
+			return CodexHookTarget(args[1], in, out, errout)
+		}
+		if err := CodexHookClient(args[1]); err != nil {
+			fmt.Fprintln(errout, err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) > 0 && args[0] == "codex-tool-permission" {
 		if len(args) != 2 {
 			fmt.Fprintln(errout, "harness codex-tool-permission requires the original job directory")
