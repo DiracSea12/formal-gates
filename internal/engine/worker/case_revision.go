@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
@@ -46,11 +47,14 @@ type OperationChange struct {
 
 // StringChange selects original field positions or read bytes, or authors new text.
 type StringChange struct {
-	Reuse *int `json:"reuse,omitempty"`
-	Read  *int `json:"read,omitempty"`
-	From  *int `json:"from,omitempty"`
-	To    *int `json:"to,omitempty"`
-	value string
+	Reuse      *int            `json:"reuse,omitempty"`
+	Read       *int            `json:"read,omitempty"`
+	From       *int            `json:"from,omitempty"`
+	To         *int            `json:"to,omitempty"`
+	FromColumn *int            `json:"fromColumn,omitempty"`
+	ToColumn   *int            `json:"toColumn,omitempty"`
+	Parts      *[]StringChange `json:"parts,omitempty"`
+	value      string
 }
 
 func (change *StringChange) UnmarshalJSON(raw []byte) error {
@@ -62,8 +66,21 @@ func (change *StringChange) UnmarshalJSON(raw []byte) error {
 	if err := decodeObject(raw, (*body)(change)); err != nil {
 		return err
 	}
-	if change.Reuse != nil {
-		if *change.Reuse < 1 || change.Read != nil || change.From != nil || change.To != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if fields["fromColumn"] != nil || fields["toColumn"] != nil {
+		if change.FromColumn == nil || change.ToColumn == nil {
+			return fmt.Errorf("string source columns require both fromColumn and toColumn")
+		}
+	}
+	if change.Parts != nil {
+		if change.Reuse != nil || change.Read != nil || change.From != nil || change.To != nil || change.FromColumn != nil || change.ToColumn != nil {
+			return fmt.Errorf("string parts select only an ordered sequence")
+		}
+	} else if change.Reuse != nil {
+		if *change.Reuse < 1 || change.Read != nil || change.From != nil || change.To != nil || change.FromColumn != nil || change.ToColumn != nil {
 			return fmt.Errorf("string reuse selects only an original field position")
 		}
 	} else if change.Read == nil || change.From == nil || change.To == nil || *change.Read < 1 || *change.From < 1 || *change.To < *change.From {
@@ -72,7 +89,7 @@ func (change *StringChange) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 func (change StringChange) MarshalJSON() ([]byte, error) {
-	if change.Reuse != nil || change.Read != nil {
+	if change.Reuse != nil || change.Read != nil || change.Parts != nil {
 		type body StringChange
 		return json.Marshal(body(change))
 	}
@@ -80,6 +97,20 @@ func (change StringChange) MarshalJSON() ([]byte, error) {
 }
 
 func (change StringChange) text(original []string, facts []LocationFact) (string, error) {
+	if change.Parts != nil {
+		var text strings.Builder
+		for _, part := range *change.Parts {
+			if part.Parts != nil {
+				return "", fmt.Errorf("string parts select fields, read ranges or new text")
+			}
+			value, err := part.text(original, facts)
+			if err != nil {
+				return "", err
+			}
+			text.WriteString(value)
+		}
+		return text.String(), nil
+	}
 	if change.Reuse != nil {
 		if *change.Reuse < 1 || *change.Reuse > len(original) {
 			return "", fmt.Errorf("string selection is outside original field")
@@ -87,7 +118,7 @@ func (change StringChange) text(original []string, facts []LocationFact) (string
 		return original[*change.Reuse-1], nil
 	}
 	if change.Read != nil {
-		return sourceReadText(facts, *change.Read, *change.From, *change.To)
+		return sourceReadText(facts, *change.Read, *change.From, *change.To, change.FromColumn, change.ToColumn)
 	}
 	return change.value, nil
 }

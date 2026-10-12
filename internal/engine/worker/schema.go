@@ -103,11 +103,16 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 				purpose["enum"] = []string{""}
 			}
 		}
-		selection := map[string]any{"type": "integer", "minimum": 1}
-		original := fixedObject(map[string]any{"read": selection, "from": selection, "to": selection, "purpose": purpose}, []string{"read", "from", "to"})
-		original["description"] = "Select an original workspace or bound requirement read and its inclusive line range; the program retains its exact command bytes, including line endings."
-		alternatives = append(alternatives, original, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
-		check := map[string]any{"anyOf": alternatives}
+		sources := stringSourceSchema()
+		for _, source := range sources["anyOf"].([]any)[1:] {
+			original := maps.Clone(source.(map[string]any))
+			properties := maps.Clone(original["properties"].(map[string]any))
+			properties["purpose"] = purpose
+			original["properties"] = properties
+			alternatives = append(alternatives, original)
+		}
+		alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
+		check := map[string]any{"anyOf": alternatives, "description": sources["description"]}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
 		delete(properties, "route")
 		if len(input.AvailableRouteCandidates) > 0 {
@@ -620,7 +625,14 @@ func stringRevisionSchema(original []string) map[string]any {
 		for index := range original {
 			positions = append(positions, index+1)
 		}
-		items = append(items, map[string]any{"type": "object", "properties": map[string]any{"reuse": map[string]any{"type": "integer", "enum": positions}}, "required": []any{"reuse"}, "additionalProperties": false})
+		reuse := map[string]any{"type": "object", "properties": map[string]any{"reuse": map[string]any{"type": "integer", "enum": positions}}, "required": []any{"reuse"}, "additionalProperties": false}
+		for _, item := range items {
+			if properties, ok := item.(map[string]any)["properties"].(map[string]any); ok && properties["parts"] != nil {
+				parts := properties["parts"].(map[string]any)["items"].(map[string]any)
+				parts["anyOf"] = append(parts["anyOf"].([]any), reuse)
+			}
+		}
+		items = append(items, reuse)
 	}
 	return map[string]any{"type": "array", "items": map[string]any{"anyOf": items}, "description": "Omit this field to retain the original array. An explicit array defines its complete final order: select 1-based original element positions with reuse, select original read/from/to bytes, author new strings, or omit positions to delete them; [] clears the array."}
 }
@@ -646,12 +658,14 @@ func operationRevisionSchema(original []coverage.Operation) (map[string]any, err
 }
 
 func stringSourceSchema() map[string]any {
-	source := map[string]any{"type": "object", "properties": map[string]any{
-		"read": map[string]any{"type": "integer", "minimum": 1},
-		"from": map[string]any{"type": "integer", "minimum": 1},
-		"to":   map[string]any{"type": "integer", "minimum": 1},
-	}, "required": []any{"read", "from", "to"}, "additionalProperties": false}
-	return map[string]any{"anyOf": []any{map[string]any{"type": "string"}, source}, "description": "Author new semantic text, or select an inclusive line range from the 1-based original workspace or bound requirement read. The program preserves the selected bytes, including line endings; it does not parse shell words or trim arguments."}
+	position := map[string]any{"type": "integer", "minimum": 1}
+	source := fixedObject(map[string]any{"read": position, "from": position, "to": position}, []string{"read", "from", "to"})
+	columns := fixedObject(map[string]any{"read": position, "from": position, "to": position, "fromColumn": position, "toColumn": position}, []string{"read", "from", "to", "fromColumn", "toColumn"})
+	columns["description"] = "Paired 1-based Unicode columns on the first/last selected line, inclusive; CR/LF count as original characters."
+	created := map[string]any{"type": "string"}
+	parts := fixedObject(map[string]any{"parts": map[string]any{"type": "array", "items": map[string]any{"anyOf": []any{created, source, columns}}}}, []string{"parts"})
+	parts["description"] = "Join these original selections and newly authored separators in order, without trimming or rewriting any selected bytes."
+	return map[string]any{"anyOf": []any{created, source, columns, parts}, "description": "Author new text, select original read/from/to lines with optional paired fromColumn/toColumn, or join parts. Selected bytes retain Unicode, line endings and missing final newlines; no shell parsing or trimming."}
 }
 func newOperationSchema() (map[string]any, error) {
 	result, err := resultTypeSchema(reflect.TypeOf(OperationChange{}))

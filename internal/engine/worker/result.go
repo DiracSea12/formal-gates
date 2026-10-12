@@ -102,12 +102,15 @@ type Criterion struct {
 	Description string `json:"description"`
 }
 type Check struct {
-	Reuse   int    `json:"reuse,omitempty"`
-	Read    int    `json:"read,omitempty"`
-	From    int    `json:"from,omitempty"`
-	To      int    `json:"to,omitempty"`
-	Purpose string `json:"purpose,omitempty"`
-	Command string `json:"command,omitempty"`
+	Reuse      int             `json:"reuse,omitempty"`
+	Read       int             `json:"read,omitempty"`
+	From       int             `json:"from,omitempty"`
+	To         int             `json:"to,omitempty"`
+	FromColumn *int            `json:"fromColumn,omitempty"`
+	ToColumn   *int            `json:"toColumn,omitempty"`
+	Parts      *[]StringChange `json:"parts,omitempty"`
+	Purpose    string          `json:"purpose,omitempty"`
+	Command    string          `json:"command,omitempty"`
 }
 
 func (item *Check) UnmarshalJSON(raw []byte) error {
@@ -123,7 +126,12 @@ func (item *Check) UnmarshalJSON(raw []byte) error {
 	if _, present := fields["reuse"]; present {
 		allowed, required = []string{"reuse"}, []string{"reuse"}
 	} else if _, present := fields["read"]; present {
-		allowed, required = []string{"read", "from", "to", "purpose"}, []string{"read", "from", "to"}
+		allowed, required = []string{"read", "from", "to", "fromColumn", "toColumn", "purpose"}, []string{"read", "from", "to"}
+		if fields["fromColumn"] != nil || fields["toColumn"] != nil {
+			required = append(required, "fromColumn", "toColumn")
+		}
+	} else if _, present := fields["parts"]; present {
+		allowed, required = []string{"parts", "purpose"}, []string{"parts"}
 	}
 	for name := range fields {
 		if !slices.Contains(allowed, name) {

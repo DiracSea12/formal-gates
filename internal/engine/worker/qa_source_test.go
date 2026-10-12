@@ -220,8 +220,11 @@ func TestQARecipeSchemaPublishesOriginalSourcesAtAllFields(t *testing.T) {
 	input.Validation.Manifest.SharedSteps = nil
 	sourceString := func(schema map[string]any) {
 		branches := schema["anyOf"].([]any)
-		if len(branches) != 2 || branches[0].(map[string]any)["type"] != "string" || !reflect.DeepEqual(branches[1].(map[string]any)["required"], []any{"read", "from", "to"}) {
+		if len(branches) != 4 || branches[0].(map[string]any)["type"] != "string" || !reflect.DeepEqual(branches[1].(map[string]any)["required"], []string{"read", "from", "to"}) {
 			t.Fatal("string field lost authored text or strict original source", schema)
+		}
+		if !reflect.DeepEqual(branches[2].(map[string]any)["required"], []string{"read", "from", "to", "fromColumn", "toColumn"}) || !reflect.DeepEqual(branches[3].(map[string]any)["required"], []string{"parts"}) {
+			t.Fatal("string field lost paired original columns or ordered parts", schema)
 		}
 	}
 	operation := func(schema map[string]any) {

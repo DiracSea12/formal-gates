@@ -482,12 +482,12 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 		t.Fatal("proposal still asks for existing raw paths")
 	}
 	checks := proposal["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
-	if len(checks) != 3 || checks[0].(map[string]any)["properties"].(map[string]any)["reuse"] == nil {
+	if len(checks) != 5 || checks[0].(map[string]any)["properties"].(map[string]any)["reuse"] == nil {
 		t.Fatal("approved commands have no numeric selection")
 	}
 	for index, choice := range checks {
 		branch := choice.(map[string]any)
-		if branch["additionalProperties"] != false || len(branch["properties"].(map[string]any)) != []int{1, 4, 2}[index] {
+		if branch["additionalProperties"] != false || len(branch["properties"].(map[string]any)) != []int{1, 4, 6, 2, 2}[index] {
 			t.Fatal("check modes accept fields from another selection mode")
 		}
 	}
@@ -498,7 +498,7 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 	if original["read"] == nil || original["from"] == nil || original["to"] == nil || !reflect.DeepEqual(original["purpose"].(map[string]any)["enum"], []string{""}) {
 		t.Fatal("source command selection changed repair local-command policy")
 	}
-	command := checks[2].(map[string]any)["properties"].(map[string]any)["command"].(map[string]any)
+	command := checks[4].(map[string]any)["properties"].(map[string]any)["command"].(map[string]any)
 	if !reflect.DeepEqual(command["not"].(map[string]any)["enum"], []string{"approved-build"}) {
 		t.Fatal("known command can pass as newly authored content")
 	}
@@ -514,7 +514,7 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 	}
 	proposal = schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 	choices := proposal["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
-	if len(choices) != 2 || choices[0].(map[string]any)["properties"].(map[string]any)["read"] == nil || choices[1].(map[string]any)["properties"].(map[string]any)["command"] == nil {
+	if len(choices) != 4 || choices[0].(map[string]any)["properties"].(map[string]any)["read"] == nil || choices[3].(map[string]any)["properties"].(map[string]any)["command"] == nil {
 		t.Fatal("initial commands require original source selection or new authorship")
 	}
 }

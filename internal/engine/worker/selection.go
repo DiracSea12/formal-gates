@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"formal-gates/internal/engine/protocol"
 )
@@ -268,21 +269,25 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			for i, check := range item.Checks {
 				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command}
 				if check.Reuse != 0 {
-					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 {
+					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil || check.Parts != nil {
 						return nil, fmt.Errorf("check reuse selects only an original approved check")
 					}
 					selected = input.ApprovedChecks[check.Reuse-1]
 				} else {
-					if check.Read != 0 {
+					if check.Read != 0 || check.Parts != nil {
 						if check.Command != "" {
 							return nil, fmt.Errorf("check requires an original published read without an authored command")
 						}
 						var err error
-						selected.Command, err = sourceReadText(facts, check.Read, check.From, check.To)
+						if check.Parts != nil {
+							selected.Command, err = (StringChange{Parts: check.Parts}).text(nil, facts)
+						} else {
+							selected.Command, err = sourceReadText(facts, check.Read, check.From, check.To, check.FromColumn, check.ToColumn)
+						}
 						if err != nil {
 							return nil, err
 						}
-					} else if check.From != 0 || check.To != 0 {
+					} else if check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil {
 						return nil, fmt.Errorf("check range requires an original published read")
 					}
 					for _, approved := range input.ApprovedChecks {
@@ -442,8 +447,9 @@ func contentID(kind string, value any, index int) string {
 	return fmt.Sprintf("%s-%x", kind, sum[:12])
 }
 
-// sourceReadText preserves the exact bytes in a published read's line range.
-func sourceReadText(facts []LocationFact, read, from, to int) (string, error) {
+// Columns are paired 1-based Unicode positions on the first and last selected
+// lines, inclusive of CR/LF characters. Omitted columns retain complete lines.
+func sourceReadText(facts []LocationFact, read, from, to int, fromColumn, toColumn *int) (string, error) {
 	if read < 1 || read > len(facts) || (facts[read-1].Kind != "read" && facts[read-1].Kind != "requirement") {
 		return "", fmt.Errorf("source requires an original published read")
 	}
@@ -454,5 +460,39 @@ func sourceReadText(facts []LocationFact, read, from, to int) (string, error) {
 	if from < 1 || to < from || to > len(lines) {
 		return "", fmt.Errorf("source selects lines from the original read")
 	}
-	return strings.Join(lines[from-1:to], ""), nil
+	selected := lines[from-1 : to]
+	if fromColumn == nil && toColumn == nil {
+		return strings.Join(selected, ""), nil
+	}
+	if fromColumn == nil || toColumn == nil {
+		return "", fmt.Errorf("source columns require both fromColumn and toColumn")
+	}
+	columnByte := func(line string, column int) (int, error) {
+		for index := range line {
+			column--
+			if column == 0 {
+				return index, nil
+			}
+		}
+		return 0, fmt.Errorf("source column is outside the original line")
+	}
+	start, err := columnByte(selected[0], *fromColumn)
+	if err != nil {
+		return "", err
+	}
+	last := len(selected) - 1
+	end, err := columnByte(selected[last], *toColumn)
+	if err != nil {
+		return "", err
+	}
+	_, width := utf8.DecodeRuneInString(selected[last][end:])
+	end += width
+	if last == 0 {
+		if end <= start {
+			return "", fmt.Errorf("source columns select an inclusive ordered range")
+		}
+		return selected[0][start:end], nil
+	}
+	selected[0], selected[last] = selected[0][start:], selected[last][:end]
+	return strings.Join(selected, ""), nil
 }

@@ -10,12 +10,117 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
 )
+
+func TestNativeRequirementFragmentsOwnOriginalQAValues(t *testing.T) {
+	for _, entrypoint := range []string{"design", "commands", "revision"} {
+		t.Run(entrypoint, func(t *testing.T) {
+			directory, workspace := nativeToolFixture(t)
+			command, argument, stdin := "printf '<片段>\\n'; cat", " 中文 'two words' ", " first🙂\r\nsecond尾"
+			original := "命令🙂 [" + command + "] end\r\n参数 [" + argument + "] tail\r\n输入 [" + stdin + "] end\r\n程序 [/usr/bin/printf]\r\n格式 [%s]"
+			input := protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v4", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
+			input.RequirementDocument.Path, input.RequirementDocument.Content = "requirements.md", original
+			if entrypoint == "commands" {
+				input.Handler, input.Validation.CommandCases = "engine.qa.execution.v3", []string{"approved-case"}
+			} else if entrypoint == "revision" {
+				input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved-case", Scenario: "SUCCESS", Oracle: "approved output", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "other invocation"}}}}
+				input.Validation.AffectedCases = []string{"approved-case"}
+			}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			materialPath := filepath.Join(directory, "material.json")
+			if err := writeAtomicJSON(materialPath, worker.Material{Input: input, ResultSchema: schema}); err != nil {
+				t.Fatal(err)
+			}
+			request := map[string]any{"provider": "dsh", "workspace": workspace, "read_only": false, "schema": schema, "engine": map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": input.Pending.ActionID}}}
+			if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			read, failed := workspaceMCP(t, directory, map[string]any{"action": "requirement"})
+			if failed {
+				t.Fatal(read)
+			}
+			number := intOf(read["read"])
+			columns := func(line, first, last int) any {
+				return map[string]any{"read": number, "from": line, "to": line, "fromColumn": first, "toColumn": last}
+			}
+			commandFirst, argumentFirst := utf8.RuneCountInString("命令🙂 [")+1, utf8.RuneCountInString("参数 [")+1
+			argumentMiddle := argumentFirst + utf8.RuneCountInString(argument)/2
+			argumentParts := map[string]any{"parts": []any{columns(2, argumentFirst, argumentMiddle-1), columns(2, argumentMiddle, argumentFirst+utf8.RuneCountInString(argument)-1)}}
+			operations := []any{
+				map[string]any{"kind": "SHELL", "command": map[string]any{"parts": []any{columns(1, commandFirst, commandFirst+utf8.RuneCountInString(command)-1)}}, "stdin": map[string]any{"read": number, "from": 3, "to": 4, "fromColumn": utf8.RuneCountInString("输入 [") + 1, "toColumn": utf8.RuneCountInString("second尾")}},
+				map[string]any{"kind": "ARGV", "argv": []any{columns(5, 5, 5+utf8.RuneCountInString("/usr/bin/printf")-1), columns(6, 5, 6), map[string]any{"parts": []any{}}, argumentParts}},
+			}
+			value := map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "approved output", "operations": operations}}, "sharedSteps": []any{map[string]any{"procedure": "original preparation", "artifacts": []any{argumentParts}, "operations": operations}}, "coverage": []any{}}
+			if entrypoint == "commands" {
+				value = map[string]any{"commands": []any{operations}}
+			} else if entrypoint == "revision" {
+				value = map[string]any{"cases": []any{map[string]any{"operations": operations}}}
+			}
+			peerSubmitSemantics(directory, value)
+			facts, err := nativeToolFacts(directory)
+			if err != nil || number != 1 || facts[number-1].Kind != "requirement" || len(facts[number-1].Paths) != 0 || string(facts[number-1].Content) != original {
+				t.Fatal("original published source identity or bytes changed", number, err)
+			}
+			answer, err := submittedSemantics(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, err := worker.DecodeResultWithFacts(input, "result", answer, "original-output", nil, workerLocationFacts(facts))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual []coverage.Operation
+			if entrypoint == "commands" {
+				actual = event.Result.Validation.QACommands[0].Operations
+			} else {
+				actual = event.Result.Validation.Manifest.Cases[0].Operations
+				if entrypoint == "design" && event.Result.Validation.Manifest.SharedSteps[0].Artifacts[0] != argument {
+					t.Fatal("shared original fragments changed")
+				}
+			}
+			want := []coverage.Operation{{Kind: coverage.OperationShell, Command: command, Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{"/usr/bin/printf", "%s", "", argument}}}
+			if !reflect.DeepEqual(actual, want) {
+				t.Fatal("original fragments or empty argv changed", actual)
+			}
+			for _, operation := range actual {
+				argv, expected := operation.Argv, argument
+				if operation.Kind == coverage.OperationShell {
+					argv, expected = coverage.ShellCommand(operation.Command), "<片段>\n"+stdin
+				}
+				cmd := exec.Command(argv[0], argv[1:]...)
+				cmd.Dir, cmd.Stdin = workspace, strings.NewReader(operation.Stdin)
+				output, err := cmd.CombinedOutput()
+				if err != nil || string(output) != expected {
+					t.Fatalf("actual fragment invocation: %q %v", output, err)
+				}
+			}
+			resumed, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed, err := worker.DecodeResultWithFacts(input, "result", answer, "original-output", nil, workerLocationFacts(resumed.facts))
+			if err != nil || !reflect.DeepEqual(event, replayed) {
+				t.Fatal("restart changed original fragment assembly", err)
+			}
+			if _, failed := workspaceMCP(t, directory, map[string]any{"action": "replace", "read": number, "from": 1, "to": 1, "content": "changed"}); !failed {
+				t.Fatal("semantic fragment source acquired physical mutation")
+			}
+			if _, err := worker.LocationPaths([]worker.Location{{Read: number}}, workerLocationFacts(facts), input.RequirementDocument); err == nil {
+				t.Fatal("semantic fragment source acquired physical location identity")
+			}
+			t.Logf("%s: original read=%d, exact SHELL/stdin and ARGV bytes, shared parts and restart verified", entrypoint, number)
+		})
+	}
+}
 
 func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
 	for _, entrypoint := range []string{"design", "commands", "revision"} {

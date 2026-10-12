@@ -127,6 +127,93 @@ func TestCommandSourceRangesAndModesRejectInvalidSelections(t *testing.T) {
 	}
 }
 
+func TestOriginalTextColumnsAndPartsPreservePublishedBytes(t *testing.T) {
+	facts := []LocationFact{{Kind: "requirement", Content: []byte("前🙂 命令 尾\r\n甲\r\n末🙂")}}
+	for _, sample := range []struct {
+		name, raw, want string
+	}{
+		{"whole-line", `{"read":1,"from":1,"to":1}`, "前🙂 命令 尾\r\n"},
+		{"inline", `{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5}`, "命令"},
+		{"multibyte", `{"read":1,"from":1,"to":1,"fromColumn":1,"toColumn":2}`, "前🙂"},
+		{"line-endings", `{"read":1,"from":1,"to":2,"fromColumn":7,"toColumn":2}`, "尾\r\n甲\r"},
+		{"no-final-newline", `{"read":1,"from":3,"to":3,"fromColumn":2,"toColumn":2}`, "🙂"},
+		{"parts", `{"parts":[{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5},"/new/",{"read":1,"from":3,"to":3}]}`, "命令/new/末🙂"},
+		{"original-empty-field", `{"parts":[{"reuse":1},{"read":1,"from":3,"to":3}]}`, "末🙂"},
+		{"empty-parts", `{"parts":[]}`, ""},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			var change StringChange
+			if err := json.Unmarshal([]byte(sample.raw), &change); err != nil {
+				t.Fatal(err)
+			}
+			got, err := change.text([]string{""}, facts)
+			if err != nil || got != sample.want {
+				t.Fatalf("original byte selection: %q %v", got, err)
+			}
+			body, err := json.Marshal(change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recovered StringChange
+			if err := json.Unmarshal(body, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			if replayed, err := recovered.text([]string{""}, facts); err != nil || replayed != got {
+				t.Fatal("recovery changed original fragment bytes", err)
+			}
+		})
+	}
+	for _, raw := range []string{
+		`{"read":1,"from":1,"to":1,"fromColumn":4}`,
+		`{"read":1,"from":1,"to":1,"fromColumn":null,"toColumn":null}`,
+		`{"read":1,"from":1,"to":1,"fromColumn":0,"toColumn":1}`,
+		`{"read":1,"from":1,"to":1,"fromColumn":5,"toColumn":4}`,
+		`{"read":1,"from":1,"to":1,"fromColumn":1,"toColumn":99}`,
+		`{"read":99,"from":1,"to":1,"fromColumn":1,"toColumn":1}`,
+		`{"parts":[{"reuse":2}]}`,
+		`{"parts":[{"parts":[]}]}`,
+		`{"parts":[],"read":1,"from":1,"to":1}`,
+	} {
+		var change StringChange
+		err := json.Unmarshal([]byte(raw), &change)
+		if err == nil {
+			_, err = change.text([]string{""}, facts)
+		}
+		if err == nil {
+			t.Fatal("invalid original fragment accepted", raw)
+		}
+	}
+}
+
+func TestReadinessAndRepairChecksShareOriginalFragmentAssembly(t *testing.T) {
+	facts := []LocationFact{{Kind: "read", Content: []byte("前🙂 命令 尾\r\n甲\r\n末🙂")}}
+	for _, handler := range []string{"engine.readiness.plan.v4", "engine.repair.v5"} {
+		t.Run(handler, func(t *testing.T) {
+			var value Granularity
+			body := `{"batches":[{"checks":[{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5,"purpose":"FULL_BUILD"},{"parts":[{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5},"/new/",{"read":1,"from":3,"to":3}]}]}]}`
+			if err := json.Unmarshal([]byte(body), &value); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := DecodeGranularity(protocol.WorkerInput{Handler: handler}, &value, nil, facts, false)
+			if err != nil || plan.Batches[0].Checks[0].Command != "命令" || plan.Batches[0].Checks[1].Command != "命令/new/末🙂" {
+				t.Fatal("check did not use original string assembly", plan, err)
+			}
+		})
+	}
+	for _, raw := range []string{
+		`{"read":1,"from":1,"to":1,"fromColumn":4}`,
+		`{"read":1,"from":1,"to":1,"fromColumn":null,"toColumn":null}`,
+		`{"parts":[],"command":"copied"}`,
+		`{"parts":[],"read":1,"from":1,"to":1}`,
+		`{"reuse":1,"fromColumn":1,"toColumn":1}`,
+	} {
+		var check Check
+		if err := json.Unmarshal([]byte(raw), &check); err == nil {
+			t.Fatal("mixed check selection accepted", raw)
+		}
+	}
+}
+
 func TestRepairSourceCommandsKeepApprovedInheritanceAndLocalPolicy(t *testing.T) {
 	approved := []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "build\n"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "tests\n"}, {ID: "edit", Purpose: protocol.CheckEdit, Command: "edit ''\n"}, {ID: "local", Command: "approved-local\n"}}
 	facts := []LocationFact{{Kind: "read", Content: []byte("Local check:\nnew-local '' \"中文\"\n")}, {Kind: "read", Content: []byte(approved[3].Command)}}

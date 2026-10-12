@@ -316,6 +316,10 @@ CLI 会话的短 cwd 只承载原生存储，文件操作仍在已绑定的实�
 续用使用其当前 material 和执行实例；恢复观察原事实，不重新提交。原会话、轮次、
 权限和费用继续由原 owner 持有。
 
+原 read 的 `from/to` 选择完整行；可成对加 `fromColumn/toColumn`，表示首/末所选行的
+1-based Unicode 字符列、两端包含，CR/LF 也计作原字符。`parts` 按顺序拼接这些原选择
+与新创作分隔文字；程序保留原字节，不解析命令或裁剪空白。
+
 `native show` 展示原问题，`native respond` 选择原问题/选项序号，使用
 `--question`、`--choice`、`--response-question`、`--response-choice` 或新 `--response-text`；
 表单以 `--form-field` 加 `--form-choice`/`--form-value` 输入新语义。程序默认保存完整
