@@ -312,9 +312,13 @@ func TestCodexQAContinuationUsesCurrentSemanticsWithPersistentToolDeclaration(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	stable, err := worker.StableResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var tools []any
-	if err := json.Unmarshal(declaration, &tools); err != nil || len(tools) != 2 || !valuesEqual(getOf(tools[1], "inputSchema"), map[string]any{"type": "object"}) {
-		t.Fatalf("original native declaration is not a stable semantic object: %s %v", declaration, err)
+	if err := json.Unmarshal(declaration, &tools); err != nil || len(tools) != 2 || !valuesEqual(getOf(tools[1], "inputSchema"), codexPlain(t, stable)) {
+		t.Fatalf("original native declaration lost the stable role contract: %s %v", declaration, err)
 	}
 	s.directory = filepath.Join(filepath.Dir(originalDirectory), "comparison")
 	s.request["identity"] = original["identity"]

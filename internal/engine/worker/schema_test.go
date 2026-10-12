@@ -742,3 +742,58 @@ func TestOrderedSchemaPreservesExactEmptyAndNonemptyDuties(t *testing.T) {
 		}
 	}
 }
+
+func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T) {
+	commands := protocol.WorkerInput{Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{CommandCases: []string{"first"}}}
+	judgments := commands
+	judgments.Validation = &protocol.ValidationInput{PendingCases: []string{"first", "second"}}
+	first, err := StableResultSchema(commands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := StableResultSchema(judgments)
+	if err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatal("same role changed its persistent tool contract", err)
+	}
+	branches := first["anyOf"].([]any)
+	if len(branches) != 3 {
+		t.Fatal("execution omitted command, judgment or inability shape")
+	}
+	for _, branch := range branches {
+		item := branch.(map[string]any)
+		if item["additionalProperties"] != false {
+			t.Fatal("role exposes unknown fields")
+		}
+		for _, identity := range []string{"actionId", "task", "binding", "candidate", "provider", "granularityReview"} {
+			if item["properties"].(map[string]any)[identity] != nil {
+				t.Fatal("execution exposes another role or machine identity", identity)
+			}
+		}
+	}
+	fields := branches[1].(map[string]any)["properties"].(map[string]any)
+	if fields["records"].(map[string]any)["prefixItems"] != nil || fields["records"].(map[string]any)["maxItems"] != nil {
+		t.Fatal("first turn froze later execution cardinality")
+	}
+	if fields["records"].(map[string]any)["type"] != "array" {
+		t.Fatal("judgment record type is not constrained")
+	}
+	development := protocol.WorkerInput{Handler: "engine.development.batch.v4", Validation: &protocol.ValidationInput{}}
+	stable, err := StableResultSchema(development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stable["anyOf"].([]any)) != 3 {
+		t.Fatal("development omitted completion, continuation or inability")
+	}
+	changed := semanticInput()
+	changed.Validation.AffectedCases = nil
+	original, err := StableResultSchema(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.Validation.AffectedCases = []string{"new"}
+	revision, err := StableResultSchema(changed)
+	if err != nil || !reflect.DeepEqual(original, revision) {
+		t.Fatal("case revisions replaced the registered role", err)
+	}
+}

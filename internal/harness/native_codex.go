@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/settings"
 	"io"
 	"os"
@@ -115,12 +116,24 @@ func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn s
 
 // Dynamic tool declarations persist with the native thread. Semantic bodies
 // are checked against the current issued material on each invocation.
-func codexToolSchemas(tools *nativeWorkspaceTools) []any {
+func codexToolSchemas(tools *nativeWorkspaceTools) ([]any, error) {
 	schemas := tools.schemas()
-	semantic := objectOrEmpty(schemas[1])
-	semantic["inputSchema"] = map[string]any{"type": "object"}
-	semantic["description"] = textOf(semantic["description"]) + " Use the current semantic schema supplied with this turn."
-	return schemas
+	if tools.material != nil {
+		schema, err := worker.StableResultSchema(tools.material.Input)
+		if err != nil {
+			return nil, err
+		}
+		objectOrEmpty(schemas[1])["inputSchema"] = schema
+	}
+	body, err := json.Marshal(schemas)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := decodeNativeJSON(body)
+	if err != nil {
+		return nil, err
+	}
+	return listOf(plain), nil
 }
 
 func codexCaptureBinding() (map[string]any, error) { return codexConfiguredBinding(settings.Values{}) }
@@ -459,7 +472,11 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 		params["excludeTurns"] = true
 	} else {
 		params["ephemeral"] = false
-		params["dynamicTools"] = codexToolSchemas(tools)
+		declarations, err := codexToolSchemas(tools)
+		if err != nil {
+			return nil, err
+		}
+		params["dynamicTools"] = declarations
 	}
 	opened, err := client.request(method, params)
 	if err != nil {

@@ -69,6 +69,134 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 	return map[string]any{"type": "object", "anyOf": alternatives}, nil
 }
 
+// StableResultSchema publishes the current role's field and type contract across
+// its native continuations. ResultSchema retains each invocation's exact choices.
+func StableResultSchema(input protocol.WorkerInput) (map[string]any, error) {
+	role, err := semanticRole(input)
+	if err != nil {
+		return nil, err
+	}
+	roles := []any{role}
+	switch input.Handler {
+	case "engine.qa.execution.v3":
+		roles = []any{&CommandBindings{}, &ExecutionJudgments{}}
+	case "engine.qa.design.v5":
+		roles = []any{&Design{}, &CaseRevisions{}}
+	case "engine.development.batch.v4":
+		roles = []any{&Development{}, &DevelopmentContinuation{}}
+	case "engine.repair.v5":
+		roles = []any{&Repair{}, &DevelopmentContinuation{}}
+	}
+	alternatives := []any{}
+	for _, variant := range roles {
+		body, err := stableBodySchema(input, variant)
+		if err != nil {
+			return nil, err
+		}
+		alternatives = append(alternatives, body)
+	}
+	interruption := any(&Interruption{})
+	if input.Handler == "engine.qa.execution.v3" {
+		interruption = &ExecutionInterruption{}
+	}
+	body, err := stableBodySchema(input, interruption)
+	if err != nil {
+		return nil, err
+	}
+	alternatives = append(alternatives, body)
+	return map[string]any{"type": "object", "anyOf": alternatives}, nil
+}
+
+func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, error) {
+	body, err := resultTypeSchema(reflect.TypeOf(role), true)
+	if err != nil {
+		return nil, err
+	}
+	fields := body["properties"].(map[string]any)
+	if plan, ok := fields["granularityReview"].(map[string]any); ok {
+		properties := plan["properties"].(map[string]any)
+		created := properties["batches"].(map[string]any)["items"].(map[string]any)
+		delete(created["properties"].(map[string]any), "reuse")
+		delete(created["properties"].(map[string]any), "remove")
+		changed, err := resultTypeSchema(reflect.TypeOf(BatchChange{}), true)
+		if err != nil {
+			return nil, err
+		}
+		changed["properties"].(map[string]any)["reuse"] = map[string]any{"type": "integer", "minimum": 1}
+		changed["properties"].(map[string]any)["remove"] = map[string]any{"type": "boolean"}
+		changed["required"] = []string{"reuse"}
+		for _, batch := range []map[string]any{created, changed} {
+			properties := batch["properties"].(map[string]any)
+			properties["route"].(map[string]any)["properties"].(map[string]any)["mode"] = map[string]any{"type": "string", "enum": []string{"full", "custom"}}
+			location := LocationSchema(false)
+			delete(location["properties"].(map[string]any), "line")
+			properties["artifacts"] = map[string]any{"type": "array", "items": location}
+			check := properties["checks"].(map[string]any)["items"].(map[string]any)
+			check["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": append(protocol.DevelopmentCheckPurposes(), "")}
+			for _, name := range []string{"subtasks", "dod"} {
+				array := properties[name].(map[string]any)
+				item := array["items"].(map[string]any)
+				delete(item["properties"].(map[string]any), "reuse")
+				delete(item["properties"].(map[string]any), "remove")
+				original := fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}, "description": map[string]any{"type": "string"}, "remove": map[string]any{"type": "boolean"}}, []string{"reuse"})
+				array["items"] = map[string]any{"anyOf": []any{item, original}}
+			}
+		}
+		properties["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{created, changed}}
+		plan["required"] = []string{}
+	}
+	if input.Review != nil && input.Review.Action != review.StartReadiness {
+		delete(fields, "granularityReview")
+	}
+	if input.Handler == "engine.qa.design.v5" && fields["cases"] != nil {
+		item := fields["cases"].(map[string]any)["items"].(map[string]any)
+		items := []any{item}
+		if _, design := role.(*Design); design {
+			change, err := resultTypeSchema(reflect.TypeOf(CaseChange{}), true)
+			if err != nil {
+				return nil, err
+			}
+			change["properties"].(map[string]any)["case"] = map[string]any{"type": "integer", "minimum": 1}
+			change["required"] = []string{"case"}
+			items = append(items, change)
+			shared := fields["sharedSteps"].(map[string]any)["items"].(map[string]any)
+			step, err := resultTypeSchema(reflect.TypeOf(SharedStepChange{}), true)
+			if err != nil {
+				return nil, err
+			}
+			step["properties"].(map[string]any)["step"] = map[string]any{"type": "integer", "minimum": 1}
+			step["required"] = []string{"step"}
+			fields["sharedSteps"].(map[string]any)["items"] = map[string]any{"anyOf": []any{shared, step}}
+		}
+		for _, variant := range items {
+			properties := variant.(map[string]any)["properties"].(map[string]any)
+			if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+				for _, field := range []string{"publicEntry", "preconditions", "steps"} {
+					delete(properties, field)
+				}
+			} else {
+				delete(properties, "test")
+			}
+		}
+		fields["cases"].(map[string]any)["items"] = map[string]any{"anyOf": items}
+		if rows, ok := fields["coverage"].(map[string]any); ok {
+			rows["items"] = map[string]any{"anyOf": []any{rows["items"], map[string]any{"type": "null"}}}
+		}
+	}
+	if records, ok := fields["records"].(map[string]any); ok {
+		records["items"] = map[string]any{"anyOf": []any{records["items"], map[string]any{"type": "null"}}}
+	}
+	if _, continuation := role.(*DevelopmentContinuation); continuation {
+		for _, field := range []string{"summary", "remainingWork"} {
+			fields[field] = map[string]any{"type": "string", "minLength": 1}
+		}
+	}
+	if fields["interruptionReason"] != nil {
+		fields["interruptionReason"] = map[string]any{"type": "string", "minLength": 1}
+	}
+	return body, nil
+}
+
 func completedSchema(input protocol.WorkerInput, target any) (map[string]any, error) {
 	body, err := resultTypeSchema(reflect.TypeOf(target))
 	if err != nil {
@@ -456,15 +584,18 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 	return body, nil
 }
 
-func resultTypeSchema(value reflect.Type) (map[string]any, error) {
+func resultTypeSchema(value reflect.Type, stable ...bool) (map[string]any, error) {
 	if value == reflect.TypeOf(Location{}) {
 		return LocationSchema(true), nil
 	}
 	if value == reflect.TypeOf(StringChange{}) {
+		if len(stable) > 0 && stable[0] {
+			return stringSourceSchema(fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})), nil
+		}
 		return stringSourceSchema(), nil
 	}
 	if value == reflect.TypeOf(coverage.Operation{}) {
-		return newOperationSchema()
+		return newOperationSchema(stable...)
 	}
 	var literals []string
 	switch value {
@@ -481,7 +612,7 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 		return map[string]any{"type": "string", "enum": literals}, nil
 	}
 	if value.Kind() == reflect.Pointer {
-		return resultTypeSchema(value.Elem())
+		return resultTypeSchema(value.Elem(), stable...)
 	}
 	switch value.Kind() {
 	case reflect.String:
@@ -493,13 +624,13 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}, nil
 	case reflect.Slice, reflect.Array:
-		item, err := resultTypeSchema(value.Elem())
+		item, err := resultTypeSchema(value.Elem(), stable...)
 		return map[string]any{"type": "array", "items": item}, err
 	case reflect.Map:
 		if value.Key().Kind() != reflect.String {
 			return nil, fmt.Errorf("worker result map keys must be strings")
 		}
-		item, err := resultTypeSchema(value.Elem())
+		item, err := resultTypeSchema(value.Elem(), stable...)
 		return map[string]any{"type": "object", "additionalProperties": item}, err
 	case reflect.Struct:
 		properties := map[string]any{}
@@ -515,9 +646,19 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			if name == "-" {
 				continue
 			}
-			child, err := resultTypeSchema(field.Type)
+			child, err := resultTypeSchema(field.Type, stable...)
 			if value == reflect.TypeOf(Check{}) && field.Name == "Purpose" {
 				child = map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
+			}
+			if field.Name == "Decision" {
+				switch value {
+				case reflect.TypeOf(FindingJudgment{}):
+					child["enum"] = []string{"NEW", "SAME_AS", "DISMISSED"}
+				case reflect.TypeOf(ImpactJudgment{}):
+					child["enum"] = []string{"INHERIT", "RERUN"}
+				case reflect.TypeOf(SuggestionJudgment{}):
+					child["enum"] = []string{"ACCEPT", "DEFER", "DECLINE"}
+				}
 			}
 			if err != nil {
 				return nil, err
@@ -635,22 +776,15 @@ func indexSchema(ids []string) map[string]any {
 }
 
 func stringRevisionSchema(original []string) map[string]any {
-	items := stringSourceSchema()["anyOf"].([]any)
+	source := stringSourceSchema()
 	if len(original) > 0 {
 		positions := []int{}
 		for index := range original {
 			positions = append(positions, index+1)
 		}
-		reuse := map[string]any{"type": "object", "properties": map[string]any{"reuse": map[string]any{"type": "integer", "enum": positions}}, "required": []any{"reuse"}, "additionalProperties": false}
-		for _, item := range items {
-			if properties, ok := item.(map[string]any)["properties"].(map[string]any); ok && properties["parts"] != nil {
-				parts := properties["parts"].(map[string]any)["items"].(map[string]any)
-				parts["anyOf"] = append(parts["anyOf"].([]any), reuse)
-			}
-		}
-		items = append(items, reuse)
+		source = stringSourceSchema(fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "enum": positions}}, []string{"reuse"}))
 	}
-	return map[string]any{"type": "array", "items": map[string]any{"anyOf": items}, "description": "Omit this field to retain the original array. An explicit array defines its complete final order: select 1-based original element positions with reuse, select original read/from/to bytes, author new strings, or omit positions to delete them; [] clears the array."}
+	return map[string]any{"type": "array", "items": source, "description": "Omit this field to retain the original array. An explicit array defines its complete final order: select original element positions, original read bytes or new text; [] clears the array."}
 }
 
 func operationRevisionSchema(original []coverage.Operation) (map[string]any, error) {
@@ -673,7 +807,7 @@ func operationRevisionSchema(original []coverage.Operation) (map[string]any, err
 	return map[string]any{"type": "array", "items": map[string]any{"anyOf": items}, "description": "Omit operations to retain the original sequence. An explicit array defines the complete final order: reuse original positions and supply only changed fields, add complete new operations, or omit original positions to delete them; [] clears the sequence. Changing kind clears incompatible original argv or command values; supply the new invocation."}, nil
 }
 
-func stringSourceSchema() map[string]any {
+func stringSourceSchema(reused ...map[string]any) map[string]any {
 	position := map[string]any{"type": "integer", "minimum": 1}
 	source := fixedObject(map[string]any{"read": position, "from": position, "to": position}, []string{"read", "from", "to"})
 	columns := fixedObject(map[string]any{"read": position, "from": position, "to": position, "fromColumn": position, "toColumn": position}, []string{"read", "from", "to", "fromColumn", "toColumn"})
@@ -681,10 +815,15 @@ func stringSourceSchema() map[string]any {
 	created := map[string]any{"type": "string"}
 	parts := fixedObject(map[string]any{"parts": map[string]any{"type": "array", "items": map[string]any{"anyOf": []any{created, source, columns}}}}, []string{"parts"})
 	parts["description"] = "Join these original selections and newly authored separators in order, without trimming or rewriting any selected bytes."
-	return map[string]any{"anyOf": []any{created, source, columns, parts}, "description": "Author new text, select original read/from/to lines with optional paired fromColumn/toColumn, or join parts. Selected bytes retain Unicode, line endings and missing final newlines; no shell parsing or trimming."}
+	items := []any{created, source, columns, parts}
+	if len(reused) > 0 {
+		parts["properties"].(map[string]any)["parts"].(map[string]any)["items"].(map[string]any)["anyOf"] = append([]any{created, source, columns}, reused[0])
+		items = append(items, reused[0])
+	}
+	return map[string]any{"anyOf": items, "description": "Author new text, select original read/from/to lines with optional paired fromColumn/toColumn, or join parts. Selected bytes retain Unicode, line endings and missing final newlines; no shell parsing or trimming."}
 }
-func newOperationSchema() (map[string]any, error) {
-	result, err := resultTypeSchema(reflect.TypeOf(OperationChange{}))
+func newOperationSchema(stable ...bool) (map[string]any, error) {
+	result, err := resultTypeSchema(reflect.TypeOf(OperationChange{}), stable...)
 	if err != nil {
 		return nil, err
 	}

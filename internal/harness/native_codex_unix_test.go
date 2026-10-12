@@ -402,7 +402,9 @@ func TestCodexRPCPeer(t *testing.T) {
 				semanticSchema = getOf(tool, "inputSchema")
 			}
 		}
-		check(semanticSchema, map[string]any{"type": "object"})
+		if getOf(semanticSchema, "type") != "object" || len(objectOrEmpty(semanticSchema)) <= 1 {
+			panic("semantic tool lost its role contract")
+		}
 		emit(map[string]any{"id": "semantic-submit", "method": "item/tool/call", "params": map[string]any{"threadId": thread, "turnId": turn, "callId": "semantic-submit", "tool": nativeSemanticTool, "arguments": answer}})
 		accepted := read()
 		check(getOf(accepted, "id"), "semantic-submit")
@@ -593,7 +595,11 @@ func (s *codexScenario) configurePeerInputs(t *testing.T) {
 				}
 			}
 		}
-		s.peer.ThreadParams["dynamicTools"] = codexToolSchemas(&nativeWorkspaceTools{readOnly: s.request["read_only"] == true, material: material, semanticSchema: objectOrEmpty(s.request["schema"])})
+		declarations, err := codexToolSchemas(&nativeWorkspaceTools{readOnly: s.request["read_only"] == true, material: material, semanticSchema: objectOrEmpty(s.request["schema"])})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.peer.ThreadParams["dynamicTools"] = declarations
 	}
 	params, err := codexTurnParameters(s.request, "")
 	if err != nil {
@@ -798,7 +804,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 			t.Fatalf("native request did not preserve original hook configuration: %v %v", value, err)
 		}
 		registered := getOf(getOf(value, "thread_request"), "dynamicTools")
-		if resume && registered != nil || !resume && (len(listOf(registered)) != 2 || getOf(listOf(registered)[0], "name") != nativeWorkspaceTool || getOf(listOf(registered)[1], "name") != nativeSemanticTool || !valuesEqual(getOf(listOf(registered)[1], "inputSchema"), map[string]any{"type": "object"})) {
+		if resume && registered != nil || !resume && (len(listOf(registered)) != 2 || getOf(listOf(registered)[0], "name") != nativeWorkspaceTool || getOf(listOf(registered)[1], "name") != nativeSemanticTool || len(objectOrEmpty(getOf(listOf(registered)[1], "inputSchema"))) <= 1) {
 			t.Fatalf("original registration/resume contract changed: %v", value)
 		}
 	}
