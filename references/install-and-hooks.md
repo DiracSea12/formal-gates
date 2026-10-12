@@ -191,10 +191,11 @@ state/envelope owner 绑定该线程，再启动 turn。维护 MCP 工具 `apply
 程序持有固定补丁和隔离目标，模型只调用 `{}`。允许调用时工具会真正应用补丁，写入
 `marker.go`；阻断检查使用原有主线程写墙。
 
-`PASS` 要求同一 thread/turn 恰有一次目标 MCP 调用，原始 `PreToolUse` 载荷的
-session、turn、tool_use_id、cwd、工具名和空参数均对应此调用；同次 hook 必须保存
-Codex deny 原响应与退出码 0，宿主原 `hook/completed` 必须报告 `blocked`，同一
-MCP 调用必须失败，turn 和 client 必须正常完成，且工具处理器未执行、marker 不存在。
+`PASS` 要求同一 thread/turn 恰有一次目标 `PreToolUse`，原始载荷必须携带 session、
+turn、非空 tool_use_id、隔离 cwd、MCP 工具名和空参数；同次 hook 必须保存 Codex
+deny 原响应与退出码 0。宿主原 `hook/completed` 必须在同一 thread/turn 报告
+`blocked`、来源 `sessionFlags`，并包含与原 deny reason 精确一致的 feedback。
+turn 和 client 必须正常完成，且工具处理器未执行、marker 不存在。
 仅本地 deny、无关工具载荷、失败的 client/turn 或 marker 缺失都不足以通过。完成但
 未调用目标的纯文本 turn 只重试一次，每次调用的证据独立保存；其他失败不重试。
 

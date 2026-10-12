@@ -23,7 +23,7 @@ func TestCodexHookCanaryBindsNativeCallAndHostDecision(t *testing.T) {
 	}
 	peer := filepath.Join(dir, "codex-peer")
 	writeExecutableFixture(t, peer, codexHookPeer)
-	for _, mode := range []string{"honors-deny", "hook-first", "text-only-then-call", "client-failure", "unrelated", "failed-turn", "local-deny-only", "ignores-deny", "different-call", "text-only"} {
+	for _, mode := range []string{"honors-deny", "text-only-then-call", "client-failure", "unrelated", "failed-turn", "local-deny-only", "ignores-deny", "missing-call-identity", "multiple-targets", "wrong-turn", "wrong-feedback", "wrong-source", "text-only"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("HOOK_PEER_MODE", mode)
 			worktree := t.TempDir()
@@ -34,7 +34,7 @@ func TestCodexHookCanaryBindsNativeCallAndHostDecision(t *testing.T) {
 				}
 			}
 			summary, result := CodexHookCanary(CodexHookCanaryOptions{Worktree: worktree, CodexCommand: peer, Binary: binary, KeepTemp: true})
-			pass := mode == "honors-deny" || mode == "hook-first" || mode == "text-only-then-call"
+			pass := mode == "honors-deny" || mode == "text-only-then-call"
 			if (summary.Status == "PASS") != pass || result.OK() != pass {
 				t.Fatalf("mode %s: %+v; %+v", mode, summary, result)
 			}
@@ -182,21 +182,14 @@ func main() {
 			if schema["name"] != "apply_patch" || input["additionalProperties"] != false || len(input["properties"].(map[string]any)) != 0 {
 				panic("tool schema differs")
 			}
-			params := func(item any) any {
-				return map[string]any{"threadId": thread, "turnId": turn, "item": item}
-			}
 			if mode != "text-only" && !(mode == "text-only-then-call" && filepath.Base(directory) == "invocation-1") {
-				tool := "apply_patch"
+				payload := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__hook_canary__apply_patch", "session_id": thread, "turn_id": turn, "tool_use_id": call, "cwd": request.Workspace, "tool_input": map[string]any{}}
 				if mode == "unrelated" {
-					tool = "pwd"
+					payload["tool_name"] = "exec"
+					payload["tool_input"] = map[string]any{"command": "pwd"}
 				}
-				item := map[string]any{"type": "mcpToolCall", "id": call, "server": "hook_canary", "tool": tool, "arguments": map[string]any{}, "status": "inProgress"}
-				if mode != "hook-first" {
-					send("item/started", params(item))
-				}
-				payload := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__hook_canary__" + tool, "session_id": thread, "turn_id": turn, "tool_use_id": call, "cwd": request.Workspace, "tool_input": map[string]any{}}
-				if mode == "different-call" {
-					payload["tool_use_id"] = "other-call"
+				if mode == "missing-call-identity" {
+					payload["tool_use_id"] = ""
 				}
 				raw, _ := json.Marshal(payload)
 				cmd := exec.Command("/bin/sh", "-c", hook)
@@ -210,29 +203,51 @@ func main() {
 				json.Unmarshal(decision, &response)
 				denied := response["decision"] == "block"
 				status := "completed"
+				entries := []any{}
 				if denied && mode != "ignores-deny" && mode != "local-deny-only" {
 					status = "blocked"
+					reason := response["reason"].(string)
+					if mode == "wrong-feedback" {
+						reason += " other call"
+					}
+					entries = append(entries, map[string]any{"kind": "feedback", "text": reason})
 				}
-				if !denied || mode == "ignores-deny" {
+				nativeTurn, source := turn, "sessionFlags"
+				if mode == "wrong-turn" {
+					nativeTurn = "other-turn"
+				}
+				if mode == "wrong-source" {
+					source = "project"
+				}
+				if mode != "local-deny-only" {
+					send("hook/completed", map[string]any{"threadId": thread, "turnId": nativeTurn, "run": map[string]any{"id": "original-hook", "eventName": "preToolUse", "status": status, "source": source, "entries": entries}})
+				}
+				if mode == "multiple-targets" {
+					payload["tool_use_id"] = call + "-another"
+					raw, _ := json.Marshal(payload)
+					cmd := exec.Command("/bin/sh", "-c", hook)
+					cmd.Stdin = bytes.NewReader(raw)
+					cmd.Dir = request.Workspace
+					if _, err := cmd.Output(); err != nil {
+						panic(err)
+					}
+					send("hook/completed", map[string]any{"threadId": thread, "turnId": turn, "run": map[string]any{"id": "other-hook", "eventName": "preToolUse", "status": "blocked", "source": source, "entries": entries}})
+				}
+				if mode == "ignores-deny" {
+					item := map[string]any{"type": "mcpToolCall", "id": call, "server": "hook_canary", "tool": "apply_patch", "arguments": map[string]any{}, "status": "inProgress"}
+					params := map[string]any{"threadId": thread, "turnId": turn, "item": item}
+					send("item/started", params)
 					target := exec.Command(request.Binary, "harness", "codex-hook-target", directory)
 					target.Stdin = strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"apply_patch\",\"arguments\":{}}}\n")
 					out, err := target.CombinedOutput()
 					if err != nil {
 						panic(fmt.Sprint(err, string(out)))
 					}
-				}
-				if mode != "local-deny-only" {
-					send("hook/completed", map[string]any{"threadId": thread, "turnId": turn, "run": map[string]any{"id": "original-hook", "eventName": "preToolUse", "status": status}})
-				}
-				if mode == "hook-first" {
-					send("item/started", params(item))
-				}
-				item["status"] = "failed"
-				if mode == "ignores-deny" {
 					item["status"] = "completed"
+					send("item/completed", params)
 				}
-				send("item/completed", params(item))
 			}
+
 			status := "completed"
 			if mode == "failed-turn" {
 				status = "failed"

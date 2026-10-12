@@ -108,7 +108,7 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		ExitCode:              -1,
 		ArtifactDir:           slash(caseDir),
 		Summary:               slash(summaryPath),
-		ExpectedPassCondition: "One original MCP apply_patch call has matching PreToolUse deny evidence and native hook/completed status blocked in the same thread/turn, the tool handler did not execute, the client and turn completed successfully, and no marker exists.",
+		ExpectedPassCondition: "One original PreToolUse MCP apply_patch target call has matching deny evidence and native hook/completed blocked with the same thread/turn, source and deny feedback; the tool handler did not execute, the client and turn completed successfully, and no marker exists.",
 		NextAction:            "Use explicit formal-gates workflow validation; a native target invocation and host blocking evidence are required to qualify automatic interception.",
 	}
 	for invocation := 1; invocation <= 2; invocation++ {
@@ -212,8 +212,8 @@ func runCodexHookCanary(options CodexHookCanaryOptions, caseDir string, summary 
 
 var errCodexHookNoCall = errors.New("native turn completed without a PreToolUse target call")
 
-// A single tool attempt makes the host's hook run attributable to the original
-// call without inventing an identity the native HookRunSummary does not carry.
+// The original PreToolUse payload owns the tool call identity. Its unique
+// decision and the native hook run bind interception to the same thread/turn.
 func qualifyCodexHookCanary(directory, workspace string, summary *CodexHookCanarySummary) error {
 	identity, err := os.ReadFile(filepath.Join(directory, "identity.json"))
 	if err != nil {
@@ -227,83 +227,11 @@ func qualifyCodexHookCanary(directory, workspace string, summary *CodexHookCanar
 		return fmt.Errorf("missing original native thread/turn identity")
 	}
 	summary.ThreadID, summary.TurnID = ids.Thread, ids.Turn
-	events, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
-	if err != nil {
-		return err
-	}
-	defer events.Close()
-	scan := bufio.NewScanner(events)
-	scan.Buffer(make([]byte, 4096), int(^uint(0)>>1))
-	started, blocked, completed, terminal := 0, 0, 0, false
-	completedCall := ""
-	for scan.Scan() {
-		var frame struct {
-			Method string `json:"method"`
-			Params struct {
-				Thread string `json:"threadId"`
-				Turn   string `json:"turnId"`
-				Item   struct {
-					ID, Type, Server, Tool, Status string
-					Arguments                      map[string]any
-				}
-				Run      struct{ ID, EventName, Status string }
-				Terminal struct{ ID, Status string } `json:"turn"`
-			} `json:"params"`
-		}
-		if err := json.Unmarshal(scan.Bytes(), &frame); err != nil {
-			return err
-		}
-		p := frame.Params
-		if p.Thread != ids.Thread {
-			continue
-		}
-		if frame.Method == "turn/completed" {
-			terminal = p.Terminal.ID == ids.Turn && p.Terminal.Status == "completed"
-			continue
-		}
-		if p.Turn != ids.Turn {
-			continue
-		}
-		switch frame.Method {
-		case "item/started":
-			if p.Item.Type == "mcpToolCall" {
-				if p.Item.Server != "hook_canary" || p.Item.Tool != "apply_patch" || p.Item.ID == "" || p.Item.Arguments == nil || len(p.Item.Arguments) != 0 {
-					return fmt.Errorf("native turn attempted an unrelated tool")
-				}
-				started++
-				summary.ToolUseID = p.Item.ID
-			}
-		case "hook/completed":
-			if p.Run.EventName == "preToolUse" {
-				if p.Run.Status != "blocked" || p.Run.ID == "" {
-					return fmt.Errorf("native PreToolUse does not prove the target call was blocked")
-				}
-				blocked++
-			}
-		case "item/completed":
-			if p.Item.Type == "mcpToolCall" {
-				if p.Item.ID == "" || p.Item.Server != "hook_canary" || p.Item.Tool != "apply_patch" || p.Item.Status != "failed" || p.Item.Arguments == nil || len(p.Item.Arguments) != 0 {
-					return fmt.Errorf("native target completion differs from the blocked call")
-				}
-				completed++
-				completedCall = p.Item.ID
-			}
-		}
-	}
-	if err := scan.Err(); err != nil {
-		return err
-	}
-	if started == 0 && blocked == 0 && completed == 0 && terminal && !summary.MarkerExists && !isFile(filepath.Join(directory, "target-call.json")) {
-		return errCodexHookNoCall
-	}
-	if started != 1 || blocked != 1 || completed != 1 || completedCall != summary.ToolUseID || !terminal {
-		return fmt.Errorf("no single original target call with native hook blocking and successful terminal")
-	}
 	paths, err := filepath.Glob(filepath.Join(directory, "payloads", "*.decision.json"))
 	if err != nil {
 		return err
 	}
-	matching := 0
+	matching, reason := 0, ""
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
 		if err != nil {
@@ -332,7 +260,7 @@ func qualifyCodexHookCanary(directory, workspace string, summary *CodexHookCanar
 		if input.Event != "PreToolUse" {
 			continue
 		}
-		if input.Tool != "mcp__hook_canary__apply_patch" || input.Session != ids.Thread || input.Turn != ids.Turn || input.Call != summary.ToolUseID || cleanWorktree(input.Cwd) != cleanWorktree(workspace) || input.Arguments == nil || len(input.Arguments) != 0 || record.Provider != "codex" || record.Decision.Decision != "block" || record.ExitCode != 0 {
+		if input.Tool != "mcp__hook_canary__apply_patch" || input.Session != ids.Thread || input.Turn != ids.Turn || input.Call == "" || cleanWorktree(input.Cwd) != cleanWorktree(workspace) || input.Arguments == nil || len(input.Arguments) != 0 || record.Provider != "codex" || record.Decision.Decision != "block" || record.Decision.Reason == "" || record.ExitCode != 0 {
 			return fmt.Errorf("original PreToolUse decision differs from the native target call")
 		}
 		response, err := json.Marshal(HookResponse("codex", record.Decision))
@@ -340,9 +268,62 @@ func qualifyCodexHookCanary(directory, workspace string, summary *CodexHookCanar
 			return fmt.Errorf("original hook response is not the recorded deny")
 		}
 		matching++
+		summary.ToolUseID, reason = input.Call, record.Decision.Reason
 	}
-	if matching != 1 || summary.PreToolUsePayloadCount != 1 || summary.MarkerExists || isFile(filepath.Join(directory, "target-call.json")) {
-		return fmt.Errorf("target execution was not prevented by one original hook deny")
+	events, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer events.Close()
+	scan := bufio.NewScanner(events)
+	scan.Buffer(make([]byte, 4096), int(^uint(0)>>1))
+	blocked, terminal := 0, false
+	for scan.Scan() {
+		var frame struct {
+			Method string `json:"method"`
+			Params struct {
+				Thread string `json:"threadId"`
+				Turn   string `json:"turnId"`
+				Run    struct {
+					ID, EventName, Status, Source string
+					Entries                       []struct{ Kind, Text string }
+				}
+				Terminal struct{ ID, Status string } `json:"turn"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(scan.Bytes(), &frame); err != nil {
+			return err
+		}
+		p := frame.Params
+		if p.Thread != ids.Thread {
+			continue
+		}
+		if frame.Method == "turn/completed" {
+			terminal = p.Terminal.ID == ids.Turn && p.Terminal.Status == "completed"
+			continue
+		}
+		if p.Turn != ids.Turn || frame.Method != "hook/completed" || p.Run.EventName != "preToolUse" {
+			continue
+		}
+		feedback := false
+		for _, entry := range p.Run.Entries {
+			if entry.Kind == "feedback" && entry.Text == reason {
+				feedback = true
+			}
+		}
+		if p.Run.ID == "" || p.Run.Status != "blocked" || p.Run.Source != "sessionFlags" || !feedback {
+			return fmt.Errorf("native PreToolUse does not prove the recorded target denial")
+		}
+		blocked++
+	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
+	if matching == 0 && summary.PreToolUsePayloadCount == 0 && blocked == 0 && terminal && !summary.MarkerExists && !isFile(filepath.Join(directory, "target-call.json")) {
+		return errCodexHookNoCall
+	}
+	if matching != 1 || summary.PreToolUsePayloadCount != 1 || blocked != 1 || !terminal || summary.MarkerExists || isFile(filepath.Join(directory, "target-call.json")) {
+		return fmt.Errorf("target execution was not prevented by one original hook deny and matching native blocking")
 	}
 	return nil
 }
