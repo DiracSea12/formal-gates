@@ -47,17 +47,14 @@ type PathLayout struct {
 }
 
 type HookSpec struct {
-	Kind             HookKind
-	Protocol         HookProtocol
-	GateEvent        string
-	GateMatcher      string
-	GateTimeout      bool
-	LifecycleMatcher string
-	LifecycleTimeout bool
+	Kind        HookKind
+	Protocol    HookProtocol
+	GateEvent   string
+	GateMatcher string
+	GateTimeout bool
 }
 
 type Descriptor struct {
-	Lifecycle         *Lifecycle                     `json:"-"`
 	ReadUsage         func(io.Reader) (Usage, error) `json:"-"`
 	Configuration     []ConfigField
 	ID                string
@@ -67,14 +64,14 @@ type Descriptor struct {
 	Installable       bool
 	Paths             PathLayout
 	Hook              HookSpec
-	LifecycleEvents   []string
+	EnvironmentKeys   []string `json:"-"`
 	LifecycleRequired bool
 	CostProvider      string
 }
 
 var descriptors = []*Descriptor{
 	{
-		ID: Claude, ReadUsage: parseClaudeTranscript, Lifecycle: claudeAdapter(),
+		ID: Claude, ReadUsage: parseClaudeTranscript, EnvironmentKeys: []string{"CLAUDE_CODE_ENTRYPOINT"},
 		Configuration: []ConfigField{StringConfig("claudeExecutable", "claude"), StringConfig("claudeHome", "")},
 		InstallName:   "claude",
 		ManifestName:  "Claude Code",
@@ -84,11 +81,11 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".claude/skills", GlobalHookConfig: ".claude/settings.json", GlobalManaged: ".claude/CLAUDE.md",
 			ProjectBase: ".claude/skills", ProjectHookConfig: ".claude/settings.json", ProjectManaged: "CLAUDE.md",
 		},
-		Hook:            HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
-		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Claude,
+		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+		LifecycleRequired: true, CostProvider: Claude,
 	},
 	{
-		ID: Codex, ReadUsage: parseCodexTranscript, Lifecycle: codexAdapter(),
+		ID: Codex, ReadUsage: parseCodexTranscript, EnvironmentKeys: []string{"CODEX_HOME", "CODEX_CLI_PATH"},
 		Configuration: []ConfigField{StringConfig("codexExecutable", "codex"), StringConfig("codexHome", "")},
 		InstallName:   "codex",
 		ManifestName:  "Codex",
@@ -98,11 +95,11 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".codex/skills", GlobalHookConfig: ".codex/hooks.json", GlobalManaged: ".codex/AGENTS.md",
 			ProjectBase: ".codex/skills", ProjectHookConfig: ".codex/hooks.json", ProjectManaged: "AGENTS.md",
 		},
-		Hook:            HookSpec{Kind: HookNested, Protocol: ProtocolCodex, GateEvent: "PreToolUse", GateMatcher: ".*", GateTimeout: true, LifecycleMatcher: ".*", LifecycleTimeout: true},
-		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Codex,
+		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolCodex, GateEvent: "PreToolUse", GateMatcher: ".*", GateTimeout: true},
+		LifecycleRequired: true, CostProvider: Codex,
 	},
 	{
-		ID: Cursor, Lifecycle: cursorAdapter(),
+		ID: Cursor, EnvironmentKeys: []string{"CURSOR_TRACE_ID", "CURSOR_RUNTIME"},
 		Configuration: []ConfigField{StringConfig("cursorExecutable", "cursor-agent"), StringConfig("cursorHome", "")},
 		InstallName:   "cursor",
 		ManifestName:  "Cursor",
@@ -112,23 +109,23 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".cursor", GlobalHookConfig: ".cursor/hooks.json",
 			ProjectBase: ".cursor", ProjectHookConfig: ".cursor/hooks.json", ProjectManaged: ".cursor/rules/formal-gates.mdc", RemoveManagedWhenEmpty: true,
 		},
-		Hook:            HookSpec{Kind: HookFlat, Protocol: ProtocolGeneric, GateEvent: "preToolUse", GateMatcher: "*"},
-		LifecycleEvents: []string{"subagentStart", "subagentStop"}, LifecycleRequired: true,
+		Hook:              HookSpec{Kind: HookFlat, Protocol: ProtocolGeneric, GateEvent: "preToolUse", GateMatcher: "*"},
+		LifecycleRequired: true,
 	},
 	{
-		ID: DeepSeek, ReadUsage: parseDSHTranscript, Lifecycle: deepseekAdapter(),
-		Configuration:   []ConfigField{StringConfig("dshExecutable", "dsh")},
-		InstallName:     "dsh",
-		ManifestName:    "DeepSeek Harness",
-		Aliases:         []string{"dsh", "deepseek", "deepseek-harness", "deepseek harness"},
-		Installable:     true,
-		Paths:           PathLayout{ProjectManaged: "AGENTS.md"},
-		Hook:            HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
-		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true,
-		CostProvider: DeepSeek,
+		ID: DeepSeek, ReadUsage: parseDSHTranscript, EnvironmentKeys: []string{"DSH_HOME", "DSH_PROJECT_DIR"},
+		Configuration:     []ConfigField{StringConfig("dshExecutable", "dsh")},
+		InstallName:       "dsh",
+		ManifestName:      "DeepSeek Harness",
+		Aliases:           []string{"dsh", "deepseek", "deepseek-harness", "deepseek harness"},
+		Installable:       true,
+		Paths:             PathLayout{ProjectManaged: "AGENTS.md"},
+		Hook:              HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+		LifecycleRequired: true,
+		CostProvider:      DeepSeek,
 	},
 	{
-		ID: ZCode, ReadUsage: parseZCodeTranscript, Lifecycle: zcodeAdapter(),
+		ID: ZCode, ReadUsage: parseZCodeTranscript, EnvironmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},
 		Configuration: []ConfigField{StringConfig("zcodeExecutable", "node"), StringConfig("zcodeScript", ""), StringConfig("zcodeHome", "")},
 		InstallName:   "zcode",
 		ManifestName:  "ZCode",
@@ -138,25 +135,25 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".zcode/skills", GlobalHookConfig: ".zcode/cli/config.json", GlobalManaged: ".zcode/AGENTS.md",
 			ProjectBase: ".zcode/skills", ProjectManaged: "AGENTS.md",
 		},
-		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
-		LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
-		CostProvider: ZCode,
+		Hook:              HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*"},
+		LifecycleRequired: true,
+		CostProvider:      ZCode,
 	},
 	{
-		ID: WorkBuddy, ReadUsage: parseWorkBuddyTranscript, Lifecycle: workbuddyAdapter(), InstallName: "workbuddy", ManifestName: "WorkBuddy",
+		ID: WorkBuddy, ReadUsage: parseWorkBuddyTranscript, EnvironmentKeys: []string{"WORKBUDDY_CONFIG_DIR"}, InstallName: "workbuddy", ManifestName: "WorkBuddy",
 		Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
 		Paths:        PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
 		CostProvider: WorkBuddy, LifecycleRequired: true,
 		Configuration: []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
 	},
 	{
-		ID: Default, Lifecycle: defaultAdapter(),
-		InstallName:     "",
-		ManifestName:    "",
-		Aliases:         []string{"default"},
-		Installable:     false,
-		Hook:            HookSpec{Kind: HookNested, Protocol: ProtocolGeneric},
-		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: false,
+		ID:                Default,
+		InstallName:       "",
+		ManifestName:      "",
+		Aliases:           []string{"default"},
+		Installable:       false,
+		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolGeneric},
+		LifecycleRequired: false,
 	},
 }
 

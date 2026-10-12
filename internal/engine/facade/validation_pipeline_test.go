@@ -23,7 +23,6 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
-	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/settings"
 )
 
@@ -465,7 +464,7 @@ func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol
 		if id == "" {
 			t.Fatalf("missing %s dispatch: %+v", action, d.run)
 		}
-		if d.host() != DefaultProvider && d.host() != lifecycle.ProviderDefault {
+		if d.host() != DefaultProvider {
 			// 可计量 provider：审查派发补零用量 transcript 与 sidecar 生命周期
 			// 事件，结果完成链走 bridge READY。
 			d.meteredSpawn(d.f.root, id)
@@ -509,12 +508,8 @@ func (d *validationDriver) meteredSpawn(root, id string) {
 		d.t.Fatal(err)
 	}
 	d.submit(e)
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"`+id+`"}`)); err != nil {
-		d.t.Fatal(err)
-	}
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"`+id+`","agent_transcript_path":"`+transcript+`"}`)); err != nil {
-		d.t.Fatal(err)
-	}
+	completeMeteredSource(d.t, root, d.host(), id, transcript)
+
 }
 
 func (d *validationDriver) action(handler string) (string, protocol.ValidationInput) {

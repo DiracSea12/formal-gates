@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"formal-gates/internal/host"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -25,7 +26,6 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
-	"formal-gates/internal/lifecycle"
 )
 
 func nativeMasterDriver(t *testing.T) *validationDriver {
@@ -330,7 +330,7 @@ func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.Coverag
 	receipt := testReceipt()
 	receipt.Coverage = inventory
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", lifecycle.ProviderDefault), Request: StartRequest{RunID: "validation", Route: "regular", Provider: lifecycle.ProviderDefault, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}

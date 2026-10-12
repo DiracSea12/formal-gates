@@ -12,8 +12,7 @@ import (
 )
 
 // DeepSeek Harness (DSH) 没有内置的 hooks.json 协议。安装器改用一个最小 Cordis
-// 插件：插件在 tools/pre-execute 上调用原生 `formal-gates hook decide`，并把
-// subagent/start、subagent/end 转发给 `formal-gates lifecycle capture`。
+// 插件：插件在 tools/pre-execute 上调用原生 `formal-gates hook decide`。
 // 插件文件写在已安装的 skill 目录内，home 级 `cordis.patch.yml` 用相对 specifier
 // 引用它。DSH 将插入项的相对路径锚定在 patch 文件所在目录，所以 home patch
 // 写 `./skills/...`：任何机器、任何 profile 都会解析回 `$DSH_HOME/skills/...`，

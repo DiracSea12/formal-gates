@@ -415,18 +415,21 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			if err = submit(e); err != nil {
 				return err
 			}
-			hooks, err := lifecycle.HookDefinitions(admission.Provider)
-			if err != nil {
+			// Synthetic package smoke evidence retains the issued action identity.
+			if err = lifecycle.ObserveNativeStart(root, material.Input.RunID, id, admission.Provider, id); err != nil {
 				return err
 			}
-			lifecyclePayload, err := portableLifecyclePayload(root, material.Input)
-			if err != nil {
-				return err
-			}
-			for _, hook := range hooks {
-				if _, err = lifecycle.Capture(root, admission.Provider, hook.Event, lifecyclePayload); err != nil {
+			for _, observed := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+				observation, err := protocol.NewLifecycleEventEvent(eventID(), admission.Provider, id, observed)
+				if err != nil {
 					return err
 				}
+				if err = submit(observation); err != nil {
+					return err
+				}
+			}
+			if err = lifecycle.ObserveNativeCompletion(root, material.Input.RunID, id, admission.Provider, id); err != nil {
+				return err
 			}
 			raw, err = json.Marshal(payload)
 			if err != nil {
@@ -453,17 +456,6 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 		}
 	}
 	return fmt.Errorf("portable workflow exceeded its bounded drive fixture")
-}
-
-// portableLifecyclePayload binds the local canary's host events to one issued
-// action. ZCode Agent hooks identify that action by the native tool-call field.
-func portableLifecyclePayload(root string, input protocol.WorkerInput) ([]byte, error) {
-	id := input.Pending.ActionID
-	payload := map[string]string{"agent_id": id, "parentConversationId": input.RunID, "generationId": id, "subagentType": input.Handler, "task": id, "cwd": root}
-	if input.Provider == host.ZCode {
-		payload["tool_name"], payload["tool_use_id"] = "Agent", id
-	}
-	return json.Marshal(payload)
 }
 
 func portableDevelopmentPlan() *worker.Granularity {

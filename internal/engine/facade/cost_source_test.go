@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/cost"
@@ -99,14 +100,7 @@ func TestCostSourceBridgeResolvesBoundNativeUsage(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeLifecycleSidecar(t, root, "run", "action", tc.provider, "identity", []string{"subagent_start", "subagent_stop"})
-			stop, err := json.Marshal(map[string]string{"provider": tc.provider, "event": "subagent_stop", "identity": "identity", "transcriptPath": path})
-			if err != nil {
-				t.Fatal(err)
-			}
-			stopPath := filepath.Join(root, ".gates", "tmp", "run", "lifecycle", "events", digestOf("action"), "subagent_stop.json")
-			if err := os.WriteFile(stopPath, stop, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeManagedCostSource(t, root, "run", "action", tc.provider, "identity", path)
 			bridge := CostSourceBridge(root, "run")
 			ref := protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: tc.provider}
 			for range 2 {
@@ -125,7 +119,7 @@ func TestCostSourceBridgeRetainsMissingSourceReasons(t *testing.T) {
 		withPath                                     bool
 	}{
 		{"provider mismatch", "claude", "zcode", "", "cost source provider does not match dispatch provider", false},
-		{"path missing", "claude", "claude", "", "dispatch stop has no transcript path", false},
+		{"path missing", "claude", "claude", "", "native dispatch has no completed metering source", false},
 		{"usage missing", "zcode", "zcode", `{"sessionId":"session","turnId":"turn","type":"turn.completed","payload":{}}`, "ZCode terminal provider usage is unavailable (including no-backend zero fallback)", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,17 +130,10 @@ func TestCostSourceBridgeRetainsMissingSourceReasons(t *testing.T) {
 				if err := os.WriteFile(path, []byte(tc.content+"\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				stop, err := json.Marshal(map[string]string{"provider": tc.provider, "event": "subagent_stop", "identity": "identity", "transcriptPath": path})
-				if err != nil {
-					t.Fatal(err)
-				}
-				stopPath := filepath.Join(root, ".gates", "tmp", "run", "lifecycle", "events", digestOf("action"), "subagent_stop.json")
-				if err := os.WriteFile(stopPath, stop, 0o600); err != nil {
-					t.Fatal(err)
-				}
+				writeManagedCostSource(t, root, "run", "action", tc.provider, "identity", path)
 			}
 			resolved := CostSourceBridge(root, "run")(protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: tc.refProvider})
-			if resolved.State != protocol.CostSourceUnavailable || resolved.Reason != tc.reason || resolved.Usage != (cost.Usage{}) {
+			if resolved.State != protocol.CostSourceUnavailable || !strings.Contains(resolved.Reason, tc.reason) || resolved.Usage != (cost.Usage{}) {
 				t.Fatalf("missing source=%+v want reason=%q", resolved, tc.reason)
 			}
 		})

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
@@ -19,7 +18,7 @@ import (
 var NativeSourceVerifier func(string, string, map[string]any) ([]byte, string, string, error)
 
 // CostSourceBridge resolves original dispatch evidence. Managed native jobs
-// share their provider verifier and raw streams; other dispatches use lifecycle.
+// share their provider verifier and raw streams.
 func CostSourceBridge(root, runID string, verifier ...func(string, string, map[string]any) ([]byte, string, string, error)) protocol.CostSourceResolver {
 	verify := NativeSourceVerifier
 	if len(verifier) > 0 {
@@ -29,19 +28,16 @@ func CostSourceBridge(root, runID string, verifier ...func(string, string, map[s
 		if ref.RunID != runID {
 			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "cost source differs from its owning run"}
 		}
-		provider, transcriptPath, err := lifecycle.DispatchTranscriptPath(root, ref.RunID, ref.ActionID)
-		if err != nil {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: err.Error()}
-		}
-		if strings.TrimSpace(provider) == "" {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "dispatch has no lifecycle binding"}
-		}
-		if provider != ref.Provider {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "cost source provider does not match dispatch provider"}
-		}
 		verification, err := lifecycle.VerifyDispatch(root, ref.RunID, ref.ActionID)
 		if err != nil {
 			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: err.Error()}
+		}
+		if verification.Provider == "" {
+			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "dispatch has no lifecycle binding"}
+		}
+		provider := verification.Provider
+		if provider != ref.Provider {
+			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "cost source provider does not match dispatch provider"}
 		}
 		if !verification.StopObserved {
 			if verification.Outcome == lifecycle.Unavailable {
@@ -49,27 +45,18 @@ func CostSourceBridge(root, runID string, verifier ...func(string, string, map[s
 			}
 			return protocol.ResolvedCostSource{State: protocol.CostSourcePending}
 		}
-		paths, managed, sourceErr := nativeCostSourcePaths(root, ref, verification.Identity, verify)
-		if managed {
-			usage, parseErr := cost.ParseTranscriptFiles(provider, paths...)
-			if err := errors.Join(sourceErr, parseErr); err != nil {
-				return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Usage: usage, Reason: err.Error()}
-			}
-			return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
-		}
-		if strings.TrimSpace(transcriptPath) == "" {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: "dispatch stop has no transcript path"}
-		}
-		usage, parseErr := cost.ParseTranscript(provider, transcriptPath)
-		if parseErr != nil {
-			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Reason: parseErr.Error()}
+		paths, sourceErr := nativeCostSourcePaths(root, ref, verification.Identity, verify)
+		usage, parseErr := cost.ParseTranscriptFiles(provider, paths...)
+		if err := errors.Join(sourceErr, parseErr); err != nil {
+			return protocol.ResolvedCostSource{State: protocol.CostSourceUnavailable, Usage: usage, Reason: err.Error()}
 		}
 		return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
+
 	}
 }
 
 // dispatchClaimBridge 在派发签出落账时，以宿主回执的实际派发身份建立
-// lifecycle sidecar 绑定；identity 不可变，宿主 start/stop 事件按它配对。
+// lifecycle journal 绑定；identity 不可变，native 观察核对该身份。
 func dispatchClaimBridge(root, owningRunID string, admission Admission) protocol.DispatchClaim {
 	return func(runID, actionID, identity, provider string) error {
 		if runID != owningRunID || provider != admission.Provider {
@@ -79,22 +66,22 @@ func dispatchClaimBridge(root, owningRunID string, admission Admission) protocol
 	}
 }
 
-func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity string, verify func(string, string, map[string]any) ([]byte, string, string, error)) ([]string, bool, error) {
+func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity string, verify func(string, string, map[string]any) ([]byte, string, string, error)) ([]string, error) {
 	stateDir := filepath.Join(root, EngineNamespace, ref.RunID)
 	actionDir := workerActionDirectory(stateDir, ref.ActionID)
 	entries, err := os.ReadDir(actionDir)
 	if os.IsNotExist(err) {
-		return nil, false, nil
+		return nil, fmt.Errorf("native dispatch has no completed metering source")
 	}
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	if verify == nil {
-		return nil, true, fmt.Errorf("native cost source verification is unavailable")
+		return nil, fmt.Errorf("native cost source verification is unavailable")
 	}
 	descriptor, err := host.Lookup(ref.Provider)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	paths := []string{}
 	attempt := ""
@@ -174,5 +161,5 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 	if len(paths) == 0 && missing == nil {
 		missing = fmt.Errorf("native dispatch has no completed metering source")
 	}
-	return paths, true, missing
+	return paths, missing
 }

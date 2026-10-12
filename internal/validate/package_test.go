@@ -253,13 +253,15 @@ func copyPackageFixture(t *testing.T) string {
 			copyValidateTestFile(t, source, target, filepath.ToSlash(filepath.Join("gates", gate.Name())))
 		}
 	}
-	actions, err := os.ReadDir(filepath.Join(source, "prompts", "actions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, action := range actions {
-		if action.Type().IsRegular() {
-			copyValidateTestFile(t, source, target, filepath.ToSlash(filepath.Join("prompts", "actions", action.Name())))
+	for _, directory := range []string{"actions", "roles"} {
+		entries, err := os.ReadDir(filepath.Join(source, "prompts", directory))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.Type().IsRegular() {
+				copyValidateTestFile(t, source, target, filepath.ToSlash(filepath.Join("prompts", directory, entry.Name())))
+			}
 		}
 	}
 	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {

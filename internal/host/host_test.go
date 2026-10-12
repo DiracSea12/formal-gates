@@ -28,7 +28,7 @@ func TestRegistryExposesFiniteInstallableHostCapabilities(t *testing.T) {
 	}
 }
 
-func TestZCodeDescriptorCapturesGlobalOnlyHookAndToolLifecycle(t *testing.T) {
+func TestZCodeDescriptorCapturesGlobalOnlyWriteBlockHook(t *testing.T) {
 	descriptor, err := Lookup(ZCode)
 	if err != nil {
 		t.Fatal(err)
@@ -36,12 +36,10 @@ func TestZCodeDescriptorCapturesGlobalOnlyHookAndToolLifecycle(t *testing.T) {
 	if descriptor.Paths.GlobalHookConfig != ".zcode/cli/config.json" || descriptor.Paths.ProjectHookConfig != "" {
 		t.Fatalf("unexpected ZCode hook paths: %+v", descriptor.Paths)
 	}
-	if descriptor.Hook.Kind != HookZCode || descriptor.Hook.Protocol != ProtocolZCode || descriptor.Hook.GateEvent != "PreToolUse" || descriptor.Hook.GateMatcher != ".*" || descriptor.Hook.LifecycleMatcher != "Agent|Task" {
+	if descriptor.Hook.Kind != HookZCode || descriptor.Hook.Protocol != ProtocolZCode || descriptor.Hook.GateEvent != "PreToolUse" || descriptor.Hook.GateMatcher != ".*" {
 		t.Fatalf("unexpected ZCode hook descriptor: %+v", descriptor.Hook)
 	}
-	if len(descriptor.LifecycleEvents) != 3 || descriptor.LifecycleEvents[0] != "PreToolUse" || descriptor.LifecycleEvents[2] != "PostToolUseFailure" {
-		t.Fatalf("unexpected ZCode lifecycle events: %v", descriptor.LifecycleEvents)
-	}
+
 }
 
 func TestInstallableListsComeFromRegistry(t *testing.T) {

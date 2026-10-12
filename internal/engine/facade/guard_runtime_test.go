@@ -9,7 +9,6 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
-	"formal-gates/internal/lifecycle"
 )
 
 // plannedThreeBatchDriver 构造三批确认计划（parser 独立、command 依赖
@@ -176,13 +175,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	if _, _, err = f.Submit(spawned); err != nil {
 		t.Fatal(err)
 	}
-	captured, err := lifecycle.Capture(root, "claude-code", "SubagentStart", []byte(`{"agent_id":"agent-one"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(captured.Roots) == 0 {
-		t.Fatal("host start capture was not attributed to the active run")
-	}
+	observeMeteredStart(t, root, "claude-code", "agent-one")
 	bridge := CostSourceBridge(root, "cost-chain")
 	if source := bridge(protocol.CostSourceRef{RunID: "cost-chain", ActionID: action, Provider: "claude-code", Correlation: "agent-one"}); source.State != protocol.CostSourcePending {
 		t.Fatalf("dispatch without stop resolved %s, want PENDING", source.State)
@@ -202,9 +195,8 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	if accepted.Status != protocol.StatusCostPending {
 		t.Fatalf("result without stop status = %s, want COST_PENDING", accepted.Status)
 	}
-	if _, err := lifecycle.Capture(root, "claude-code", "SubagentStop", []byte(`{"agent_id":"agent-one","agent_transcript_path":"`+transcript+`"}`)); err != nil {
-		t.Fatal(err)
-	}
+	completeMeteredSource(t, root, "claude-code", "agent-one", transcript)
+
 	// stop 证据落定后的下一事务完成滞留结果（同载荷换事件 ID 重走公开接纳）。
 	accepted, _, err = f.Submit(protocol.Event{ID: "result-after-stop", Kind: protocol.KindWorkerResult, Result: result.Result})
 	if err != nil {

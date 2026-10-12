@@ -1039,31 +1039,17 @@ func runHook(program string, args []string, streams IO) (int, error) {
 
 func runLifecycle(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
-		return 1, fmt.Errorf("lifecycle subcommand is required (e.g. lifecycle capture|verify)")
+		return 1, fmt.Errorf("lifecycle subcommand is required (e.g. lifecycle verify)")
 	}
 	if isHelpArg(args[0]) {
 		printLifecycleUsage(streams.Stdout, program)
 		return 0, nil
 	}
 	if strings.HasPrefix(args[0], "-") {
-		return 1, fmt.Errorf("lifecycle subcommand is required (e.g. lifecycle capture|verify)")
+		return 1, fmt.Errorf("lifecycle subcommand is required (e.g. lifecycle verify)")
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
-	case "capture":
-		fs := newFlagSet("lifecycle capture", streams)
-		root := fs.String("root", "", "repository root override (normally derived from the host payload)")
-		provider := fs.String("provider", "", "host provider: "+providerHelp())
-		event := fs.String("event", "", "provider lifecycle event name")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		payload, err := io.ReadAll(streams.Stdin)
-		if err != nil {
-			return 1, err
-		}
-		result, err := lifecycle.Capture(*root, *provider, *event, payload)
-		return printValue(streams.Stdout, result, err)
 	case "verify":
 		fs := newFlagSet("lifecycle verify", streams)
 		root := fs.String("root", ".", "repository root")
@@ -1361,7 +1347,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|set|remove\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|set|remove\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -1385,7 +1371,7 @@ func printHookUsage(w io.Writer, program string) {
 }
 
 func printLifecycleUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s lifecycle <subcommand>\n\nSubcommands:\n  capture  record a host lifecycle event (%s) from the host payload on stdin\n  verify   verify a dispatch's lifecycle binding\n\nRun `%s lifecycle <subcommand> --help` for a subcommand's flags.\n", program, lifecycleEventHelp(), program)
+	fmt.Fprintf(w, "Usage: %s lifecycle <subcommand>\n\nSubcommands:\n  verify   verify a dispatch's lifecycle binding\n\nRun `%s lifecycle <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printCanaryUsage(w io.Writer, program string) {
@@ -1417,23 +1403,6 @@ func installHostHelp() string {
 
 func providerHelp() string {
 	return strings.Join(host.InstallableIDs(), "|")
-}
-
-func lifecycleEventHelp() string {
-	seen := map[string]bool{}
-	events := make([]string, 0)
-	for _, descriptor := range host.All() {
-		if !descriptor.Installable {
-			continue
-		}
-		for _, event := range descriptor.LifecycleEvents {
-			if !seen[event] {
-				seen[event] = true
-				events = append(events, event)
-			}
-		}
-	}
-	return strings.Join(events, "|")
 }
 
 func readJSONFileInto(path string, value any) error {

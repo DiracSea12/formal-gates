@@ -154,32 +154,15 @@ QA 设计角色按已绑定身份工作；主代理编辑已确认需求/方案�
 同样放行。包含仓库内目标或无法可靠归类的复合 Bash 写入继续按角色墙处理，避免一条命令
 同时修改仓库内外时绕过保护。
 
-安装器还会为 Claude Code 和 Codex 配置 `SubagentStart` 与 `SubagentStop`，为
-Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发
-送给已安装的原生二进制：
+安装器配置写墙拦截。Claude Code、Codex 和 Cursor 的 hook，以及 DSH 的
+`tools/pre-execute` 插件事件和 ZCode 全局 `PreToolUse`，均使用该决策入口。
+ZCode 当前运行时不读取项目级 hook 配置，项目安装只写 skill 与 `AGENTS.md` 指令。
 
-ZCode 的全局 CLI 配置使用 `PreToolUse`、`PostToolUse` 和 `PostToolUseFailure`，并以
-`Agent|Task` matcher 观察工具调用；当前运行时不读取项目级 hook 配置，因此项目安装
-只写 skill 与 `AGENTS.md` 指令。工具调用生命周期的精确子代理完成语义仍须同一 ZCode
-版本的实机 canary 才能确认。
-
-```bash
-$HOME/.local/bin/formal-gates lifecycle capture \
-  --provider <claude-code|codex|cursor|deepseek-harness|zcode> --event <provider-event-name>
-```
-
-capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的项目目录环境变量），
-因此全局 hook 不依赖其配置目录作为工作目录。`--root` 仍然可用，作为显式的命令行
-覆盖。
-
-生命周期观测只在该项目中至少有一个正式 run 处于活动状态时保留。每个 run 在
-`.gates/tmp/<run-id>/lifecycle` 下拥有自己的待定与已认领观测，因此正常的 Seal 或
-Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动正式 run 时触发的 hook
-不会创建生命周期日志。
-
-派发与原生身份绑定由 engine 的已签发 action 和 SpawnReceipt 持有；lifecycle capture
-只登记原生观测，drive/submit 经同一执行与对账路径处理。UNKNOWN 先查原始生命周期
-事实，不能盲目重派，也不能从配置文件推断代理已经完成。实际调用形式与结果提交见
+生命周期由 engine 受管原生派发观察：已签发 action 与 SpawnReceipt 绑定真实身份，
+原生启动回执与完成来源经宿主适配器核验后，通过同一执行与恢复路径提交 engine
+生命周期事件并写入派发日志。每个 run 的日志位于 `.gates/tmp/<run-id>/lifecycle`；
+Seal 或 Abort 清理与该 run 的其余工件一并退役。UNKNOWN 查原始执行事实，不能
+盲目重派，也不能从配置文件推断代理已完成。实际调用与结果提交见
 [正式流程公共合同](formal-flow.md#原生运行时派发)。
 
 维护面的只读核验可使用：

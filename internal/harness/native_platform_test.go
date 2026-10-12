@@ -57,7 +57,7 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 		}
 		return value.(map[string]any), nil
 	}
-	descriptor := &host.Descriptor{ID: "native-platform-peer", InstallName: "native-platform-peer", Aliases: []string{"peer-alias"}, Configuration: []host.ConfigField{host.StringConfig("peerExecutable", binary)}, LifecycleRequired: true, LifecycleEvents: []string{"Started", "Finished"}}
+	descriptor := &host.Descriptor{ID: "native-platform-peer", InstallName: "native-platform-peer", Aliases: []string{"peer-alias"}, Configuration: []host.ConfigField{host.StringConfig("peerExecutable", binary)}, LifecycleRequired: true}
 	descriptor.ReadUsage = func(reader io.Reader) (host.Usage, error) {
 		var value map[string]any
 		if err := json.NewDecoder(reader).Decode(&value); err != nil {
@@ -68,15 +68,6 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 		}
 		return host.Usage{InputCacheMissTokens: int64(value["input"].(float64)), OutputTokens: int64(value["output"].(float64))}, nil
 	}
-	descriptor.Lifecycle = &host.Lifecycle{Name: descriptor.ID, NormalizeEvent: func(event string) (string, error) {
-		switch event {
-		case "Started":
-			return "subagent_start", nil
-		case "Finished":
-			return "subagent_stop", nil
-		}
-		return "", fmt.Errorf("unknown peer event %q", event)
-	}, Identity: func(_ string, payload any) string { return textOf(getOf(payload, "identity")) }, Correlation: func(string, any) string { return "" }, ProjectRoots: func(any) []string { return []string{root} }}
 	implementation := nativeImplementation{
 		capture: func() (map[string]any, error) {
 			return capture(settings.Values{Native: map[string]string{"peerExecutable": binary}})
@@ -216,14 +207,10 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 	if err := lifecycle.BeginRun(root, "peer-run"); err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte(`{"identity":"peer-session"}`)
-	if _, err := lifecycle.Capture(root, "peer-alias", "Started", payload); err != nil {
-		t.Fatal(err)
-	}
 	if err := lifecycle.BindDispatchWithProvider(root, "peer-run", "peer-dispatch", "peer-session", descriptor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lifecycle.Capture(root, descriptor.ID, "Finished", payload); err != nil {
+	if err := lifecycle.ObserveNativeCompletion(root, "peer-run", "peer-dispatch", "peer-alias", "peer-session"); err != nil {
 		t.Fatal(err)
 	}
 	verified, err := lifecycle.VerifyDispatch(root, "peer-run", "peer-dispatch")

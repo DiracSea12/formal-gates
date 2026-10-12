@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"formal-gates/internal/host"
-	"formal-gates/internal/lifecycle"
 )
 
 // configureZCodeHook writes the user-level ZCode hook protocol. ZCode accepts
@@ -41,35 +40,15 @@ func configureZCodeHook(target installTarget) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lifecycleHooks, err := lifecycle.HookDefinitions(host.ZCode)
-	if err != nil {
-		return false, err
-	}
 	launcher := filepath.ToSlash(targetLauncherPath(target))
 	gateCommand := zcodeProcessEntry(launcher, []string{"hook", "decide", "--provider", host.ZCode})
-	// The gate hook remains broad so write-blocking applies to every tool. The
-	// lifecycle matcher comes from the shared host descriptor.
-	cleaned := map[string]bool{}
-	clean := func(event string) []any {
-		entries, _ := events[event].([]any)
-		if !cleaned[event] {
-			entries = removeZCodeHookEntries(entries, target)
-			cleaned[event] = true
+	for event, raw := range events {
+		if entries, ok := raw.([]any); ok {
+			events[event] = removeZCodeHookEntries(entries, target)
 		}
-		return entries
 	}
-	events[descriptor.Hook.GateEvent] = append(
-		clean(descriptor.Hook.GateEvent),
-		zcodeHookGroup(descriptor.Hook.GateMatcher, gateCommand),
-	)
-	for _, hook := range lifecycleHooks {
-		matcher := hook.Matcher
-		if matcher == "" {
-			matcher = descriptor.Hook.LifecycleMatcher
-		}
-		entry := zcodeProcessEntry(launcher, append([]string(nil), hook.Command...))
-		events[hook.Event] = append(clean(hook.Event), zcodeHookGroup(matcher, entry))
-	}
+	entries, _ := events[descriptor.Hook.GateEvent].([]any)
+	events[descriptor.Hook.GateEvent] = append(entries, zcodeHookGroup(descriptor.Hook.GateMatcher, gateCommand))
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return false, err
@@ -326,7 +305,7 @@ func isZCodeInstallerHook(value any, target installTarget) bool {
 	}
 	words := make([]string, 0, len(args))
 	for _, arg := range args {
-		words = append(words, lifecycle.ScalarString(arg))
+		words = append(words, host.ScalarString(arg))
 	}
 	if len(words) >= 4 && words[0] == "hook" && words[1] == "decide" {
 		return zcodeProviderArgument(words)

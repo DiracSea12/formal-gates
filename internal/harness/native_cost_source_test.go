@@ -92,10 +92,6 @@ func TestManagedCostSourcesUseOriginalVerifiedNativeStreams(t *testing.T) {
 			t.Fatalf("verified original native streams: %#v want %#v", resolved, want)
 		}
 	}
-	_, path, err := lifecycle.DispatchTranscriptPath(root, "run", "action")
-	if err != nil || path != "" {
-		t.Fatal("managed lifecycle stop must retain only its original binding facts")
-	}
 	if err := os.WriteFile(filepath.Join(two, "native-events.jsonl"), []byte(second+" changed\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

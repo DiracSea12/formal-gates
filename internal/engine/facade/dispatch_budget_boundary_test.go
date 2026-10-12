@@ -44,12 +44,7 @@ func completeMeteredDispatch(t *testing.T, d *validationDriver, root, action, ag
 	if _, _, err = d.f.Submit(spawned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"`+agent+`"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"`+agent+`","agent_transcript_path":"`+transcript+`"}`)); err != nil {
-		t.Fatal(err)
-	}
+	completeMeteredSource(t, root, d.host(), agent, transcript)
 	return d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: result})
 }
 
@@ -296,9 +291,7 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 	d.submit(receipt)
 	reviewTranscript := filepath.Join(root, "review-worker.jsonl")
 	writeTranscript(t, reviewTranscript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}`})
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"`+first+`","agent_transcript_path":"`+reviewTranscript+`"}`)); err != nil {
-		t.Fatal(err)
-	}
+	completeMeteredSource(t, root, d.host(), first, reviewTranscript)
 	reviewPass, err := protocol.NewReviewWorkerResultEvent(d.eventID(), first, d.host(), string(d.eventID()), protocol.ReviewResultEvidence{
 		Action: review.ProductReview, DispatchID: first, RequirementRevision: d.revision, Status: "PASS",
 		Findings:     []review.Finding{},
@@ -386,18 +379,12 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 	if _, _, err = f.Submit(stop); err != nil {
 		t.Fatal(err)
 	}
-	// 宿主 sidecar 先按真实身份写 stop＋transcript，绑定创建晚于事件到达。
 	transcript := filepath.Join(root, "agent-nine.jsonl")
 	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":1}}}`})
-	if _, err := lifecycle.Capture(root, meteredProvider, "SubagentStart", []byte(`{"agent_id":"agent-9"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := lifecycle.Capture(root, meteredProvider, "SubagentStop", []byte(`{"agent_id":"agent-9","agent_transcript_path":"`+transcript+`"}`)); err != nil {
-		t.Fatal(err)
-	}
 	if _, _, err := f.engine.ReconcileUnknownReceipt(action, emptyFingerprint()); err != nil {
 		t.Fatalf("attach failed: %v", err)
 	}
+	completeMeteredSource(t, root, meteredProvider, "agent-9", transcript)
 	snap, err := f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -456,13 +443,11 @@ func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
 	if _, err = f.Drive(); err != nil {
 		t.Fatal(err)
 	}
-	captured, err := lifecycle.Capture(root, meteredProvider, "SubagentStart", []byte(`{"agent_id":"late-agent"}`))
-	if err != nil {
-		t.Fatal(err)
+	active, err := lifecycle.ActiveRunIDs(root)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("terminal run remains active: %v %v", active, err)
 	}
-	if len(captured.Roots) != 0 {
-		t.Fatalf("late host event was attributed to the terminal run: %+v", captured)
-	}
+
 }
 
 // submitDecide 提交一条 DECIDE 决定并返回提交错误（判拒断言用：零状态变化由
@@ -726,14 +711,10 @@ func TestUnreliableUsageMarksCapUnavailableAndKeepsIssuing(t *testing.T) {
 	if _, _, err = d.f.Submit(spawned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"agent-parser"}`)); err != nil {
-		t.Fatal(err)
-	}
+	observeMeteredStart(t, root, d.host(), "agent-parser")
 	garbage := filepath.Join(root, "agent-parser.jsonl")
 	writeTranscript(t, garbage, []string{"not a transcript line"})
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"agent-parser","agent_transcript_path":"`+garbage+`"}`)); err != nil {
-		t.Fatal(err)
-	}
+	completeMeteredSource(t, root, d.host(), "agent-parser", garbage)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: first, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "parser-digest", Validation: &protocol.ValidationResult{Binding: input.Binding, Development: batchEvidence(input), Status: "PASS"}}})
 	if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {
 		t.Fatalf("unreliable usage advertised cap = %+v", d.run.GuardBudget)
@@ -800,14 +781,10 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	if _, _, err = d.f.Submit(spawned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStart", []byte(`{"agent_id":"agent-qa"}`)); err != nil {
-		t.Fatal(err)
-	}
+	observeMeteredStart(t, root, d.host(), "agent-qa")
 	garbage := filepath.Join(root, "agent-qa.jsonl")
 	writeTranscript(t, garbage, []string{"not a transcript line"})
-	if _, err := lifecycle.Capture(root, d.host(), "SubagentStop", []byte(`{"agent_id":"agent-qa","agent_transcript_path":"`+garbage+`"}`)); err != nil {
-		t.Fatal(err)
-	}
+	completeMeteredSource(t, root, d.host(), "agent-qa", garbage)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "qa-digest"}})
 	if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {
 		t.Fatalf("unreliable usage advertised cap = %+v", d.run.GuardBudget)

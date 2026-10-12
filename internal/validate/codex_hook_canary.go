@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/host"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"formal-gates/internal/lifecycle"
 )
 
 type CodexHookCanaryOptions struct {
@@ -405,10 +404,10 @@ func hookPayloadNames(payload []byte) (string, string) {
 	toolName := "unknown"
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err == nil {
-		if value := lifecycle.ScalarString(decoded["hook_event_name"]); value != "" {
+		if value := host.ScalarString(decoded["hook_event_name"]); value != "" {
 			eventName = value
 		}
-		if value := lifecycle.ScalarString(decoded["tool_name"]); value != "" {
+		if value := host.ScalarString(decoded["tool_name"]); value != "" {
 			toolName = value
 		}
 	}

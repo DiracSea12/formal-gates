@@ -5,7 +5,6 @@ import { homedir } from 'node:os'
 export const name = 'formal-gates-dsh'
 
 const DEFAULT_TIMEOUT_MS = 30000
-const PROVIDER = 'deepseek-harness'
 
 function headerOf(agent) {
   return agent && agent.session && agent.session.header ? agent.session.header : undefined
@@ -47,18 +46,6 @@ function payloadFor(ctx, exec) {
     tool_input: normalizeArguments(exec.arguments),
     tool_use_id: exec.callId,
     ...(agent && header && (header.origin === 'subagent' || (typeof header.delegationDepth === 'number' && header.delegationDepth > 0)) ? { agent_id: header.id } : {}),
-  }
-}
-
-function lifecyclePayload(ctx, event, info, child) {
-  const header = headerOf(child)
-  return {
-    session_id: header && typeof header.id === 'string' ? header.id : '',
-    transcript_path: transcriptPath(ctx, child),
-    cwd: header && typeof header.cwd === 'string' ? header.cwd : process.cwd(),
-    hook_event_name: event,
-    agent_id: String(info.id),
-    ...(event === 'SubagentStop' ? { stop_reason: String(info.stopReason || '') } : {}),
   }
 }
 
@@ -142,41 +129,6 @@ export function apply(ctx, config = {}) {
   const timeoutMs = Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS
   const dshHome = typeof config.dshHome === 'string' && config.dshHome.trim() !== '' ? config.dshHome : undefined
 
-  const inflight = new Set()
-  const controller = new AbortController()
-  const subagentChildren = new Map()
-  const track = (run) => {
-    inflight.add(run)
-    void run.then(() => inflight.delete(run), () => inflight.delete(run))
-  }
-  const resolveChild = (id) => {
-    const agents = ctx && typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-    return agents && typeof agents.get === 'function' ? agents.get(id) : undefined
-  }
-  const capture = (event, info) => {
-    // Stop 事件发生时 child 可能已从 agent registry 注销；保留 start 时拿到的
-    // child，使 stop payload 仍能推导项目 cwd/session/transcript。
-    if (event === 'SubagentStart') {
-      const child = resolveChild(info.id)
-      if (child) subagentChildren.set(info.runId, child)
-    }
-    const child = event === 'SubagentStop'
-      ? (subagentChildren.get(info.runId) || resolveChild(info.id))
-      : resolveChild(info.id)
-    if (event === 'SubagentStop') subagentChildren.delete(info.runId)
-    track(runBinary(ctx, binary, ['lifecycle', 'capture', '--provider', PROVIDER, '--event', event], lifecyclePayload(ctx, event, info, child), controller.signal, timeoutMs, dshHome)
-      .then((result) => {
-        if (result.error || (typeof result.code === 'number' && result.code !== 0)) {
-          warn('formal-gates-dsh: lifecycle ' + event + ' hook failed: ' + (result.error || result.stderr || result.code))
-        }
-      }))
-  }
-  ctx.effect(() => () => {
-    controller.abort()
-    subagentChildren.clear()
-    return Promise.allSettled([...inflight])
-  }, 'formal-gates-dsh: drain lifecycle hooks')
-
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
       const result = await runBinary(ctx, binary, ['hook', 'decide'], payloadFor(ctx, exec), exec.signal, timeoutMs, dshHome)
@@ -191,6 +143,4 @@ export function apply(ctx, config = {}) {
     return next()
   })
 
-  ctx.on('subagent/start', (info) => capture('SubagentStart', info))
-  ctx.on('subagent/end', (info) => capture('SubagentStop', info))
 }

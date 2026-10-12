@@ -8,18 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 type eventRecord struct {
-	Provider       string `json:"provider"`
-	Event          string `json:"event"`
-	Identity       string `json:"identity,omitempty"`
-	Correlation    string `json:"correlation,omitempty"`
-	TranscriptPath string `json:"transcriptPath,omitempty"`
-	// Reason 是宿主 stop/error 事件携带的中断原因（含 HTTP 错误码 429/503/402 等），
-	// 由 lifecycle capture 在子代理中断时自动提取并记录；宿主未提供时记
-	// 录"未知"。供续用判定（三分支）与中断派发的生命周期凭证读取。
-	Reason string `json:"reason,omitempty"`
+	Provider string `json:"provider"`
+	Event    string `json:"event"`
+	Identity string `json:"identity,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 type bindingRecord struct {
@@ -30,8 +27,7 @@ type bindingRecord struct {
 }
 
 // ObserveNativeCompletion records verified native start/terminal facts for an
-// already bound dispatch. It shares the original normalized event journal;
-// host tool-hook payloads and engine lifecycle events retain their own meaning.
+// already bound dispatch in the journal used by lifecycle and cost checks.
 func ObserveNativeCompletion(root, runID, dispatchID, provider, identity string) error {
 	return observeNativeEvents(root, runID, dispatchID, provider, identity, eventStart, eventStop)
 }
@@ -41,11 +37,11 @@ func ObserveNativeStart(root, runID, dispatchID, provider, identity string) erro
 }
 
 func observeNativeEvents(root, runID, dispatchID, provider, identity string, events ...string) error {
-	adapter, err := adapterFor(provider)
+	adapter, err := host.Lookup(provider)
 	if err != nil {
 		return err
 	}
-	provider = adapter.Name
+	provider = adapter.ID
 	binding, found, err := readBinding(root, runID, dispatchID)
 	if err != nil {
 		return err
@@ -63,57 +59,11 @@ func observeNativeEvents(root, runID, dispatchID, provider, identity string, eve
 			return readErr
 		}
 		record := eventRecord{Provider: provider, Event: event, Identity: identity}
-		if _, err := recordBoundEvent(root, binding, record); err != nil {
+		if err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, record.Event), record); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func recordEvent(root string, record eventRecord) (bool, error) {
-	bindings, err := matchingBindings(root, record)
-	if err != nil {
-		return false, err
-	}
-	if len(bindings) > 1 {
-		return false, fmt.Errorf("lifecycle event matches more than one active dispatch")
-	}
-	if len(bindings) == 0 {
-		runIDs, err := activeRuns(root)
-		if err != nil {
-			return false, err
-		}
-		duplicate := len(runIDs) > 0
-		for _, runID := range runIDs {
-			alreadyExists, err := writeEventAt(pendingEventPath(root, runID, record), record)
-			if err != nil {
-				return false, err
-			}
-			duplicate = duplicate && alreadyExists
-		}
-		return duplicate, nil
-	}
-	return recordBoundEvent(root, bindings[0], record)
-}
-
-func recordBoundEvent(root string, binding bindingRecord, record eventRecord) (bool, error) {
-	duplicate, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, record.Event), record)
-	if err != nil {
-		return false, err
-	}
-	// stop 事件带中断原因时写入派发级原因记录，供"start + 已记录中断原因"
-	// 作为被中断派发的中断凭证读取（即使 stop 配对事件缺失也能读到原因）。
-	if record.Event == eventStop && record.Reason != "" {
-		if err := writeInterruptionReason(root, binding.RunID, binding.DispatchID, record.Reason); err != nil {
-			return false, err
-		}
-	}
-	if record.Event == eventStart && record.Correlation != "" {
-		if err := bindPendingStops(root, binding, record.Correlation); err != nil {
-			return false, err
-		}
-	}
-	return duplicate, nil
 }
 
 func writeBinding(root string, record bindingRecord) error {
@@ -124,7 +74,7 @@ func writeBinding(root string, record bindingRecord) error {
 		if existing != record {
 			return fmt.Errorf("lifecycle provider and identity are immutable for dispatch %s", record.DispatchID)
 		}
-		return bindPending(root, existing)
+		return nil
 	}
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -143,7 +93,7 @@ func writeBinding(root string, record bindingRecord) error {
 		if !found || existing != record {
 			return fmt.Errorf("lifecycle provider and identity are immutable for dispatch %s", record.DispatchID)
 		}
-		return bindPending(root, existing)
+		return nil
 	}
 	if err != nil {
 		return err
@@ -159,96 +109,7 @@ func writeBinding(root string, record bindingRecord) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return bindPending(root, record)
-}
-
-func bindPending(root string, binding bindingRecord) error {
-	records, err := pendingEvents(root, binding.RunID, binding.Provider)
-	if err != nil {
-		return err
-	}
-	correlation := ""
-	for path, record := range records {
-		if record.Event != eventStart || record.Identity != binding.Identity {
-			continue
-		}
-		if _, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, eventStart), record); err != nil {
-			return err
-		}
-		correlation = record.Correlation
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	for path, record := range records {
-		if record.Event != eventStop {
-			continue
-		}
-		if record.Identity != binding.Identity && (correlation == "" || record.Correlation != correlation) {
-			continue
-		}
-		if _, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, eventStop), record); err != nil {
-			return err
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
 	return nil
-}
-
-func bindPendingStops(root string, binding bindingRecord, correlation string) error {
-	records, err := pendingEvents(root, binding.RunID, binding.Provider)
-	if err != nil {
-		return err
-	}
-	for path, record := range records {
-		if record.Event != eventStop || record.Correlation != correlation {
-			continue
-		}
-		if _, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, eventStop), record); err != nil {
-			return err
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
-}
-
-func matchingBindings(root string, record eventRecord) ([]bindingRecord, error) {
-	paths, err := filepath.Glob(filepath.Join(CleanRoot(root), ".gates", "tmp", "*", "lifecycle", "*.json"))
-	if err != nil {
-		return nil, err
-	}
-	matches := []bindingRecord{}
-	for _, path := range paths {
-		binding, err := readBindingPath(path)
-		if err != nil {
-			return nil, err
-		}
-		if binding.Provider != record.Provider {
-			continue
-		}
-		if record.Identity != "" && binding.Identity == record.Identity {
-			matches = append(matches, binding)
-			continue
-		}
-		if record.Event != eventStop || record.Correlation == "" {
-			continue
-		}
-		start, err := readEvent(runEventPath(root, binding.RunID, binding.DispatchID, eventStart))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if start.Provider == record.Provider && start.Correlation == record.Correlation {
-			matches = append(matches, binding)
-		}
-	}
-	return matches, nil
 }
 
 func readBinding(root, runID, dispatchID string) (bindingRecord, bool, error) {
@@ -270,54 +131,6 @@ func readBindingPath(path string) (bindingRecord, error) {
 		return bindingRecord{}, fmt.Errorf("lifecycle dispatch binding is invalid: %w", err)
 	}
 	return record, nil
-}
-
-// DispatchTranscriptPath returns the provider and stored subagent transcript
-// path for a dispatch's stop event. A dispatch without a binding or without
-// a stop event carrying a transcript path yields empty values.
-func DispatchTranscriptPath(root, runID, dispatchID string) (string, string, error) {
-	binding, found, err := readBinding(root, runID, dispatchID)
-	if err != nil || !found {
-		return "", "", err
-	}
-	record, err := readEvent(runEventPath(root, runID, dispatchID, eventStop))
-	if os.IsNotExist(err) {
-		return binding.Provider, "", nil
-	}
-	if err != nil {
-		return "", "", err
-	}
-	if record.Provider != binding.Provider {
-		return "", "", fmt.Errorf("lifecycle event journal entry is inconsistent")
-	}
-	return binding.Provider, record.TranscriptPath, nil
-}
-
-// writeInterruptionReason persists a dispatch-level interruption reason record
-// The record lives next to the dispatch's event journal so the reason
-// is readable even when the stop event pairing is missing or was cleaned up.
-func writeInterruptionReason(root, runID, dispatchID, reason string) error {
-	data, err := json.MarshalIndent(eventRecord{Reason: reason}, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	path := interruptionReasonPath(root, runID, dispatchID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if os.IsExist(err) {
-		return nil // 首个原因已记录，保留最初的客观原因
-	}
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	return file.Close()
 }
 
 func interruptionReasonPath(root, runID, dispatchID string) string {
@@ -342,38 +155,38 @@ func eventExists(root, runID, dispatchID, provider, identity, event string) (boo
 	return true, nil
 }
 
-func writeEventAt(path string, record eventRecord) (bool, error) {
+func writeEventAt(path string, record eventRecord) error {
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
-		return false, err
+		return err
 	}
 	data = append(data, '\n')
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, err
+		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if os.IsExist(err) {
 		existing, readErr := readEvent(path)
 		if readErr != nil {
-			return false, readErr
+			return readErr
 		}
 		if existing != record {
-			return false, fmt.Errorf("lifecycle event journal entry is inconsistent")
+			return fmt.Errorf("lifecycle event journal entry is inconsistent")
 		}
-		return true, nil
+		return nil
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		return false, err
+		return err
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return false, err
+		return err
 	}
-	return false, file.Close()
+	return file.Close()
 }
 
 func readEvent(path string) (eventRecord, error) {
@@ -386,31 +199,6 @@ func readEvent(path string) (eventRecord, error) {
 		return eventRecord{}, fmt.Errorf("lifecycle event journal entry is invalid: %w", err)
 	}
 	return record, nil
-}
-
-func pendingEvents(root, runID, provider string) (map[string]eventRecord, error) {
-	paths, err := filepath.Glob(filepath.Join(pendingRoot(root, runID), provider, "*", "*.json"))
-	if err != nil {
-		return nil, err
-	}
-	records := make(map[string]eventRecord, len(paths))
-	for _, path := range paths {
-		record, err := readEvent(path)
-		if err != nil {
-			return nil, err
-		}
-		records[path] = record
-	}
-	return records, nil
-}
-
-func pendingEventPath(root, runID string, record eventRecord) string {
-	key := record.Provider + "\x00" + record.Event + "\x00" + record.Identity + "\x00" + record.Correlation
-	return filepath.Join(pendingRoot(root, runID), record.Provider, record.Event, digest(key)+".json")
-}
-
-func pendingRoot(root, runID string) string {
-	return filepath.Join(runLifecycleRoot(root, runID), "pending")
 }
 
 func activeRuns(root string) ([]string, error) {

@@ -21,6 +21,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/lifecycle"
 	"sync"
 )
 
@@ -280,7 +281,7 @@ func (d *candidateDriver) reviews() {
 			d.t.Fatal(err)
 		}
 		d.submit(event)
-		d.captureLifecycle(id)
+		d.observeLifecycle(id)
 		result := protocol.ReviewResultEvidence{Action: kind, DispatchID: id, RequirementRevision: d.p.intake.RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "The confirmed command requirement has a runnable public input contract."}}
 		if kind == review.StartReadiness {
 			result.GranularityReview = candidatePlan()
@@ -368,15 +369,22 @@ func (d *candidateDriver) business(id string, result protocol.ValidationResult) 
 		d.t.Fatal(err)
 	}
 	d.submit(event)
-	d.captureLifecycle(id)
+	d.observeLifecycle(id)
 	event = protocol.Event{ID: d.id(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: "codex", Outcome: "PASS", PayloadDigest: string(d.id()), Validation: &result}}
 	d.submit(event)
 	d.submit(event)
 }
-func (d *candidateDriver) captureLifecycle(action string) {
-	payload := installedJSON(d.t, map[string]string{"agent_id": action, "cwd": d.p.project})
-	for _, event := range []string{"SubagentStart", "SubagentStop"} {
-		d.call(payload, "lifecycle", "capture", "--root", d.p.project, "--provider", "codex", "--event", event)
+func (d *candidateDriver) observeLifecycle(action string) {
+	// This installed workflow fixture supplies synthetic host facts.
+	for _, event := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+		fact, err := protocol.NewLifecycleEventEvent(d.id(), "codex", action, event)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		d.submit(fact)
+	}
+	if err := lifecycle.ObserveNativeCompletion(d.p.project, "candidate", action, "codex", action); err != nil {
+		d.t.Fatal(err)
 	}
 }
 func (d *candidateDriver) write(root, path, body string, mode os.FileMode) {

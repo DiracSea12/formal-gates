@@ -1802,10 +1802,6 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
-	if err != nil {
-		return false, err
-	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
 	// Metered hosts must bind their transcript parser even when their hook
@@ -1825,21 +1821,6 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 		config["version"] = float64(1)
 		desired = map[string]any{
 			descriptor.Hook.GateEvent: flatHookEntry(gateCommand),
-		}
-	}
-	for _, hook := range lifecycleHooks {
-		command := nativeInstallCommand(targetLauncherPath(target), hook.Command...)
-		matcher := hook.Matcher
-		if matcher == "" {
-			matcher = descriptor.Hook.LifecycleMatcher
-		}
-		if matcher == "" {
-			matcher = descriptor.Hook.GateMatcher
-		}
-		if shape == string(host.HookFlat) {
-			desired[hook.Event] = flatHookEntry(command)
-		} else {
-			desired[hook.Event] = nestedHookEntry(matcher, command, hook.Timeout)
 		}
 	}
 	for event, entry := range desired {
@@ -2068,11 +2049,9 @@ func installerHookCommands(target installTarget) map[string]bool {
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	add(gateArgs...)
-	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
-	if err == nil {
-		for _, hook := range lifecycleHooks {
-			add(hook.Command...)
-		}
+	// Remove installer-owned lifecycle hooks from supported disk configurations.
+	for _, event := range retiredLifecycleHookEvents(target.host) {
+		add("lifecycle", "capture", "--provider", target.host, "--event", event)
 	}
 	for _, command := range []string{
 		"pwsh -File hooks/" + "enforce-" + "gate-sequence.ps1",
@@ -2081,6 +2060,18 @@ func installerHookCommands(target installTarget) map[string]bool {
 		commands[command] = true
 	}
 	return commands
+}
+
+func retiredLifecycleHookEvents(provider string) []string {
+	switch provider {
+	case host.Claude, host.Codex, host.DeepSeek:
+		return []string{"SubagentStart", "SubagentStop"}
+	case host.Cursor:
+		return []string{"subagentStart", "subagentStop"}
+	case host.ZCode:
+		return []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+	}
+	return nil
 }
 
 func exactNestedHookShape(value map[string]any, hostName string) bool {

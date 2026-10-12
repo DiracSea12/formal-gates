@@ -19,8 +19,6 @@ import (
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/harness"
-	"formal-gates/internal/host"
-	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/prompts"
 )
 
@@ -229,18 +227,15 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			correlation := "dispatch-lifecycle-key"
-			spawn, err := protocol.NewSpawnReceiptEvent("spawn", ref.ActionID, "zcode", correlation, protocol.SpawnStatusSpawned)
+			session := "native-session-different-from-dispatch"
+			spawn, err := protocol.NewSpawnReceiptEvent("spawn", ref.ActionID, "zcode", correlation, protocol.SpawnStatusUnknown)
 			if err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := f.Submit(spawn); err != nil {
 				t.Fatal(err)
 			}
 			directory := WorkerExecutionDirectory(ref, "")
 			if err := os.MkdirAll(directory, 0700); err != nil {
 				t.Fatal(err)
 			}
-			session := "native-session-different-from-dispatch"
 			payload := worker.Review{Findings: []worker.Finding{}, Verification: []string{}}
 			for _, key := range review.RequiredVerificationChecks() {
 				payload.Verification = append(payload.Verification, "verified full current requirement: "+key)
@@ -292,13 +287,26 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 				files[name] = map[string]any{"sha256": proof.SHA256, "size": proof.Size}
 			}
 			source := map[string]any{"provider": "zcode", "identity": session, "files": files}
-			descriptor, _ := host.Lookup("zcode")
-			startPayload, _ := json.Marshal(map[string]any{"tool_use_id": correlation})
-			if _, err := lifecycle.Capture(f.root, descriptor.ID, descriptor.LifecycleEvents[0], startPayload); err != nil {
+			_, _, nativeIdentity, err := harness.NativeResultEvidence("zcode", directory, source)
+			if err != nil || nativeIdentity != session {
+				t.Fatalf("original source identity differs: %s %v", nativeIdentity, err)
+			}
+			if _, _, err := f.Submit(spawn); err != nil {
 				t.Fatal(err)
 			}
-			stopPayload, _ := json.Marshal(map[string]any{"tool_use_id": correlation, "transcript_path": filepath.Join(directory, "native-events.jsonl")})
-			if _, err := lifecycle.Capture(f.root, descriptor.ID, descriptor.LifecycleEvents[1], stopPayload); err != nil {
+			for _, observed := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+				fact, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-"+observed), "zcode", correlation, nativeIdentity, observed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := f.Submit(fact); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, _, err := f.engine.ReconcileUnknownReceipt(ref.ActionID, emptyFingerprint()); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.ObserveWorkerSource(ref, directory, source, harness.NativeResultEvidence); err != nil {
 				t.Fatal(err)
 			}
 

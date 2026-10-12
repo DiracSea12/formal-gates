@@ -16,10 +16,7 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 	for _, required := range []string{
 		"export const name = 'formal-gates-dsh'",
 		"ctx.on('tools/pre-execute'",
-		"ctx.on('subagent/start'",
-		"ctx.on('subagent/end'",
 		"['hook', 'decide']",
-		"['lifecycle', 'capture', '--provider', PROVIDER, '--event', event]",
 		"normalizeArguments",
 		"config.skillRoot",
 		"process.platform",
@@ -29,6 +26,12 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 			t.Fatalf("dsh_plugin.mjs missing required behavior %q", required)
 		}
 	}
+	for _, retired := range []string{"subagent/start", "subagent/end", "lifecyclePayload", "'capture'", "subagentChildren"} {
+		if strings.Contains(source, retired) {
+			t.Fatalf("retired lifecycle callback remains: %s", retired)
+		}
+	}
+
 }
 
 // DSH anchors inserted plugin names beside the patch, not beside the profile.

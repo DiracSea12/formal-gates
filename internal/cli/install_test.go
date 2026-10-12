@@ -168,8 +168,6 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					"keep-non-formal-hook",
 					"bin",
 					installTestBinaryName(),
-					"lifecycle capture",
-					tc.provider,
 				} {
 					if !strings.Contains(raw, expected) {
 						t.Fatalf("hook config missing %q: %s", expected, raw)
@@ -178,7 +176,7 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 				if !strings.Contains(raw, tc.hookArgs) {
 					t.Fatalf("hook config missing %q: %s", tc.hookArgs, raw)
 				}
-				if strings.Contains(raw, "receipt capture") {
+				if strings.Contains(raw, "receipt capture") || strings.Contains(raw, "lifecycle capture") {
 					t.Fatalf("hook config still contains removed receipt lifecycle command: %s", raw)
 				}
 				hooks := readHooksMap(t, configPath)
@@ -186,17 +184,15 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					t.Fatalf("expected hook event %s in %s", tc.preEvent, raw)
 				}
 				for _, event := range []string{tc.start, tc.stop} {
-					if _, ok := hooks[event]; !ok {
-						t.Fatalf("expected lifecycle hook event %s in %s", event, raw)
+					if entries, ok := hooks[event].([]any); ok && len(entries) != 0 {
+						t.Fatalf("retired lifecycle hook event %s in %s", event, raw)
 					}
 				}
 				for _, command := range hookCommands(hooks) {
 					if strings.Contains(command, `\`) {
 						t.Fatalf("hook command should use slash paths for shell compatibility: %s", command)
 					}
-					if strings.Contains(command, "lifecycle capture") && strings.Contains(command, "--root") {
-						t.Fatalf("lifecycle hook command must derive the project root from its payload: %s", command)
-					}
+
 				}
 			})
 		}
@@ -227,13 +223,13 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 	assertFileContains(t, filepath.Join(home, ".zcode", "skills", "formal-gates", "SKILL.md"), "source")
 	assertManagedRuleState(t, filepath.Join(home, ".zcode", "AGENTS.md"), false)
 	raw := readFile(t, configPath)
-	for _, expected := range []string{"keep-zcode-hook", "PreToolUse", "PostToolUseFailure", "Agent|Task", "--provider", "zcode"} {
+	for _, expected := range []string{"keep-zcode-hook", "PreToolUse", "--provider", "zcode"} {
 		if !strings.Contains(raw, expected) {
 			t.Fatalf("ZCode config missing %q: %s", expected, raw)
 		}
 	}
-	if strings.Contains(raw, ".ps1") {
-		t.Fatalf("ZCode config contains legacy script: %s", raw)
+	if strings.Contains(raw, ".ps1") || strings.Contains(raw, `"lifecycle"`) || strings.Contains(raw, "PostToolUseFailure") || strings.Contains(raw, "Agent|Task") {
+		t.Fatalf("ZCode config contains retired interception: %s", raw)
 	}
 
 	stdout.Reset()
