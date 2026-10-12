@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -1213,7 +1214,18 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target receipt failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target receipt failed: %w", targetErr))
 		}
-		if !sameInstallPackageFiles(expected, targetReceipt.Entries) {
+		targetExpected := expected
+		if !options.SkipHooks && target.hookConfig != "" {
+			descriptor, err := host.Lookup(target.host)
+			if err != nil {
+				return InstallReport{}, rollback(err)
+			}
+			if capability := hookCapabilities[descriptor.Hook.Kind]; capability.packageFiles != nil {
+				targetExpected = append(append([]PackageEntry(nil), expected...), capability.packageFiles()...)
+				sort.Slice(targetExpected, func(i, j int) bool { return targetExpected[i].Path < targetExpected[j].Path })
+			}
+		}
+		if !sameInstallPackageFiles(targetExpected, targetReceipt.Entries) {
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target differs from source package"))
 		}
 		if targetErr := validateInstallPackage(target.targetPath); targetErr != nil {
@@ -1764,8 +1776,9 @@ func copyFile(from, to string, mode os.FileMode) error {
 }
 
 type hookCapability struct {
-	configure func(installTarget) (bool, error)
-	remove    func(installTarget) error
+	configure    func(installTarget) (bool, error)
+	remove       func(installTarget) error
+	packageFiles func() []PackageEntry
 }
 
 // hookCapabilities is the install-time capability registry. Generic nested
@@ -1774,7 +1787,7 @@ type hookCapability struct {
 var hookCapabilities = map[host.HookKind]hookCapability{
 	host.HookNested: {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
 	host.HookFlat:   {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
-	host.HookDSH:    {configure: configureDSHInstallHook, remove: removeDshHook},
+	host.HookDSH:    {configure: configureDSHInstallHook, remove: removeDshHook, packageFiles: dshHookPackageFiles},
 	host.HookZCode:  {configure: configureZCodeHook, remove: removeZCodeHook},
 }
 

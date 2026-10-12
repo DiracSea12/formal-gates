@@ -2,12 +2,14 @@ package validate
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"fmt"
 	yaml "gopkg.in/yaml.v3"
 
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -24,10 +26,11 @@ import (
 // 只安装 skill 与宿主指令文件，不写 hook 补丁；需要 hook 集成时安装 global。
 
 const (
-	dshPluginEntryID = "formal-gates-dsh"
-	dshPluginFileRel = "plugin/formal-gates.mjs"
-	dshPluginRelName = "./skills/formal-gates/plugin/formal-gates.mjs"
-	dshPatchFileName = "cordis.patch.yml"
+	dshPluginEntryID  = "formal-gates-dsh"
+	dshPluginFileRel  = "plugin/formal-gates.mjs"
+	dshPluginFileMode = 0o600
+	dshPluginRelName  = "./skills/formal-gates/plugin/formal-gates.mjs"
+	dshPatchFileName  = "cordis.patch.yml"
 )
 
 //go:embed dsh_plugin.mjs
@@ -65,6 +68,16 @@ func dshPluginPath(target installTarget) string {
 	return filepath.Join(target.targetPath, filepath.FromSlash(dshPluginFileRel))
 }
 
+func dshHookPackageFiles() []PackageEntry {
+	mode := uint32(dshPluginFileMode)
+	if runtime.GOOS == "windows" {
+		// Windows reports writable regular files with permission bits 0666.
+		mode = 0o666
+	}
+	sum := sha256.Sum256([]byte(dshPluginSource))
+	return []PackageEntry{{Path: dshPluginFileRel, Mode: mode, Size: int64(len(dshPluginSource)), SHA256: fmt.Sprintf("%x", sum)}}
+}
+
 func configureDshHook(target installTarget) error {
 	if strings.TrimSpace(target.hookConfig) == "" {
 		return nil
@@ -72,7 +85,7 @@ func configureDshHook(target installTarget) error {
 	if err := os.MkdirAll(filepath.Dir(dshPluginPath(target)), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(dshPluginPath(target), []byte(dshPluginSource), 0o600); err != nil {
+	if err := os.WriteFile(dshPluginPath(target), []byte(dshPluginSource), dshPluginFileMode); err != nil {
 		return err
 	}
 	doc, err := readDshPatch(target.hookConfig)

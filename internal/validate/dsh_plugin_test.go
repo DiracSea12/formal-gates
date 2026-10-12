@@ -1,11 +1,120 @@
 package validate
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDshBootstrapChecksInstalledHookPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		scope     string
+		skipHooks bool
+	}{
+		{name: "global", scope: "global"},
+		{name: "global_skip_hooks", scope: "global", skipHooks: true},
+		{name: "project", scope: "project"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := copyPackageFixture(t)
+			home, project := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("DSH_HOME", filepath.Join(home, "dsh"))
+			patch := filepath.Join(home, "dsh", dshPatchFileName)
+			mustWriteValidateTest(t, patch, "# user patch\n- modify: user-plugin\n  config:\n    value: preserved\n")
+			options := InstallOptions{
+				Source: source, Host: "dsh", Scope: tc.scope, Project: project,
+				RegistryPath: filepath.Join(home, "registry.json"),
+				BinaryTarget: filepath.Join(home, "stable", nativeBinaryName()),
+				Force:        true, SkipHooks: tc.skipHooks,
+			}
+			report, err := Install(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := report.Targets[0].TargetPath
+			plugin := filepath.Join(target, filepath.FromSlash(dshPluginFileRel))
+			hasPlugin := tc.scope == "global" && !tc.skipHooks
+			if data, err := os.ReadFile(plugin); hasPlugin {
+				if err != nil || string(data) != dshPluginSource {
+					t.Fatalf("installed plugin bytes differ: %v", err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("hook-free installation contains a plugin: %v", err)
+			}
+			before, err := PackageReceipt(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			patchBefore, err := os.ReadFile(patch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registryBefore, err := os.ReadFile(options.RegistryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.Bootstrap = true
+			for attempt := 0; attempt < 2; attempt++ {
+				bootstrap, err := Install(options)
+				if err != nil {
+					t.Fatalf("bootstrap rejected installed DSH package: %v", err)
+				}
+				data, err := os.ReadFile(bootstrap.BootstrapReceiptPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var receipt BootstrapReceipt
+				if err := json.Unmarshal(data, &receipt); err != nil {
+					t.Fatal(err)
+				}
+				if !receipt.Accepted || receipt.StateCreated || receipt.PackageDigest != report.PackageDigest || len(receipt.Records) != 1 || receipt.Records[0].InstalledDigest != before.Digest {
+					t.Fatalf("bootstrap did not bind original package and installed bytes: %+v", receipt)
+				}
+			}
+			if after, err := PackageReceipt(target); err != nil || after.Digest != before.Digest {
+				t.Fatalf("bootstrap changed installed bytes: %v", err)
+			}
+			for path, want := range map[string][]byte{patch: patchBefore, options.RegistryPath: registryBefore} {
+				if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("bootstrap changed %s: %v", path, err)
+				}
+			}
+			if !hasPlugin {
+				return
+			}
+			selfOptions := options
+			selfOptions.Source = target
+			selfOptions.RegistryPath = filepath.Join(home, "self-bootstrap-registry.json")
+			if _, err := Install(selfOptions); err != nil {
+				t.Fatalf("bootstrap rejected its own installed DSH package: %v", err)
+			}
+			if err := os.WriteFile(plugin, []byte(dshPluginSource+"\nchanged\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "bootstrap target differs from source package") {
+				t.Fatalf("bootstrap admitted altered plugin bytes: %v", err)
+			}
+			selfOptions.RegistryPath = filepath.Join(home, "altered-self-bootstrap-registry.json")
+			if _, err := Install(selfOptions); err == nil || !strings.Contains(err.Error(), "bootstrap target differs from source package") {
+				t.Fatalf("self bootstrap admitted altered plugin bytes: %v", err)
+			}
+			if got, err := os.ReadFile(plugin); err != nil || string(got) != dshPluginSource+"\nchanged\n" {
+				t.Fatalf("rejected bootstrap changed plugin bytes: %v", err)
+			}
+			for path, want := range map[string][]byte{patch: patchBefore, options.RegistryPath: registryBefore} {
+				if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("rejected bootstrap changed %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
 
 func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 	data, err := os.ReadFile("dsh_plugin.mjs")
