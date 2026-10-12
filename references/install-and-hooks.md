@@ -40,7 +40,7 @@ $HOME/.local/bin/formal-gates uninstall \
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
-考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
+考文档。它默认配置所选 host 的 formal-gates 命令和写墙 hook。既有的无
 关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
