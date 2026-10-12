@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	engineRuntime "formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
@@ -634,9 +633,6 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		// different generations.
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
 			activeRegistryRecords = append([]RegistryRecord(nil), doc.Records...)
-			if fenceErr := rejectActiveWorkflowRunsForUninstall(targets, options, doc.Records); fenceErr != nil {
-				return UninstallReport{}, fenceErr
-			}
 			for index := range targets {
 				for _, record := range doc.Records {
 					if filepath.Clean(record.Target) == filepath.Clean(targets[index].targetPath) && strings.TrimSpace(record.LauncherPath) != "" {
@@ -647,8 +643,6 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		} else if !os.IsNotExist(loadErr) {
 			return UninstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
-	} else if fenceErr := rejectActiveWorkflowRunsForUninstall(targets, options, nil); fenceErr != nil {
-		return UninstallReport{}, fenceErr
 	}
 	transactionParent := filepath.Dir(registryPath)
 	if transactionParent == "." || transactionParent == "" {
@@ -911,139 +905,6 @@ func installRegistryPath(options InstallOptions) string {
 		return filepath.Join(home, ".formal-gates", "registry.json")
 	}
 	return ""
-}
-
-// rejectActiveWorkflowRunsForUninstall inventories the state roots owned by the
-// affected registry records before uninstall removes runtime bytes.
-func rejectActiveWorkflowRunsForUninstall(targets []installTarget, options UninstallOptions, records []RegistryRecord) error {
-	installOptions := InstallOptions{
-		Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath,
-	}
-	targetPaths := map[string]bool{}
-	stateRoots := map[string]bool{}
-	resourceRoots := map[string]bool{}
-	locatedStates := []string{}
-	for _, target := range targets {
-		targetPaths[canonicalRegistryPath(target.targetPath)] = true
-		desired := installRegistryRecord(target, installOptions)
-		if desired.StateRoot != "" {
-			stateRoots[canonicalRegistryPath(desired.StateRoot)] = true
-		}
-	}
-	for _, record := range records {
-		if !targetPaths[canonicalRegistryPath(record.Target)] {
-			continue
-		}
-		if record.ResourceRoot != "" {
-			resourceRoots[record.ResourceRoot] = true
-		}
-		if record.StateRoot != "" {
-			stateRoots[canonicalRegistryPath(record.StateRoot)] = true
-		}
-	}
-	if strings.TrimSpace(options.Project) != "" {
-		stateRoots[canonicalRegistryPath(options.Project)] = true
-	}
-	for resourceRoot := range resourceRoots {
-		references, err := filepath.Glob(filepath.Join(resourceRoot, "engine-runs", "*.json"))
-		if err != nil {
-			return err
-		}
-		for _, reference := range references {
-			data, err := os.ReadFile(reference)
-			if err != nil {
-				return err
-			}
-			var location struct {
-				Request string `json:"request"`
-			}
-			if err := json.Unmarshal(data, &location); err != nil {
-				return err
-			}
-			data, err = os.ReadFile(location.Request)
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			var request struct {
-				RunID  string `json:"runId"`
-				Target string `json:"admissionTarget"`
-				Root   string `json:"admissionRoot"`
-			}
-			if err := json.Unmarshal(data, &request); err != nil {
-				return err
-			}
-			if !targetPaths[canonicalRegistryPath(request.Target)] {
-				continue
-			}
-			stateDir := filepath.Dir(location.Request)
-			if _, err := os.Stat(filepath.Join(stateDir, "terminal-summary.intent.json")); err == nil {
-				return fmt.Errorf("unfinished terminal cleanup for workflow run %q fences uninstall", request.RunID)
-			} else if !os.IsNotExist(err) {
-				return err
-			}
-			statePath := filepath.Join(stateDir, "state.json")
-			if _, err := os.Stat(statePath); err == nil {
-				locatedStates = append(locatedStates, statePath)
-				continue
-			} else if !os.IsNotExist(err) {
-				return err
-			}
-			for _, intent := range []string{filepath.Join(filepath.Dir(stateDir), request.RunID+".start.intent.json")} {
-				if _, err := os.Stat(intent); err == nil {
-					return fmt.Errorf("unfinished workflow run %q at %s fences uninstall", request.RunID, intent)
-				} else if !os.IsNotExist(err) {
-					return err
-				}
-			}
-		}
-	}
-	for stateRoot := range stateRoots {
-		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
-		if err != nil {
-			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", stateRoot, err)
-		}
-		candidateMatches, err := filepath.Glob(filepath.Join(stateRoot, "engine", "*", "state.json"))
-		if err != nil {
-			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", stateRoot, err)
-		}
-		matches = append(matches, candidateMatches...)
-		locatedStates = append(locatedStates, matches...)
-	}
-	for _, statePath := range locatedStates {
-		data, readErr := os.ReadFile(statePath)
-		if readErr != nil {
-			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", statePath, readErr)
-		}
-		var probe struct {
-			RunID   string `json:"runId"`
-			Status  string `json:"status"`
-			Phase   string `json:"phase"`
-			Content struct {
-				RunID string `json:"runId"`
-				Phase string `json:"phase"`
-			} `json:"content"`
-		}
-		_ = json.Unmarshal(data, &probe)
-		phase := probe.Content.Phase
-		if phase == "" {
-			phase = probe.Phase
-		}
-		active := strings.EqualFold(probe.Status, "ACTIVE") || phase != "" && phase != string(engineRuntime.PhaseTerminal)
-		if phase == string(engineRuntime.PhaseTerminal) {
-			return fmt.Errorf("unfinished terminal cleanup at %s fences uninstall", statePath)
-		}
-		if !active {
-			continue
-		}
-		if probe.RunID == "" {
-			probe.RunID = probe.Content.RunID
-		}
-		return fmt.Errorf("active workflow run %q at %s fences uninstall", probe.RunID, statePath)
-	}
-	return nil
 }
 
 // defaultStableLauncherPath 解析默认稳定 launcher 落点。Windows 优先使用

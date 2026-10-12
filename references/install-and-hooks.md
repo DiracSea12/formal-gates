@@ -49,7 +49,6 @@ host 的全局安装当作回退。
 
 活动 workflow run 不阻断安装：安装器不扫描或等待它们，也不改写、迁移或
 兼容旧 run。安装后旧 generation 的 run 由正常 admission/版本校验决定能否继续。
-卸载仍在存在受影响的活动 run 时拒绝，避免直接移除它正在使用的运行时、hook 和规则。
 
 引导文件 `install.command` 和 `install.bat` 会下载匹配的 release 源码与二进制、
 校验已发布的 checksum、组装本地包，把 binary 首次放到固定 stable launcher，再由该

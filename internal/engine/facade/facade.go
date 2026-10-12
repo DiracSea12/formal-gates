@@ -681,28 +681,9 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		if err := errors.Join(writeErr, closeErr); err != nil {
 			return err
 		}
-		reference, err := admission.runReferencePath(stateDir)
-		if err != nil {
-			return err
-		}
-		if reference != "" {
-			options.RuntimeFiles.Files = append(options.RuntimeFiles.Files, reference)
-			options.RuntimeFiles.EmptyDirectories = append(options.RuntimeFiles.EmptyDirectories, filepath.Dir(reference))
-			req.RuntimeFiles = &options.RuntimeFiles
-		}
-		requestPath := filepath.Join(stateDir, "request.json")
-		if err := writeJSONAtomic(requestPath, req); err != nil {
-			return err
-		}
-		if reference == "" {
-			return nil
-		}
-		return writeJSONAtomic(reference, map[string]string{"request": requestPath})
+		return writeJSONAtomic(filepath.Join(stateDir, "request.json"), req)
 	}); err != nil {
 		return nil, Run{}, err
-	}
-	if vcsProvider != nil {
-		vcsProvider = vcsProvider.WithRuntimeFiles(options.RuntimeFiles)
 	}
 	// Any failure after the prefix retains its evidence if installation moved.
 	// Established state and side effects stay available for normal reconciliation.
@@ -711,9 +692,6 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 			return cause
 		}
 		if err := admission.write(func() error {
-			if err := admission.removeRunReference(stateDir); err != nil {
-				return err
-			}
 			if err := os.RemoveAll(filepath.Join(root, ".gates", "tmp", req.RunID)); err != nil {
 				return err
 			}
@@ -947,19 +925,6 @@ func (f *Facade) Drive() (Run, error) {
 			_, intentErr := os.Stat(terminalIntentPath(f.stateDir))
 			_, activeErr := os.Stat(filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active"))
 			if err == nil && f.terminalEvidenceComplete(summary) && errors.Is(intentErr, fs.ErrNotExist) && errors.Is(activeErr, fs.ErrNotExist) {
-				reference, err := f.admission.runReferencePath(f.stateDir)
-				if err != nil {
-					return Run{}, false
-				}
-				if reference != "" {
-					if _, err := os.Stat(reference); err == nil {
-						if err := f.endLifecycle(); err != nil {
-							return Run{}, false
-						}
-					} else if !errors.Is(err, fs.ErrNotExist) {
-						return Run{}, false
-					}
-				}
 				return runFromSummary(summary), true
 			}
 			return Run{}, false
@@ -1872,10 +1837,7 @@ func (f *Facade) recoverTerminalIntent() error {
 	if !f.terminalEvidenceComplete(summary) {
 		return fmt.Errorf("engine state is missing with unfinished terminal evidence")
 	}
-	if err := f.commitTerminalCleanup(summary); err != nil {
-		return err
-	}
-	return f.endLifecycle()
+	return f.commitTerminalCleanup(summary)
 }
 
 func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
@@ -1888,7 +1850,12 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 	if err := f.store.CleanupTerminal(); err != nil {
 		return err
 	}
-	return nil
+	return f.admission.write(func() error {
+		if err := os.Remove(terminalIntentPath(f.stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 // cleanupCheckpoints consumes the master's durable terminal authority. Frozen
@@ -1910,10 +1877,10 @@ func (f *Facade) cleanupCheckpoints(summary TerminalSummary) error {
 		}
 		err = func() error {
 			defer unlock()
-			if err := store.CleanupTerminal(); err != nil {
+			if err := child.endLifecycle(); err != nil {
 				return err
 			}
-			return child.endLifecycle()
+			return store.CleanupTerminal()
 		}()
 		if err != nil {
 			return err
@@ -2305,9 +2272,6 @@ func recoverStartIntent(root, runID string) error {
 	}
 	return intent.Admission.write(func() error {
 		if !established {
-			if err := intent.Admission.removeRunReference(stateDir); err != nil {
-				return err
-			}
 			if err := os.RemoveAll(stateDir); err != nil {
 				return err
 			}
@@ -2442,15 +2406,13 @@ func admissionProviderMatches(registered, provider string) bool {
 }
 
 func (f *Facade) endLifecycle() error {
-	return f.admission.write(func() error {
-		if err := lifecycle.EndRun(f.root, f.runID); err != nil {
-			return err
-		}
-		if err := os.Remove(terminalIntentPath(f.stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return f.admission.removeRunReference(f.stateDir)
-	})
+	path := filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active")
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return f.admission.write(func() error { return lifecycle.EndRun(f.root, f.runID) })
 }
 
 func emptyFingerprint() string {

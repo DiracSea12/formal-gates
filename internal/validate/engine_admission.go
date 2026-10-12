@@ -199,14 +199,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 		runtimeFiles.Files = append(runtimeFiles.Files, canonicalRegistryPath(record.LauncherPath))
 	}
 	if record.ResourceRoot != "" {
-		references, err := filepath.Glob(filepath.Join(record.ResourceRoot, "engine-runs", "*.json"))
-		if err != nil {
-			return EngineAdmission{}, err
-		}
-		for _, reference := range references {
-			runtimeFiles.Files = append(runtimeFiles.Files, canonicalRegistryPath(reference))
-		}
-		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot), canonicalRegistryPath(filepath.Join(record.ResourceRoot, "engine-runs"))}
+		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot)}
 	}
 	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token, RuntimeFiles: runtimeFiles}, nil
 }
