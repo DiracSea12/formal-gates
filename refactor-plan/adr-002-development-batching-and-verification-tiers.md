@@ -2,7 +2,7 @@
 
 > 状态：已由用户确认（2026-08-22），作为通用流程规则冻结。
 > 范围：任何 run 的开发组织与验证节奏；引擎按总需求 §8.5"开发分批与组间验证"机械承载。补充 ADR-001 未覆盖的开发过程组织层。
-> 决策依据：2026-08-22 对业界系统（Claude Code、OpenAI Codex、MetaGPT、LangGraph、CrewAI、Google Jules、OpenHands、SWE-agent、Aider、Agentless）公开资料的调研。
+> 决策依据：2026-08-22 对业界系统（Claude Code、OpenAI Codex、MetaGPT、CrewAI、Google Jules、OpenHands、SWE-agent、Aider、Agentless）公开资料的调研。
 
 ## 背景
 

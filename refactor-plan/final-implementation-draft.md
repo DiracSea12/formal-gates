@@ -86,7 +86,7 @@ phase 名称可在编码时微调，但合法边、用户节点和外部可观�
 
 ### 3.2 程序化优先与节点内执行计划
 
-调研 Temporal、AWS Step Functions、Argo Workflows、Airflow、LangGraph、OpenAI Agents SDK、Google ADK 2.0 和 Microsoft Agent Framework 后，采用这些系统共同支持的成熟边界：**已知控制流放在 workflow/code/DAG，非确定性语义工作才进入 agent 节点；持久化粒度跟随恢复和副作用边界，而不是把每条语句都拆成远程步骤。** 机械强制程度并不相同：传统 durable orchestrator 通常强制已声明的图/活动边界，agent 框架多为提供能力且仍可能允许模型路由或把工具错误回给模型。formal-gates 选择其中的严格子集，并额外实施定义编译、理由枚举和“禁止动态降级给代理”。
+调研 Temporal、AWS Step Functions、Argo Workflows、Airflow、OpenAI Agents SDK、Google ADK 2.0 和 Microsoft Agent Framework 后，采用这些系统共同支持的成熟边界：**已知控制流放在 workflow/code/DAG，非确定性语义工作才进入 agent 节点；持久化粒度跟随恢复和副作用边界，而不是把每条语句都拆成远程步骤。** 机械强制程度并不相同：传统 durable orchestrator 通常强制已声明的图/活动边界，agent 框架多为提供能力且仍可能允许模型路由或把工具错误回给模型。formal-gates 选择其中的严格子集，并额外实施定义编译、理由枚举和“禁止动态降级给代理”。
 
 执行责任拆成两个正交维度：
 
