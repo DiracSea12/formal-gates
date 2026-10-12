@@ -373,7 +373,7 @@ func correctedSeverity(input CorrectionInput, original string) string {
 }
 
 func validSeverity(severity string) bool {
-	return severity == "P0" || severity == "P1" || severity == "P2" || severity == "P3"
+	return slices.Contains(Severities(), severity)
 }
 
 func blockingSeverity(severity string) bool {

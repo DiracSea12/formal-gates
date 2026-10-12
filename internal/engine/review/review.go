@@ -18,6 +18,9 @@ import (
 // 持有一条独立 series。
 type Action string
 
+// Severities lists the severities accepted by review findings.
+func Severities() []string { return []string{"P0", "P1", "P2", "P3"} }
+
 // TechnicalCategories lists the classifications accepted by start-readiness.
 func TechnicalCategories() []string {
 	return []string{"requirement-conflict", "responsibility-dependency", "acceptance-entry", "implementation-detail"}

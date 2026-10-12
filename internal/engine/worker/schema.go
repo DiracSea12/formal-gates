@@ -153,7 +153,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			choices := []any{}
 			for _, category := range review.TechnicalCategories() {
 				severities := []string{}
-				for _, severity := range []string{"P0", "P1", "P2", "P3"} {
+				for _, severity := range review.Severities() {
 					if review.ValidateFindingClassification(input.Review.Action, category, severity) == nil {
 						severities = append(severities, severity)
 					}
@@ -207,7 +207,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 				delete(properties, "severityRationale")
 				delete(properties["verification"].(map[string]any)["properties"].(map[string]any), "severity")
 			} else {
-				properties["severity"] = map[string]any{"type": "string", "minLength": 1, "enum": []string{"P0", "P1", "P2", "P3"}}
+				properties["severity"] = map[string]any{"type": "string", "minLength": 1, "enum": review.Severities()}
 				properties["severityRationale"] = map[string]any{"type": "string", "minLength": 1}
 				item["required"] = append(item["required"].([]any), "severity", "severityRationale")
 				verification := properties["verification"].(map[string]any)
@@ -510,8 +510,11 @@ func resultTypeSchema(value reflect.Type) (map[string]any, error) {
 			if name == "" {
 				name = field.Name
 			}
-			if (value == reflect.TypeOf(Case{}) || value == reflect.TypeOf(DesignedCase{})) && field.Name == "Scenario" {
+			if (value == reflect.TypeOf(Case{}) || value == reflect.TypeOf(DesignedCase{}) || value == reflect.TypeOf(CaseChange{})) && field.Name == "Scenario" {
 				child["enum"] = coverage.Scenarios()
+			}
+			if value == reflect.TypeOf(Finding{}) && field.Name == "Severity" {
+				child["enum"] = review.Severities()
 			}
 			if value == reflect.TypeOf(Suggestion{}) && field.Name == "Severity" {
 				child["enum"] = []string{"P2", "P3"}

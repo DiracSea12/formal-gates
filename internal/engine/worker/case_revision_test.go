@@ -20,6 +20,11 @@ func TestCaseRevisionKeepsUntouchedContentAndFillsIssuedIDs(t *testing.T) {
 	if len(manifest.Cases) != 3 || manifest.Cases[0].CaseID != "keep" || manifest.Cases[1].CaseID != "change" || manifest.Cases[2].CaseID != "delete" || manifest.Cases[0].Preconditions != "initialize the corrected fixture" || manifest.Cases[1].Oracle != "corrected success" || !reflect.DeepEqual(manifest.Cases[2], input.Validation.Manifest.Cases[2]) || !reflect.DeepEqual(manifest.Edges, input.Validation.Manifest.Edges) || !reflect.DeepEqual(manifest.SharedSteps[1], input.Validation.Manifest.SharedSteps[1]) || manifest.SharedSteps[0].Procedure != "prepare the corrected fixture" {
 		t.Fatal("revision lost exact issued IDs/order, original untouched cases, shared content or coverage")
 	}
+	for index := range input.Validation.Manifest.Cases {
+		if manifest.Cases[index].Scenario != input.Validation.Manifest.Cases[index].Scenario {
+			t.Fatal("omitted scenario changed its approved classification")
+		}
+	}
 	if !reflect.DeepEqual(manifest.Cases[0].Operations, input.Validation.Manifest.Cases[0].Operations) || !reflect.DeepEqual(manifest.Cases[0].Files, input.Validation.Manifest.Cases[0].Files) || result.Result.PayloadDigest != "original-revision-output" {
 		t.Fatal("revision lost issued command bytes, files or original output evidence")
 	}

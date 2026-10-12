@@ -46,6 +46,82 @@ func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	}
 }
 
+func TestFindingSchemasPublishSeverityChoices(t *testing.T) {
+	for _, input := range []protocol.WorkerInput{
+		{Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
+		{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}},
+		{Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{}},
+	} {
+		t.Run(input.Handler, func(t *testing.T) {
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, branch := range schema["anyOf"].([]any) {
+				fields := branch.(map[string]any)["properties"].(map[string]any)
+				if fields["findings"] == nil {
+					continue
+				}
+				finding := fields["findings"].(map[string]any)["items"].(map[string]any)
+				severity := finding["properties"].(map[string]any)["severity"].(map[string]any)
+				if !reflect.DeepEqual(severity["enum"], []string{"P0", "P1", "P2", "P3"}) || !slices.Contains(finding["required"].([]any), any("severity")) {
+					t.Fatal("finding severity is not a required choice among P0-P3", severity)
+				}
+			}
+		})
+	}
+}
+
+func TestDesignSchemasPublishScenarioChoicesForNewAndExistingCases(t *testing.T) {
+	for _, kind := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+		for _, scope := range []string{"initial", "full", "affected"} {
+			t.Run(string(kind)+"/"+scope, func(t *testing.T) {
+				input := protocol.WorkerInput{Handler: "engine.qa.design.v4", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
+				if scope != "initial" {
+					input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved", Scenario: "SUCCESS", Oracle: "approved oracle"}}
+				}
+				if scope == "affected" {
+					input.Validation.AffectedCases = []string{"approved"}
+				}
+				schema, err := ResultSchema(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cases := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["cases"].(map[string]any)
+				items := []any{cases["items"]}
+				if scope == "affected" {
+					items = cases["prefixItems"].([]any)
+				} else if scope == "full" {
+					items = cases["items"].(map[string]any)["anyOf"].([]any)
+				}
+				for index, raw := range items {
+					item := raw.(map[string]any)
+					scenario := item["properties"].(map[string]any)["scenario"].(map[string]any)
+					if !reflect.DeepEqual(scenario["enum"], coverage.Scenarios()) {
+						t.Fatal("scenario choices differ from acceptance coverage", scenario)
+					}
+					newCase := scope != "affected" && index == 0
+					if slices.Contains(item["required"].([]any), any("scenario")) != newCase {
+						t.Fatal("new-case scenario duty or existing-case omission changed")
+					}
+				}
+				stored, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var recovered protocol.WorkerInput
+				if err := json.Unmarshal(stored, &recovered); err != nil {
+					t.Fatal(err)
+				}
+				replay, err := ResultSchema(recovered)
+				if err != nil || !reflect.DeepEqual(schema, replay) {
+					t.Fatal("recovery changed scenario choices or omission", err)
+				}
+			})
+		}
+	}
+}
+
 func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t *testing.T) {
 	input := observationWorkerInput()
 	input.Validation.Observation.Findings[0].Finding.Raw = &review.Finding{Severity: "P1"}

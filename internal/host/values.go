@@ -20,23 +20,3 @@ func ScalarString(value any) string {
 	}
 	return ""
 }
-
-func AppendUniqueStrings(values []string, additions ...string) []string {
-	for _, addition := range additions {
-		addition = strings.TrimSpace(addition)
-		if addition == "" {
-			continue
-		}
-		found := false
-		for _, value := range values {
-			if value == addition {
-				found = true
-				break
-			}
-		}
-		if !found {
-			values = append(values, addition)
-		}
-	}
-	return values
-}

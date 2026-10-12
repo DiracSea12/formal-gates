@@ -55,7 +55,7 @@
         "hook_configuration": "bundled-global-cli-hook-guidance",
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
-      "caveat": "ZCode hooks are configured at user level because current ZCode ignores project-level hook configuration; Agent/Task lifecycle observations use documented PreToolUse/PostToolUse/PostToolUseFailure events and require a same-host canary before claiming child-completion semantics."
+      "caveat": "ZCode write-block hooks are configured at user level because current ZCode ignores project-level hook configuration; hook enforcement requires a live canary on ZCode."
     },
     {
       "name": "WorkBuddy",
@@ -156,7 +156,7 @@
     "Native install also writes the DeepSeek Harness skill under .dsh/skills and mounts the bundled minimal Cordis hook plugin through the DSH home cordis.patch.yml; project-scope DSH installs skills and AGENTS.md instructions only because DSH loads only the home-level patch layer.",
     "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking.",
     "Native ZCode installs the skill under .zcode/skills and configures the user-level .zcode/cli/config.json hook; project-scope ZCode installs the skill and AGENTS.md guidance only because current ZCode ignores project-level hooks.",
-    "The native ZCode lifecycle path observes documented Agent/Task tool calls through PreToolUse, PostToolUse, and PostToolUseFailure, correlating tool_use_id (or its documented aliases); exact child-agent completion semantics remain unclaimed until a same-host canary verifies them.",
+    "Native engine execution owns worker identity, start verification, and completion evidence through the selected host adapter; installer hooks enforce the write boundary.",
     "Native installation owns the immutable release copy, cross-process lock, one recovery journal, backup, stable launcher, host configuration, and registry commit; shell and PowerShell bootstrap entries only download, verify, stage the fixed launcher, and invoke that owner.",
     "Package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
