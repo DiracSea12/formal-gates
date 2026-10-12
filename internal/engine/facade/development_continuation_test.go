@@ -227,9 +227,18 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := t.TempDir()
-	request, _ := json.Marshal(map[string]any{"prompt": material.Prompt, "workspace": material.Input.Validation.Workspace.Path, "read_only": material.ReadOnly})
-	if err := os.WriteFile(filepath.Join(directory, "native-request.json"), request, 0600); err != nil {
+	request, _, directory, selected, err := d.f.WorkerExecutionRequest(ref, "")
+	if err != nil || selected != ref {
+		t.Fatalf("semantic fixture lost its original material: %+v %v", selected, err)
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	requestBody, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "native-request.json"), requestBody, 0600); err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(answer)

@@ -126,7 +126,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 	answerJSON := mustCanonical(e.t, answer)
 	switch c.nativeName() {
 	case "claude":
-		peer := claudePeer{Workspace: workspace, Calls: filepath.Join(dir, "peer-calls.jsonl"), Environment: map[string]string{"HOME": c.home, "CLAUDE_CONFIG_DIR": paths["config"]}, Events: []any{
+		peer := claudePeer{Semantics: answer, Workspace: workspace, Calls: filepath.Join(dir, "peer-calls.jsonl"), Environment: map[string]string{"HOME": c.home, "CLAUDE_CONFIG_DIR": paths["config"]}, Events: []any{
 			map[string]any{"type": "system", "subtype": "init", "session_id": identity, "cwd": workspace, "model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity},
 			map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity, "uuid": "result-" + identity, "num_turns": 1, "structured_output": answer, "usage": map[string]any{"input_tokens": len(textOf(request["prompt"])), "output_tokens": len(answerJSON)}},
 		}}

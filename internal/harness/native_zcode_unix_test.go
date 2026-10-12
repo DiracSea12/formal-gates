@@ -1063,7 +1063,7 @@ func TestZcodeExecuteLongStreamTurn(t *testing.T) {
 		script = append(script,
 			peerStep{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", streamEvents+1,
 				"turn.started", "t-1", zcodeTurnPayload(inputID, ""))},
-			peerStep{On: `"method":"session/send"`, Send: zcodeEventLine("s-1", streamEvents+2,
+			peerStep{On: `"method":"session/send"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", streamEvents+2,
 				"turn.completed", "t-1", zcodeTurnPayload(inputID,
 					`, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			peerStep{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},

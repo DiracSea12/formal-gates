@@ -454,6 +454,7 @@ func TestDSHNativeContinuation(t *testing.T) {
 	steps[1].On = `"method":"session/resume"`
 	steps[1].Send = `{"id":"@ID@","result":{"sessionId":"s-1","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`
 	steps = append(steps[:2], steps[3:]...)
+	steps[2].Semantics = map[string]any{"status": "PASS", "summary": "continued exact task", "findings": []any{}, "check_reviews": map[string]any{}}
 	steps[2].Files[0].Body = `{"sessionId":"s-1","inputId":"in-2","turn":2}`
 	steps[2].Files[1].Body = peerEvent("s-1", "assistant/message", map[string]any{"turn": 2, "step": 0, "usage": map[string]any{"inputTokens": 23, "outputTokens": 5}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"status":"PASS","summary":"continued exact task","findings":[],"check_reviews":{}}`}}}}) + "\n" + peerEvent("s-1", "turn/end", map[string]any{"turn": 2, "reason": map[string]any{"kind": "completed"}}) + "\n"
 	continued := newDSHScenario(t, steps, func(request map[string]any) {

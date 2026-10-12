@@ -3,6 +3,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -89,12 +90,29 @@ func TestCanaryPrivateP4PIDFileOwnsBackendCleanup(t *testing.T) {
 			root := t.TempDir()
 			pidFile := filepath.Join(root, "p4d.pid")
 			server := exec.Command(binary, "--pid-file="+pidFile, "-r", root, "-p", "127.0.0.1:0")
+			var nativeLog bytes.Buffer
+			server.Stdout, server.Stderr = &nativeLog, &nativeLog
 			if err := server.Start(); err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = server.Process.Kill(); _ = server.Wait() }()
+			completed := make(chan struct{})
+			var waitErr error
+			go func() {
+				waitErr = server.Wait()
+				close(completed)
+			}()
+			defer func() {
+				_ = server.Process.Kill()
+				<-completed
+				t.Logf("native backend exit=%v output=%s", waitErr, nativeLog.Bytes())
+			}()
 			var pid int
-			for until := time.Now().Add(2 * time.Second); time.Now().Before(until); {
+			for {
+				select {
+				case <-completed:
+					t.Fatalf("native backend exited before PID publication: %v", waitErr)
+				default:
+				}
 				if body, err := os.ReadFile(pidFile); err == nil {
 					pid, _ = strconv.Atoi(strings.TrimSpace(string(body)))
 					if pid > 0 {
@@ -112,14 +130,15 @@ func TestCanaryPrivateP4PIDFileOwnsBackendCleanup(t *testing.T) {
 			}
 			if mode == "normal" {
 				_ = server.Process.Kill()
-				_ = server.Wait()
+				<-completed
 				if err = os.Remove(pidFile); err != nil {
 					t.Fatal(err)
 				}
 			}
 			canaryStopPrivateBackend(t, pidFile)
 			if mode != "normal" {
-				if err = server.Wait(); err == nil {
+				<-completed
+				if waitErr == nil {
 					t.Fatal("expected native backend to be signalled")
 				}
 			}

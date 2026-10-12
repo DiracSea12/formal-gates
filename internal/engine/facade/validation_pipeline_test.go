@@ -501,7 +501,10 @@ func plannedValidationDriverAtVCS(t *testing.T, root, provider string, runner vc
 // 零用量 transcript 与 sidecar start/stop 事件（派发计量来源解析 READY）。
 func (d *validationDriver) meteredSpawn(root, id string) {
 	d.t.Helper()
-	transcript := filepath.Join(root, strings.ReplaceAll(strings.ReplaceAll(id, "/", "_"), ":", "_")+".jsonl")
+	transcript := filepath.Join(root, ".gates", "tmp", d.f.runID, "metering", digestOf(id)+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0700); err != nil {
+		d.t.Fatal(err)
+	}
 	writeTranscript(d.t, transcript, []string{`{"type":"assistant","uuid":"metered-zero","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}`})
 	e, err := protocol.NewSpawnReceiptEvent(d.eventID(), id, d.host(), id, protocol.SpawnStatusSpawned)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/vcs"
 )
 
 // A confirmed requirement and its observed document jointly qualify child work;
@@ -85,8 +86,20 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 			child.reopen()
 			child.drive()
 			current := driverState(t, child)
-			if child.run.Status != string(runtime.PhaseSliceReady) || current.SliceReceipt.Receipt.RequirementRevision != revision || current.SliceReceipt.Receipt.Snapshot != ready.Receipt.Snapshot || current.Validation.Document.Content != document || len(current.SpawnReceipts) != len(physical.SpawnReceipts) || !reflect.DeepEqual(current.Results, physical.Results) {
+			if child.run.Status != string(runtime.PhaseSliceReady) || current.SliceReceipt.Receipt.RequirementRevision != revision || current.Validation.Document.Content != document || len(current.SpawnReceipts) != len(physical.SpawnReceipts) || !reflect.DeepEqual(current.Results, physical.Results) {
 				t.Fatal("current document did not rebuild delivery with the original carried gate evidence")
+			}
+			if current.CandidatePromotion == nil || current.SliceReceipt.Receipt.Snapshot != current.AcceptedNativeSnapshot() || current.SliceReceipt.Receipt.Snapshot != current.CandidatePromotion.Final || current.SliceReceipt.Receipt.Digest != current.CandidatePromotion.FinalDigest || !reflect.DeepEqual(current.SpawnReceipts, physical.SpawnReceipts) {
+				t.Fatal("current child receipt lost its actual promotion or original dispatches")
+			}
+			requirementPath := current.RequirementArtifactPath()
+			changes, err := child.f.vcs.Changes(ready.Receipt.Snapshot, current.SliceReceipt.Receipt.Snapshot)
+			if err != nil || len(changes) != 1 || changes[0].Path != requirementPath || changes[0].Kind != "M" || changes[0].BaseMode != changes[0].Mode {
+				t.Fatalf("document delivery changed original production values: %+v %v", changes, err)
+			}
+			body, err := (vcs.ExecRunner{}).RunRaw(child.f.vcs.Root(), "git", nil, "show", current.SliceReceipt.Receipt.Snapshot+":"+requirementPath)
+			if err != nil || string(body) != document {
+				t.Fatalf("delivered child requirement differs from confirmation: %q %v", body, err)
 			}
 			before, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
 			if err != nil {

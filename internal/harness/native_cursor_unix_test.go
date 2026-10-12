@@ -121,11 +121,12 @@ func TestCursorManagedToolsUseOriginalWorkspaceAndPolicy(t *testing.T) {
 				}
 				return objectOrEmpty(response["result"])
 			}
+			beforeDenied := readBytes(t, filepath.Join(directory, nativeToolCallsFile))
 			if call("other-server", map[string]any{"action": "list"}) != nil {
 				t.Fatal("same-name MCP tool from another server executed")
 			}
-			if _, err := os.Stat(filepath.Join(directory, nativeToolCallsFile)); !os.IsNotExist(err) {
-				t.Fatalf("denied server produced tool effects: %v", err)
+			if !bytes.Equal(beforeDenied, readBytes(t, filepath.Join(directory, nativeToolCallsFile))) {
+				t.Fatal("denied server changed original tool call evidence")
 			}
 			decode := func(result map[string]any) map[string]any {
 				t.Helper()

@@ -28,6 +28,7 @@ type claudePeer struct {
 	Workspace   string            `json:"workspace"`
 	Calls       string            `json:"calls"`
 	Events      []any             `json:"events"`
+	Semantics   any               `json:"semantics"`
 	Stderr      string            `json:"stderr"`
 	Exit        int               `json:"exit"`
 	Wait        bool              `json:"wait"`
@@ -92,8 +93,8 @@ func TestClaudeCLI(t *testing.T) {
 	}
 	fmt.Fprint(os.Stderr, peer.Stderr)
 	for _, event := range peer.Events {
-		if getOf(event, "type") == "result" && getOf(event, "is_error") == false && getOf(event, "structured_output") != nil {
-			peerSubmitSemantics(textOf(listOf(getOf(getOf(getOf(decodeTestJSON(t, argsFlag(peer.Args, "--mcp-config")), "mcpServers"), "formal-gates"), "args"))[2]), getOf(event, "structured_output"))
+		if getOf(event, "type") == "result" && getOf(event, "is_error") == false && peer.Semantics != nil {
+			peerSubmitSemantics(textOf(listOf(getOf(getOf(getOf(decodeTestJSON(t, argsFlag(peer.Args, "--mcp-config")), "mcpServers"), "formal-gates"), "args"))[2]), peer.Semantics)
 		}
 	}
 	for _, event := range peer.Events {
@@ -165,10 +166,10 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 		"model": "claude-fixture-model", "effort": "high", "uuid": "init-" + identity}
 	answer := map[string]any{"findings": []any{map[string]any{"severity": "P3", "message": "native answer " + identity}}}
 	terminal := map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": identity,
-		"uuid": "result-" + identity, "num_turns": 3, "result": "ignored when structured output is available", "structured_output": answer,
+		"uuid": "result-" + identity, "num_turns": 3, "result": "Completed the semantic tool submission.",
 		"usage": map[string]any{"input_tokens": 12, "output_tokens": 3}, "modelUsage": map[string]any{"claude-fixture-model": map[string]any{"inputTokens": 12}}}
 	peer := claudePeer{Workspace: workspace, Environment: map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": config},
-		Calls: filepath.Join(root, "calls.jsonl"), Events: []any{init, terminal}}
+		Calls: filepath.Join(root, "calls.jsonl"), Events: []any{init, terminal}, Semantics: answer}
 	scenario := &claudeScenario{request: request, peer: peer, directory: directory, workspace: workspace, script: script}
 	scenario.save(t)
 	return scenario
@@ -283,7 +284,7 @@ func TestClaudeNativeRefusals(t *testing.T) {
 		{"no-terminal", "terminal result is missing", func(s *claudeScenario) { s.peer.Events = s.peer.Events[:1] }},
 		{"no-native-identity", "identity is missing", func(s *claudeScenario) { s.peer.Events = nil }},
 		{"invalid-answer", "NATIVE_RESULT", func(s *claudeScenario) {
-			delete(objectOrEmpty(s.peer.Events[1]), "structured_output")
+			s.peer.Semantics = nil
 			objectOrEmpty(s.peer.Events[1])["result"] = "not role JSON"
 		}},
 		{"wrong-model", "model selection was not applied", func(s *claudeScenario) { objectOrEmpty(s.peer.Events[0])["model"] = "claude-different-model" }},
@@ -425,21 +426,20 @@ func TestClaudeOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 	}
 }
 
-func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
+func TestClaudeSemanticSubmissionUsageUnavailableAndRoleValidation(t *testing.T) {
 	for _, invalidRole := range []bool{false, true} {
 		s := newClaudeScenario(t, "text-session", true)
 		terminal := objectOrEmpty(s.peer.Events[1])
-		delete(terminal, "structured_output")
 		delete(terminal, "usage")
 		delete(terminal, "modelUsage")
-		terminal["result"] = "```json\n" + mustCanonical(t, map[string]any{"findings": []any{}}) + "\n```"
+		s.peer.Semantics = map[string]any{"findings": []any{}}
 		if invalidRole {
-			terminal["result"] = `{"status":"unexpected","findings":[]}`
+			s.peer.Semantics = map[string]any{"status": "unexpected", "findings": []any{}}
 		}
 		s.save(t)
 		source, err := runNativeJob(s.directory)
 		if err != nil || source["usage_evidence"] != nil {
-			t.Fatalf("fallback = %v, %v", source, err)
+			t.Fatalf("semantic submission = %v, %v", source, err)
 		}
 		answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
 		body, _ := json.Marshal(answer)
@@ -452,7 +452,7 @@ func TestClaudeTextFallbackUsageUnavailableAndRoleValidation(t *testing.T) {
 
 func TestClaudeReconcileOriginalEvidence(t *testing.T) {
 	s := newClaudeScenario(t, "recovered-session", true)
-	peerSubmitSemantics(s.directory, getOf(s.peer.Events[1], "structured_output"))
+	peerSubmitSemantics(s.directory, s.peer.Semantics)
 	nativeSource := map[string]any{"sessionId": "recovered-session", "workspace": s.workspace,
 		"selection": map[string]any{"model": "claude-fixture-model", "reasoning_effort": "high"},
 		"process":   map[string]any{"exit_code": 0, "error": ""}}

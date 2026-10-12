@@ -37,6 +37,7 @@ type nativeToolFact struct {
 type nativeWorkspaceTools struct {
 	runtimeFiles                                          vcs.RuntimeFiles
 	directory, workspace, action, requestDigest, evidence string
+	provider                                              string
 	readOnly                                              bool
 	facts                                                 []nativeToolFact
 	services                                              []ExecutionServices
@@ -96,7 +97,7 @@ func newNativeWorkspaceTools(directory string, services ...ExecutionServices) (*
 	if err != nil {
 		return nil, err
 	}
-	t := &nativeWorkspaceTools{directory: directory, workspace: resolveNativePath(workspace), readOnly: readOnly, requestDigest: textOf(proof["sha256"]), evidence: filepath.Join(directory, "tool-facts.jsonl")}
+	t := &nativeWorkspaceTools{provider: textOf(getOf(request, "provider")), directory: directory, workspace: resolveNativePath(workspace), readOnly: readOnly, requestDigest: textOf(proof["sha256"]), evidence: filepath.Join(directory, "tool-facts.jsonl")}
 	if raw, err := json.Marshal(getOf(request, "runtime_files")); err != nil {
 		return nil, err
 	} else if err := json.Unmarshal(raw, &t.runtimeFiles); err != nil {
@@ -942,6 +943,9 @@ func (t *nativeWorkspaceTools) schemas() []any {
 	}
 	if len(schema) == 0 {
 		schema = map[string]any{"type": "object"}
+	}
+	if t.provider == "zcode" {
+		schema = zcodeSemanticToolSchema(schema)
 	}
 	return []any{nativeWorkspaceToolSchema(t.readOnly, t.material), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": schema}}
 }

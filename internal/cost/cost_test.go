@@ -213,7 +213,7 @@ func TestParseCodexCurrentRequestsAndMirrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ParseTranscript("codex", writeFixture(t, content))
-			if err != nil || got != (Usage{50, 75, 27}) {
+			if err != nil || got != (Usage{InputCacheHitTokens: 50, InputCacheMissTokens: 75, OutputTokens: 27}) {
 				t.Fatalf("usage=%+v err=%v", got, err)
 			}
 		})
@@ -228,7 +228,7 @@ func TestCodexTaskTimingIncludesToolsAndExcludesIdle(t *testing.T) {
 {"timestamp":"2026-09-06T16:10:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two"}}
 `
 	got, err := CodexTaskTiming(writeFixture(t, events))
-	if err != nil || got != (TaskTiming{"2026-09-06T16:00:00Z", "2026-09-06T16:10:02Z", 5000}) {
+	if err != nil || got != (TaskTiming{StartedAt: "2026-09-06T16:00:00Z", CompletedAt: "2026-09-06T16:10:02Z", WallTimeMillis: 5000}) {
 		t.Fatalf("timing=%+v err=%v", got, err)
 	}
 	for _, content := range []string{"{}\n", events + `{"timestamp":"2026-09-06T16:11:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"unfinished"}}` + "\n"} {
@@ -247,7 +247,7 @@ func TestCodexResumeDoesNotMixThreadAndProcessCounters(t *testing.T) {
 {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":55,"cached_input_tokens":30,"output_tokens":15}}}}
 `
 	got, err := ParseTranscript("codex", writeFixture(t, transcript))
-	if err != nil || got != (Usage{70, 85, 35}) {
+	if err != nil || got != (Usage{InputCacheHitTokens: 70, InputCacheMissTokens: 85, OutputTokens: 35}) {
 		t.Fatalf("resume usage=%+v err=%v", got, err)
 	}
 }

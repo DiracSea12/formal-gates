@@ -395,7 +395,7 @@ func TestCodexRPCPeer(t *testing.T) {
 	if peer.Answer != nil {
 		answer = peer.Answer
 	}
-	if status == "completed" && peer.Mode != "bad_json" {
+	if status == "completed" && peer.Mode != "bad_json" && peer.Mode != "commentary" {
 		var semanticSchema any
 		for _, tool := range declaredTools {
 			if getOf(tool, "name") == nativeSemanticTool {
@@ -1317,6 +1317,7 @@ func TestCodexNativeSupervisorAndInterrupt(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				firstPrompt := textOf(getOf(listOf(getOf(getOf(source, "turn_request"), "input"))[0], "text"))
 				s.request["identity"] = getOf(source, "threadId")
 				s.request["prompt"] = "after interrupt"
 				s.directory = filepath.Join(filepath.Dir(s.directory), "resumed")
@@ -1325,8 +1326,13 @@ func TestCodexNativeSupervisorAndInterrupt(t *testing.T) {
 				if _, err := s.execute(t); err != nil {
 					t.Fatal(err)
 				}
+				resumedSource, err := readJSONFile(filepath.Join(s.directory, "native-source.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resumedPrompt := textOf(getOf(listOf(getOf(getOf(resumedSource, "turn_request"), "input"))[0], "text"))
 				answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
-				if getOf(answer, "summary") != "original prompt / after interrupt" {
+				if getOf(answer, "summary") != firstPrompt+" / "+resumedPrompt {
 					t.Fatalf("cancelled history missing: %v", answer)
 				}
 			}
@@ -1353,7 +1359,7 @@ func TestCodexNativeCaptureAndEvidence(t *testing.T) {
 	if err = codexVerifySource(s.directory, source); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(s.directory, "answer.raw.txt"), []byte("changed"), 0o644)
+	os.WriteFile(filepath.Join(s.directory, nativeToolCallsFile), []byte("changed"), 0o644)
 	if err = codexVerifySource(s.directory, source); err == nil || !strings.Contains(err.Error(), "EVIDENCE_CHANGED") {
 		t.Fatalf("proof did not bind original bytes: %v", err)
 	}
@@ -1451,7 +1457,14 @@ func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutc
 			scenario.peer.MessageText = "Correct current detail"
 			scenario.request["read_only"] = true
 			materialPath := filepath.Join(scenario.directory, "material.json")
-			material := worker.Material{ReadOnly: scenario.request["read_only"] == true, Input: protocol.WorkerInput{Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "issued-attempt"}}}
+			input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "issued-attempt"}, Validation: &protocol.ValidationInput{}}
+			schema, err := worker.ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scenario.request["schema"] = schema
+			scenario.peer.Answer = map[string]any{"findings": []any{}}
+			material := worker.Material{ReadOnly: scenario.request["read_only"] == true, Input: input, ResultSchema: schema}
 			if err := writeAtomicJSON(materialPath, material); err != nil {
 				t.Fatal(err)
 			}
@@ -1459,7 +1472,12 @@ func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutc
 			scenario.save(t)
 			claims := 0
 			var receipts []protocol.TaskMessage
-			services := ExecutionServices{ClaimMessage: func(directory, identity string, begin bool) (*protocol.TaskMessage, error) {
+			services := ExecutionServices{Admit: func(directory string, request map[string]any) (func(), error) {
+				if directory != scenario.directory || !valuesEqual(request, codexPlain(t, scenario.request)) {
+					t.Errorf("admission differs from original request: %s %v", directory, request)
+				}
+				return func() {}, nil
+			}, ClaimMessage: func(directory, identity string, begin bool) (*protocol.TaskMessage, error) {
 				if directory != scenario.directory || identity == "" || begin {
 					t.Errorf("wrong original message owner: %s %s %t", directory, identity, begin)
 				}

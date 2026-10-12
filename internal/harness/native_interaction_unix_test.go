@@ -102,7 +102,7 @@ func dshPermissionSteps(continuationOn string, extraPermissions ...string) []pee
 		steps = append(steps, peerStep{On: `"method":"session/prompt"`, Send: extra})
 	}
 	return append(steps,
-		peerStep{On: continuationOn, Files: []peerFile{
+		peerStep{On: continuationOn, Semantics: map[string]any{"status": "PASS", "summary": "observed", "findings": []any{}, "check_reviews": map[string]any{}}, Files: []peerFile{
 			{Path: "native-source.json", Body: `{"sessionId": "s-1", "inputId": "in-1", "turn": 1, "transcriptPath": "/t/root.jsonl"}`},
 			{Path: "native-events.jsonl", Body: events},
 		}, Send: `{"id": 3, "result": {"stopReason": "end_turn"}}`},
@@ -360,7 +360,7 @@ func zcodeInteractionSteps(heldFrame, continuationOn string) func(string) []peer
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: continuationOn, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: continuationOn, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+			{On: continuationOn, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -507,7 +507,7 @@ func TestInteractionZcodeReannounceReAimsFrame(t *testing.T) {
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+			{On: `"decision":"allow"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -547,7 +547,7 @@ func TestInteractionZcodeDualRequest(t *testing.T) {
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: `"id":"server-1","result"`, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: `"id":"server-1","result"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+			{On: `"id":"server-1","result"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -583,7 +583,7 @@ func TestInteractionZcodeWaitsForUserAndTerminal(t *testing.T) {
 			{On: `"method":"session/send"`, Send: `{"id": "@ID@", "result": {"sessionId": "s-1", "accepted": true}}`},
 			{On: `"decision":"allow"`, SleepSecs: 0.1, Send: zcodeEventLine("s-1", 1, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
+			{On: `"decision":"allow"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 2, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
@@ -689,7 +689,7 @@ func TestInteractionZcodeReceiptConfirms(t *testing.T) {
 			{On: `"decision":"allow"`, SleepSecs: 2},
 			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 2, "turn.started", "t-1",
 				zcodeTurnPayload(inputID, ""))},
-			{On: `"decision":"allow"`, Send: zcodeEventLine("s-1", 3, "turn.completed", "t-1",
+			{On: `"decision":"allow"`, Semantics: map[string]any{"status": "PASS", "summary": "observed"}, Send: zcodeEventLine("s-1", 3, "turn.completed", "t-1",
 				zcodeTurnPayload(inputID, `, "resultType": "success", "response": `+zcodeTestResponseJSON))},
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}

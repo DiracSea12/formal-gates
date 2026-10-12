@@ -448,19 +448,21 @@ func TestForEachSessionEvent(t *testing.T) {
 	}
 }
 
-// TestWriteAnswerSemantics pins write_answer: the bytes are kept, a re-run is
-// idempotent, a real difference is refused while line-ending-equal bytes are
-// not, and a framing refusal passes through with its NATIVE_RESULT prefix.
-
 // TestEvidenceSourceShape pins the receipt: provider, identity, the caller's
-// extra keys, then proofs for the four files; usage_evidence is null when
+// extra keys, then proofs for the original evidence files; usage_evidence is null when
 // empty.
 func TestEvidenceSourceShape(t *testing.T) {
-	directory := t.TempDir()
-	for _, name := range nativeSourceFiles {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte("evidence:"+name), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS"})
+	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), map[string]any{"sessionId": "s-1", "turn": 1}); err != nil {
+		t.Fatal(err)
+	}
+	events := peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
+	if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), []byte(events), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSubmittedAnswer(directory); err != nil {
+		t.Fatal(err)
 	}
 	receipt, err := evidenceSource(directory, "dsh", "s-1", map[string]any{
 		"native_turn":    json.Number("1"),
@@ -474,7 +476,7 @@ func TestEvidenceSourceShape(t *testing.T) {
 		"provider": "dsh", "identity": "s-1",
 		"native_turn": json.Number("1"), "transcript": "/t/transcript.jsonl",
 		"usage_evidence": nil,
-		"files":          proofsOf(t, directory, nativeSourceFiles),
+		"files":          proofsOf(t, directory, append(append([]string{}, nativeSourceFiles...), nativeToolCallsFile, nativeToolContextFile)),
 	}
 	if !valuesEqual(receipt, want) {
 		t.Fatalf("receipt = %s", mustCanonical(t, receipt))

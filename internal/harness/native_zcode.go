@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/settings"
+	"maps"
 	"math/big"
 	"os"
 	"os/exec"
@@ -42,6 +43,28 @@ import (
 // The native allowlist restricts builtin and MCP tools. The registered handler
 // takes execution authority from the original issued request.
 var zcodeManagedTools = []any{"mcp__formal-gates__workspace", "mcp__formal-gates__submit_semantics", "AskUserQuestion"}
+
+// ZCode exposes root properties to models; the original closed alternatives
+// retain all semantic requirements and acceptance constraints.
+func zcodeSemanticToolSchema(schema map[string]any) map[string]any {
+	alternatives := listOf(schema["anyOf"])
+	if len(alternatives) == 0 {
+		return schema
+	}
+	properties := map[string]any{}
+	for _, alternative := range alternatives {
+		for name, field := range objectOrEmpty(getOf(alternative, "properties")) {
+			if prior, exists := properties[name]; exists && !valuesEqual(prior, field) {
+				properties[name] = map[string]any{"anyOf": []any{prior, field}}
+			} else {
+				properties[name] = field
+			}
+		}
+	}
+	projected := maps.Clone(schema)
+	projected["properties"] = properties
+	return projected
+}
 
 // The handshake every snapshot carries. A different one means the app-server
 // no longer speaks the protocol this transport was accepted against.
