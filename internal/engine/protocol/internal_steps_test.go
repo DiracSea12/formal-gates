@@ -371,6 +371,10 @@ func TestRepeatedResultPredicateKeepsSemanticFailureAndEvidence(t *testing.T) {
 	if err != nil || accepted.Status != "ACCEPTED" {
 		t.Fatalf("valid FAIL was rejected: %+v %v", accepted, err)
 	}
+	if engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatal("worker completion must wait for independent semantic acceptance")
+	}
+	verifyOriginalFixtureReview(t, engine, event)
 	snapshot := engine.LoadMustSucceed(t)
 	series := snapshot.State.ReviewSeries.ProductReview
 	result := snapshot.State.Results[actionID]
@@ -389,7 +393,7 @@ func TestRepeatedResultPredicateKeepsSemanticFailureAndEvidence(t *testing.T) {
 }
 
 func TestResultPredicateRejectsChangedValidationBindingWithOriginalRetry(t *testing.T) {
-	engine, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
+	engine, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	state.RejectedResults = map[string]RejectedResult{}
 	state.EndedAttempts = map[runtime.TaskKey]Attempt{}
 	binding := state.DispatchBindings[pending.ActionID]

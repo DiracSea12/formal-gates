@@ -25,8 +25,7 @@ func TestReadinessClassificationConstrainsBlockers(t *testing.T) {
 			d.receipt(id)
 			event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, "independent-original-review", protocol.ReviewResultEvidence{
 				Action: review.StartReadiness, DispatchID: id, RequirementRevision: d.revision, Status: "FAIL", GranularityReview: commandPlan(),
-				Findings:     []review.Finding{{Severity: "P1", Category: category, Message: "Use a native library instead of the proposed helper", SeverityRationale: "The proposed helper adds unnecessary implementation work", Requirement: "Use the simplest existing owner", NormalPath: "Technical review of the proposed helper", ActualError: "The proposed helper duplicates native capability", DeferralImpact: "Developer must remove the duplicate helper", Locations: []string{"requirements.md"}, Verification: review.FindingVerification{Scope: "checked confirmed solution", Severity: "this is an implementation choice", Causality: "helper duplicates native operation", Reproduction: "compared solution to existing owner", Classification: "implementation detail"}}},
-				Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the submitted proposed solution and reported classification"},
+				Findings: []review.Finding{{Severity: "P1", Category: category, Message: "Use a native library instead of the proposed helper", SeverityRationale: "The proposed helper adds unnecessary implementation work", Requirement: "Use the simplest existing owner", NormalPath: "Technical review of the proposed helper", ActualError: "The proposed helper duplicates native capability", DeferralImpact: "Developer must remove the duplicate helper", Locations: []string{"requirements.md"}, Verification: review.FindingVerification{Scope: "checked confirmed solution", Severity: "this is an implementation choice", Causality: "helper duplicates native operation", Reproduction: "compared solution to existing owner", Classification: "implementation detail"}}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -34,6 +33,16 @@ func TestReadinessClassificationConstrainsBlockers(t *testing.T) {
 			accepted, _, err := d.f.Submit(event)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if category == "acceptance-entry" {
+				d.run, err = d.f.Show()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d.run.Review.Actions[1].Completed != 0 {
+					t.Fatal("reviewer result bypassed independent classification")
+				}
+				verifyReviewFixture(t, d, event)
 			}
 			snapshot, err := d.f.engine.Load()
 			if err != nil {

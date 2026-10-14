@@ -276,8 +276,8 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 	if code := runInstalledFixture(t, []string{"uninstall", "--host", "codex", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("Codex project uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if remaining := readFile(t, filepath.Join(project, "AGENTS.md")); strings.Contains(remaining, testManagedRulesStartMarker) {
-		t.Fatalf("shared project AGENTS.md still contains managed marker after both hosts uninstall: %q", remaining)
+	if _, err := os.Stat(filepath.Join(project, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("shared project AGENTS.md remains after both hosts uninstall: %v", err)
 	}
 }
 
@@ -314,8 +314,8 @@ func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) 
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("dsh project runtime remains after uninstall: %v", err)
 	}
-	if got := readFile(t, filepath.Join(project, "AGENTS.md")); strings.Contains(got, testManagedRulesStartMarker) {
-		t.Fatalf("dsh project managed rule markers remain after uninstall: %q", got)
+	if _, err := os.Stat(filepath.Join(project, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("dsh project AGENTS.md remains after uninstall: %v", err)
 	}
 }
 
@@ -350,7 +350,6 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 		"insert:",
 		"id: formal-gates-dsh",
 		"name: ./skills/formal-gates/plugin/formal-gates.mjs",
-		"skillRoot: !!js dshHomePath('skills', 'formal-gates')",
 		"dshHome: !!js dshHomePath()",
 		"provider: deepseek-harness",
 		"user-plugin",
@@ -358,6 +357,9 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 		if !strings.Contains(patchText, expected) {
 			t.Fatalf("dsh patch missing %q: %s", expected, patchText)
 		}
+	}
+	if strings.Contains(patchText, "skillRoot") {
+		t.Fatalf("dsh patch contains unused skillRoot configuration: %s", patchText)
 	}
 	assertFileContains(t, filepath.Join(home, ".dsh", "AGENTS.md"), testManagedRuleLatest)
 
@@ -390,9 +392,8 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 	if !strings.Contains(patchText, "user-plugin") || !strings.Contains(patchText, "!!js process.platform") {
 		t.Fatalf("uninstall changed user-owned patch row: %s", patchText)
 	}
-	agentsText := readFile(t, filepath.Join(home, ".dsh", "AGENTS.md"))
-	if strings.Contains(agentsText, testManagedRulesStartMarker) || strings.Contains(agentsText, testManagedRulesEndMarker) {
-		t.Fatalf("dsh managed rule markers remain after uninstall: %q", agentsText)
+	if _, err := os.Stat(filepath.Join(home, ".dsh", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("dsh global AGENTS.md remains after uninstall: %v", err)
 	}
 }
 

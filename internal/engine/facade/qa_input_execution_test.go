@@ -33,8 +33,8 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native QA inputs"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch.v5")
-	design, qi := d.action("engine.qa.design.v5")
+	development, di := d.action("engine.development.batch.v6")
+	design, qi := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(qi)
 	configure(&manifest)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
@@ -56,7 +56,7 @@ func awaitQAInput(t *testing.T, d *validationDriver, ready func(protocol.Validat
 	for {
 		d.drive()
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.qa.execution.v3" && ready(input) {
+			if input.Handler == "engine.qa.execution.v4" && ready(input) {
 				return id, input
 			}
 		}
@@ -618,10 +618,10 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command behavior"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))
 	d.drive()
-	development, di := d.action("engine.development.batch.v5")
+	development, di := d.action("engine.development.batch.v6")
 	d.business(development, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	d.drive()
-	design, qi := d.action("engine.qa.design.v5")
+	design, qi := d.action("engine.qa.design.v6")
 	body := "import subprocess\nimport unittest\nclass Behavior(unittest.TestCase):\n    def test_normal(self):\n        self.assertEqual(subprocess.run(['./app', 'run', 'valid']).returncode, 0)\n    def test_invalid(self):\n        self.assertNotEqual(subprocess.run(['./app', 'run', 'invalid']).returncode, 0)\n"
 	if err := os.WriteFile(filepath.Join(qi.Workspace.Path, "test_recipe.py"), []byte(body), 0600); err != nil {
 		t.Fatal(err)

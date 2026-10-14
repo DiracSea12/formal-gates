@@ -31,21 +31,24 @@ func TestRoleMaterialsKeepObservationsWithoutPhysicalWorkspaceBindings(t *testin
 	record := coverage.ExecutionRecord{CaseID: fact.CaseID, Procedure: procedure, Observation: observation, Comparison: "actual comparison", Result: coverage.ExecutedFail}
 	report := &coverage.ExecutionReport{Records: []coverage.ExecutionRecord{record}}
 	finding := protocol.ObservationFinding{Target: protocol.ValidationTarget{Execution: report}, Evidence: protocol.WorkerResult{Validation: &protocol.ValidationResult{Execution: report}}, FailedCases: []coverage.ExecutionRecord{record}}
-	for _, handler := range []string{"engine.development.batch.v5", "engine.qa.execution.v3", "engine.repair.v6", "engine.repair.verify.v2", "engine.validation.observation.v2", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.qa.execution.v4", "engine.repair.v7", "engine.repair.verify.v2", "engine.validation.observation.v2", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "issued attempt"
 			input.RequirementDocument.Content = "confirmed requirement"
-			if handler == "engine.repair.v6" {
+			if handler == "engine.repair.v7" {
 				input.AvailableRouteCandidates = slices.DeleteFunc(catalog.RouteCandidates(), func(id string) bool { return id == "blackbox" || id == "whitebox" })
 			}
 			v := input.Validation
 			v.Workspace = &protocol.NativeResource{Path: workspace}
 			v.Development = &protocol.DevelopmentInput{Checks: []protocol.CheckEvidence{evidence}}
 			v.ExecutionFacts = []protocol.ExecutionFact{fact}
+			v.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: fact.CaseID, Operations: []coverage.Operation{fact.Operations[0].Parameters.QA.Operation}}}
+			v.RequiredCases, v.PendingCases = []string{fact.CaseID}, []string{fact.CaseID}
+			v.Contract.Manifests = []coverage.AcceptanceManifest{v.Manifest}
 			v.Completed, v.Inherited = []coverage.ExecutionRecord{record}, []coverage.ExecutionRecord{record}
-			v.Repair = &protocol.RepairInput{ExecutionFailures: []protocol.RepairExecutionFailure{{Records: []coverage.ExecutionRecord{record}}}}
+			v.Repair = &protocol.RepairInput{VerificationCases: []string{fact.CaseID}, ExecutionFailures: []protocol.RepairExecutionFailure{{Records: []coverage.ExecutionRecord{record}}}}
 			v.Gate = &protocol.GateInput{Gate: catalog.Gates[0].ID}
 			v.Observation = &protocol.ObservationInput{
 				Findings:    []protocol.ObservationFinding{finding},
@@ -64,14 +67,14 @@ func TestRoleMaterialsKeepObservationsWithoutPhysicalWorkspaceBindings(t *testin
 					t.Fatalf("%s actively sent a mechanical binding %q", handler, physical)
 				}
 			}
-			if handler == "engine.development.batch.v5" || handler == "engine.qa.execution.v3" || handler == "engine.repair.v6" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
+			if handler == "engine.development.batch.v6" || handler == "engine.qa.execution.v4" || handler == "engine.repair.v7" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
 				for _, needed := range []string{"actual execution error", "actual stderr", "stdout proof", "actual executable sha256:tool", "actual environment", "original invocation", "actual output mentions /semantic/path"} {
 					if !strings.Contains(material.Prompt, needed) {
 						t.Fatalf("%s lost actual failure evidence %q", handler, needed)
 					}
 				}
 			}
-			if handler == "engine.qa.execution.v3" || handler == "engine.repair.v6" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
+			if handler == "engine.qa.execution.v4" || handler == "engine.repair.v7" || handler == "engine.repair.verify.v2" || handler == "engine.validation.observation.v2" {
 				if !strings.Contains(material.Prompt, command) {
 					// JSON escaping does not alter the approved value.
 					encoded, _ := json.Marshal(command)

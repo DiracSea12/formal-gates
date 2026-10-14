@@ -28,6 +28,7 @@ import (
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/requirement"
 	"formal-gates/internal/validate"
 )
 
@@ -35,7 +36,8 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	t.Helper()
 	s := newCodexScenario(t)
 	project := s.workspace
-	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(canaryRequirementDocument), 0600); err != nil {
+	const document = "# 命令交付\n\n## 需求点\n\n### REQ-001：完成消息\n\n#### 要求\n公开执行 app.go 时退出 0，输出一行非空完成文本；不约束文本内容或顺序。\n\n#### 验收条件\n- AC-001：go run app.go 退出 0，并输出一行非空完成文本。\n\n#### 来源\n原生命令夹具的执行职责。\n\n## 方案\n在 app.go 的 main 中输出完成消息。\n"
+	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(project, "app.go"), []byte("package main\nfunc main() {}\n"), 0600); err != nil {
@@ -97,6 +99,10 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("candidate build: %v %s", err, out)
 	}
+	t.Setenv("HOME", s.home)
+	t.Setenv("USERPROFILE", s.home)
+	t.Setenv("CODEX_HOME", s.config)
+	t.Setenv("PATH", filepath.Dir(s.home)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
 	if len(installed) > 0 && installed[0] {
 		candidate := t.TempDir()
@@ -127,8 +133,6 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		if err := os.WriteFile(filepath.Join(candidate, "bin", "formal-gates"), body, 0700); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("HOME", s.home)
-		t.Setenv("USERPROFILE", s.home)
 		binary = filepath.Join(s.home, ".local", "bin", "formal-gates")
 		options := validate.InstallOptions{Source: candidate, Host: "codex", Scope: "project", Project: project, BinaryTarget: binary, Force: true, SkipHooks: true}
 		if _, err := validate.Install(options); err != nil {
@@ -146,14 +150,14 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		record := registry.Records[0]
 		admission = facade.Admission{RegistryPath: report.Registry, Target: record.Target, Root: project, Provider: "codex", PackageDigest: record.PackageDigest, InstalledTargetIdentity: record.ID, Generation: record.Generation, Lease: record.Lease, Token: record.Token}
 	}
-	c := engineCanary{t: t, doc: []byte(canaryRequirementDocument)}
+	if err := writeAtomicJSON(filepath.Join(project, ".gates", "config.json"), map[string]any{"capacity": 2, "codexExecutable": filepath.Join(filepath.Dir(s.home), "codex")}); err != nil {
+		t.Fatal(err)
+	}
+	c := engineCanary{t: t, doc: []byte(document)}
 	var f *facade.Facade
 	if len(installed) > 0 && installed[0] {
 		intake := filepath.Join(t.TempDir(), "intake.json")
 		if err := writeAtomicJSON(intake, c.confirmedIntake()); err != nil {
-			t.Fatal(err)
-		}
-		if err := writeAtomicJSON(filepath.Join(project, ".gates", "config.json"), map[string]any{"capacity": 2}); err != nil {
 			t.Fatal(err)
 		}
 		command := exec.Command(binary, "workflow", "start", "--root", project, "--run-id", "native-execution", "--route", "regular", "--vcs", "git", "--intake-receipt", intake, "--machine")
@@ -188,9 +192,6 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		t.Fatal(err)
 	}
 	// Native capture resolves this real peer executable and its isolated config.
-	t.Setenv("HOME", s.home)
-	t.Setenv("CODEX_HOME", s.config)
-	t.Setenv("PATH", filepath.Dir(s.home)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binding, err := NativeBinding("codex")
 	if err != nil {
 		t.Fatal(err)
@@ -473,7 +474,7 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 			t.Fatalf("invalid source-verified body remained blocked: %s", out)
 		}
 		rejected := response.Run.RejectedResults[ref.ActionID]
-		if rejected.Status != "REJECTED_INVALID_RESULT" || rejected.AttemptID != ref.AttemptID || !strings.Contains(rejected.Reason, "verification evidence is missing") || rejected.Payload.InvalidReason != rejected.Reason {
+		if rejected.Status != "REJECTED_INVALID_RESULT" || rejected.AttemptID != ref.AttemptID || !strings.Contains(rejected.Reason, "severity must be P0-P3 and message non-empty") || rejected.Payload.Review == nil || len(rejected.Payload.Review.Findings) != 1 || rejected.Payload.Review.Findings[0].Severity != "P9" || rejected.Payload.InvalidReason != "" {
 			t.Fatalf("original invalid result reason/attempt lost: %+v", rejected)
 		}
 		exhausted := false
@@ -481,11 +482,11 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 			exhausted = exhausted || attempt.RetryExhausted && attempt.Attempts == attempt.MaxAttempts
 		}
 		if !exhausted {
-			t.Fatal("original finite invalid-result policy was not exhausted")
+			t.Fatalf("original finite invalid-result policy was not exhausted: ended=%+v attempts=%+v asks=%+v", response.Run.EndedAttempts, response.Run.Attempts, response.Run.PendingAsks)
 		}
 		invalid := 0
 		for _, result := range response.Run.RejectedResults {
-			if result.Status == "REJECTED_INVALID_RESULT" && strings.Contains(result.Reason, "verification evidence is missing") {
+			if result.Status == "REJECTED_INVALID_RESULT" && strings.Contains(result.Reason, "severity must be P0-P3 and message non-empty") {
 				invalid++
 			}
 		}
@@ -586,10 +587,10 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 // Setup accepts explicit review/control fixtures without claiming native calls.
 // Only the subsequent developer and gate execute against the actual RPC peer.
 func stageNativeReviews(t *testing.T, f *facade.Facade, s *codexScenario, owners ...string) *protocol.GranularityReview {
-	return stageNativeReviewsWithEdit(t, f, s, "", owners...)
+	return stageNativeReviewsWithEdit(t, f, s, "", true, owners...)
 }
 
-func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario, command string, owners ...string) *protocol.GranularityReview {
+func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario, command string, split bool, owners ...string) *protocol.GranularityReview {
 	t.Helper()
 	plan := &protocol.GranularityReview{Reason: "One complete command delivery", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "implementation", Description: "Deliver app.go"}}, Deliverable: "app.go delivery", PublicEntry: "go run app.go", Artifacts: []string{"app.go"}, Interfaces: "Existing command", StateBoundary: "No persistent state", Risk: "Retain command behavior", DoD: []protocol.DevelopmentCriterion{{ID: "delivery", Description: "Deliver the original app.go task"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build -o " + filepath.Join(t.TempDir(), "app") + " app.go"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -count=1 app.go"}}, Rollback: "Restore original app.go", Recovery: "Continue original task", Handoff: "Report original delivery", ContextCost: "One file and its behavior"}}}
 	if command != "" {
@@ -601,6 +602,9 @@ func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario
 		for _, owner := range owners {
 			batch := original
 			batch.ID, batch.Owner = owner, owner
+			if !split {
+				batch.Owner = ""
+			}
 			batch.Artifacts = []string{owner + ".go"}
 			batch.Subtasks = []protocol.DevelopmentSubtask{{ID: owner + "-implementation", Description: "Deliver the confirmed " + owner + " artifact"}}
 			plan.Batches = append(plan.Batches, batch)
@@ -625,6 +629,9 @@ func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario
 		if err := json.Unmarshal(body, &material); err != nil {
 			t.Fatal(err)
 		}
+		if material.Input.Pending.ActionID != ref.ActionID || material.Input.Provider != "codex" || material.Input.Review == nil || material.Input.Review.Action != role || material.Input.Intake == nil || material.Input.Review.RequirementRevision != material.Input.Intake.RequirementRevision || material.Input.RequirementDocument.Content != strings.ReplaceAll(string(readTestFileBytes(t, filepath.Join(s.workspace, material.Input.Intake.RequirementSource))), "\r\n", "\n") {
+			t.Fatal("synthetic review differs from its original action and complete confirmed input")
+		}
 		identity := "setup:" + ref.ActionID
 		spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID(identity), ref.ActionID, "codex", identity, protocol.SpawnStatusSpawned)
 		if err != nil {
@@ -636,16 +643,49 @@ func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario
 		if err := lifecycle.ObserveNativeCompletion(s.workspace, "native-execution", ref.ActionID, "codex", identity); err != nil {
 			t.Fatal(err)
 		}
-		evidence := protocol.ReviewResultEvidence{Action: role, DispatchID: ref.ActionID, RequirementRevision: material.Input.Review.RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "Explicit fixture review for the native continuation scenario"}}
+		evidence := protocol.ReviewResultEvidence{Action: role, DispatchID: ref.ActionID, RequirementRevision: material.Input.Review.RequirementRevision, Status: "PASS", Findings: []review.Finding{}}
 		if role == review.StartReadiness {
+			for i := range plan.Batches {
+				if plan.Batches[i].Owner == "" || plan.Batches[i].Owner == "master-merge" {
+					plan.Batches[i].RequirementPoints = requirement.PointIDs(material.Input.RequirementPoints)
+				}
+			}
 			evidence.GranularityReview = plan
 		}
 		event, err := protocol.NewReviewWorkerResultEvent(protocol.EventID("setup-result:"+ref.ActionID), ref.ActionID, "codex", "sha256:fixture-review", evidence)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := f.Submit(event); err != nil {
+		accepted, run, err := f.Submit(event)
+		if err != nil || accepted.Status != "ACCEPTED" {
+			t.Fatal("original synthetic review was rejected", accepted, err)
+		}
+		if len(run.ReviewVerifications) != 1 || run.ReviewVerifications[0].Review == nil || !reflect.DeepEqual(*run.ReviewVerifications[0].Review, evidence) || len(evidence.Findings) != 0 {
+			t.Fatal("independent actor did not receive the exact original zero-finding fixture", run.ReviewVerifications)
+		}
+		if role == review.StartReadiness {
+			if err := protocol.ValidateGranularity(plan); err != nil {
+				t.Fatal(err)
+			}
+			if err := protocol.ValidateProjectChecks(plan); err != nil {
+				t.Fatal(err)
+			}
+		}
+		candidate, err := f.PrepareControl(facade.ControlInput{ReviewVerification: &facade.ReviewVerificationInput{Result: 1, Findings: []protocol.ReviewFindingVerification{}, Verification: []string{
+			"Compared the original Codex action and current confirmed revision in its exact issued material.",
+			"The original synthetic report has no findings; readiness preserves complete finite duties and passes project-check validation.",
+			"Read the complete original confirmed document and compared the retained raw report with the submitted fixture.",
+			"The original zero-finding report has no locations; its complete confirmed source bytes were compared directly.",
+			"The fixture's native Git input contains app.go; its declared command entry and component artifacts supply the normal responsibility.",
+			"Readiness assigns the original points to command or master integration while component DoD remains explicit.",
+			"The checked content concerns the issued product or readiness action and its confirmed input only.",
+			"The original report has zero findings, so no severity or user disposition is introduced.",
+		}}})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if accepted, _, err := f.SubmitControl(candidate); err != nil || accepted.Status != "ACCEPTED" {
+			t.Fatal("independent synthetic review acceptance failed", accepted, err)
 		}
 	}
 	return plan
@@ -706,7 +746,7 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 		t.Fatal(err)
 	}
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			ref := run.WorkerMaterials[id]
 			body, err := os.ReadFile(ref.Path)
 			if err != nil {
@@ -729,8 +769,8 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	root := fRoot(development)
 	submit := func(event protocol.Event) {
 		t.Helper()
-		if _, _, err := f.Submit(event); err != nil {
-			t.Fatal(err)
+		if accepted, _, err := f.Submit(event); err != nil || accepted.Status != "ACCEPTED" && accepted.Status != "DUPLICATE" {
+			t.Fatal("original native setup event was rejected", accepted, err)
 		}
 	}
 	spawn, err := protocol.NewSpawnReceiptEvent("development-start", development.ActionID, "codex", "setup-development", protocol.SpawnStatusSpawned)
@@ -745,6 +785,16 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	completion := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Handoff: "The original command is ready for its approved checks"}
+	if len(original.RequirementPoints) != 1 || original.RequirementPoints[0].ID != "AC-001" || original.RequirementPoints[0].Text != "go run app.go 退出 0，并输出一行非空完成文本。" {
+		t.Fatal("native fixture received another requirement duty", original.RequirementPoints)
+	}
+	command := exec.Command("go", "run", "app.go")
+	command.Dir = original.Validation.Workspace.Path
+	output, err := command.CombinedOutput()
+	if err != nil || len(bytes.Split(bytes.TrimSpace(output), []byte{'\n'})) != 1 || len(bytes.TrimSpace(output)) == 0 {
+		t.Fatal("actual native setup command did not satisfy its single duty", err, string(output))
+	}
+	completion.RequirementResults = []requirement.PointResult{{PointID: original.RequirementPoints[0].ID, Status: "PASS", Evidence: "go run app.go exited 0 and returned one completion line: " + string(output)}}
 	for _, criterion := range original.Validation.Development.Batch.DoD {
 		completion.DoD[criterion.ID] = "Delivered the original command artifact"
 	}
@@ -773,7 +823,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err := lifecycle.ObserveNativeCompletion(root, "native-execution", gate, "codex", "setup-gate"); err != nil {
 		t.Fatal(err)
 	}
-	submit(protocol.Event{ID: "gate-failure", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: "codex", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:gate-failure", Validation: &protocol.ValidationResult{Binding: run.ValidationInputs[gate].Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "Reported command ordering differs from the confirmed ordering"}}}}})
+	submit(protocol.Event{ID: "gate-failure", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: "codex", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:gate-failure", Validation: &protocol.ValidationResult{Binding: run.ValidationInputs[gate].Binding, Status: "FAIL", RequirementResults: []protocol.RequirementDecision{{PointID: original.RequirementPoints[0].ID, Status: "FAIL", Evidence: "The synthetic gate report asserts an additional ordering constraint for the observed completion line", FindingIndexes: []int{0}}}, Findings: []review.Finding{{Severity: "P2", Requirement: original.RequirementPoints[0].ID, Message: "Reported command ordering differs from the confirmed ordering"}}}}})
 	run, err = f.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -1184,18 +1234,16 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision := "sha256:" + intake.Revision
-	var choices []protocol.RequirementWorkDecision
+	var choices []facade.WorkChoice
 	for _, work := range run.RequirementWork {
-		choices = append(choices, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "Formatting preserves this original duty"})
+		choices = append(choices, facade.WorkChoice{Disposition: protocol.RequirementWorkCarry, Reason: "Formatting preserves this original duty " + work.ActionID})
 	}
 	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"same original inputs and obligations"}}
-	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, Impact: impact, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
-	event, err := protocol.NewRequirementRequestEvent("held-requirement", pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	change, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &facade.RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Work: choices, Impact: *impact}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.Submit(event)
+	_, run, err = f.SubmitControl(change)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1607,7 +1655,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	topology := &protocol.TopologyDecision{Decision: "split", SplitCount: 2, Slices: []string{"core", "tooling"}, Parallel: "Two independent deliveries", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}, {AC: "AC-002", Owner: "master-merge"}}}
+	topology := &protocol.TopologyDecision{Decision: "split", SplitCount: 2, Slices: []string{"core", "tooling"}, Parallel: "Two independent deliveries", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}}
 	preview, err := f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
 	if err != nil {
 		t.Fatal(err)
@@ -1663,7 +1711,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	var merge facade.WorkerMaterial
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "MERGE" {
+		if input.Handler == "engine.qa.design.v6" && input.Manifest.Binding.ReviewKind == "MERGE" {
 			merge = run.WorkerMaterials[id]
 		}
 	}

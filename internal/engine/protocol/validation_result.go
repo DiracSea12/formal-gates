@@ -264,7 +264,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	requirementCarry := b.Generation != s.Validation.Generation
 	routeCarry := b.RouteScope != "" && b.RouteScope != s.validationRouteDigest()
 	if requirementCarry || routeCarry {
-		if requirementCarry && !s.prewaveCarryAuthorized(b.Task, e.cfg.Definition) {
+		if requirementCarry && !s.validationWorkCarryAuthorized("", b.Task) {
 			return validationError("result has no current requirement carry authorization")
 		}
 		projected := *p
@@ -294,29 +294,29 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		p = &projected
 	}
 	role := s.validationRole(b.Task, e.cfg.Definition)
-	if p.Development != nil && len(p.Development.RequirementResults) > 0 && role != "engine.repair.v6" {
+	if p.Development != nil && len(p.Development.RequirementResults) > 0 && role != "engine.repair.v7" {
 		return validationError("direct point evidence belongs to standalone repair")
 	}
-	if p.Status == "CONTINUE" && role != "engine.development.batch.v5" && role != "engine.repair.v6" {
+	if p.Status == "CONTINUE" && role != "engine.development.batch.v6" && role != "engine.repair.v7" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair.v6" {
+	if p.GranularityReview != nil && role != "engine.repair.v7" {
 		return validationError("only a repair worker can submit a repair execution plan")
 	}
-	if p.DesignChange != nil && role != "engine.qa.design.v5" {
+	if p.DesignChange != nil && role != "engine.qa.design.v6" {
 		return validationError("only QA design can change its manifest")
 	}
-	if len(p.QACommands) > 0 && role != "engine.qa.execution.v3" {
+	if len(p.QACommands) > 0 && role != "engine.qa.execution.v4" {
 		return validationError("only QA execution can bind a missing invocation")
 	}
-	if p.Checkpoint && role != "engine.qa.design.v5" && role != "engine.qa.execution.v3" {
+	if p.Checkpoint && role != "engine.qa.design.v6" && role != "engine.qa.execution.v4" {
 		return validationError("only QA design and execution can record a checkpoint")
 	}
 	if len(p.RequirementResults) > 0 && role != "engine.gate.v3" {
 		return validationError("independent requirement judgments belong to the gate")
 	}
 	mode := s.validationMode(b.Task)
-	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution.v3" && p.Checkpoint && p.Execution != nil) {
+	if record.Outcome != OutcomePass && !(record.Outcome == OutcomeRuntimeError && role == "engine.qa.execution.v4" && p.Checkpoint && p.Execution != nil) {
 		return validationError("semantic result requires a completed worker transport")
 	}
 	count := 0
@@ -351,13 +351,13 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		}
 	case "engine.repair.verify.v2":
 		return s.acceptRepairComparison(record, e.cfg.Definition)
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		return s.acceptRepairResult(record)
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
 		if count != 1 || p.Development == nil || (p.Status != "PASS" && p.Status != "CONTINUE") || strings.TrimSpace(p.Development.Summary) == "" {
 			return validationError("development requires actual work and summary")
 		}
-		if role == "engine.development.batch.v5" {
+		if role == "engine.development.batch.v6" {
 			_, _, batch, ok := s.developmentBatch(p.Binding.Task, e.cfg.Definition)
 			if !ok {
 				return validationError("development task is not a confirmed batch")
@@ -398,7 +398,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			}
 
 		}
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		if (count != 1 && !(count == 2 && mode == coverage.ReviewWhitebox && p.Development != nil)) || p.Manifest == nil || p.Status != "PASS" {
 			return validationError("QA design requires one manifest")
 		}
@@ -474,7 +474,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if p.Review.Verdict() == coverage.StatusFail {
 			set.reopen(nil)
 		}
-	case "engine.qa.execution.v3", "engine.gate.v3":
+	case "engine.qa.execution.v4", "engine.gate.v3":
 		w := s.validationWave(b.WaveID)
 		_, repairTarget := s.repairGateTarget(b.Task)
 		if w == nil || w.Status != "COLLECTING" && repairTarget == nil && !(w.Status == "INVALIDATED" && s.validationCarryAuthorized(record.ActionID)) {
@@ -484,7 +484,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		if target == nil || target.Status == "DISPOSED" || target.Status == "PASS" || target.Status == "FAIL" {
 			return validationError("validation target is already settled or unknown")
 		}
-		if role == "engine.qa.execution.v3" {
+		if role == "engine.qa.execution.v4" {
 			if len(p.QACommands) > 0 {
 				if count != 1 || !p.Checkpoint || p.Status != "PASS" || len(p.Findings) != 0 {
 					return validationError("QA command binding records only a checkpoint, not a verdict")
@@ -520,7 +520,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			id := validationFindingID(w.ID, b.Task.String(), i, raw)
 			s.Validation.Findings[id] = &ValidationFinding{ID: id, WaveID: w.ID, Target: b.Task.String(), Raw: &raw}
 		}
-		if role == "engine.qa.execution.v3" {
+		if role == "engine.qa.execution.v4" {
 			for _, row := range target.Execution.Records {
 				if row.Result != coverage.ExecutedFail {
 					continue

@@ -109,7 +109,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if _, rejected := s.RejectedResults[id]; rejected {
 		return WorkerInput{}, false
 	}
-	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v5" || s.validationRole(pending.Task, cd) == "engine.repair.v6") && !s.developmentContinuation(id, cd) {
+	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v6" || s.validationRole(pending.Task, cd) == "engine.repair.v7") && !s.developmentContinuation(id, cd) {
 		return WorkerInput{}, false
 	}
 	var step *compiler.CompiledStep
@@ -141,13 +141,13 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	} else {
 		return WorkerInput{}, false
 	}
-	if input.Handler == "engine.qa.execution.v3" {
+	if input.Handler == "engine.qa.execution.v4" {
 		wave := s.validationWave(input.Validation.Binding.WaveID)
 		if wave == nil || !s.qaComparisonReady(wave.Targets[pending.Task.String()], cd) {
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair.v6" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v7" || input.Review != nil && input.Review.Action == review.StartReadiness {
 		for _, check := range s.fullProjectChecks() {
 			if check.Command != "" {
 				input.ApprovedChecks = append(input.ApprovedChecks, check)
@@ -165,7 +165,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			}
 		}
 	}
-	if input.Handler == "engine.repair.v6" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v7" || input.Review != nil && input.Review.Action == review.StartReadiness {
 		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
 	}
 	input.RequirementPoints = s.workerRequirementPoints(input)

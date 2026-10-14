@@ -104,44 +104,15 @@ func (s *State) designReopening(mode coverage.ReviewKind) (string, uint64) {
 
 func (s *State) reviewTask(mode coverage.ReviewKind, generation uint64, version string, cd *compiler.CompiledDefinition) runtime.TaskKey {
 	set := s.Validation.Sets[mode]
-	if source, carried := s.carriedReviewSource(mode); carried && version == set.Version {
-		generation = source.Generation
-	}
 	return pipelineTask(cd, "engine.qa.review.rationale.v2", fmt.Sprintf("%d:%s:%s:%s:%d", generation, mode, version, strings.TrimPrefix(digestOfCanonical(set.DesignTask), "sha256:"), len(set.ReviewHistory)+1))
-}
-
-// A review derives its unchanged input occurrence from its carried design.
-// Its complete manifest version and review history remain part of reviewTask.
-func (s *State) carriedReviewSource(mode coverage.ReviewKind) (WorkBinding, bool) {
-	set := s.Validation.Sets[mode]
-	if set != nil && s.validationWorkCarryAuthorized("", set.DesignTask) {
-		for _, binding := range s.DispatchBindings {
-			if binding.Task == set.DesignTask {
-				return binding, true
-			}
-		}
-	}
-	return WorkBinding{}, false
-}
-
-func (s *State) prewaveCarryAuthorized(task runtime.TaskKey, cd *compiler.CompiledDefinition) bool {
-	if _, explicit := s.requirementWorkReplacement(task); explicit {
-		return s.validationWorkCarryAuthorized("", task)
-	}
-	if s.validationRole(task, cd) != "engine.qa.review.rationale.v2" {
-		return false
-	}
-	mode := s.validationMode(task)
-	source, carried := s.carriedReviewSource(mode)
-	return carried && task == s.reviewTask(mode, source.Generation, s.Validation.Sets[mode].Version, cd)
 }
 
 // issuedPrewaveSources preserves the run/child identity of this validation
 // owner and restores material revisions only for explicitly carried work.
-func (s *State) issuedPrewaveSources(b WorkBinding, cd *compiler.CompiledDefinition) (coverage.SourceBinding, bool) {
+func (s *State) issuedPrewaveSources(b WorkBinding) (coverage.SourceBinding, bool) {
 	source := s.coverageContract(nil).RequiredSources.Binding
 	if b.Generation != s.Validation.Generation {
-		if !s.prewaveCarryAuthorized(b.Task, cd) {
+		if !s.validationWorkCarryAuthorized("", b.Task) {
 			return coverage.SourceBinding{}, false
 		}
 		receipt := s.intakeConfirmationForWork(b)
@@ -162,20 +133,20 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
 	}
-	if role != "engine.qa.design.v5" && role != "engine.qa.review.rationale.v2" {
+	if role != "engine.qa.design.v6" && role != "engine.qa.review.rationale.v2" {
 		return true
 	}
 	if s.Validation == nil {
 		return false
 	}
-	issuedSources, current := s.issuedPrewaveSources(b, cd)
+	issuedSources, current := s.issuedPrewaveSources(b)
 	if !current {
 		return false
 	}
 	mode := s.validationMode(b.Task)
 	set := s.Validation.Sets[mode]
 	source := s.sourceValidationTask(b.Task)
-	if role == "engine.qa.design.v5" {
+	if role == "engine.qa.design.v6" {
 		if set != nil && set.Status != "DRAFT" && set.Status != "THAWED" {
 			return false
 		}
@@ -260,7 +231,7 @@ func (s *State) prewaveInputsCurrent(b WorkBinding) bool {
 // A carried target retains its original wave binding while the current wave
 // may project that exact Task; candidate equality alone grants no authority.
 func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinition) bool {
-	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.prewaveCarryAuthorized(b.Task, cd) {
+	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
 		return false
 	}
 	if s.validationRole(b.Task, cd) == "engine.validation.observation.v2" {
@@ -271,7 +242,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		context, current := s.repairComparisonContext(b.Task, cd)
 		return current && context.binding == b && s.repairComparisonResult(b.Task) == nil
 	}
-	if s.validationRole(b.Task, cd) == "engine.development.batch.v5" {
+	if s.validationRole(b.Task, cd) == "engine.development.batch.v6" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil
 	}
@@ -282,7 +253,7 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 		_, current := s.repairGateBinding(b.Task, s.repairWork())
 		return current && (target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED")
 	}
-	if s.validationRole(b.Task, cd) == "engine.repair.v6" {
+	if s.validationRole(b.Task, cd) == "engine.repair.v7" {
 		for _, work := range s.repairWork() {
 			if work.task == b.Task && work.wave.ID == b.WaveID {
 				return work.result == nil

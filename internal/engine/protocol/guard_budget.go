@@ -307,7 +307,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			set := state.Validation.Sets[mode]
 			if set == nil {
 				if mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge || state.Validation.AuthoringWorkspace != "" {
-					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v5", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+					if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v6", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
 						return guard.Basis{}, err
 					}
 				}
@@ -315,7 +315,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			}
 			switch set.Status {
 			case "DRAFT", "THAWED":
-				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v5", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
+				if err := declare(pipelineTask(e.cfg.Definition, "engine.qa.design.v6", state.nextDesignScope(mode, e.cfg.Definition))); err != nil {
 					return guard.Basis{}, err
 				}
 			case "REVIEW":
@@ -469,7 +469,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
 			return guard.Provenance{}, 0, false
@@ -484,7 +484,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		}
 		digest := planContractDigest(plan)
 		return guard.Provenance{Kind: guard.BatchSource, Identity: guard.Identity{ID: "development-plan", Revision: digest}}, maxAttempts, true
-	case "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
+	case "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}
@@ -540,7 +540,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}

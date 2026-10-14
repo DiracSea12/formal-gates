@@ -8,6 +8,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/harness"
 )
 
@@ -106,6 +107,51 @@ func workflowRunView(run facade.Run) map[string]any {
 		questions = append(questions, question)
 	}
 	view["questions"] = questions
+	corrections := []map[string]any{}
+	for actionIndex, action := range run.Review.Actions {
+		for candidateIndex, candidate := range action.Candidates {
+			if candidate.Excluded {
+				continue
+			}
+			for findingIndex, finding := range candidate.Findings {
+				if (finding.EffectiveDecision == "CONFIRM" || finding.EffectiveDecision == "RESEVERITIZE") && !finding.Revised {
+					corrections = append(corrections, map[string]any{"review": actionIndex + 1, "candidate": candidateIndex + 1, "finding": findingIndex + 1, "action": action.Action, "message": finding.Message, "severity": finding.Severity})
+				}
+			}
+		}
+	}
+	if len(corrections) > 0 {
+		view["reviewCorrections"] = corrections
+	}
+	if len(run.ReviewVerifications) != 0 {
+		verifications := []map[string]any{}
+		for index, result := range run.ReviewVerifications {
+			r := result.Review
+			verification := map[string]any{"result": index + 1, "action": r.Action, "requirementRevision": r.RequirementRevision, "message": r.Message, "findings": r.Findings, "checks": review.RequiredVerificationChecks()}
+			context := run.ReviewVerificationContexts[result.ActionID]
+			verification["granularityReview"] = r.GranularityReview
+			if context.Input != nil {
+				input := context.Input
+				verification["requirement"] = input.RequirementDocument.Content
+				verification["materials"] = input.Materials
+				verification["requirementPoints"] = input.RequirementPoints
+				verification["scope"] = input.Scope
+				verification["approvedPlan"] = input.ApprovedPlan
+			}
+			if context.Intake != nil {
+				verification["materials"] = context.Intake.Materials
+				verification["requirement"] = context.Intake.Content
+				if context.Intake.RequirementDocument != nil {
+					verification["requirementPoints"] = context.Intake.RequirementDocument.Requirements
+				}
+			}
+			verifications = append(verifications, verification)
+		}
+		view["reviewVerifications"] = verifications
+		if run.Next.Kind == decision.KindOperator {
+			next["action"] = "next --review-result"
+		}
+	}
 	if run.PendingRequirementAsk != nil {
 		work := []map[string]any{}
 		for index, item := range run.RequirementWork {
@@ -120,6 +166,7 @@ func workflowControlRunViews(runs []facade.Run) map[string]map[string]any {
 	views := make(map[string]map[string]any, len(runs))
 	number := 0
 	nodeNumber := 0
+	reviewNumber := 0
 	for _, run := range runs {
 		view := workflowRunView(run)
 		for _, question := range view["questions"].([]map[string]any) {
@@ -130,6 +177,12 @@ func workflowControlRunViews(runs []facade.Run) map[string]map[string]any {
 			for _, node := range nodes {
 				nodeNumber++
 				node["node"] = nodeNumber
+			}
+		}
+		if verifications, ok := view["reviewVerifications"].([]map[string]any); ok {
+			for _, verification := range verifications {
+				reviewNumber++
+				verification["result"] = reviewNumber
 			}
 		}
 		views[run.RunID] = view

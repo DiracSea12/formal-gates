@@ -840,7 +840,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	for _, fact := range resumed.facts {
 		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Handler: "engine.qa.design.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","test":{"read":%d,"symbol":2}}],"coverage":[]}`, originalRead))
 	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
 	if err != nil {
@@ -896,7 +896,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
 	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	for _, handler := range []string{"engine.development.batch.v5", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v6", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v7", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			material.Input.Handler = handler
 			if err := writeAtomicJSON(path, material); err != nil {

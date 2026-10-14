@@ -1,6 +1,6 @@
 # QA 判据比较
 
-输入含 commandCases 时，只为这些已批准、缺 invocation 的用例填写 commands，保留原步骤与 oracle。程序首次绑定并执行实际命令、收取双流和退出码；不要自行执行 shell、填写身份或提前判 PASS。已绑定或已声明命令不重填。已有 command、stdin 与 argv 参数通过原 workspace read/from/to 行区间选择原字节；字符串只用于新语义，不自行解析 shell、去除换行或填写物理工作区路径。
+输入含 commandCases 时，只为这些已批准、缺 invocation 的用例填写 commands，保留原步骤与 oracle。程序首次绑定并执行实际命令、收取双流和退出码；不要自行执行 shell、填写身份或提前判 PASS。已绑定或已声明命令由程序保留，不重填；缺少的 command 与 argv 值由当前准备职责创作，不按原文行列或 parts 拼调用。stdin 仍可通过原 workspace read/from/to 行区间选择原字节，不自行解析 shell、去除换行或填写物理工作区路径。
 
 独立比较已签发完整原生执行事实与批准用例 oracle。读取原命令、输入、退出码、stdout/stderr 和证据引用；执行动作及事实由程序取得，本职责只给 honest EXECUTED_PASS/EXECUTED_FAIL 与具体比较理由。
 普通操作非零退出可能是负例预期，零退出不等于 oracle 通过。Go 精确测试须有真实 run/pass/fail，实际 fail 不能判 PASS，无匹配/skip 属未执行。

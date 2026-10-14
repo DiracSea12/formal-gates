@@ -418,7 +418,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				if !slices.Contains(gates, "blackbox") {
 					return
 				}
-				id, input := d.action("engine.qa.design.v5")
+				id, input := d.action("engine.qa.design.v6")
 				manifest := simpleManifest(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				d.drive()
@@ -457,7 +457,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				}
 			}
 			if slices.Contains(gates, "blackbox") {
-				id, input := d.action("engine.qa.execution.v3")
+				id, input := d.action("engine.qa.execution.v4")
 				report := executionFor(input)
 				tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -480,12 +480,13 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 }
 func TestMasterRequirementBarrierProtectsChildWrites(t *testing.T) {
 	master, child := controlChildren(t)
+	child.drive()
 	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	master.submit(request)
-	route := protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: sliceLanePlan()}}
+	route := protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}
 	preview, err := child.f.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)
@@ -760,7 +761,11 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:topology", ImpactDigest: "sha256:affected-slice", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, RedoTopology: true, Children: choices, Impact: &protocol.RequirementImpact{ChangedItems: []string{"affected slice boundary"}, TransitiveImpacts: []string{"replacement route"}, CarryReasons: []string{"core evidence and ownership unchanged"}}}
+	intake, err := prepareConfirmedIntake(master.f.root, master.run.IntakeConfirmationReceipt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:topology", ImpactDigest: "sha256:affected-slice", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, RedoTopology: true, Children: choices, Impact: &protocol.RequirementImpact{ChangedItems: []string{"affected slice boundary"}, TransitiveImpacts: []string{"replacement route"}, CarryReasons: []string{"core evidence and ownership unchanged"}}}
 	for _, work := range master.run.RequirementWork {
 		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master obligation"})
 	}
@@ -770,8 +775,7 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 	}
 	master.submit(request)
 	ask := master.run.PendingRequirementAsk
-	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoStartReadiness: pkg.RedoStartReadiness, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route and its development plan"}}})
-	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, RedoStartReadiness: pkg.RedoStartReadiness, RedoTopology: true, Children: choices, Impact: pkg.Impact, Reason: "preserve exact core and replace affected route and its development plan"}}}.WithRequirementDocument(document))
 	master.revision = revision
 	master.drive()
 	passPreDevelopmentReviews(t, master, splitCommandPlan("lane-core", "lane-io"), review.StartReadiness)
@@ -901,7 +905,11 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 			}
 		}
 	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-document", ImpactDigest: "sha256:child-revalidation", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"confirmed document"}, TransitiveImpacts: []string{"fresh child gates"}, CarryReasons: []string{"development and route remain unchanged"}}}
+	intake, err := prepareConfirmedIntake(master.f.root, master.run.IntakeConfirmationReceipt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:confirmed-document", ImpactDigest: "sha256:child-revalidation", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"confirmed document"}, TransitiveImpacts: []string{"fresh child gates"}, CarryReasons: []string{"development and route remain unchanged"}}}
 	for _, work := range master.run.RequirementWork {
 		pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master inputs"})
 	}
@@ -911,8 +919,7 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 	}
 	master.submit(request)
 	ask := master.run.PendingRequirementAsk
-	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, Reason: "confirm the complete changed and carried inventory"}}})
-	master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, Reason: "confirm the complete changed and carried inventory"}}}.WithRequirementDocument(document))
 	if driverState(t, master).SliceReceiptQualified(ready) || driverState(t, master).SliceReceipts[child.f.runID].Digest != ready.Digest {
 		t.Fatal("redo lost frozen evidence or retained its successful qualification")
 	}

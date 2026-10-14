@@ -19,7 +19,9 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/requirement"
 	"sync"
 )
 
@@ -257,8 +259,8 @@ func (d *candidateDriver) driveOnce() {
 	}
 }
 
-func candidatePlan() *protocol.GranularityReview {
-	return &protocol.GranularityReview{Reason: "One command is a cohesive deliverable.", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", Subtasks: []protocol.DevelopmentSubtask{{ID: "input", Description: "Validate input"}}, Deliverable: "Command validates input", PublicEntry: "app", Artifacts: []string{"app.go"}, Interfaces: "Command arguments", StateBoundary: "No persistent command state", Risk: "Invalid input", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Command contract holds"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "Revert app.go", Recovery: "Run command again", Handoff: "Command ready", ContextCost: "One small package"}}}
+func candidatePlan(points []string) *protocol.GranularityReview {
+	return &protocol.GranularityReview{Reason: "One command is a cohesive deliverable.", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{{ID: "command", RequirementPoints: points, Subtasks: []protocol.DevelopmentSubtask{{ID: "input", Description: "Validate input"}}, Deliverable: "Command validates input", PublicEntry: "app", Artifacts: []string{"app.go"}, Interfaces: "Command arguments", StateBoundary: "No persistent command state", Risk: "Invalid input", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Command contract holds"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build the complete command project"}, {ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Run the complete command project suite"}}, Rollback: "Revert app.go", Recovery: "Run command again", Handoff: "Command ready", ContextCost: "One small package"}}}
 }
 func (d *candidateDriver) reviews() {
 	for _, kind := range []review.Action{review.ProductReview, review.StartReadiness} {
@@ -277,11 +279,24 @@ func (d *candidateDriver) reviews() {
 		}
 		d.submit(event)
 		d.observeLifecycle(id)
-		result := protocol.ReviewResultEvidence{Action: kind, DispatchID: id, RequirementRevision: d.p.intake.RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "The confirmed command requirement has a runnable public input contract."}}
+		var material worker.Material
+		if err := json.Unmarshal(readInstalledFile(d.t, d.run.WorkerMaterials[id].Path), &material); err != nil {
+			d.t.Fatal(err)
+		}
+		if material.Input.Pending.ActionID != id || material.Input.Provider != "codex" || material.Input.Review == nil || material.Input.Review.Action != kind || material.Input.Review.RequirementRevision != d.p.intake.RequirementRevision || material.Input.RequirementDocument.Content == "" {
+			d.t.Fatal("independent check found a different or incomplete original review input")
+		}
+		result := protocol.ReviewResultEvidence{Action: kind, DispatchID: id, RequirementRevision: d.p.intake.RequirementRevision, Status: "PASS", Findings: []review.Finding{}}
 		if kind == review.StartReadiness {
-			result.GranularityReview = candidatePlan()
+			points := requirement.PointIDs(material.Input.RequirementPoints)
+			result.GranularityReview = candidatePlan(points)
 			if d.plan != nil {
 				result.GranularityReview = d.plan
+				for i := range d.plan.Batches {
+					if !d.plan.Batches[i].Spike {
+						d.plan.Batches[i].RequirementPoints = slices.Clone(points)
+					}
+				}
 			}
 		}
 		event, err = protocol.NewReviewWorkerResultEvent(d.id(), id, "codex", string(d.id()), result)
@@ -289,6 +304,42 @@ func (d *candidateDriver) reviews() {
 			d.t.Fatal(err)
 		}
 		d.submit(event)
+		if len(d.run.ReviewVerifications) != 1 {
+			d.t.Fatal("original raw review did not require independent acceptance", d.run.ReviewVerifications)
+		}
+		raw := d.run.ReviewVerifications[0]
+		if raw.ActionID != id || raw.Provider != "codex" || raw.Review == nil || !reflect.DeepEqual(*raw.Review, result) || len(raw.Review.Findings) != 0 {
+			d.t.Fatal("independent check found changed raw content or an unexpected finding", raw)
+		}
+		if kind == review.StartReadiness {
+			if err := protocol.ValidateGranularity(raw.Review.GranularityReview); err != nil {
+				d.t.Fatal(err)
+			}
+			if err := protocol.ValidateProjectChecks(raw.Review.GranularityReview); err != nil {
+				d.t.Fatal(err)
+			}
+			for _, batch := range raw.Review.GranularityReview.Batches {
+				if !batch.Spike && !reflect.DeepEqual(batch.RequirementPoints, requirement.PointIDs(material.Input.RequirementPoints)) {
+					d.t.Fatal("command contribution differs from the original confirmed points", batch)
+				}
+				if batch.Spike && len(batch.RequirementPoints) != 0 {
+					d.t.Fatal("spike conclusion claims completed command points", batch)
+				}
+			}
+		}
+		if source := readInstalledFile(d.t, filepath.Join(d.p.project, d.p.intake.RequirementSource)); string(source) != candidateDocument {
+			d.t.Fatal("independent check consumed a different confirmed command requirement")
+		}
+		d.control(facade.ControlInput{ReviewVerification: &facade.ReviewVerificationInput{Result: 1, Findings: []protocol.ReviewFindingVerification{}, Verification: []string{
+			"Compared the original action, Codex provider and confirmed requirement revision in its complete issued material.",
+			"The original raw PASS has no findings; readiness, when supplied, has finite duties and passes the project-check validator.",
+			"Read the complete confirmed command source and compared the original raw result with the issued review contract.",
+			"The original raw report has no finding rows or locations; its source is the confirmed project document.",
+			"The admitted native Git baseline contains app.go and go.mod; readiness declares the public app entry.",
+			"Compared readiness command and extension duties with the original points; spike conclusions claim no completion.",
+			"The verified content concerns this run's product or readiness contract and original command requirement only.",
+			"The original raw report has zero findings; no severity or user disposition is invented.",
+		}}})
 		d.drive()
 	}
 	opened, err := facade.Open(d.p.project, "candidate")
@@ -345,13 +396,13 @@ func (d *candidateDriver) business(id string, result protocol.ValidationResult) 
 		d.t.Fatal("worker resource owner is not admitted")
 	}
 	expected := input.Workspace.Identity
-	if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v3" {
+	if input.Handler == "engine.qa.execution.v4" || input.Handler == "engine.gate.v3" {
 		expected = input.Binding.Candidate
 		if input.Workspace.Source != expected {
 			d.t.Fatal("execution source is not Qn")
 		}
 	}
-	if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && input.Workspace.Source != input.Binding.Candidate {
+	if input.Handler == "engine.qa.design.v6" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox && input.Workspace.Source != input.Binding.Candidate {
 		d.t.Fatal("whitebox authoring source is not Dn")
 	}
 	if head := d.p.git(d.t, "-C", input.Workspace.Path, "rev-parse", "HEAD"); head != expected {
@@ -387,7 +438,7 @@ func (d *candidateDriver) write(root, path, body string, mode os.FileMode) {
 	}
 }
 func (d *candidateDriver) develop(id string, input protocol.ValidationInput, extraPaths ...string) {
-	if input.Handler != "engine.development.batch.v5" || input.Development == nil {
+	if input.Handler != "engine.development.batch.v6" || input.Development == nil {
 		d.t.Fatal("wrong development method")
 	}
 	body := d.implementation
@@ -395,7 +446,25 @@ func (d *candidateDriver) develop(id string, input protocol.ValidationInput, ext
 		body = "package main\nimport \"os\"\nfunc main() {if len(os.Args)!=2 || !valid(os.Args[1]) {os.Exit(2)}}\nfunc valid(s string) bool {return s!=\"\"}\n"
 	}
 	d.write(input.Workspace.Path, "app.go", body, 0644)
-	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"}, Handoff: "Command ready"}}})
+	binary := executablePath(filepath.Join(d.t.TempDir(), "app"))
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Dir = input.Workspace.Path
+	if output, err := build.CombinedOutput(); err != nil {
+		d.t.Fatalf("development command build: %v %s", err, output)
+	}
+	if output, err := exec.Command(binary, "ok").CombinedOutput(); err != nil {
+		d.t.Fatalf("development valid input: %v %s", err, output)
+	}
+	if output, err := exec.Command(binary, "").CombinedOutput(); err == nil {
+		d.t.Fatalf("development empty input was accepted: %s", output)
+	} else if failed, ok := err.(*exec.ExitError); !ok || failed.ExitCode() != 2 {
+		d.t.Fatalf("development empty input: %v %s", err, output)
+	}
+	completion := &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"}, Handoff: "Command ready"}
+	for _, point := range input.Development.Batch.RequirementPoints {
+		completion.RequirementResults = append(completion.RequirementResults, requirement.PointResult{PointID: point, Status: "PASS", Evidence: "The assigned app.go contribution builds and accepts ok with exit 0 while rejecting empty input with exit 2."})
+	}
+	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation", Commands: []string{"go build ./...", "go test -timeout=0 ./..."}, Completion: completion}})
 }
 func (d *candidateDriver) designResult(input protocol.ValidationInput) protocol.ValidationResult {
 	manifest := input.Manifest
@@ -499,9 +568,9 @@ func (d *candidateDriver) untilValidation() {
 		for _, id := range ids {
 			input := d.run.ValidationInputs[id]
 			switch input.Handler {
-			case "engine.development.batch.v5":
+			case "engine.development.batch.v6":
 				d.develop(id, input)
-			case "engine.qa.design.v5":
+			case "engine.qa.design.v6":
 				d.design(id, input)
 			case "engine.qa.review.rationale.v2":
 				d.caseReview(id, input)
@@ -535,7 +604,7 @@ func (d *candidateDriver) executeWorkers() {
 			d.t.Fatal("execution is not bound to exact Qn")
 		}
 		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-		if input.Handler == "engine.qa.execution.v3" {
+		if input.Handler == "engine.qa.execution.v4" {
 			if input.Execution == nil || input.Execution.Candidate.Identity != d.candidate || input.Whitelist == nil {
 				d.t.Fatal("wrong execution method or input identity")
 			}
@@ -583,6 +652,27 @@ func (d *candidateDriver) executeWorkers() {
 			cmd.Dir = input.Workspace.Path
 			if out, err := cmd.CombinedOutput(); err != nil {
 				d.t.Fatalf("Qn gate Go checks: %v %s", err, out)
+			}
+			binary := executablePath(filepath.Join(d.t.TempDir(), "app"))
+			build := exec.Command("go", "build", "-o", binary, ".")
+			build.Dir = input.Workspace.Path
+			if output, err := build.CombinedOutput(); err != nil {
+				d.t.Fatalf("Qn gate command build: %v %s", err, output)
+			}
+			if output, err := exec.Command(binary, "ok").CombinedOutput(); err != nil {
+				d.t.Fatalf("Qn gate valid input: %v %s", err, output)
+			}
+			if output, err := exec.Command(binary, "").CombinedOutput(); err == nil {
+				d.t.Fatalf("Qn gate empty input was accepted: %s", output)
+			} else if failed, ok := err.(*exec.ExitError); !ok || failed.ExitCode() != 2 {
+				d.t.Fatalf("Qn gate empty input: %v %s", err, output)
+			}
+			var material worker.Material
+			if err := json.Unmarshal(readInstalledFile(d.t, d.run.WorkerMaterials[id].Path), &material); err != nil {
+				d.t.Fatal(err)
+			}
+			for _, point := range material.Input.RequirementPoints {
+				result.RequirementResults = append(result.RequirementResults, protocol.RequirementDecision{PointID: point.ID, Status: "PASS", Evidence: "The assembled candidate passes its Go tests, accepts ok with exit 0 and rejects empty input with exit 2 under the admitted native Git workflow."})
 			}
 		} else {
 			d.t.Fatalf("unexpected final worker %s", input.Handler)
@@ -824,9 +914,9 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 	d := newCandidateDriver(t, "both")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			d.develop(id, input)
-		} else if input.Handler == "engine.qa.design.v5" {
+		} else if input.Handler == "engine.qa.design.v6" {
 			d.design(id, input)
 		}
 	}
@@ -927,7 +1017,7 @@ func TestInstalledCandidateRejectsUndeclaredContent(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			d.write(input.Workspace.Path, "notes.txt", "unrelated user content\n", 0644)
 			d.develop(id, input)
 			d.expectNativeError("undeclared change: notes.txt")
@@ -947,11 +1037,11 @@ func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
 	d.reviews()
 	for n := 0; n < 6; n++ {
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.development.batch.v5" {
+			if input.Handler == "engine.development.batch.v6" {
 				d.develop(id, input)
 				continue
 			}
-			if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v6" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				result := d.designResult(input)
 				d.write(input.Workspace.Path, "app.go", "package main\nfunc main() {}\nfunc valid(s string) bool {return true}\n", 0644)
 				result.Development.Paths = append(result.Development.Paths, "app.go")
@@ -1002,7 +1092,7 @@ func TestInstalledCandidatePreservesUndeclaredIndexEdit(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler != "engine.development.batch.v5" {
+		if input.Handler != "engine.development.batch.v6" {
 			continue
 		}
 		root := input.Workspace.Path
@@ -1029,7 +1119,7 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 	d.reviews()
 	d.implementation = "package main\nimport (\"os\"; _ \"embed\")\n//go:embed old_test.go\nvar content string\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\"}\n"
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			d.write(input.Workspace.Path, "old_test.go", "package main\nimport \"testing\"\nfunc TestOld(t *testing.T) {t.Log(\"production embed\")}\n", 0644)
 			d.develop(id, input, "old_test.go")
 		}
@@ -1057,7 +1147,7 @@ func TestInstalledRequirementBarrierPreventsCandidateWrites(t *testing.T) {
 	d.reviews()
 	var workspaces []protocol.NativeResource
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			d.develop(id, input)
 			workspaces = append(workspaces, *input.Workspace)
 		}

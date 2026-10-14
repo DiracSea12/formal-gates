@@ -137,7 +137,9 @@ type Run struct {
 	NodeContinuation          *protocol.NodeContinuationView `json:"nodeContinuation,omitempty"`
 	// Review 是开发前审查的只读投影面（总需求 §7.3.5）：分动作的轮次/容量/
 	// effective 状态与拓扑、路线绑定。不改 Next 的六类边界形态。
-	Review ReviewFace `json:"review"`
+	Review                     ReviewFace                           `json:"review"`
+	ReviewVerifications        []protocol.WorkerResult              `json:"reviewVerifications,omitempty"`
+	ReviewVerificationContexts map[string]ReviewVerificationContext `json:"reviewVerificationContexts,omitempty"`
 	// RequirementWork 是需求变更需逐项决定的当前工作身份，由协议层派生。
 	RequirementWork []protocol.RequirementWork `json:"requirementWork"`
 	// PendingRequirementAsk 是修订屏障在位时未决需求变化 Ask 的公开面：
@@ -215,6 +217,7 @@ type ReviewCandidateFace struct {
 // 裁决的稳定身份，severity 为有效严重度；EffectiveDecisionID 是后续纠正
 // 必须 supersede 的当前决定身份，空值表示未裁决。
 type ReviewFindingFace struct {
+	Revised             bool           `json:"revised,omitempty"`
 	Evidence            review.Finding `json:"evidence"`
 	ID                  string         `json:"id"`
 	Digest              string         `json:"digest"`
@@ -276,8 +279,8 @@ func reviewFace(state *protocol.State) ReviewFace {
 	return ReviewFace{
 		ReadinessProposal: state.ReadinessProposal(),
 		Actions: []ReviewActionFace{
-			reviewActionFace(state.ReviewSeries.ProductReview),
-			reviewActionFace(state.ReviewSeries.StartReadiness),
+			reviewActionFace(state, state.ReviewSeries.ProductReview),
+			reviewActionFace(state, state.ReviewSeries.StartReadiness),
 		},
 		Topology:              state.Topology,
 		RouteMode:             state.RouteMode,
@@ -307,7 +310,7 @@ func requirementChangeFace(state *protocol.State) *RequirementChangeFace {
 	return nil
 }
 
-func reviewActionFace(series review.Series) ReviewActionFace {
+func reviewActionFace(state *protocol.State, series review.Series) ReviewActionFace {
 	occupied := review.OccupiedAuthorizationIDs(series)
 	grants := make([]ReviewGrantFace, 0, len(series.Authorizations))
 	for _, authorization := range series.Authorizations {
@@ -324,6 +327,7 @@ func reviewActionFace(series review.Series) ReviewActionFace {
 			decision, severity, decisionID := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
 			findings = append(findings, ReviewFindingFace{
 				Evidence:            finding,
+				Revised:             state.ReviewFindingRevised(finding),
 				ID:                  finding.ID,
 				Digest:              finding.Digest,
 				Severity:            severity,
@@ -1391,6 +1395,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		run, err := f.projectOrSummary()
 		return accepted, run, err
 	}
+	var observation protocol.Observation
 	if event.Request != nil && event.Request.Control == protocol.ControlReset {
 		snap, err := f.engine.Load()
 		if err != nil {
@@ -1406,6 +1411,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			return protocol.Acceptance{}, Run{}, err
 		}
 		preview.Intake = &intake.IntakeCandidate
+		observation = intakeObservation(f.root, intake.Materials)
 		preview.RequirementRevision = intake.Revision
 		if strings.HasPrefix(snap.State.RequirementRevision(), "sha256:") {
 			preview.RequirementRevision = "sha256:" + preview.RequirementRevision
@@ -1419,6 +1425,13 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if event.Request != nil && event.Request.Package != nil {
 		if err := f.validateChildRequirementPackage(event.Request.Package); err != nil {
 			return protocol.Acceptance{}, Run{}, err
+		}
+		if receipt := event.Request.Package.Intake; receipt != nil {
+			intake, err := captureIntake(f.root, receipt)
+			if err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+			observation = intakeObservation(f.root, intake.Materials)
 		}
 	}
 	var confirmedMaterials *IntakeConfirmationReceipt
@@ -1461,11 +1474,12 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
+		observation = intakeObservation(f.root, preview.Materials)
 		if err := f.admission.write(func() error { return saveIntake(f.stateDir, preview) }); err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
 	}
-	acceptance, err := f.engine.Submit(event, protocol.Observation{})
+	acceptance, err := f.engine.Submit(event, observation)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1608,37 +1622,43 @@ func (f *Facade) project() (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	verificationContexts, err := f.reviewVerificationContexts(snap.State)
+	if err != nil {
+		return Run{}, err
+	}
 	run := Run{
-		TaskMessages:     snap.State.TaskMessages,
-		Settings:         stateSettings(snap.State),
-		WorkerMaterials:  materials,
-		ValidationInputs: snap.State.ValidationInputs(f.definition),
-		Attempts:         snap.State.Attempts,
-		PendingActions:   snap.State.PendingActions,
-		RejectedResults:  snap.State.RejectedResults,
-		RecoveryRecords:  snap.State.RecoveryRecords,
-		Validation:       snap.State.Validation,
-		DispatchBindings: snap.State.DispatchBindings,
-		AdapterIntents:   snap.State.ExecutableHostActions(f.definition),
-		EndedAttempts:    snap.State.EndedAttempts,
-		RunID:            f.runID,
-		Runtime:          RuntimeEngine,
-		Route:            snap.State.Route,
-		Status:           status,
-		Revision:         snap.Revision,
-		Envelope:         f.envelope,
-		BaseSnapshot:     snap.State.BaseSnapshot,
-		PromotedSnapshot: snap.State.PromotedSnapshot,
-		QAWorktree:       snap.State.QAWorktree,
-		Next:             plan.Next,
-		Review:           reviewFace(snap.State),
-		Cost:             snap.State.Cost,
-		SliceReceipt:     snap.State.SliceReceipt,
-		SliceChildren:    snap.State.SliceChildren,
-		SliceReceipts:    snap.State.SliceReceipts,
-		GuardBudget:      snap.State.Guard,
-		SummaryPath:      filepath.Join(f.stateDir, "terminal-summary.json"),
-		Unverified:       snap.State.Route == "lightweight",
+		ReviewVerificationContexts: verificationContexts,
+		TaskMessages:               snap.State.TaskMessages,
+		Settings:                   stateSettings(snap.State),
+		WorkerMaterials:            materials,
+		ValidationInputs:           snap.State.ValidationInputs(f.definition),
+		Attempts:                   snap.State.Attempts,
+		PendingActions:             snap.State.PendingActions,
+		RejectedResults:            snap.State.RejectedResults,
+		RecoveryRecords:            snap.State.RecoveryRecords,
+		Validation:                 snap.State.Validation,
+		DispatchBindings:           snap.State.DispatchBindings,
+		AdapterIntents:             snap.State.ExecutableHostActions(f.definition),
+		EndedAttempts:              snap.State.EndedAttempts,
+		RunID:                      f.runID,
+		Runtime:                    RuntimeEngine,
+		Route:                      snap.State.Route,
+		Status:                     status,
+		Revision:                   snap.Revision,
+		Envelope:                   f.envelope,
+		BaseSnapshot:               snap.State.BaseSnapshot,
+		PromotedSnapshot:           snap.State.PromotedSnapshot,
+		QAWorktree:                 snap.State.QAWorktree,
+		Next:                       plan.Next,
+		Review:                     reviewFace(snap.State),
+		ReviewVerifications:        snap.State.PendingReviewVerifications(),
+		Cost:                       snap.State.Cost,
+		SliceReceipt:               snap.State.SliceReceipt,
+		SliceChildren:              snap.State.SliceChildren,
+		SliceReceipts:              snap.State.SliceReceipts,
+		GuardBudget:                snap.State.Guard,
+		SummaryPath:                filepath.Join(f.stateDir, "terminal-summary.json"),
+		Unverified:                 snap.State.Route == "lightweight",
 	}
 	if status == "SLICE_READY" {
 		run.SummaryPath = ""
@@ -2010,6 +2030,7 @@ func runFromSummary(summary TerminalSummary) Run {
 	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
 		run.Review = reviewFace(s)
+		run.ReviewVerifications = s.PendingReviewVerifications()
 		run.TaskMessages = s.TaskMessages
 		run.SliceReceipt = s.SliceReceipt
 		run.BaseSnapshot = s.BaseSnapshot

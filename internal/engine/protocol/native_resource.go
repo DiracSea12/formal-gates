@@ -141,7 +141,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		return NativeResource{}
 	}
 	for _, b := range s.DispatchBindings {
-		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.prewaveCarryAuthorized(b.Task, cd)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
+		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.validationWorkCarryAuthorized("", b.Task)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
 			return s.NativeResources[b.WorkspaceID]
 		}
 	}
@@ -149,7 +149,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	source := s.BaseSnapshot
 	scope := s.Validation.RequirementRevision
 	switch role {
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
 		if s.mergeMaster() {
 			return s.integrationResource()
 		}
@@ -180,7 +180,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity
@@ -197,7 +197,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			}
 		}
 		role = "development"
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		if s.validationMode(key) == coverage.ReviewMerge {
 			source = s.AcceptedNativeSnapshot()
 		}
@@ -239,7 +239,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		} else {
 			return NativeResource{}
 		}
-	case "engine.qa.execution.v3", "engine.gate.v3":
+	case "engine.qa.execution.v4", "engine.gate.v3":
 		if _, target := s.repairGateTarget(key); target != nil {
 			if binding, ok := s.repairGateBinding(key, s.repairWork()); ok {
 				source, scope, role = binding.Candidate, key.String(), "gate"
@@ -252,7 +252,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		}
 		source = wave.Candidate.Identity
 		scope = wave.ID
-		if role == "engine.qa.execution.v3" {
+		if role == "engine.qa.execution.v4" {
 			role = strings.ToLower(string(s.validationMode(key))) + "-execution"
 		} else {
 			role = "gate"
@@ -319,7 +319,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return chosen
 	case "AUTHORING":
-		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v5", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
+		task := s.validationRequiredTask(pipelineTask(cd, "engine.qa.design.v6", s.nextDesignScope(coverage.ReviewWhitebox, cd)), s.currentValidationWave(), cd)
 		return s.taskResource(task, cd)
 	case "QA_ARTIFACT":
 		return s.taskResource(p.DesignTasks[coverage.ReviewWhitebox], cd)
@@ -609,7 +609,7 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 		return false
 	}
 	current := p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation
-	carried := p.Task != nil && s.prewaveCarryAuthorized(*p.Task, cd)
+	carried := p.Task != nil && s.validationWorkCarryAuthorized("", *p.Task)
 	if !current && !carried {
 		return false
 	}
@@ -698,7 +698,7 @@ func (s *State) WorkspaceMirrorSuperseded(intent HostActionIntent, cd *compiler.
 			return false
 		}
 		current := after.RequirementRevision == s.Validation.RequirementRevision && after.Generation == s.Validation.Generation
-		carried := after.Task != nil && s.prewaveCarryAuthorized(*after.Task, cd)
+		carried := after.Task != nil && s.validationWorkCarryAuthorized("", *after.Task)
 		if !current && !carried {
 			return false
 		}

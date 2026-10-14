@@ -130,16 +130,16 @@ func TestNodeContinuationEntersExistingReviewAndRouteOwners(t *testing.T) {
 						t.Fatal("retained topology required a redundant confirmation")
 					}
 				}
-				if _, input := d.action("engine.development.batch.v5"); input.Development == nil {
+				if _, input := d.action("engine.development.batch.v6"); input.Development == nil {
 					t.Fatal("retained topology did not continue into its original development owner")
 				}
 			case "development:command":
-				_, input := d.action("engine.development.batch.v5")
+				_, input := d.action("engine.development.batch.v6")
 				if input.Development == nil || input.Development.Batch.ID != "command" {
 					t.Fatal("selected development responsibility missing")
 				}
 			case "qa-design:BLACKBOX":
-				_, input := d.action("engine.qa.design.v5")
+				_, input := d.action("engine.qa.design.v6")
 				if input.Manifest.Binding.ReviewKind != "BLACKBOX" {
 					t.Fatal("selected design owner missing")
 				}
@@ -180,7 +180,7 @@ func TestNodeContinuationPreparesMissingPlanThroughOriginalOwners(t *testing.T) 
 
 func TestNodeContinuationWaitsForExactOldExecutionAndRejectsLateResult(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	old, input := d.action("engine.development.batch.v5")
+	old, input := d.action("engine.development.batch.v6")
 	d.receipt(old)
 	decision := continueBusinessNode(d, "development:command")
 	state := driverState(t, d)
@@ -205,7 +205,7 @@ func TestNodeContinuationWaitsForExactOldExecutionAndRejectsLateResult(t *testin
 	if _, accepted := driverState(t, d).Results[old]; accepted {
 		t.Fatal("old execution became current")
 	}
-	_, fresh := d.action("engine.development.batch.v5")
+	_, fresh := d.action("engine.development.batch.v6")
 	if fresh.Binding.Task == input.Binding.Task {
 		t.Fatal("selected owner reused retired execution identity")
 	}
@@ -217,7 +217,7 @@ func TestNodeContinuationRepeatedChoiceRetainsAuthorizedReplacement(t *testing.T
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "quality")
-			old, input := d.action("engine.development.batch.v5")
+			old, input := d.action("engine.development.batch.v6")
 			d.receipt(old)
 			first := continueBusinessNode(d, "development:command")
 			continueBusinessNode(d, "candidate")
@@ -226,7 +226,7 @@ func TestNodeContinuationRepeatedChoiceRetainsAuthorizedReplacement(t *testing.T
 			}
 			d.completeWorkerTerminations()
 			d.drive()
-			fresh, binding := d.action("engine.development.batch.v5")
+			fresh, binding := d.action("engine.development.batch.v6")
 			if fresh == old || binding.Binding.RequirementRevision != input.Binding.RequirementRevision {
 				t.Fatal("later target discarded an already authorized development replacement")
 			}
@@ -347,7 +347,7 @@ func TestNodeContinuationEntersValidationOwners(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
 			if target == "post-review" {
-				qa, input := d.action("engine.qa.execution.v3")
+				qa, input := d.action("engine.qa.execution.v4")
 				report := executionFor(input)
 				d.business(qa, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report}))
 				gate, gi := d.gateAction("quality")
@@ -369,7 +369,7 @@ func TestNodeContinuationEntersValidationOwners(t *testing.T) {
 			case "qa-review:BLACKBOX":
 				d.action("engine.qa.review.rationale.v2")
 			case "qa-execution:BLACKBOX":
-				d.action("engine.qa.execution.v3")
+				d.action("engine.qa.execution.v4")
 			case "gate:quality":
 				d.gateAction("quality")
 			case "candidate":
@@ -377,7 +377,7 @@ func TestNodeContinuationEntersValidationOwners(t *testing.T) {
 				if !reflect.DeepEqual(original.Validation.Candidate, state.Validation.Candidate) || !reflect.DeepEqual(original.HostActionReceipts, state.HostActionReceipts) {
 					t.Fatal("candidate continuation replayed a completed native prefix")
 				}
-				d.action("engine.qa.execution.v3")
+				d.action("engine.qa.execution.v4")
 			case "post-review":
 				state := driverState(t, d)
 				if state.Validation.Waves[len(state.Validation.Waves)-1].Status != "COMPLETE" || !state.FinalValidationComplete(d.f.definition) {
@@ -670,8 +670,8 @@ func TestNodeContinuationKeepsIndependentDesignRunningDuringDeveloperStop(t *tes
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-			dev, _ := d.action("engine.development.batch.v5")
-			design, input := d.action("engine.qa.design.v5")
+			dev, _ := d.action("engine.development.batch.v6")
+			design, input := d.action("engine.qa.design.v6")
 			d.receipt(dev)
 			d.receipt(design)
 			original := driverState(t, d).DispatchBindings[design]
@@ -711,7 +711,7 @@ func TestNodeContinuationKeepsIndependentDesignRunningDuringDeveloperStop(t *tes
 				}{state.PendingHostActions, state.HostActionReceipts})
 				t.Fatalf("independent owner continuation: %v; exact native facts=%s", err, original)
 			}
-			d.action("engine.development.batch.v5")
+			d.action("engine.development.batch.v6")
 			reviewer, reviewInput := d.action("engine.qa.review.rationale.v2")
 			if reviewInput.Binding.Task != *signed.Task || reviewInput.Binding.WorkspaceID != signed.Resource.ID || reviewInput.Binding.Generation != signed.Generation || reviewInput.Binding.RequirementRevision != signed.RequirementRevision || !reflect.DeepEqual(reviewInput.Manifest, *signed.Manifest) {
 				t.Fatal("unrelated developer epoch replaced independent review source")
@@ -741,7 +741,7 @@ func TestNodeContinuationEntersOriginalRepairResponsibility(t *testing.T) {
 	continueBusinessNode(d, target)
 	d.completeWorkerTerminations()
 	d.drive()
-	fresh, input := d.action("engine.repair.v6")
+	fresh, input := d.action("engine.repair.v7")
 	if fresh == action || input.Binding.RequirementRevision != original.Binding.RequirementRevision || input.Binding.WaveID != original.Binding.WaveID {
 		t.Fatal("repair target did not enter the original signed obligation")
 	}
@@ -770,7 +770,7 @@ func TestNodeContinuationCleanupWaitsForOriginalDeliveryAndCompletes(t *testing.
 	base := snapshotRepoCommits(t, root, "implementation")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	report := executionFor(qi)
 	d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
 	action, input := d.gateAction("quality")

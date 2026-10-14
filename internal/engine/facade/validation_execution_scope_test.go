@@ -22,7 +22,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
 				d.fixtureTool, d.fixtureEnvironment = "tool-v1", "environment-v1"
 				d.reviewReady()
-				qa, qi := d.action("engine.qa.execution.v3")
+				qa, qi := d.action("engine.qa.execution.v4")
 				prior := qi.Binding.Candidate
 				report := executionFor(qi)
 				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
@@ -36,7 +36,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run invalid", Module: "input", RootCause: "diagnostic formatter", Consequence: "wrong diagnostic", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "confirmed input behavior", Severity: "limited output", Causality: "formatter", Reproduction: "app run invalid", Classification: "implementation"}, Reason: "observed actual output"}
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 				d.drive()
-				repair, ri := d.action("engine.repair.v6")
+				repair, ri := d.action("engine.repair.v7")
 				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}}
 				d.business(repair, edit)
 				d.verifyRepair(edit)
@@ -49,7 +49,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				}
 
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.qa.execution.v3" {
+					if in.Handler == "engine.qa.execution.v4" {
 						t.Fatal("QA dispatched before host fixed its execution scope")
 					}
 				}
@@ -59,7 +59,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				wave = d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "EXECUTION_SCOPE", Mode: coverage.ReviewBlackbox, AffectedCases: []string{"invalid"}, Reason: "host checked diagnostic repair path; normal input remains unaffected"}}})
 				d.drive()
-				qa, qi = d.action("engine.qa.execution.v3")
+				qa, qi = d.action("engine.qa.execution.v4")
 				if qi.Execution.Scope != coverage.ScopeAffected {
 					t.Fatal("host scope changed the required AFFECTED wave")
 				}
@@ -94,7 +94,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				}
 				original := qi.Binding
 				d.drive()
-				qa, qi = d.action("engine.qa.execution.v3")
+				qa, qi = d.action("engine.qa.execution.v4")
 				if qi.Binding.Task != original.Task || qi.Binding.WaveID != original.WaveID {
 					t.Fatal("invalid result changed logical scope responsibility")
 				}
@@ -118,7 +118,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 						d.reopen()
 					}
 					d.drive()
-					qa, qi = d.action("engine.qa.execution.v3")
+					qa, qi = d.action("engine.qa.execution.v4")
 					report = scopedExecutionReport(qi, prior, true)
 					report.Records = nil
 					report.Binding.ActualCaseIDs = []string{"normal"}
@@ -198,7 +198,7 @@ func repairedExecutionDriver(t *testing.T, drivers ...*validationDriver) *valida
 	t.Helper()
 	d, finding, wave := validationWithGateFinding(t, drivers...)
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v6")
+	id, in := d.action("engine.repair.v7")
 	if !d.mockNative {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\nfunc main() { println(\"ordered\") }\n"), 0600); err != nil {
 			t.Fatal(err)
@@ -243,7 +243,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 				d = repairedExecutionDriver(t)
 			}
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-			original, input := d.action("engine.qa.execution.v3")
+			original, input := d.action("engine.qa.execution.v4")
 			candidate := *d.run.Validation.Candidate
 			source := d.run.Validation.Waves[0].Candidate.Identity
 			switch change {
@@ -267,13 +267,13 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 			d.drive()
 			if change == "redo" || change == "qa-retry" {
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.qa.execution.v3" {
+					if in.Handler == "engine.qa.execution.v4" {
 						t.Fatal("new semantic responsibility reused old host scope")
 					}
 				}
 				d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
 			}
-			id, in := d.action("engine.qa.execution.v3")
+			id, in := d.action("engine.qa.execution.v4")
 			if change == "route" || change == "carry" || change == "carry-route" {
 				if change == "carry" && (id != original || in.Binding != input.Binding) || len(in.RequiredCases) != 1 || in.RequiredCases[0] != "normal" {
 					t.Fatal("unchanged responsibility lost its signed scope")
@@ -306,7 +306,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 		t.Run(evidence, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v3")
+			qa, qi := d.action("engine.qa.execution.v4")
 			report := executionFor(qi)
 			if evidence == "failure" {
 				for i := range report.Records {
@@ -323,7 +323,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "partial-execution", Validation: &partialExecutionResult}})
 				for i := 0; i < 2; i++ {
 					if i > 0 {
-						qa, qi = d.action("engine.qa.execution.v3")
+						qa, qi = d.action("engine.qa.execution.v4")
 						d.receipt(qa)
 					}
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: string(d.eventID())}})
@@ -352,7 +352,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				}
 			}
 			d.drive()
-			id, in := d.action("engine.repair.v6")
+			id, in := d.action("engine.repair.v7")
 			edit := gateRepairResult(in)
 			d.business(id, edit)
 			if edit.Binding.PureP2 {
@@ -365,7 +365,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 			rejectExecutionScope(d, "unknown")
 			rejectExecutionScope(d, "normal")
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal", "invalid")
-			id, in = d.action("engine.qa.execution.v3")
+			id, in = d.action("engine.qa.execution.v4")
 			report = executionFor(in)
 			for _, row := range report.Records {
 				if row.Provenance != coverage.ProvenanceExecuted {
@@ -399,7 +399,7 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 			t.Run(fmt.Sprintf("held=%t/result-first=%t", held, resultFirst), func(t *testing.T) {
 				d := repairedExecutionDriver(t)
 				d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-				qa, in := d.action("engine.qa.execution.v3")
+				qa, in := d.action("engine.qa.execution.v4")
 				waveID := in.Binding.WaveID
 				report := executionFor(in)
 				scopedExecutionResult := nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report})
@@ -462,7 +462,7 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 	d.reopen()
 	d.drive()
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-	id, in := d.action("engine.qa.execution.v3")
+	id, in := d.action("engine.qa.execution.v4")
 	report := executionFor(in)
 	if in.Binding.RequirementRevision != d.run.Validation.RequirementRevision || len(in.RequiredCases) != 1 || in.RequiredCases[0] != "normal" {
 		t.Fatal("new dispatch lost current requirement or scope")
@@ -476,7 +476,7 @@ func TestQAExecutionWaitsForAllRequirementAsksAndKeepsOriginalReceipts(t *testin
 		t.Run(map[bool]string{false: "normal", true: "reopened"}[reopen], func(t *testing.T) {
 			d := repairedExecutionDriver(t)
 			d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-			qa, input := d.action("engine.qa.execution.v3")
+			qa, input := d.action("engine.qa.execution.v4")
 			report := executionFor(input)
 			result := nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report})
 			event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "scoped-execution", Validation: &result}}

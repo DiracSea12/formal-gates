@@ -119,7 +119,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				accepted = append(accepted, acceptedEvent{event, receipt})
 				return receipt
 			}
-			qa, _ := d.action("engine.qa.design.v5")
+			qa, _ := d.action("engine.qa.design.v6")
 			d.receipt(qa)
 			start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), qa, protocol.LifecycleStart)
 			if err != nil {
@@ -132,7 +132,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				// Missing required development evidence exhausts the existing two
 				// attempts and produces a genuine RETRY disposition with Abort.
 				for n := 0; n < 2; n++ {
-					id, input := d.action("engine.development.batch.v5")
+					id, input := d.action("engine.development.batch.v6")
 					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 					d.drive()
 				}
@@ -140,7 +140,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				requestID = ask.RequestID
 				validation = &protocol.ValidationDecision{Reason: "Abort the unavailable development obligation", Digest: ask.Validation.Digest, StateRevision: d.run.Revision}
 			} else {
-				id, _ := d.action("engine.development.batch.v5")
+				id, _ := d.action("engine.development.batch.v6")
 				d.receipt(id)
 				start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
 				if err != nil {

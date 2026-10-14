@@ -196,6 +196,15 @@ Operator 逐项核实、用户 finding/remedy 决定与 effective status 分层�
 处置前，逐项展示问题、正常路径错误、后果、建议、ID、等级及定级理由；不完整展示
 不能作为授权。严重度和项目范围唯一以 [审查契约](../prompts/reviewer-base.md) 为准。
 
+worker 完成后，`reviewVerifications` 展示独立核实待办及其原始完整材料。
+主代理读取原材料、逐 finding 独立核实后，用 `next --review-result <原序号>`，
+按展示的 checks 顺序逐项追加 `--review-evidence <实际核实证据>`；每条原 finding
+依次使用 `--review-finding-valid true|false --review-finding-reason <实际证据>`。
+需要更正等级时再给该项的 `--review-finding-severity` 与 `--review-finding-severity-rationale`；
+整结果无效或不完整使用 `--review-invalid-reason`。程序绑定原 result，不由模型抄身份。
+核实完成直接提交该程序候选；这一步是 Operator 事实，不请求用户授权。
+只有接纳的有效完整审查计轮；有效 finding 随后各有原 Ask，`next --ask --choice` 自动绑定该项。
+
 产品/技术审各自有限语义轮；有效审查计轮，修订不清零。P0/P1 确认修订后完整新鲜复审；
 P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成穷尽 review-delta，用户确认
 变更包；meaning-preserved 保留适用 PASS，meaning-changed 明示失效、回退和容量后授权。

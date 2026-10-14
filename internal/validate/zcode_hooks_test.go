@@ -67,7 +67,7 @@ func TestManagedRuleSharedByDeepSeekAndZCodeProjectInstalls(t *testing.T) {
 		t.Fatal("active project DSH installation was not recognized as sharing AGENTS.md")
 	}
 	records[0].SkipHooks = true
-	if managedRuleSharedByActiveInstall(managed, removing, records) {
-		t.Fatal("project DSH skip-hooks installation incorrectly claimed AGENTS.md ownership")
+	if !managedRuleSharedByActiveInstall(managed, removing, records) {
+		t.Fatal("active project DSH installation lost its independent AGENTS.md ownership when hooks were skipped")
 	}
 }

@@ -18,13 +18,10 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 	if result.Outcome != protocol.OutcomePass || result.FailureClass != "" || result.Validation.Status != "FAIL" || len(result.Validation.Findings) != 1 {
 		t.Fatalf("semantic defect became a transport failure: %+v", result)
 	}
-	input.Handler = "engine.review.worker.v2"
+	input.Handler = "engine.review.worker.v3"
 	input.Validation = nil
 	input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-	body := Review{Findings: []Finding{{Severity: "P1", Message: "Requirement contradicts public behavior"}}, Verification: []string{}}
-	for _, key := range review.RequiredVerificationChecks() {
-		body.Verification = append(body.Verification, "Observed "+key)
-	}
+	body := Review{Findings: []Finding{{Severity: "P1", Message: "Requirement contradicts public behavior"}}}
 	result = decodeSemantic(t, input, body)
 	if result.Outcome != protocol.OutcomePass || result.Review.Status != "FAIL" || result.FailureClass != "" {
 		t.Fatal("review verdict controls transport")
@@ -32,14 +29,14 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 }
 
 func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.repair.verify.v2", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.review.worker.v3", "engine.readiness.plan.v6", "engine.development.batch.v6", "engine.repair.v7", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.repair.verify.v2", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v5" {
+			if handler == "engine.review.worker.v3" || handler == "engine.readiness.plan.v6" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-				if handler == "engine.readiness.plan.v5" {
+				if handler == "engine.readiness.plan.v6" {
 					input.Review.Action = review.StartReadiness
 				}
 			}
@@ -64,7 +61,7 @@ func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
 
 func TestExecutionInabilityRetainsActualCompletedComparisons(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.qa.execution.v3"
+	input.Handler = "engine.qa.execution.v4"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "alpha", PointID: "one", CaseID: "new"}, {ReviewKind: coverage.ReviewBlackbox, SourceID: "beta", PointID: "two", CaseID: "remaining"}}}
 	input.Validation.RequiredCases = []string{"new", "remaining"}
@@ -95,7 +92,7 @@ func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T
 			t.Fatalf("invalid body accepted: %s", raw)
 		}
 	}
-	input.Handler = "engine.qa.execution.v3"
+	input.Handler = "engine.qa.execution.v4"
 	input.Validation.Execution = &coverage.ExecutionBinding{}
 	input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 	input.Validation.PendingCases = []string{"new"}
@@ -109,7 +106,7 @@ func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T
 func TestQAInterruptionFieldsFollowIssuedDuty(t *testing.T) {
 	for _, commandDuty := range []bool{false, true} {
 		input := semanticInput()
-		input.Handler = "engine.qa.execution.v3"
+		input.Handler = "engine.qa.execution.v4"
 		if commandDuty {
 			input.Validation.CommandCases = []string{"approved-case"}
 		}

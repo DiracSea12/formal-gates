@@ -15,18 +15,18 @@ import (
 
 func zcodeSchemaRoleInputs() map[string]protocol.WorkerInput {
 	inputs := map[string]protocol.WorkerInput{}
-	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.repair.verify.v2", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.repair.v7", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.validation.observation.v2", "engine.repair.verify.v2", "engine.gate.v3"} {
 		inputs[handler] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Observation: &protocol.ObservationInput{}}}
 	}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		inputs[string(action)] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: action}}
+		inputs[string(action)] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v3", Review: &protocol.WorkerReviewInput{Action: action}}
 	}
-	inputs[string(review.StartReadiness)] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v5", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: &protocol.GranularityReview{Batches: []protocol.DevelopmentBatch{{ID: "usage"}}}, AvailableRouteCandidates: []string{"quality"}}
-	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
+	inputs[string(review.StartReadiness)] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v6", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: &protocol.GranularityReview{Batches: []protocol.DevelopmentBatch{{ID: "usage"}}}, AvailableRouteCandidates: []string{"quality"}}
+	for _, handler := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		inputs[handler+"/issued"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "public behavior"}}}}, Repair: &protocol.RepairInput{}}}
 	}
-	inputs["execution-commands"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{CommandCases: []string{"case"}}}
-	inputs["repair-case-impact"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v6", ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}}}}}
+	inputs["execution-commands"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.execution.v4", Validation: &protocol.ValidationInput{CommandCases: []string{"case"}}}
+	inputs["repair-case-impact"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v7", ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}}}}}
 	inputs["observation-issued"] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.validation.observation.v2", Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "finding"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"case"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}, Suggestions: []protocol.ObservationSuggestion{{Suggestion: protocol.QASuggestion{ID: "suggestion"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}}}}}}
 	for _, kind := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
 		for _, affected := range []bool{false, true} {
@@ -37,7 +37,7 @@ func zcodeSchemaRoleInputs() map[string]protocol.WorkerInput {
 				name += "-affected"
 				validation.AffectedCases = []string{"case"}
 			}
-			inputs[name] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.design.v5", Validation: validation}
+			inputs[name] = protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.design.v6", Validation: validation}
 		}
 	}
 	return inputs
@@ -209,7 +209,7 @@ func TestZcodeSemanticToolSubmissionKeepsOriginalRoleAcceptance(t *testing.T) {
 }
 
 func TestZcodeSemanticToolShowsDistinctRepairSummaryChoices(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v6", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v7", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	directory := zcodeSchemaToolFixture(t, "", "zcode", input)
 	tools := listOf(getOf(zcodeSchemaToolRequest(t, directory, "tools/list", nil), "tools"))
 	schema := getOf(tools[1], "inputSchema")
@@ -237,7 +237,7 @@ func zcodeSchemaContainsChoice(advertised, original any) bool {
 }
 
 func TestZcodeSemanticToolContinuationRetainsOriginalFactsAndCompletedBody(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Provider: "zcode", Handler: handler, Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "owned"}}, Repair: &protocol.RepairInput{}}}
 			directory := zcodeSchemaToolFixture(t, "", "zcode", input)
@@ -253,7 +253,7 @@ func TestZcodeSemanticToolContinuationRetainsOriginalFactsAndCompletedBody(t *te
 				t.Fatal("continuation result changed", err)
 			}
 			prior := &protocol.WorkerResult{Digest: "original-partial", Validation: accepted.Result.Validation}
-			if handler == "engine.development.batch.v5" {
+			if handler == "engine.development.batch.v6" {
 				input.Validation.Development.Result = prior
 			} else {
 				input.Validation.Repair.Result = prior

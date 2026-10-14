@@ -115,11 +115,14 @@ func codexWorkspaceReply(tools *nativeWorkspaceTools, params any, thread, turn s
 	return &nativeReply{payload: map[string]any{"result": result}, status: "tool-result"}, nil
 }
 
-// Dynamic tool declarations persist with the native thread. Semantic bodies
-// are checked against the current issued material on each invocation.
+// Dynamic tool declarations cover the role's native continuations. The current
+// issued material controls workspace writes and semantic submissions.
 func codexToolSchemas(tools *nativeWorkspaceTools) ([]any, error) {
 	schemas := tools.schemas()
 	if tools.material != nil {
+		if tools.material.Input.Handler == "engine.development.batch.v6" {
+			schemas[0] = nativeWorkspaceToolSchema(false, tools.material)
+		}
 		schema, err := worker.StableResultSchema(tools.material.Input)
 		if err != nil {
 			return nil, err

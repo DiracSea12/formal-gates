@@ -139,7 +139,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v3")
+			qa, qi := d.action("engine.qa.execution.v4")
 			gate, gi := d.action("engine.gate.v3")
 			report := executionFor(qi)
 			tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -198,7 +198,15 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 				}
 				work = append(work, protocol.RequirementWorkDecision{Work: w, Disposition: disposition, Reason: "confirmed disposition of original work"})
 			}
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:editorial", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: work}
+			intakeReceipt := driverState(t, d).CurrentIntakeConfirmation()
+			if err := os.WriteFile(filepath.Join(d.f.root, intakeReceipt.RequirementSource), []byte(document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			intake, err := prepareConfirmedIntake(d.f.root, intakeReceipt, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:editorial", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: work}
 			d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlRequestRequirementChange, Request: protocol.RequestID(ask.RequestID), Token: d.run.PendingRequirementAsk.Token, Package: &pkg}})
 			if d.run.PendingRequirementAsk.RequestID != ask.RequestID || d.run.PendingRequirementAsk.Package == nil {
 				t.Fatal("package update replaced or failed to bind the existing Ask")
@@ -206,9 +214,13 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			t.Logf("package bound to same ask=%s", ask.RequestID)
 			decision := &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: d.run.PendingRequirementAsk.Token, Choice: choice}
 			if choice == "proceed" {
-				decision.Requirement = &protocol.RequirementDecisionPayload{BaseRevision: d.revision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: work, Reason: "Confirmed unchanged ordering requirement"}
+				decision.Requirement = &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: d.revision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: work, Reason: "Confirmed unchanged ordering requirement"}
 			}
-			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: decision})
+			confirmation := protocol.Event{Kind: protocol.KindDecide, Decide: decision}
+			if choice == "proceed" {
+				confirmation = confirmation.WithRequirementDocument(document)
+			}
+			d.submit(confirmation)
 			if d.run.PendingRequirementAsk != nil {
 				t.Fatal("resolved Ask retained the requirement barrier")
 			}
@@ -218,9 +230,6 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			}
 			if d.run.Review.RequirementRevision != expected {
 				t.Fatalf("requirement=%s want %s", d.run.Review.RequirementRevision, expected)
-			}
-			if choice == "proceed" {
-				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			}
 			if redo {
 				state := driverState(t, d)
@@ -236,7 +245,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 				if _, executed := state.HostActionReceipts[original.ActionID]; executed {
 					t.Fatal("REDO executed the obsolete workspace")
 				}
-				_, repair := d.action("engine.repair.v6")
+				_, repair := d.action("engine.repair.v7")
 				if repair.Binding.Task == *originalInput.Task || repair.Binding.WorkspaceID == originalInput.Resource.ID {
 					t.Fatal("replacement borrowed the original task or resource")
 				}
@@ -299,7 +308,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			if after.HostActionReceipts[original.ActionID].Digest != receipt.Digest || len(after.HostActionReceipts) != len(beforeExecution.HostActionReceipts) {
 				t.Fatal("reopen reexecuted the original workspace")
 			}
-			_, repair := d.action("engine.repair.v6")
+			_, repair := d.action("engine.repair.v7")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}
@@ -324,7 +333,7 @@ func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
 			}
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", catalog[2]}))
 			d.drive()
-			design, input := d.action("engine.qa.design.v5")
+			design, input := d.action("engine.qa.design.v6")
 			manifest := simpleManifest(input)
 			d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 			state := driverState(t, d)

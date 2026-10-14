@@ -74,7 +74,7 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 			if err := d.f.vcs.AddWorktree(fresh, source); err != nil {
 				t.Fatal(err)
 			}
-			current := protocol.WorkspaceParameters{RequirementRevision: d.revision, Generation: state.Validation.Generation, Resource: protocol.NativeResource{Path: fresh, Source: source, Role: "gate"}}
+			current := protocol.WorkspaceParameters{RequirementRevision: d.revision, Generation: state.Validation.Generation, Resource: protocol.NativeResource{Path: fresh, Source: source, Role: "candidate"}}
 			invoked = false
 			complete, err = d.f.injectRequirements(state, current, false, &invoked)
 			if err != nil || complete || invoked {
@@ -93,6 +93,32 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 			complete, err = d.f.injectRequirements(state, current, false, &invoked)
 			if err != nil || !complete || invoked {
 				t.Fatal("completed producer was replayed", complete, invoked, err)
+			}
+			for _, role := range []string{"check", "repair-verification", "blackbox-execution", "whitebox-execution", "merge-execution", "gate", "merge", "repair-integration", "child-target"} {
+				checkRoot := filepath.Join(t.TempDir(), role)
+				if err := d.f.vcs.AddWorktree(checkRoot, source); err != nil {
+					t.Fatal(err)
+				}
+				check := protocol.WorkspaceParameters{RequirementRevision: d.revision, Generation: state.Validation.Generation, Resource: protocol.NativeResource{Path: checkRoot, Source: source, Role: role}}
+				for _, mayWrite := range []bool{false, true} {
+					invoked = false
+					complete, err = d.f.injectRequirements(state, check, mayWrite, &invoked)
+					if err != nil || !complete || invoked {
+						t.Fatalf("%s changed its immutable check source: complete=%t invoked=%t error=%v", role, complete, invoked, err)
+					}
+					body, err = os.ReadFile(filepath.Join(checkRoot, "requirements.md"))
+					if committed && (err != nil || string(body) != validationDocument) || !committed && !os.IsNotExist(err) {
+						t.Fatalf("%s did not retain its exact native source material: %q %v", role, body, err)
+					}
+					native := d.f.vcs.At(checkRoot, check.Resource.Handle)
+					head, err := native.Resolve()
+					if err != nil || head != source {
+						t.Fatalf("%s changed its original source HEAD: %s %v", role, head, err)
+					}
+					if err := native.VerifyReady(); err != nil {
+						t.Fatalf("%s changed its copied source bytes: %v", role, err)
+					}
+				}
 			}
 			if !committed {
 				if err := os.Remove(filepath.Join(workspace, "requirements.md")); err != nil {
@@ -142,7 +168,7 @@ func TestBlackboxWorkspaceReceiptPreservesConfirmedContext(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 			d.drive()
-			design, input := d.action("engine.qa.design.v5")
+			design, input := d.action("engine.qa.design.v6")
 			state := driverState(t, d)
 			resource := state.NativeResources[input.Binding.WorkspaceID]
 			if resource.ID != input.Binding.WorkspaceID || resource.Owner != state.RunID || resource.Role != "blackbox-design" || resource.Path == "" || resource.Path == root || resource.Source != base || resource.Identity != base || resource.Status != "READY" || resource.Ref == "" || state.QAWorktree != resource.Path {

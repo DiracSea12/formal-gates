@@ -31,7 +31,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
 	alternatives := []any{body, interruption}
-	if input.Validation != nil && (input.Handler == "engine.development.batch.v5" || input.Handler == "engine.repair.v6") {
+	if _, preparing := role.(*DevelopmentContinuation); !preparing && input.Validation != nil && (input.Handler == "engine.development.batch.v6" || input.Handler == "engine.repair.v7") {
 		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
 		if err != nil {
 			return nil, err
@@ -39,9 +39,14 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		for _, field := range []string{"summary", "remainingWork"} {
 			partial["properties"].(map[string]any)[field] = map[string]any{"type": "string", "minLength": 1}
 		}
+		if commands := body["properties"].(map[string]any)["commands"]; commands != nil {
+			partial["properties"].(map[string]any)["commands"] = commands
+		} else {
+			delete(partial["properties"].(map[string]any), "commands")
+		}
 		alternatives = append(alternatives, partial)
 	}
-	if input.Handler == "engine.repair.v6" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+	if input.Handler == "engine.repair.v7" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
 		fields := body["properties"].(map[string]any)
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
@@ -63,7 +68,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		batches := maps.Clone(planFields["batches"].(map[string]any))
 		batches["minItems"], batches["maxItems"] = 1, 1
 		batch := maps.Clone(batches["items"].(map[string]any))
-		if alternatives, ok := batch["anyOf"].([]any); ok {
+		if alternatives, ok := batch["anyOf"].([]any); ok && batch["properties"] == nil {
 			batch = maps.Clone(alternatives[0].(map[string]any))
 		}
 		batchFields := maps.Clone(batch["properties"].(map[string]any))
@@ -89,13 +94,13 @@ func StableResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 	}
 	roles := []any{role}
 	switch input.Handler {
-	case "engine.qa.execution.v3":
+	case "engine.qa.execution.v4":
 		roles = []any{&CommandBindings{}, &ExecutionJudgments{}}
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		roles = []any{&Design{}, &CaseRevisions{}}
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
 		roles = []any{&Development{}, &DevelopmentContinuation{}}
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		roles = []any{&Repair{}, &DevelopmentContinuation{}}
 	}
 	alternatives := []any{}
@@ -107,7 +112,7 @@ func StableResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		alternatives = append(alternatives, body)
 	}
 	interruption := any(&Interruption{})
-	if input.Handler == "engine.qa.execution.v3" {
+	if input.Handler == "engine.qa.execution.v4" {
 		interruption = &ExecutionInterruption{}
 	}
 	body, err := stableBodySchema(input, interruption)
@@ -145,14 +150,8 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 			check := properties["checks"].(map[string]any)["items"].(map[string]any)
 			check["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": append(protocol.DevelopmentCheckPurposes(), "")}
 			if input.Review != nil {
-				source := stringSourceSchema()["anyOf"].([]any)
 				choices := []any{fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})}
-				for _, original := range source[1:3] {
-					branch := original.(map[string]any)
-					branch["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}
-					choices = append(choices, branch)
-				}
-				choices = append(choices, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": []string{"", protocol.CheckFullBuild, protocol.CheckFullTests}}}, []string{"goal"}))
+				choices = append(choices, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}}, []string{"goal"}))
 				properties["checks"] = map[string]any{"type": "array", "items": map[string]any{"anyOf": choices}}
 			} else {
 				delete(check["properties"].(map[string]any), "goal")
@@ -172,7 +171,7 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 	if input.Review != nil && input.Review.Action != review.StartReadiness {
 		delete(fields, "granularityReview")
 	}
-	if input.Handler == "engine.qa.design.v5" && fields["cases"] != nil {
+	if input.Handler == "engine.qa.design.v6" && fields["cases"] != nil {
 		item := fields["cases"].(map[string]any)["items"].(map[string]any)
 		items := []any{item}
 		if _, design := role.(*Design); design {
@@ -227,7 +226,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
-	if input.Handler == "engine.repair.v6" {
+	if input.Handler == "engine.repair.v7" {
 		if completionBatch(input) == nil {
 			if points := standaloneRepairPoints(input); len(points) > 0 {
 				fields["requirements"] = requirementEvidenceSchema(points)
@@ -271,29 +270,18 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			}
 			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
 			command["not"] = map[string]any{"enum": commands}
-			if input.Handler == "engine.repair.v6" {
+			if input.Handler == "engine.repair.v7" {
 				purpose["enum"] = []string{""}
 			}
 		}
-		sources := stringSourceSchema()
-		for _, source := range sources["anyOf"].([]any)[1:] {
-			if input.Review != nil && source.(map[string]any)["properties"].(map[string]any)["parts"] != nil {
-				continue
-			}
-			original := maps.Clone(source.(map[string]any))
-			properties := maps.Clone(original["properties"].(map[string]any))
-			properties["purpose"] = purpose
-			original["properties"] = properties
-			alternatives = append(alternatives, original)
-		}
 		if input.Review != nil {
-			alternatives = append(alternatives, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": []string{"", protocol.CheckFullBuild, protocol.CheckFullTests}}}, []string{"goal"}))
+			alternatives = append(alternatives, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}}, []string{"goal"}))
 		} else {
 			alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
 		}
-		check := map[string]any{"anyOf": alternatives, "description": sources["description"]}
+		check := map[string]any{"anyOf": alternatives, "description": "Reuse an original approved check or author a genuinely new local invocation."}
 		if input.Review != nil {
-			check["description"] = "Select an original approved check or read range; a missing call declares only its verification goal."
+			check["description"] = "Reuse an original approved check or declare a missing verification goal for the developer to prepare."
 		}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
 		delete(properties, "route")
@@ -330,18 +318,38 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			changed["description"] = "Select an original confirmed batch and supply only changed semantics. Omitted content, identities, dependencies, checks and route are carried by the program."
 			plan["properties"].(map[string]any)["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{batch, changed}}
 		}
+		for _, name := range []string{"subtasks", "dod"} {
+			array := maps.Clone(properties[name].(map[string]any))
+			array["minItems"] = 1
+			properties[name] = array
+		}
+		if input.Handler != "engine.repair.v7" || !slices.ContainsFunc(input.ApprovedChecks, func(check protocol.DevelopmentCheck) bool {
+			return check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests || check.Purpose == protocol.CheckEdit
+		}) {
+			checks := maps.Clone(properties["checks"].(map[string]any))
+			checks["minItems"] = 1
+			properties["checks"] = checks
+			batch["required"] = append(batch["required"].([]any), "checks")
+		}
+		artifacts := maps.Clone(properties["artifacts"].(map[string]any))
+		delete(artifacts, "minItems")
+		properties["artifacts"] = artifacts
+		batch["anyOf"] = []any{
+			map[string]any{"required": []string{"artifacts"}, "properties": map[string]any{"artifacts": map[string]any{"minItems": 1}}},
+			map[string]any{"required": []string{"newArtifacts"}, "properties": map[string]any{"newArtifacts": map[string]any{"minItems": 1}}},
+		}
 	}
-	if input.Handler == "engine.development.batch.v5" {
+	if input.Handler == "engine.development.batch.v6" {
 		pending, positions, commands := pendingDevelopmentCommands(input)
 		duties := []any{}
 		for _, check := range pending {
-			item := stringSourceSchema()
-			item["description"] = check.Goal
+			item := map[string]any{"type": "string", "minLength": 1, "description": check.Goal}
 			duties = append(duties, item)
 		}
 		if len(duties) > 0 {
 			fields["commands"] = orderedSchema(duties)
-			if slices.ContainsFunc(positions, func(position int) bool { return commands[position] == "" }) {
+			_, continuation := target.(*DevelopmentContinuation)
+			if !continuation && slices.ContainsFunc(positions, func(position int) bool { return commands[position] == "" }) {
 				body["required"] = append(body["required"].([]any), "commands")
 			}
 		} else {
@@ -384,11 +392,6 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			}
 			finding["anyOf"] = choices
 		}
-		verification := []any{}
-		for _, key := range review.RequiredVerificationChecks() {
-			verification = append(verification, map[string]any{"type": "string", "minLength": 1, "description": "Evidence for " + key})
-		}
-		fields["verification"] = orderedSchema(verification)
 		return body, nil
 	}
 	if input.Handler == "engine.validation.observation.v2" {
@@ -485,8 +488,8 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		return body, nil
 	}
 
-	if batch := completionBatch(input); batch != nil {
-		if input.Handler == "engine.repair.v6" {
+	if batch := completionBatch(input); batch != nil && fields["completion"] != nil {
+		if input.Handler == "engine.repair.v7" {
 			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
 			body["required"] = append(body["required"].([]any), "summary")
 		}
@@ -501,7 +504,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			object := fields["completion"].(map[string]any)
 			object["required"] = append(object["required"].([]any), "requirements")
 		}
-	} else if !(input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+	} else if !(input.Handler == "engine.repair.v7" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
 	if input.Handler == "engine.repair.verify.v2" {
@@ -511,7 +514,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 		fields["records"] = comparisonSchema(input.Validation.Repair.VerificationCases, item, false)
 	}
-	if input.Handler == "engine.qa.design.v5" {
+	if input.Handler == "engine.qa.design.v6" {
 		whitebox := input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox
 		if len(input.Validation.AffectedCases) > 0 {
 			cases := []any{}
@@ -651,7 +654,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		fields["caseDecisions"] = decisionSchema(cases, input.Validation.InheritableReviews, decision)
 		fields["sharedStepDecisions"] = decisionSchema(shared, input.Validation.InheritableSharedReviews, decision)
 	}
-	if input.Handler == "engine.qa.execution.v3" && len(input.Validation.CommandCases) > 0 {
+	if input.Handler == "engine.qa.execution.v4" && len(input.Validation.CommandCases) > 0 {
 		operation, err := newOperationSchema()
 		if err != nil {
 			return nil, err
@@ -670,7 +673,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		fields["commands"] = orderedSchema(items)
 		return body, nil
 	}
-	if input.Handler == "engine.qa.execution.v3" {
+	if input.Handler == "engine.qa.execution.v4" {
 		item, err := resultTypeSchema(reflect.TypeOf(Observation{}))
 		if err != nil {
 			return nil, err
@@ -690,6 +693,12 @@ func resultTypeSchema(value reflect.Type, stable ...bool) (map[string]any, error
 			return stringSourceSchema(fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})), nil
 		}
 		return stringSourceSchema(), nil
+	}
+	if value == reflect.TypeOf(ArgumentChange{}) {
+		if len(stable) > 0 && stable[0] {
+			return map[string]any{"anyOf": []any{map[string]any{"type": "string"}, fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})}}, nil
+		}
+		return map[string]any{"type": "string"}, nil
 	}
 	if value == reflect.TypeOf(coverage.Operation{}) {
 		return newOperationSchema(stable...)
@@ -821,7 +830,7 @@ func resultTypeSchema(value reflect.Type, stable ...bool) (map[string]any, error
 // Completion keys come only from the issued member batch. Final-candidate
 // verification and repair planning have different evidence duties.
 func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
-	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v5" && input.Handler != "engine.repair.v6") {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v6" && input.Handler != "engine.repair.v7") {
 		return nil
 	}
 	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {
@@ -913,7 +922,11 @@ func operationRevisionSchema(original []coverage.Operation) (map[string]any, err
 		}
 		properties := changed["properties"].(map[string]any)
 		properties["reuse"] = map[string]any{"type": "integer", "enum": []int{index + 1}, "description": "Select this 1-based original operation; the program carries its original argv, command and stdin."}
-		properties["argv"] = stringRevisionSchema(operation.Argv)
+		arguments := []any{map[string]any{"type": "string"}}
+		if len(operation.Argv) > 0 {
+			arguments = append(arguments, fixedObject(map[string]any{"reuse": indexSchema(operation.Argv)}, []string{"reuse"}))
+		}
+		properties["argv"] = map[string]any{"type": "array", "items": map[string]any{"anyOf": arguments}, "description": "Retain original arguments by their published positions or author new argument values; omitted argv retains the complete original array."}
 		changed["required"] = []any{"reuse"}
 		items = append(items, changed)
 	}

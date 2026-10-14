@@ -53,12 +53,12 @@ func walkToInFlightRound(t *testing.T, engine *Engine, action review.Action) str
 	t.Helper()
 	if action == review.StartReadiness {
 		product := issueReady(t, engine)[0]
-		submitReviewResult(t, engine, "result-ix-gate", product, reviewEvidence(review.ProductReview, product, "", "PASS", "gate round", nil))
+		submitVerifiedReviewResult(t, engine, "result-ix-gate", product, reviewEvidence(review.ProductReview, product, "", "PASS", "gate round", nil))
 	} else {
 		issueReady(t, engine)
 	}
 	round1 := pendingActionID(t, engine)
-	submitReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "PASS", "initial review", nil))
+	submitVerifiedReviewResult(t, engine, "result-ix-round-1", round1, reviewEvidence(action, round1, "", "PASS", "initial review", nil))
 	invalidateSeriesRoundOf(t, engine, "req-ix-invalidate", action, round1)
 	snap := engine.LoadMustSucceed(t)
 	series, _ := snap.State.ReviewSeries.Series(action)
@@ -167,7 +167,8 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.change.name+" on "+string(row.mark), func(t *testing.T) {
 			engine, _, target := intersectionFixture(t, row.mark)
-			originalTask := engine.LoadMustSucceed(t).State.PendingActions[target].Task
+			original := engine.LoadMustSucceed(t).State.PendingActions[target]
+			originalTask := original.Task
 			if row.mark == authoring.ReviewSeriesUnaffiliated {
 				work, err := engine.RequirementWork()
 				if err != nil || len(work) != 1 || work[0].ActionID != target {
@@ -179,8 +180,14 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 			row.change.drive(t, engine, "req-ix-pending")
 			snap := engine.LoadMustSucceed(t)
 			if row.freshOK {
+				retired := snap.State.ObsoleteActions[target]
+				if snap.State.PendingActions[target] != original || retired.Task != originalTask || retired.AttemptID != original.AttemptID || snap.State.Tasks[originalTask] == runtime.TaskTerminal {
+					t.Fatal("redo lost its original live identity before the exact stop")
+				}
+				stopSupersededDispatch(t, engine, target)
+				snap = engine.LoadMustSucceed(t)
 				if _, still := snap.State.PendingActions[target]; still {
-					t.Fatal("the dispatch of the redone series must be retired by the decision")
+					t.Fatal("the dispatch of the redone series must be retired after its exact stop")
 				}
 				if _, retired := snap.State.ObsoleteActions[target]; !retired || snap.State.Tasks[originalTask] != runtime.TaskTerminal {
 					t.Fatal("the redone obligation must retire its dispatch and terminate its task")
@@ -201,7 +208,7 @@ func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
 				if row.mark == authoring.ReviewSeriesUnaffiliated {
 					submitPlainResult(t, engine, "result-ix-plain", target)
 				} else {
-					submitReviewResult(t, engine, "result-ix-carry", target, reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-carry", "rev-1", "PASS", "carried binding", nil))
+					submitVerifiedReviewResult(t, engine, "result-ix-carry", target, reviewEvidenceAt(seriesEvidenceOf(row.mark), "dispatch-ix-carry", "rev-1", "PASS", "carried binding", nil))
 					if row.change.redoReadiness {
 						// 产品审恢复 PASS 后，重走的 readiness 才满足顺序门。
 						completeReviewAfterRedo(t, engine, readinessTarget, "result-ix-fresh-other", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-fresh-other", "rev-2", "PASS", "fresh readiness round after the redo", nil))
@@ -329,6 +336,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 				if acceptance, err := engine.Submit(receipt, observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 					t.Fatalf("late receipt pairing: %v %+v", err, acceptance)
 				}
+				verifyCompleteFixtureReview(t, engine, target)
 				if series := targetSeriesOf(t, engine, row.mark); series.Completed != 1 || series.Effective.Status != "PASS" {
 					t.Fatalf("the paired round = completed %d %+v", series.Completed, series.Effective)
 				}
@@ -419,6 +427,8 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the carried result must reach Results")
 		}
+		verifyCompleteFixtureReview(t, engine, target)
+		snap = engine.LoadMustSucceed(t)
 		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" || series.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("the carried round = completed %d %+v", series.Completed, series.Effective)
 		}
@@ -448,6 +458,8 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if _, admitted := snap.State.Results[target]; !admitted {
 			t.Fatal("the replayed result must reach Results after the abort")
 		}
+		verifyCompleteFixtureReview(t, engine, target)
+		snap = engine.LoadMustSucceed(t)
 		if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.RequirementRevision != "rev-1" {
 			t.Fatalf("the replayed round = completed %d %+v", series.Completed, series.Effective)
 		}
@@ -479,6 +491,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		}
 		intersectionCheck(t, engine)
 		abortExistingAsk(t, engine, "req-ix-q-last")
+		verifyCompleteFixtureReview(t, engine, target)
 		snap = engine.LoadMustSucceed(t)
 		if len(snap.State.QuarantinedResults) != 0 || snap.State.ReviewSeries.ProductReview.Completed != 1 {
 			t.Fatalf("the last decision must replay the quarantine: held=%d completed=%d",
@@ -539,6 +552,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
 			Classification: RequirementClassificationChanged, RedoStartReadiness: true, Reason: "only the readiness walk is redone",
 		})
+		verifyCompleteFixtureReview(t, engine, target)
 		// readiness 原任务被重走决定终止，产品审恢复后以新任务完成新鲜轮。
 		completeReviewAfterRedo(t, engine, readinessTarget, "result-ix-term-readiness", reviewEvidenceAt(review.StartReadiness, "dispatch-ix-term-readiness", "rev-2", "PASS", "fresh readiness round after the redo", nil))
 		snap := engine.LoadMustSucceed(t)

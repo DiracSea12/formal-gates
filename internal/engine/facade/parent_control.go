@@ -346,6 +346,6 @@ func (f *Facade) syncResetRequirement() error {
 		return err
 	}
 	event := protocol.Event{ID: protocol.EventID("reset-requirement:" + entry.RequestID), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: entry.Revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: entry.Revision, Document: string(data)}}}
-	_, err = f.engine.Submit(event, requirementObservation(path, data))
+	_, err = f.engine.Submit(event, intakeObservation(f.root, []IntakeMaterial{{Path: req.IntakeConfirmationReceipt.RequirementSource, Revision: requirementContentRevision(data)}}))
 	return err
 }

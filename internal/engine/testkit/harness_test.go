@@ -62,6 +62,16 @@ func TestHarnessReviewResultsAcceptedAndPreservedAfterRestart(t *testing.T) {
 			if result.ActionID != actionID || result.Outcome != protocol.OutcomePass || result.Review == nil || result.Review.Action != review.ProductReview || result.Review.DispatchID != actionID || result.Review.RequirementRevision != state.RequirementRevision() {
 				t.Fatalf("persisted result = %+v", result)
 			}
+			fixture, err := NewProtocolFixture(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verifyFakeReviewFixture(t, fixture.Engine, result)
+			verified, err := fixture.Engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			state = verified.State
 			series := state.ReviewSeries.ProductReview
 			if series.Completed != 1 || series.Effective.Status != "PASS" || len(series.RawCandidates) != 1 || series.RawCandidates[0].DispatchID != actionID {
 				t.Fatalf("persisted review series = %+v", series)
@@ -407,7 +417,7 @@ func TestHarnessFailureRoutingTransientExhaustionOffersDecision(t *testing.T) {
 		t.Fatalf("transient spawn accounting = sideEffects=%+v metadata=%+v", report.SideEffects, report.Metadata)
 	}
 	registry := definition.Registry()
-	step, err := authoring.NewAgentStep(authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version}, authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}}, authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}})
+	step, err := authoring.NewAgentStep(authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version}, authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}}, authoring.AgentSpec{Handler: "engine.review.worker.v3", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}})
 	if err != nil {
 		t.Fatal(err)
 	}

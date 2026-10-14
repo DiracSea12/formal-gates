@@ -340,7 +340,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			return err
 		}
 		if run.Status == "COMPLETE" {
-			for _, role := range []string{"engine.development.batch.v5", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
+			for _, role := range []string{"engine.development.batch.v6", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
 				if !checked[role] {
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
@@ -351,6 +351,38 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 				}
 			}
 			return nil
+		}
+		if len(run.ReviewVerifications) != 0 {
+			source := run.ReviewVerifications[0]
+			original, err := os.ReadFile(filepath.Join(root, "requirement.md"))
+			if err != nil {
+				return err
+			}
+			if string(original) != document || source.Review.RequirementRevision != run.IntakeConfirmationReceipt.RequirementRevision || source.Review.Status != "PASS" || len(source.Review.Findings) != 0 {
+				return fmt.Errorf("portable review differs from its complete original fixture and current binding")
+			}
+			if source.Review.Action == review.StartReadiness {
+				if err := protocol.ValidateGranularity(source.Review.GranularityReview); err != nil {
+					return err
+				}
+			}
+			evidence := []string{}
+			for _, check := range review.RequiredVerificationChecks() {
+				evidence = append(evidence, "Synthetic canary independently checked "+check+": original confirmed requirement bytes match, the exact result has no findings, and its native workflow contract remains complete")
+			}
+			candidate, err := f.PrepareControl(facade.ControlInput{ReviewVerification: &facade.ReviewVerificationInput{Result: 1, Verification: evidence, Findings: []protocol.ReviewFindingVerification{}}})
+			if err != nil {
+				return err
+			}
+			accepted, next, err := f.SubmitControl(candidate)
+			if err != nil {
+				return err
+			}
+			if accepted.Status != "ACCEPTED" {
+				return fmt.Errorf("portable independent review verification: %s", accepted.Status)
+			}
+			run = next
+			continue
 		}
 		if slices.ContainsFunc(run.Review.Actions, func(a facade.ReviewActionFace) bool {
 			return a.Action == string(review.StartReadiness) && a.EffectiveStatus == "PASS"
@@ -463,13 +495,7 @@ func portableDevelopmentPlan() *worker.Granularity {
 func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, facts *[]worker.LocationFact) (any, error) {
 	var payload any
 	if input.Review != nil {
-		evidence := map[string]string{
-			"binding": "The synthetic fixture uses the installed role and confirmed input.", "completeness": "The fixture requirement declares its delivery marker and full verified route.", "evidence": "This deterministic fixture does not claim model or semantic reviewer validation.", "locations": "The fixture identifies its public runtime and committed delivery artifacts.", "normal-entry": "The installed runtime and registered native workspace are used.", "requirement-match": "The plan delivers the declared marker and preserves route checks.", "scope": "The fixture remains within its confirmed requirement.", "severity": "No findings are claimed by this synthetic fixture.",
-		}
 		result := &worker.Review{Findings: []worker.Finding{}}
-		for _, key := range review.RequiredVerificationChecks() {
-			result.Verification = append(result.Verification, evidence[key])
-		}
 		if input.Review.Action == review.StartReadiness {
 			result.GranularityReview = portableDevelopmentPlan()
 			batch := &result.GranularityReview.Batches[0]
@@ -499,7 +525,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		workspace = in.Workspace.Path
 	}
 	switch in.Handler {
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -530,7 +556,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 			payload.(map[string]any)["commands"] = commands
 		}
 		checked[in.Handler] = true
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		mode := in.Manifest.Binding.ReviewKind
 		c := worker.DesignedCase{Scenario: "SUCCESS", PublicEntry: canaryBlackboxProcedure, Preconditions: "Committed candidate", Steps: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:delivery.txt"}}}}
 		missing := worker.DesignedCase{Scenario: "FAILURE", PublicEntry: "git show HEAD:absent-marker.txt", Preconditions: "Candidate has no absent-marker.txt", Steps: "git show HEAD:absent-marker.txt", Oracle: "git rejects the absent committed artifact", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"git", "show", "HEAD:absent-marker.txt"}}}}
@@ -572,7 +598,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		payload = &r
 		checked["review:"+string(m.Binding.ReviewKind)] = true
-	case "engine.qa.execution.v3":
+	case "engine.qa.execution.v4":
 		result := &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{}}}
 		payload = result
 		seen := []string{}

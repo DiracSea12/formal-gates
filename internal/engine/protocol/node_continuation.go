@@ -245,21 +245,21 @@ func (s *State) nodeOwnsTask(node BusinessNode, task runtime.TaskKey, cd *compil
 	case "development":
 		batch, known := s.plannedBatchSource(task)
 		_, plan, _ := s.confirmedDevelopmentPlan()
-		if role == "engine.development.batch.v5" {
+		if role == "engine.development.batch.v6" {
 			return node.Batch == "" || known && batchDependsOn(plan, batch.ID, node.Batch)
 		}
-		return role == "engine.qa.execution.v3" || role == "engine.gate.v3" || (role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2") && s.validationMode(task) == coverage.ReviewWhitebox
+		return role == "engine.qa.execution.v4" || role == "engine.gate.v3" || (role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2") && s.validationMode(task) == coverage.ReviewWhitebox
 	case "qa-design":
-		return (role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2" || role == "engine.qa.execution.v3") && s.validationMode(task) == node.Mode
+		return (role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2" || role == "engine.qa.execution.v4") && s.validationMode(task) == node.Mode
 	case "qa-review":
-		return (role == "engine.qa.review.rationale.v2" || role == "engine.qa.execution.v3") && s.validationMode(task) == node.Mode
+		return (role == "engine.qa.review.rationale.v2" || role == "engine.qa.execution.v4") && s.validationMode(task) == node.Mode
 	case "qa-execution":
-		return role == "engine.qa.execution.v3" && s.validationMode(task) == node.Mode
+		return role == "engine.qa.execution.v4" && s.validationMode(task) == node.Mode
 	case "gate":
 		key := s.sourceValidationTask(task)
 		return role == "engine.gate.v3" && strings.HasSuffix(key.Scope, ":"+node.Gate)
 	case "repair":
-		return role == "engine.repair.v6" && (node.Task == nil || *node.Task == task)
+		return role == "engine.repair.v7" && (node.Task == nil || *node.Task == task)
 	}
 	return false
 }

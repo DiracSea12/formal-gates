@@ -13,7 +13,7 @@ func TestCaseReviewPassKeepsFailureAllowanceAcrossReopening(t *testing.T) {
 		t.Run(reopen, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			for index := 0; index < 4; index++ {
-				id, in := d.action("engine.qa.design.v5")
+				id, in := d.action("engine.qa.design.v6")
 				m := in.Manifest
 				if len(m.Cases) == 0 {
 					m = simpleManifest(in)
@@ -77,7 +77,7 @@ func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
 						d.reopen()
 						d.drive()
 					}
-					id, in := d.action("engine.qa.design.v5")
+					id, in := d.action("engine.qa.design.v6")
 					m := in.Manifest
 					if len(m.Cases) == 0 {
 						m = simpleManifest(in)

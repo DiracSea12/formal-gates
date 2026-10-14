@@ -9,6 +9,7 @@ import (
 
 func TestTransientRecoveryRetainsWorkAfterPreviousDispatchCost(t *testing.T) {
 	d := nativeMasterDriver(t)
+	meterReceiptDispatches(d, 1, 4, 2)
 	passPreDevelopmentReviews(t, d, commandPlan(), review.ProductReview)
 	var action string
 	for id, pending := range d.run.PendingActions {
@@ -31,8 +32,13 @@ func TestTransientRecoveryRetainsWorkAfterPreviousDispatchCost(t *testing.T) {
 	}
 	pending := before.State.PendingActions[action]
 	attempt := before.State.Attempts[pending.Task]
-	if before.State.Cost == nil || len(before.State.Cost.Dispatches) == 0 || attempt.Plan.ObservationDigest == attempt.Bindings.Snapshot {
-		t.Fatal("product cost was not retained in the decision observation separately from work identity")
+	if before.State.Cost == nil || len(before.State.Cost.Dispatches) != 1 || before.State.Cost.TotalInputTokens != 5 || before.State.Cost.InputCacheHitTokens != 1 || before.State.Cost.InputCacheMissTokens != 4 || before.State.Cost.OutputTokens != 2 {
+		t.Fatalf("prior product cost does not retain the actual transcript usage: %+v", before.State.Cost)
+	}
+	product := before.State.ReviewSeries.ProductReview.RawCandidates[0].DispatchID
+	entry := before.State.Cost.Dispatches[product]
+	if entry.Source != "transcript" || entry.TotalInputTokens != 5 || entry.InputCacheHitTokens != 1 || entry.InputCacheMissTokens != 4 || entry.OutputTokens != 2 {
+		t.Fatalf("original product dispatch lost its actual transcript usage: %+v", entry)
 	}
 	head, err := d.git.Resolve()
 	if err != nil {

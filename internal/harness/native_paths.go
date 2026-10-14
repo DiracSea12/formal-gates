@@ -99,7 +99,7 @@ func nativePathEvidence(directory, raw string, capture bool) (*nativePathFacts, 
 	}
 	resource := input.Validation.Workspace
 	native := vcs.NewNative(resource.Path, input.VCS, nil).At(resource.Path, resource.Handle)
-	if input.Handler == "engine.qa.design.v5" {
+	if input.Handler == "engine.qa.design.v6" {
 		expected.Paths, err = native.ChangedPathsFrom(input.Validation.ReviewBase)
 	} else {
 		expected.Paths, err = native.ChangedPaths()

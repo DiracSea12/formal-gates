@@ -22,8 +22,9 @@ type Interruption struct {
 	InterruptionReason string `json:"interruptionReason"`
 }
 type DevelopmentContinuation struct {
-	Summary       string `json:"summary"`
-	RemainingWork string `json:"remainingWork"`
+	Commands      []string `json:"commands,omitempty"`
+	Summary       string   `json:"summary"`
+	RemainingWork string   `json:"remainingWork"`
 }
 type Repair struct {
 	Completion        *Completion  `json:"completion,omitempty"`
@@ -111,16 +112,10 @@ type Criterion struct {
 	Description string `json:"description"`
 }
 type Check struct {
-	Reuse      int             `json:"reuse,omitempty"`
-	Read       int             `json:"read,omitempty"`
-	From       int             `json:"from,omitempty"`
-	To         int             `json:"to,omitempty"`
-	FromColumn *int            `json:"fromColumn,omitempty"`
-	ToColumn   *int            `json:"toColumn,omitempty"`
-	Parts      *[]StringChange `json:"parts,omitempty"`
-	Purpose    string          `json:"purpose,omitempty"`
-	Goal       string          `json:"goal,omitempty"`
-	Command    string          `json:"command,omitempty"`
+	Reuse   int    `json:"reuse,omitempty"`
+	Purpose string `json:"purpose,omitempty"`
+	Goal    string `json:"goal,omitempty"`
+	Command string `json:"command,omitempty"`
 }
 
 func (item *Check) UnmarshalJSON(raw []byte) error {
@@ -137,13 +132,6 @@ func (item *Check) UnmarshalJSON(raw []byte) error {
 		allowed, required = []string{"goal", "purpose"}, []string{"goal"}
 	} else if _, present := fields["reuse"]; present {
 		allowed, required = []string{"reuse"}, []string{"reuse"}
-	} else if _, present := fields["read"]; present {
-		allowed, required = []string{"read", "from", "to", "fromColumn", "toColumn", "purpose"}, []string{"read", "from", "to"}
-		if fields["fromColumn"] != nil || fields["toColumn"] != nil {
-			required = append(required, "fromColumn", "toColumn")
-		}
-	} else if _, present := fields["parts"]; present {
-		allowed, required = []string{"parts", "purpose"}, []string{"parts"}
 	}
 	for name := range fields {
 		if !slices.Contains(allowed, name) {
@@ -171,7 +159,6 @@ type Review struct {
 	GranularityReview *Granularity `json:"granularityReview,omitempty"`
 	Message           string       `json:"message,omitempty"`
 	Findings          []Finding    `json:"findings"`
-	Verification      []string     `json:"verification"`
 }
 type Finding struct {
 	Severity          string                     `json:"severity"`
@@ -186,9 +173,9 @@ type Finding struct {
 	Locations         []Location                 `json:"locations,omitempty"`
 }
 type Development struct {
-	Commands      []StringChange `json:"commands,omitempty"`
-	RemainingWork string         `json:"-"`
-	Completion    *Completion    `json:"completion,omitempty"`
+	Commands      []string    `json:"commands,omitempty"`
+	RemainingWork string      `json:"-"`
+	Completion    *Completion `json:"completion,omitempty"`
 	paths         []string
 	Summary       string `json:"summary"`
 }
@@ -340,7 +327,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	} else if value.Validation != nil {
 		proposed = value.Validation.GranularityReview
 	}
-	completed := input.Handler == "engine.repair.v6" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	completed := input.Handler == "engine.repair.v7" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
 	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
 	if err != nil {
 		return protocol.Event{}, err
@@ -365,19 +352,6 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		}
 		body := protocol.ReviewResultEvidence{GranularityReview: value.Granularity, Status: findingStatus(r.Findings), Message: r.Message, Findings: items}
 		body.Action, body.DispatchID, body.RequirementRevision, body.AuthorizationID = input.Review.Action, input.Pending.ActionID, input.Review.RequirementRevision, input.Review.AuthorizationID
-		checks := review.RequiredVerificationChecks()
-		if len(value.Review.Verification) != len(checks) {
-			return protocol.Event{}, fmt.Errorf("review requires evidence for every verification check")
-		}
-		evidence := []string{}
-		for _, key := range checks {
-			text := strings.TrimSpace(value.Review.Verification[len(evidence)])
-			if text == "" {
-				return protocol.Event{}, fmt.Errorf("review verification evidence is missing: %s", key)
-			}
-			evidence = append(evidence, key+": "+text)
-		}
-		body.Verification = review.OperatorVerification{Checks: checks, Evidence: strings.Join(evidence, "\n")}
 		payload.Review = &body
 	}
 	if value.Validation != nil {
@@ -387,7 +361,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		issued := input.Validation
 		v := value.Validation
 		if v.Development != nil {
-			if paths == nil {
+			if paths == nil && (input.Handler != "engine.development.batch.v6" || !missingEditCalls(input)) {
 				return protocol.Event{}, fmt.Errorf("development requires original native terminal path facts")
 			}
 			v.Development.paths = slices.Clone(paths)
@@ -412,7 +386,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			if body.GranularityReview != nil && len(v.RequirementEvidence) > 0 {
 				return protocol.Event{}, fmt.Errorf("batch repair evidence belongs to its completion")
 			}
-			if input.Handler == "engine.repair.v6" && completionBatch(input) == nil && body.GranularityReview == nil && v.Status != "CONTINUE" {
+			if input.Handler == "engine.repair.v7" && completionBatch(input) == nil && body.GranularityReview == nil && v.Status != "CONTINUE" {
 				body.Development.RequirementResults, err = assemblePointEvidence(requirement.PointIDs(standaloneRepairPoints(input)), v.RequirementEvidence)
 				if err != nil {
 					return protocol.Event{}, err
@@ -427,7 +401,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 			var err error
 			source := developmentSource(input)
 			if v.Status != "CONTINUE" || len(v.Development.Commands) != 0 || source != nil && len(source.Validation.Development.Commands) > 0 {
-				body.Development.Commands, err = assembleDevelopmentCommands(input, v.Development.Commands, locationFacts)
+				body.Development.Commands, err = assembleDevelopmentCommands(input, v.Development.Commands)
 			}
 			if err != nil {
 				return protocol.Event{}, err
@@ -542,7 +516,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 				return protocol.Event{}, err
 			}
 			body.Manifest, body.DesignChange = &manifest, &change
-			if input.Handler == "engine.qa.design.v5" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
+			if input.Handler == "engine.qa.design.v6" && manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 				if paths == nil {
 					return protocol.Event{}, fmt.Errorf("whitebox design requires original native terminal path facts")
 				}
@@ -751,20 +725,23 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
 	switch input.Handler {
-	case "engine.development.batch.v5":
+	case "engine.development.batch.v6":
+		if missingEditCalls(input) {
+			return &DevelopmentContinuation{}, nil
+		}
 		return &Development{}, nil
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		return &Repair{}, nil
 	case "engine.merge.resolve.v3":
 		return &ConflictResolution{}, nil
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		if len(input.Validation.AffectedCases) > 0 {
 			return &CaseRevisions{}, nil
 		}
 		return &Design{}, nil
 	case "engine.qa.review.rationale.v2":
 		return &CaseReview{}, nil
-	case "engine.qa.execution.v3":
+	case "engine.qa.execution.v4":
 		if len(input.Validation.CommandCases) > 0 {
 			return &CommandBindings{}, nil
 		}
@@ -798,7 +775,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		return decodedResult{}, "", err
 	}
 	if _, present := fields["remainingWork"]; present {
-		if input.Validation == nil || input.Handler != "engine.development.batch.v5" && input.Handler != "engine.repair.v6" {
+		if input.Validation == nil || input.Handler != "engine.development.batch.v6" && input.Handler != "engine.repair.v7" {
 			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
 		}
 		var partial DevelopmentContinuation
@@ -808,7 +785,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		if strings.TrimSpace(partial.Summary) == "" || strings.TrimSpace(partial.RemainingWork) == "" {
 			return decodedResult{}, "", fmt.Errorf("development continuation requires summary and actual remaining work")
 		}
-		return decodedResult{Validation: &decodedValidation{Status: "CONTINUE", Development: &Development{Summary: partial.Summary, RemainingWork: partial.RemainingWork}}}, "", nil
+		return decodedResult{Validation: &decodedValidation{Status: "CONTINUE", Development: &Development{Commands: partial.Commands, Summary: partial.Summary, RemainingWork: partial.RemainingWork}}}, "", nil
 	}
 	if reason, present := fields["interruptionReason"]; present {
 		var text string
@@ -920,7 +897,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	if input.Handler == "engine.repair.v6" && fields["completion"] != nil && fields["granularityReview"] != nil {
+	if input.Handler == "engine.repair.v7" && fields["completion"] != nil && fields["granularityReview"] != nil {
 		var plan struct {
 			Batches []map[string]json.RawMessage `json:"batches"`
 		}
@@ -1040,10 +1017,10 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 	if input.Validation == nil {
 		return nil
 	}
-	if input.Handler == "engine.development.batch.v5" && input.Validation.Development != nil {
+	if input.Handler == "engine.development.batch.v6" && input.Validation.Development != nil {
 		return input.Validation.Development.Result
 	}
-	if input.Handler == "engine.repair.v6" && input.Validation.Repair != nil {
+	if input.Handler == "engine.repair.v7" && input.Validation.Repair != nil {
 		return input.Validation.Repair.Result
 	}
 	return nil
@@ -1141,7 +1118,17 @@ func pendingDevelopmentCommands(input protocol.WorkerInput) ([]protocol.Developm
 	return duties, positions, commands
 }
 
-func assembleDevelopmentCommands(input protocol.WorkerInput, values []StringChange, facts []LocationFact) ([]string, error) {
+func missingEditCalls(input protocol.WorkerInput) bool {
+	duties, positions, commands := pendingDevelopmentCommands(input)
+	for i, check := range duties {
+		if check.Purpose == protocol.CheckEdit && commands[positions[i]] == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func assembleDevelopmentCommands(input protocol.WorkerInput, values []string) ([]string, error) {
 	duties, positions, commands := pendingDevelopmentCommands(input)
 	if len(values) == 0 && developmentSource(input) != nil {
 		if slices.Contains(commands, "") {
@@ -1152,11 +1139,7 @@ func assembleDevelopmentCommands(input protocol.WorkerInput, values []StringChan
 	if len(values) != len(duties) {
 		return nil, fmt.Errorf("commands must follow the issued unfinished verification goals in order")
 	}
-	for i, value := range values {
-		command, err := value.text(nil, facts)
-		if err != nil {
-			return nil, err
-		}
+	for i, command := range values {
 		if strings.TrimSpace(command) == "" {
 			return nil, fmt.Errorf("verification call is empty")
 		}

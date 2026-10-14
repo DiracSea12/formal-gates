@@ -215,19 +215,18 @@ type WorkerResultPayload struct {
 }
 
 // ReviewResultEvidence 是审查结果的完整语义证据：绑定动作、派发身份、
-// 需求 revision 与（越过自动上限时的）复审授权，以及 raw 结论与
-// Operator 八项核实记录。只有 PASS/FAIL 是可接纳的语义状态；身份与
+// 需求 revision 与（越过自动上限时的）复审授权，以及完整 raw 结论。
+// 独立 Operator 核实不属于 worker result。只有 PASS/FAIL 是语义状态；身份与
 // 摘要由 review 内核在接纳时派生。
 type ReviewResultEvidence struct {
-	GranularityReview   *GranularityReview          `json:"granularityReview,omitempty"`
-	Action              review.Action               `json:"action"`
-	DispatchID          string                      `json:"dispatchId"`
-	RequirementRevision string                      `json:"requirementRevision"`
-	AuthorizationID     string                      `json:"authorizationId,omitempty"`
-	Status              string                      `json:"status"`
-	Message             string                      `json:"message,omitempty"`
-	Findings            []review.Finding            `json:"findings"`
-	Verification        review.OperatorVerification `json:"verification"`
+	GranularityReview   *GranularityReview `json:"granularityReview,omitempty"`
+	Action              review.Action      `json:"action"`
+	DispatchID          string             `json:"dispatchId"`
+	RequirementRevision string             `json:"requirementRevision"`
+	AuthorizationID     string             `json:"authorizationId,omitempty"`
+	Status              string             `json:"status"`
+	Message             string             `json:"message,omitempty"`
+	Findings            []review.Finding   `json:"findings"`
 }
 
 // ReviewDecisionPayload 是审查类业务控制的 DECIDE typed 载荷：小 tagged
@@ -363,9 +362,10 @@ const (
 // 核实的事实集合（复用 decision.Fact 的 typed 形态与来源枚举）与它绑定
 // 的来源对账项标识（如 actionID/receipt）。
 type OperatorObservationPayload struct {
-	Validation *ValidationObservation `json:"validation,omitempty"`
-	Subject    string                 `json:"subject"`
-	Facts      []decision.Fact        `json:"facts,omitempty"`
+	Review     *ReviewVerificationObservation `json:"review,omitempty"`
+	Validation *ValidationObservation         `json:"validation,omitempty"`
+	Subject    string                         `json:"subject"`
+	Facts      []decision.Fact                `json:"facts,omitempty"`
 }
 
 // HostActionReceiptPayload 是 HOST_ACTION_RECEIPT 的 payload：
@@ -784,8 +784,11 @@ func (e Event) Validate() error {
 		if strings.TrimSpace(e.Observation.Subject) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "operator observation subject is empty"}
 		}
-		if len(e.Observation.Facts) == 0 && e.Observation.Validation == nil {
+		if len(e.Observation.Facts) == 0 && e.Observation.Validation == nil && e.Observation.Review == nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "operator observation facts are empty"}
+		}
+		if e.Observation.Review != nil && (e.Observation.Validation != nil || len(e.Observation.Facts) != 0) {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "review verification cannot contain another observation role"}
 		}
 		for _, fact := range e.Observation.Facts {
 			if !fact.Source.Valid() {
@@ -933,9 +936,10 @@ type workerResultEventWire struct {
 }
 
 type operatorObsWire struct {
-	Validation *ValidationObservation `json:"validation,omitempty"`
-	Subject    string                 `json:"subject"`
-	Facts      []operatorFactWire     `json:"facts"`
+	Review     *ReviewVerificationObservation `json:"review,omitempty"`
+	Validation *ValidationObservation         `json:"validation,omitempty"`
+	Subject    string                         `json:"subject"`
+	Facts      []operatorFactWire             `json:"facts"`
 }
 
 type operatorFactWire struct {
@@ -1003,7 +1007,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		for _, fact := range e.Observation.Facts {
 			facts = append(facts, operatorFactWire{Source: string(fact.Source), Key: fact.Key, Value: fact.Value})
 		}
-		w.Observation = &operatorObsWire{Validation: e.Observation.Validation, Subject: e.Observation.Subject, Facts: facts}
+		w.Observation = &operatorObsWire{Review: e.Observation.Review, Validation: e.Observation.Validation, Subject: e.Observation.Subject, Facts: facts}
 	}
 	if e.HostAction != nil {
 		w.HostAction = &hostActionReceiptWire{

@@ -85,15 +85,22 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	d.routeRedos++
 	document := validationDocument + strings.Repeat("\n", d.routeRedos+1)
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:readiness-only", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices}
+	receipt := driverState(t, d).CurrentIntakeConfirmation()
+	if err := os.WriteFile(filepath.Join(d.f.root, receipt.RequirementSource), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	intake, err := prepareConfirmedIntake(d.f.root, receipt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:readiness-only", ImpactDigest: "sha256:command-contract", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices}
 	request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(request)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only; the route stays bound"}}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only; the route stays bound"}}}.WithRequirementDocument(document))
 	d.drive()
 	if d.run.Review.RouteMode != "custom" {
 		t.Fatalf("readiness-only redo changed the route binding: %q", d.run.Review.RouteMode)
@@ -110,14 +117,20 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	if ready == "" {
 		t.Fatal("readiness redo omitted the fresh round")
 	}
+	worker, issued := driverState(t, d).WorkerInput(ready, d.f.definition)
+	if !issued {
+		t.Fatal("new readiness has no original signed requirement points")
+	}
+	fixturePlanRequirements(&nextPlan, worker.RequirementPoints)
 	d.receipt(ready)
-	ev, err := protocol.NewReviewWorkerResultEvent(d.eventID(), ready, DefaultProvider, "new plan", protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: ready, RequirementRevision: revision, Status: "PASS", GranularityReview: &nextPlan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Compared the extended command DoD"}})
+	ev, err := protocol.NewReviewWorkerResultEvent(d.eventID(), ready, DefaultProvider, "new plan", protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: ready, RequirementRevision: revision, Status: "PASS", GranularityReview: &nextPlan, Findings: []review.Finding{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(ev)
+	verifyReviewFixture(t, d, ev)
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v5" {
+		if input.Handler == "engine.development.batch.v6" {
 			t.Fatal("new contract executed before plan confirmation")
 		}
 	}
@@ -213,7 +226,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			qa, qi := d.action("engine.qa.execution.v3")
+			qa, qi := d.action("engine.qa.execution.v4")
 			gate, gi := d.gateAction("quality")
 			report := executionFor(qi)
 			result := nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
@@ -249,7 +262,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 				if delivery == "retry" {
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "environment-interrupted"}})
 					d.drive()
-					qa, qi = d.action("engine.qa.execution.v3")
+					qa, qi = d.action("engine.qa.execution.v4")
 					report = executionFor(qi)
 					result = nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report})
 					event = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: qa, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "executed-input-contract", Validation: &result}}
@@ -293,7 +306,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v6")
+	id, in := d.action("engine.repair.v7")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"
@@ -307,7 +320,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.qa.execution.v3")
+	id, in = d.action("engine.qa.execution.v4")
 	if in.Execution.Scope != coverage.ScopeAffected {
 		t.Fatal("setup needs AFFECTED")
 	}
@@ -476,7 +489,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
-			action, _ := d.action("engine.development.batch.v5")
+			action, _ := d.action("engine.development.batch.v6")
 			before, err := d.f.engine.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -821,8 +834,8 @@ func TestRequirementRedoTracksLatestReplacementAndPreservesIndependentWorker(t *
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
-	action, _ := d.action("engine.development.batch.v5")
-	qa, _ := d.action("engine.qa.design.v5")
+	action, _ := d.action("engine.development.batch.v6")
+	qa, _ := d.action("engine.qa.design.v6")
 	d.receipt(action)
 	initial, err := d.f.engine.Load()
 	if err != nil {

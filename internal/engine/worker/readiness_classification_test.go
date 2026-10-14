@@ -14,7 +14,7 @@ import (
 )
 
 func TestReadinessMaterialAndSemanticBodyCarryTechnicalClassification(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.readiness.plan.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "revision"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.readiness.plan.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "revision"}}
 	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -39,10 +39,7 @@ func TestReadinessMaterialAndSemanticBodyCarryTechnicalClassification(t *testing
 	for _, category := range []string{"", "unknown", "requirement-conflict", "responsibility-dependency", "acceptance-entry", "implementation-detail"} {
 		for _, severity := range []string{"P0", "P1", "P2", "P3"} {
 			t.Run(category+"/"+severity, func(t *testing.T) {
-				body := Review{Findings: []Finding{{Category: category, Severity: severity, Message: "Actual documented path concern"}}, Verification: []string{}}
-				for range review.RequiredVerificationChecks() {
-					body.Verification = append(body.Verification, "Inspected original requirement and observed evidence")
-				}
+				body := Review{Findings: []Finding{{Category: category, Severity: severity, Message: "Actual documented path concern"}}}
 				raw, err := json.Marshal(body)
 				if err != nil {
 					t.Fatal(err)

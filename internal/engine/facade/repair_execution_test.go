@@ -34,6 +34,13 @@ func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
 	oldSource := old.Repair.FinalCandidate.Identity
 	document := validationDocument + "\n"
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	if err := os.WriteFile(filepath.Join(d.f.root, "requirements.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	intake, err := prepareConfirmedIntake(d.f.root, d.run.IntakeConfirmationReceipt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var choices []protocol.RequirementWorkDecision
 	for _, item := range d.run.RequirementWork {
 		disposition := protocol.RequirementWorkCarry
@@ -42,15 +49,14 @@ func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
 		}
 		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: disposition, Reason: "repeat selected implementation under confirmed document"})
 	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "formatting", ImpactDigest: "member-source", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "formatting", ImpactDigest: "member-source", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
 	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(event)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirm member replacement"}}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirm member replacement"}}}.WithRequirementDocument(document))
 	d.reopen()
 	d.drive()
 	var current []protocol.WorkBinding
@@ -132,7 +138,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one public command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
 	d.drive()
-	id, in := d.action("engine.qa.design.v5")
+	id, in := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(in)
 	for i := range manifest.Cases {
 		argument := "valid"
@@ -147,7 +153,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	approved := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.drive()
-	id, in = d.action("engine.development.batch.v5")
+	id, in = d.action("engine.development.batch.v6")
 	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"} {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, path), []byte(body), 0644); err != nil {
 			t.Fatal(err)
@@ -157,7 +163,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	e.Paths = []string{"app.go", "go.mod"}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: e})
 	d.drive()
-	id, in = d.action("engine.qa.execution.v3")
+	id, in = d.action("engine.qa.execution.v4")
 	report := executionFor(in)
 	tool, environment := protocol.ExecutionIdentities(in.ExecutionFacts)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -177,7 +183,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	r := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "command", RootCause: "composition", Consequence: "documented result missing", Severity: severity, SeverityRationale: "documented command behavior", Verification: review.FindingVerification{Scope: "command", Severity: "documented severity", Causality: "composition", Reproduction: "normal command invocation", Classification: "implementation"}, Reason: "native output comparison"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: w.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v6")
+	id, in = d.action("engine.repair.v7")
 	return d, in, id
 }
 
@@ -408,7 +414,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		var action string
 		var input protocol.ValidationInput
 		for id, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v3" {
+			if in.Handler == "engine.qa.execution.v4" || in.Handler == "engine.gate.v3" {
 				action, input = id, in
 				break
 			}
@@ -417,7 +423,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 			break
 		}
 		result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-		if input.Handler == "engine.qa.execution.v3" {
+		if input.Handler == "engine.qa.execution.v4" {
 			report := executionFor(input)
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -437,7 +443,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		t.Fatal("completed member source problem stayed open")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v6" {
+		if input.Handler == "engine.repair.v7" {
 			t.Fatal("completed source problem created another repair")
 		}
 	}

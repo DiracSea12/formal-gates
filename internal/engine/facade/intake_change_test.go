@@ -57,10 +57,10 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 					d.drive()
 				}
 				if boundary == "validation" {
-					design, input := d.action("engine.qa.design.v5")
+					design, input := d.action("engine.qa.design.v6")
 					manifest := simpleManifest(input)
 					manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "normal"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "invalid"}, {SourceID: "REQ-002", PointID: "AC-002", CaseID: "normal"}, {SourceID: "REQ-002", PointID: "AC-002", CaseID: "invalid"}}
-					dev, di := d.action("engine.development.batch.v5")
+					dev, di := d.action("engine.development.batch.v6")
 					d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 					if len(d.run.RejectedResults) != 0 {
 						t.Fatalf("native QA preparation rejected its source manifest: %+v", d.run.RejectedResults)

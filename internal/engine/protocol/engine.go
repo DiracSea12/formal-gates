@@ -315,7 +315,7 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, input Ob
 	if _, err := e.stopControlledWorkers(state, "superseded-work", "Worker responsibility superseded: ", nextRevision, false); err != nil {
 		return nil, err
 	}
-	e.reconcileReviewGrantAsks(state)
+	e.reconcileReviewAsks(state)
 	heldRouted := e.executeHeldFailureRoutes(state, nextRevision)
 	heldSettled, err := e.executeHeldSettles(state, nextRevision)
 	if err != nil {
@@ -437,6 +437,12 @@ func (e *Engine) Load() (Snapshot, error) {
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
 	view.OperatorFacts = slices.Clone(view.OperatorFacts)
+	for _, result := range s.PendingReviewVerifications() {
+		view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: result.ActionID, Value: "Independently verify the original review result and each finding before admission"})
+	}
+	for _, finding := range s.pendingReviewCorrections() {
+		view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: finding.Digest, Value: "Clarify the correction for this confirmed finding and prepare its complete review delta: " + finding.Message})
+	}
 	view.Suspended = pipelineEnabled(s, compiled) && s.dualReviewPass() && !s.validationRequirementCurrent() || !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
 	for actionID, receipt := range s.SpawnReceipts {
 		if receipt.Status != SpawnStatusUnknown || !s.liveDispatch(actionID) {
@@ -493,6 +499,13 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 	for mark, steps := range carriers {
 		key := runtime.TaskKey{Node: steps[0].Header.NodeID, Step: steps[0].Header.ID}
 		series, _ := s.ReviewSeries.Series(mark)
+		for _, result := range s.PendingReviewVerifications() {
+			if result.Review.Action == mark {
+				key := s.SpawnReceipts[result.ActionID].Task
+				view.RequiredTasks[key.Step] = append(view.RequiredTasks[key.Step], decision.RequiredTask{Task: key, BlockedBy: decision.WaitDependencies, Covers: coveredSteps(mark)})
+				live[mark] = true
+			}
+		}
 		if live[mark] || s.effectivePass(series) {
 			continue
 		}
@@ -651,7 +664,7 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return nil, revision, err
 		}
-		if attached || advanced || len(state.Completed) != completed || e.reconcileReviewGrantAsks(state) {
+		if attached || advanced || len(state.Completed) != completed || e.reconcileReviewAsks(state) {
 			if _, err := e.commit(state, revision, input); err != nil {
 				return nil, revision, err
 			}
@@ -1157,7 +1170,7 @@ func (e *Engine) Submit(ev Event, input Observation) (Acceptance, error) {
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
 	}
 	if state.Phase == runtime.PhasePreparing {
-		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil {
+		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil) {
 			return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "preparing child has no business control authority"}
 		}
 	}
@@ -1205,7 +1218,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 // admitEvent 按事件 kind 做接纳校验与落账（屏障处置表之后）。补配对属
 // 事务收尾（见 admit），各分支不做。
 func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, input Observation) (Acceptance, *State, bool, error) {
-	if state.abortRequested() && (ev.Kind == KindRequestControl || ev.Kind == KindDecide || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil) {
+	if state.abortRequested() && (ev.Kind == KindRequestControl || ev.Kind == KindDecide || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil)) {
 		cleanupRecovery := false
 		if ev.Kind == KindDecide {
 			ask := state.PendingAsks[string(ev.Decide.Request)]
@@ -1597,11 +1610,21 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		if !wrote {
 			return acceptance, nil, false, nil
 		}
-		// 结果接纳可能把产品审结论重新 PASS——挂起配对的补齐属事务收尾
-		// 单点（admit），两种完成顺序（结果先到/回执先到）走同一处。
+		// 挂起结果的配对属事务收尾单点（admit）；结果先到与回执先到
+		// 共用该路径，完整审查随后等待独立 Operator 接纳。
 		return acceptance, state, true, nil
 
 	case KindOperatorObservation:
+		if ev.Observation.Review != nil {
+			status, err := e.acceptReviewVerification(state, ev.Observation, nextRevision)
+			if err == nil && status != "DUPLICATE" {
+				state.OperatorObservations = append(state.OperatorObservations, OperatorObservation{Subject: ev.Observation.Subject, Review: ev.Observation.Review, EventID: string(ev.ID), Revision: nextRevision})
+			}
+			if err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: status, Revision: nextRevision, ActionID: ev.Observation.Subject}, state, true, nil
+		}
 		if ev.Observation.Validation != nil {
 			if err := e.acceptValidationObservation(state, ev.Observation, revision, nextRevision); err != nil {
 				return Acceptance{}, nil, false, err
@@ -1884,7 +1907,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v5" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v6") {
+			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v6" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v7") {
 				for _, prior := range state.RecoverableResults[actionID] {
 					if prior.Digest == payloadDigest {
 						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
@@ -1951,8 +1974,8 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		// （§7.2 第 4 项 对确认续用项的恢复/接纳不因任务经 TASK_PROGRESS 到
 		// terminal 而失效）：
 		//   - 真实结果（PASS 或携审查证据）仍须在途观察事实回执（SPAWNED，
-		//     或经 lifecycle 对账挂接的 ATTACHED）——其入账要完成步骤与候
-		//     选记账，观察事实是前提；UNKNOWN 尚待对账，不接纳真实结果。
+		//     或经 lifecycle 对账挂接的 ATTACHED）；原始证据保存后，审查
+		//     仍须独立核实才计轮。UNKNOWN 尚待对账，不接纳真实结果。
 		//   - 失败结果（非 PASS 且无审查证据）接受任何签出证明回执
 		//     （issuedWitnessReceipt，含 UNKNOWN）——僵尸出口对一切计入者
 		//     可用：不建候选、不占轮、不完成步骤，承诺落定释放容量。
@@ -1993,12 +2016,9 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: status, Revision: nextRevision, ActionID: actionID, Refill: refill}, true, nil
 		}
 		record := workerResultRecord(result)
-		preparedReview, preparedValidation, err := e.prepareResult(state, record, receipt.Task, nextRevision)
+		preparedValidation, err := e.prepareResult(state, record, receipt.Task, nextRevision)
 		if err != nil {
 			return Acceptance{}, false, err
-		}
-		if record.Review != nil {
-			state.ReviewSeries = preparedReview
 		}
 		if preparedValidation != nil {
 			state.Validation = preparedValidation
@@ -2192,7 +2212,7 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, input O
 // prepareResult executes the issued step's result predicate through the review
 // and validation content owners. Failure-only transport results keep their
 // declared recovery domain; the predicate does not require a PASS conclusion.
-func (e *Engine) prepareResult(state *State, record WorkerResult, key runtime.TaskKey, nextRevision uint64) (review.Set, *Validation, error) {
+func (e *Engine) prepareResult(state *State, record WorkerResult, key runtime.TaskKey, nextRevision uint64) (*Validation, error) {
 	for _, step := range e.cfg.Definition.Steps {
 		if step.Header.ID != key.Step {
 			continue
@@ -2203,39 +2223,36 @@ func (e *Engine) prepareResult(state *State, record WorkerResult, key runtime.Ta
 			}
 			if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && record.FailureClass == authoring.FailureTransientEngine {
 				if record.Validation == nil {
-					return review.Set{}, nil, nil
+					return nil, nil
 				}
-				if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v3" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
-					return review.Set{}, nil, validationError("runtime progress requires a QA execution checkpoint")
+				if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v4" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
+					return nil, validationError("runtime progress requires a QA execution checkpoint")
 				}
 				next, err := e.prepareValidationResult(state, record, nextRevision)
 				if err != nil {
-					return review.Set{}, nil, validationReject(err)
+					return nil, validationReject(err)
 				}
-				return review.Set{}, next, nil
+				return next, nil
 			}
 			if record.Outcome == OutcomePass && state.reviewSeriesBooked(review.Action(step.Payload.(compiler.CompiledAgentStep).ReviewSeries)) && record.Review == nil {
-				return review.Set{}, nil, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "signed review duty requires review evidence"}
+				return nil, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "signed review duty requires review evidence"}
 			}
-			var preparedReview review.Set
 			if record.Review != nil {
-				var err error
-				preparedReview, err = e.prepareReviewResult(state, record.Review, record.ActionID)
-				if err != nil {
-					return review.Set{}, nil, err
+				if err := e.prepareReviewResult(state, record.Review, record.ActionID); err != nil {
+					return nil, err
 				}
 			}
 			if record.FailureClass == "" && state.validationRole(key, e.cfg.Definition) != "" {
 				next, err := e.prepareValidationResult(state, record, nextRevision)
 				if err != nil {
-					return review.Set{}, nil, validationReject(err)
+					return nil, validationReject(err)
 				}
-				return preparedReview, next, nil
+				return next, nil
 			}
-			return preparedReview, nil, nil
+			return nil, nil
 		}
 	}
-	return review.Set{}, nil, &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("step %s has no implemented result predicate", key.Step)}
+	return nil, &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("step %s has no implemented result predicate", key.Step)}
 }
 
 func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, input Observation) ([]string, error) {
@@ -2248,7 +2265,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", record.InvalidReason, record, nextRevision)
 	}
 	class := record.FailureClass
-	preparedReview, preparedValidation, err := e.prepareResult(state, record, key, nextRevision)
+	preparedValidation, err := e.prepareResult(state, record, key, nextRevision)
 	if err != nil {
 		if rejected, ok := err.(*RejectedError); ok && (rejected.Code == CodeReviewEvidenceRejected || rejected.Code == CodeValidationEvidenceRejected) {
 			return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", rejected.Detail, record, nextRevision)
@@ -2274,7 +2291,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
-		if role := state.validationRole(key, e.cfg.Definition); role == "engine.development.batch.v5" || role == "engine.repair.v6" && record.Validation.Development != nil || record.Validation != nil && record.Validation.Status == "CONTINUE" {
+		if role := state.validationRole(key, e.cfg.Definition); role == "engine.development.batch.v6" || role == "engine.repair.v7" && record.Validation.Development != nil || record.Validation != nil && record.Validation.Status == "CONTINUE" {
 			if previous, ok := state.Results[record.ActionID]; ok {
 				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
 			}
@@ -2312,7 +2329,10 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		}
 	}
 	if record.Review != nil {
-		state.ReviewSeries = preparedReview
+		if attempt, ok := state.Attempts[key]; ok {
+			attempt.AwaitingResult = false
+			state.EndedAttempts[key] = attempt
+		}
 	}
 	if err := state.terminalizeTask(key); err != nil {
 		return nil, err
@@ -2477,7 +2497,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, input Observation) ([
 	if err := e.releaseUpstreamVoidIfReleasable(state); err != nil {
 		return nil, err
 	}
-	e.reconcileReviewGrantAsks(state)
+	e.reconcileReviewAsks(state)
 	plan, err := e.decide(state)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill decide: %w", err)

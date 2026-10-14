@@ -348,8 +348,8 @@ func TestWhiteboxAuthoringReusesOnlyCurrentDevelopmentSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := pipelineTask(cd, "engine.qa.design.v5", "3:WHITEBOX:1:")
-	revised := pipelineTask(cd, "engine.qa.design.v5", "3:WHITEBOX:2:clarify")
+	original := pipelineTask(cd, "engine.qa.design.v6", "3:WHITEBOX:1:")
+	revised := pipelineTask(cd, "engine.qa.design.v6", "3:WHITEBOX:2:clarify")
 	resource := NativeResource{ID: "authoring", Owner: "run", Role: "whitebox-authoring", Path: "/run/authoring", Source: "development", Identity: "test-candidate", Status: "READY"}
 	s := &State{RunID: "run", NativeRoot: "/run", SelectedGates: []string{"whitebox"}, Validation: &Validation{DevelopmentSnapshot: "development", RequirementRevision: "confirmed", Generation: 3, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewWhitebox: {DesignTask: original, Status: "DRAFT"}}}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"original": {Task: original, WorkspaceID: resource.ID}}}
 	if actual := s.taskResource(revised, cd); actual != resource {
@@ -371,7 +371,7 @@ func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
 	}
 	for _, withTask := range []bool{false, true} {
 		t.Run(fmt.Sprintf("task-bound=%t", withTask), func(t *testing.T) {
-			key := pipelineTask(cd, "engine.development.batch.v5", "plan:command")
+			key := pipelineTask(cd, "engine.development.batch.v6", "plan:command")
 			resource := NativeResource{ID: "implementation", Owner: "run", Role: "development", Path: "/work/implementation", Ref: "refs/implementation", Source: "source", Status: "PLANNED"}
 			s := &State{RunID: "run", NativeRoot: "/work", RouteMode: "custom", SelectedGates: []string{"quality"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"developer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}
 			required := map[authoring.StepID][]decision.RequiredTask{key.Step: {{Task: key}}}
@@ -421,7 +421,7 @@ func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
 	}
 
 	t.Run("blackbox mirror", func(t *testing.T) {
-		key := pipelineTask(cd, "engine.qa.design.v5", "1:BLACKBOX")
+		key := pipelineTask(cd, "engine.qa.design.v6", "1:BLACKBOX")
 		manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{RouteScope: "issued-route"}, Cases: []coverage.AcceptanceCase{{CaseID: "normal", Oracle: "accepted"}}}
 		resource := NativeResource{ID: "design", Owner: "run", Role: "blackbox-design", Path: "/work/design", Source: "source", Status: "PLANNED"}
 		s := &State{RunID: "run", NativeRoot: "/work", Validation: &Validation{RequirementRevision: "confirmed", Generation: 1, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Manifest: manifest}}}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"designer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}

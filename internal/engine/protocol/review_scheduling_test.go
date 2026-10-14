@@ -62,7 +62,7 @@ func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "initial-pass", first, reviewEvidenceAt(review.ProductReview, first, "rev-1", "PASS", "initial review", nil))
+	submitVerifiedReviewResult(t, engine, "initial-pass", first, reviewEvidenceAt(review.ProductReview, first, "rev-1", "PASS", "initial review", nil))
 	redoProductReview(t, engine, "requirement-change")
 	state := engine.LoadMustSucceed(t).State
 	fresh := pendingActionID(t, engine)
@@ -76,7 +76,7 @@ func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
 	if plan.Next.Kind != decision.KindWait {
 		t.Fatalf("pending redo plan = %s, want WAIT", plan.Next.Kind)
 	}
-	submitReviewResult(t, engine, "fresh-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, state.RequirementRevision(), "PASS", "new revision reviewed", nil))
+	submitVerifiedReviewResult(t, engine, "fresh-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, state.RequirementRevision(), "PASS", "new revision reviewed", nil))
 	plan, _, err = engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestReviewInvalidationOrderPreservesEvidenceAndNewWork(t *testing.T) {
 					action = pendingActionID(t, engine)
 				}
 				revision := engine.LoadMustSucceed(t).State.RequirementRevision()
-				submitReviewResult(t, engine, fmt.Sprintf("result-%d", i), action, reviewEvidenceAt(review.ProductReview, action, revision, "PASS", "review complete", nil))
+				submitVerifiedReviewResult(t, engine, fmt.Sprintf("result-%d", i), action, reviewEvidenceAt(review.ProductReview, action, revision, "PASS", "review complete", nil))
 			}
 			candidates := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.RawCandidates
 			for _, i := range order {
@@ -124,7 +124,7 @@ func TestReviewInvalidationOrderPreservesEvidenceAndNewWork(t *testing.T) {
 				t.Fatal("invalidated review returned COMPLETE")
 			}
 			fresh := pendingActionID(t, engine)
-			submitReviewResult(t, engine, "replacement-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, state.RequirementRevision(), "PASS", "replacement review", nil))
+			submitVerifiedReviewResult(t, engine, "replacement-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, state.RequirementRevision(), "PASS", "replacement review", nil))
 			series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 			if series.Completed != 1 || series.Effective.Status != "PASS" || len(series.RawCandidates) != len(order)+1 || len(series.Corrections) != len(order) {
 				t.Fatalf("replacement did not preserve history: %+v", series)
@@ -232,7 +232,7 @@ func TestSharedReviewObligationHoldsSiblingDependents(t *testing.T) {
 		t.Fatalf("bad initial frontier: %+v", issued)
 	}
 	id := issued[0].ActionID
-	submitReviewResult(t, e, "first-pass", id, reviewEvidenceAt(review.ProductReview, id, "rev-1", "PASS", "complete", nil))
+	submitVerifiedReviewResult(t, e, "first-pass", id, reviewEvidenceAt(review.ProductReview, id, "rev-1", "PASS", "complete", nil))
 	redoProductReview(t, e, "review-updated")
 	plan, _, err = e.Plan(Observation{})
 	if err != nil {

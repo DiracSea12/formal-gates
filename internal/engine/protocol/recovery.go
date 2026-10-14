@@ -199,6 +199,9 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 			return PendingAction{}, false
 		}
 		pending = PendingAction{ActionID: actionID, Task: receipt.Task, Step: string(receipt.Task.Step)}
+		if ended, retained := s.EndedAttempts[receipt.Task]; retained && ended.ActionID == actionID {
+			attempt = ended
+		}
 	}
 	if pending.AttemptID == "" && attempt.ActionID == actionID {
 		pending.AttemptID = attempt.ID

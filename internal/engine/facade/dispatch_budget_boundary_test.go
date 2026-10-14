@@ -75,7 +75,7 @@ func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
 	// cap 已达后在途的 QA 派发：瞬态恢复入口必须零效果＋落预算 Ask。
 	qaID := ""
 	for pendingID, pending := range snap.State.PendingActions {
-		if input, ok := snap.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == snap.State.Attempts[pending.Task].ID {
+		if input, ok := snap.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v6" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == snap.State.Attempts[pending.Task].ID {
 			qaID = pendingID
 			break
 		}
@@ -293,13 +293,13 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 	completeMeteredSource(t, root, d.host(), first, reviewTranscript)
 	reviewPass, err := protocol.NewReviewWorkerResultEvent(d.eventID(), first, d.host(), string(d.eventID()), protocol.ReviewResultEvidence{
 		Action: review.ProductReview, DispatchID: first, RequirementRevision: d.revision, Status: "PASS",
-		Findings:     []review.Finding{},
-		Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"},
+		Findings: []review.Finding{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(reviewPass)
+	verifyReviewFixture(t, d, reviewPass)
 	d.drive()
 	next := ""
 	for id := range d.run.PendingActions {
@@ -404,8 +404,7 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 			}
 			result, err := protocol.NewReviewWorkerResultEvent("result-attached", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{
 				Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
-				Findings:     []review.Finding{},
-				Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
+				Findings: []review.Finding{},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -542,7 +541,7 @@ func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
 	for _, used := range []int{0, 1} {
 		t.Run(map[int]string{0: "available", 1: "exhausted"}[used], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			id, input := d.action("engine.qa.design.v5")
+			id, input := d.action("engine.qa.design.v6")
 			original := d.run.Attempts[input.Binding.Task]
 			d.receipt(id)
 			start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
@@ -632,7 +631,7 @@ func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
 func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 	t.Run("budget retry first blocks the RETRY extension", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox")
-		id, _ := d.action("engine.qa.design.v5")
+		id, _ := d.action("engine.qa.design.v6")
 		d.receipt(id)
 		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
 		if err != nil {
@@ -689,7 +688,7 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 
 	t.Run("RETRY extension first blocks the budget retry", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox")
-		id, input := d.action("engine.qa.design.v5")
+		id, input := d.action("engine.qa.design.v6")
 		d.receipt(id)
 		start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, id, protocol.LifecycleStart)
 		if err != nil {
@@ -703,7 +702,7 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomeRuntimeError, PayloadDigest: "runtime-failure", FailureClass: "TRANSIENT_ENGINE_ERROR"}})
 		decideValidation(d, d.validationAsk("RETRY"), "approve")
 		d.drive()
-		reissued, reinput := d.action("engine.qa.design.v5")
+		reissued, reinput := d.action("engine.qa.design.v6")
 		if reissued == id || reinput.Binding.Task != input.Binding.Task {
 			t.Fatalf("retry extension re-signed a different task: %s %+v", reissued, reinput.Binding)
 		}
@@ -867,7 +866,7 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	}
 	qa := ""
 	for pendingID, pending := range before.State.PendingActions {
-		if input, ok := before.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == before.State.Attempts[pending.Task].ID {
+		if input, ok := before.State.ValidationInputs(d.f.definition)[pendingID]; ok && input.Handler == "engine.qa.design.v6" && input.Manifest.Binding.ReviewKind == "BLACKBOX" && pending.AttemptID == before.State.Attempts[pending.Task].ID {
 			qa = pendingID
 			break
 		}
@@ -955,7 +954,7 @@ func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
 				}
 				submit(ev)
 			}
-			result, err := protocol.NewReviewWorkerResultEvent("result", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"}})
+			result, err := protocol.NewReviewWorkerResultEvent("result", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS", Findings: []review.Finding{}})
 			if err != nil {
 				t.Fatal(err)
 			}

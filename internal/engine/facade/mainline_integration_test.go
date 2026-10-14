@@ -56,7 +56,7 @@ func mainlineReady(t *testing.T, conflict string, identical bool, supplied ...*p
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
 	master.drive()
-	design, input := master.action("engine.qa.design.v5")
+	design, input := master.action("engine.qa.design.v6")
 	if input.Manifest.Binding.ReviewKind != coverage.ReviewMerge {
 		t.Fatal("retained master did not start merge QA design")
 	}
@@ -259,7 +259,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	var id string
 	var input protocol.ValidationInput
 	for action, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v3" {
+		if in.Handler == "engine.qa.execution.v4" || in.Handler == "engine.gate.v3" {
 			id, input = action, in
 			break
 		}
@@ -393,7 +393,7 @@ func TestConflictContextRejectsNonConflictEdits(t *testing.T) {
 
 func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution.v3" {
+	if input.Handler == "engine.qa.execution.v4" {
 		report := executionFor(input)
 		result.Execution = &report
 		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
@@ -427,7 +427,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			result.Status = "FAIL"
 			result.Findings = []review.Finding{{Severity: "P2", Message: "Combined command output differs from the confirmed oracle"}}
 		}
-		if input.Handler == "engine.qa.execution.v3" {
+		if input.Handler == "engine.qa.execution.v4" {
 			result.Status = "FAIL"
 			result.Execution.Records[0].Result = coverage.ExecutedFail
 			failedCase = result.Execution.Records[0].CaseID
@@ -467,7 +467,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{item}}}})
 	}
 	master.drive()
-	repair, input := master.action("engine.repair.v6")
+	repair, input := master.action("engine.repair.v7")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 || len(input.Repair.ExecutionFailures) != 1 {
 		t.Fatal("simultaneous merge failures did not join one repair")
 	}
@@ -500,7 +500,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	// their original event identities without changing the native candidate.
 	var events []protocol.Event
 	for id, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v3" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
+		if in.Handler == "engine.qa.execution.v4" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
 			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
 		}
 		if in.Handler == "engine.gate.v3" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
@@ -508,15 +508,32 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		}
 		master.receipt(id)
 		result := mainlineResult(in)
+		if in.Gate != nil {
+			issued, ok := driverState(t, master).WorkerInput(id, master.f.definition)
+			if !ok {
+				t.Fatal("parallel gate lacks its original signed input")
+			}
+			result.RequirementResults = fixtureGatePointDecisions(issued.RequirementPoints, in.Gate.Candidate.Identity, result.Findings)
+		}
 		events = append(events, protocol.Event{ID: master.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: master.host(), Outcome: protocol.OutcomePass, PayloadDigest: id, Validation: &result}})
 	}
-	errs := make(chan error, len(events))
+	results := make(chan struct {
+		acceptance protocol.Acceptance
+		err        error
+	}, len(events))
 	for _, event := range events {
-		go func(event protocol.Event) { _, _, err := master.f.Submit(event); errs <- err }(event)
+		go func(event protocol.Event) {
+			acceptance, _, err := master.f.Submit(event)
+			results <- struct {
+				acceptance protocol.Acceptance
+				err        error
+			}{acceptance: acceptance, err: err}
+		}(event)
 	}
 	for range events {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
+		result := <-results
+		if result.err != nil || result.acceptance.Status != "ACCEPTED" {
+			t.Fatalf("parallel original result admission: %+v, err=%v", result.acceptance, result.err)
 		}
 	}
 	for _, event := range events {
@@ -1015,7 +1032,11 @@ func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
 	for i := range completed {
 		completed[i] = "Integrated verification calls prepared"
 	}
-	raw, err := json.Marshal(map[string]any{"summary": "Prepared integrated project verification", "commands": []string{"go build ./...", "go test -timeout=0 -count=1 ./..."}, "completion": map[string]any{"dod": completed, "handoff": "Ready for program verification"}})
+	points := make([]string, len(issued.RequirementPoints))
+	for i, point := range issued.RequirementPoints {
+		points[i] = point.ID + ": prepared build and regression calls for the integrated command contract: " + point.Text
+	}
+	raw, err := json.Marshal(map[string]any{"summary": "Prepared integrated project verification", "commands": []string{"go build ./...", "go test -timeout=0 -count=1 ./..."}, "completion": map[string]any{"dod": completed, "requirements": points, "handoff": "Ready for program verification"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -273,12 +273,13 @@ func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
 	finding := review.Finding{Severity: "P2", Message: "输入示例是否需要额外约束", Requirement: "REQ-001 / AC-001", NormalPath: "阅读已确认输入验收", ActualError: "需要核实示例是否形成额外约束", Locations: []string{"requirements.md:5"}}
 	event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), productRef.ActionID, "zcode", "sha256:semantic-evidence", protocol.ReviewResultEvidence{
 		Action: productMaterial.Input.Review.Action, DispatchID: productRef.ActionID, RequirementRevision: productMaterial.Input.Review.RequirementRevision, Status: "PASS", Message: "完整产品审已核实",
-		Findings: []review.Finding{finding}, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "已核实当前确认需求、输入路径、证据、范围及P2级别"},
+		Findings: []review.Finding{finding},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(event)
+	verifyReviewFixture(t, d, event)
 	request, err := f.PrepareControl(ControlInput{Request: protocol.ControlReviewFindingDecision, Review: 1, Candidate: 1, Finding: 1, Choice: "DISMISS", Reason: "AC-001已经完整约束正常输入与错误输入"})
 	if err != nil {
 		t.Fatal(err)

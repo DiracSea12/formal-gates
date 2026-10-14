@@ -21,7 +21,7 @@ func requirementInput(handler string) protocol.WorkerInput {
 }
 
 func TestRequirementCompletionBindsOriginalPointsAcrossRecovery(t *testing.T) {
-	input := requirementInput("engine.development.batch.v5")
+	input := requirementInput("engine.development.batch.v6")
 	input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "input", RequirementPoints: []string{"AC-001", "AC-002"}, DoD: []protocol.DevelopmentCriterion{{ID: "criterion", Description: "Input behavior"}}}}
 	raw := []byte(`{"summary":"Implemented the confirmed input contract","completion":{"dod":["Both paths tested"],"handoff":"Ready","requirements":["Public result matches the requested value","Public error matches the requested rejection"]}}`)
 	original, err := DecodeResultWithPaths(input, "result", raw, "actual-output", []string{"input.go"})
@@ -87,7 +87,7 @@ func TestGateRequirementDecisionsRetainFindingSeverity(t *testing.T) {
 }
 
 func TestPlanRequirementAssignmentsUsePublishedPointOrder(t *testing.T) {
-	input := requirementInput("engine.readiness.plan.v5")
+	input := requirementInput("engine.readiness.plan.v6")
 	input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 	raw := []byte(`{"reason":"One input contract","verificationTier":"FINAL","batches":[{"deliverable":"Input contract","requirements":[2,1]}]}`)
 	var plan Granularity
@@ -110,7 +110,7 @@ func TestPlanRequirementAssignmentsUsePublishedPointOrder(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(changed.Batches[0].RequirementPoints, result.Batches[0].RequirementPoints) {
 		t.Fatalf("unchanged assignment was rewritten: %v", err)
 	}
-	input.Handler, input.Review = "engine.development.batch.v5", nil
+	input.Handler, input.Review = "engine.development.batch.v6", nil
 	input.Validation.Development = &protocol.DevelopmentInput{Batch: changed.Batches[0]}
 	catalog, err := prompts.LoadPromptCatalog("../../..")
 	if err != nil {
@@ -141,7 +141,7 @@ func TestPlanRequirementAssignmentsUsePublishedPointOrder(t *testing.T) {
 }
 
 func TestRequirementMaterialsKeepQualityAndHonestExecutionDuties(t *testing.T) {
-	input := requirementInput("engine.development.batch.v5")
+	input := requirementInput("engine.development.batch.v6")
 	input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "input", RequirementPoints: []string{"AC-001", "AC-002"}}}
 	catalog, err := prompts.LoadPromptCatalog("../../..")
 	if err != nil {
@@ -159,7 +159,7 @@ func TestRequirementMaterialsKeepQualityAndHonestExecutionDuties(t *testing.T) {
 }
 
 func TestRepairCompletionCoversOnlyConfirmedAffectedContribution(t *testing.T) {
-	input := requirementInput("engine.repair.v6")
+	input := requirementInput("engine.repair.v7")
 	input.Validation.Repair = &protocol.RepairInput{}
 	raw := []byte(`{"summary":"Restored invalid input rejection","granularityReview":{"reason":"One affected path","verificationTier":"FINAL","batches":[{"deliverable":"Invalid input path","requirements":[2],"dod":[{"description":"Invalid input rejection restored"}]}]},"completion":{"dod":["Original failure restored"],"handoff":"Ready","requirements":["Actual invalid input error restored"]}}`)
 	event, err := DecodeResultWithPaths(input, "result", raw, "actual-repair", []string{"input.go"})
@@ -183,7 +183,7 @@ func TestRepairCompletionCoversOnlyConfirmedAffectedContribution(t *testing.T) {
 }
 
 func TestStandaloneRepairRequiresActualAffectedPointEvidence(t *testing.T) {
-	input := requirementInput("engine.repair.v6")
+	input := requirementInput("engine.repair.v7")
 	input.Validation.Repair = &protocol.RepairInput{RequiredPoints: input.RequirementPoints[1:]}
 	if _, err := DecodeResultWithPaths(input, "result", []byte(`{"summary":"Restored invalid input rejection"}`), "actual-repair", []string{"input.go"}); err == nil {
 		t.Fatal("standalone repair accepted summary-only completion without actual affected point evidence")
@@ -232,7 +232,7 @@ func TestStandaloneRepairRequiresActualAffectedPointEvidence(t *testing.T) {
 }
 
 func TestRepairMemberUsesOnlyItsBatchContributionEvidence(t *testing.T) {
-	input := requirementInput("engine.repair.v6")
+	input := requirementInput("engine.repair.v7")
 	input.RequirementPoints = input.RequirementPoints[1:]
 	input.Validation.Repair = &protocol.RepairInput{}
 	input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "input", RequirementPoints: []string{"AC-002"}, DoD: []protocol.DevelopmentCriterion{{ID: "criterion", Description: "Invalid input rejection"}}}}

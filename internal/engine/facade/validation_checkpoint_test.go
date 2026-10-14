@@ -16,7 +16,7 @@ func TestExecutionCheckpointKeepsCasesPendingUntilEveryEdgeCompletes(t *testing.
 				Links:   []protocol.SourcePoint{{SourceID: "SOL-001", PointID: "SOL-AC-001"}, {SourceID: "SOL-001", PointID: "SOL-AC-002"}},
 			}
 			d := configuredValidationDriver(t, inventory, "blackbox")
-			_, input := d.action("engine.qa.design.v5")
+			_, input := d.action("engine.qa.design.v6")
 			manifest := simpleManifest(input)
 			for _, c := range manifest.Cases {
 				for _, link := range inventory.Links {
@@ -24,7 +24,7 @@ func TestExecutionCheckpointKeepsCasesPendingUntilEveryEdgeCompletes(t *testing.
 				}
 			}
 			d.reviewReadyWithManifest(manifest)
-			id, input := d.action("engine.qa.execution.v3")
+			id, input := d.action("engine.qa.execution.v4")
 			full := executionFor(input)
 			parts := make([][]coverage.ExecutionRecord, 3)
 			for _, row := range full.Records {
@@ -61,7 +61,7 @@ func TestExecutionCheckpointKeepsCasesPendingUntilEveryEdgeCompletes(t *testing.
 				d.drive()
 				completed += len(rows)
 				if checkpoint {
-					resumedID, resumed := d.action("engine.qa.execution.v3")
+					resumedID, resumed := d.action("engine.qa.execution.v4")
 					if resumedID != id || resumed.Binding != input.Binding || !slices.Equal(resumed.PendingCases, []string{"normal"}) || len(resumed.Completed) != completed {
 						t.Fatal("partially executed case lost its remaining edges or execution identity")
 					}

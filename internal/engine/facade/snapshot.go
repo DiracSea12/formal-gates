@@ -650,16 +650,23 @@ func (f *Facade) promotionObservation(value protocol.PromotionObservation, read 
 	}}
 }
 
-// requirementObservation binds the document sample to its exact file reader.
-func requirementObservation(path string, data []byte) protocol.Observation {
-	facts := func(data []byte) decision.Observation {
-		return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceFile, Key: path, Value: requirementContentRevision(data)}}}
+// intakeObservation binds the complete material sample to its exact file readers.
+func intakeObservation(root string, materials []IntakeMaterial) protocol.Observation {
+	facts := decision.Observation{}
+	for _, material := range materials {
+		path := filepath.Join(root, filepath.FromSlash(material.Path))
+		facts.Facts = append(facts.Facts, decision.Fact{Source: decision.SourceFile, Key: path, Value: material.Revision})
 	}
-	return protocol.Observation{Facts: facts(data), Read: func() (decision.Observation, error) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return decision.Observation{}, err
+	return protocol.Observation{Facts: facts, Read: func() (decision.Observation, error) {
+		current := decision.Observation{}
+		for _, fact := range facts.Facts {
+			data, err := os.ReadFile(fact.Key)
+			if err != nil {
+				return decision.Observation{}, err
+			}
+			fact.Value = requirementContentRevision(data)
+			current.Facts = append(current.Facts, fact)
 		}
-		return facts(data), nil
+		return current, nil
 	}}
 }

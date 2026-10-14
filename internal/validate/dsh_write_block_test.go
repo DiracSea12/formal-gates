@@ -26,7 +26,7 @@ func TestHookResolvesDshAgentTypeFromLifecycleBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []struct{ id, handler string }{{"dispatch-dev", "engine.development.batch.v5"}, {"dispatch-reviewer", "engine.gate.v3"}} {
+	for _, wanted := range []struct{ id, handler string }{{"dispatch-dev", "engine.development.batch.v6"}, {"dispatch-reviewer", "engine.gate.v3"}} {
 		for _, step := range cd.Steps {
 			agent, ok := step.Payload.(compiler.CompiledAgentStep)
 			if ok && string(agent.Handler) == wanted.handler {

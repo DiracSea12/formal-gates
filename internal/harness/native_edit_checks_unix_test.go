@@ -18,7 +18,7 @@ import (
 func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	f, _, scenario, _ := engineNativeFixture(t)
 	command := `printf started > "$FORMAL_GATES_WORKSPACE/.gates/tmp/started"; while test ! -e "$FORMAL_GATES_WORKSPACE/.gates/tmp/release"; do sleep 0.02; done; printf original-check`
-	stageNativeReviewsWithEdit(t, f, scenario, command, "left", "right")
+	stageNativeReviewsWithEdit(t, f, scenario, command, false, "left", "right")
 	stageNativeDevelopmentReady(t, f, scenario)
 	run, err := f.Drive()
 	if err != nil {
@@ -27,7 +27,7 @@ func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	refs := []facade.WorkerMaterial{}
 	inputs := []protocol.WorkerInput{}
 	for id, input := range run.ValidationInputs {
-		if input.Handler != "engine.development.batch.v5" {
+		if input.Handler != "engine.development.batch.v6" {
 			continue
 		}
 		ref := run.WorkerMaterials[id]

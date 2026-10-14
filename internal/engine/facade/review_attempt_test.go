@@ -16,7 +16,14 @@ func TestReadinessContentUsesFiniteOriginalAttempt(t *testing.T) {
 			t.Run(delivery+"/"+shape, func(t *testing.T) {
 				d := startValidationDriver(t, nil)
 				submitReview := func(id string, kind review.Action, plan *protocol.GranularityReview) protocol.Event {
-					event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: kind, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked current requirement and exact review result"}})
+					input, issued := driverState(t, d).WorkerInput(id, d.f.definition)
+					if !issued || input.Review == nil {
+						t.Fatal("review fixture has no original issued responsibility")
+					}
+					if plan != nil {
+						fixturePlanRequirements(plan, input.RequirementPoints)
+					}
+					event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: kind, DispatchID: id, RequirementRevision: input.Review.RequirementRevision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -29,7 +36,9 @@ func TestReadinessContentUsesFiniteOriginalAttempt(t *testing.T) {
 					}
 				}
 				d.receipt(product)
-				d.submit(submitReview(product, review.ProductReview, nil))
+				productResult := submitReview(product, review.ProductReview, nil)
+				d.submit(productResult)
+				verifyReviewFixture(t, d, productResult)
 				d.drive()
 				var readiness string
 				for id, p := range d.run.PendingActions {
@@ -76,6 +85,14 @@ func TestReadinessContentUsesFiniteOriginalAttempt(t *testing.T) {
 				}
 				t.Logf("readiness=%s task=%s pending=%t rejected=%+v ended=%+v staged=%d completed=%d", readiness, task, snap.State.PendingActions[readiness].ActionID != "", snap.State.RejectedResults[readiness], snap.State.EndedAttempts[task], len(snap.State.StagedResults), snap.State.ReviewSeries.StartReadiness.Completed)
 				if shape == "valid" {
+					if snap.State.ReviewSeries.StartReadiness.Completed != 0 || len(d.run.ReviewVerifications) != 1 {
+						t.Fatal("completed source bypassed independent plan verification")
+					}
+					verifyReviewFixture(t, d, event)
+					snap, err = d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
 					if snap.State.ReviewSeries.StartReadiness.Completed != 1 {
 						t.Fatal("valid plan negative control not accepted")
 					}
@@ -158,7 +175,9 @@ func TestReadinessContentUsesFiniteOriginalAttempt(t *testing.T) {
 					t.Fatal("extra attempt lost original allowance")
 				}
 				d.receipt(granted)
-				d.submit(submitReview(granted, review.StartReadiness, commandPlan()))
+				replacementResult := submitReview(granted, review.StartReadiness, commandPlan())
+				d.submit(replacementResult)
+				verifyReviewFixture(t, d, replacementResult)
 				completed, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)

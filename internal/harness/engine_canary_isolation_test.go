@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,29 +316,9 @@ func TestCanaryRuntimeIdentitySurvivesPrivateHome(t *testing.T) {
 	}
 }
 
-// Native environment parsing and path resolution determine the database path;
-// the canary supplies the same private path through both supported aliases.
+// The public app-server initializes the database at the canary's private path.
 func TestCanaryNativeDatabaseStaysPrivate(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is not available")
-	}
-	data, err := os.ReadFile(zcodeDefaultScript)
-	if os.IsNotExist(err) {
-		t.Skip("native ZCode database configuration is not available")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := `const Pjs='ZCODE_',Dwt=require('node:path'),UF=Dwt,QVr=require('node:os');`
-	for _, marker := range [][2]string{{"function aun(", "var Pjs,"}, {"function jie(", "function M7a("}, {"function zg(", "function _Oe("}} {
-		_, body, found := strings.Cut(string(data), marker[0])
-		body, _, ended := strings.Cut(body, marker[1])
-		if !found || !ended {
-			t.Fatal("native database configuration source markers are missing")
-		}
-		script += marker[0] + body
-	}
-	script += `const config=aun(process.env);config.storage??={};config.storage.sessionDbPath??='~/.zcode/cli/db/db.sqlite';console.log(JSON.stringify({path:jie({config},process.cwd())}));`
+	binding := canaryNativePublicBinding(t)
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	for _, key := range []string{"default", "ZCODE_SESSION_DB_PATH", "ZCODE_SESSION_DB"} {
@@ -370,33 +351,25 @@ func TestCanaryNativeDatabaseStaysPrivate(t *testing.T) {
 			if key != "default" && c.separateRoots["stable "+key] != canaryCanonicalPath(stableDatabase) {
 				t.Fatalf("named stable database omitted: %#v", c.separateRoots)
 			}
-			cmd := exec.Command("node", "-e", script)
-			cmd.Dir, cmd.Env = c.home, os.Environ()
-			for key, value := range environment {
-				cmd.Env = append(cmd.Env, key+"="+value)
+			active := c.hostPaths()["catalogue"]
+			if err := os.MkdirAll(filepath.Dir(active), 0o700); err != nil {
+				t.Fatal(err)
 			}
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("native database resolution: %v %s", err, output)
+			if err := os.WriteFile(active, []byte(canaryNativeCatalogue(t, 7, "private-active")), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			if getOf(decodeTestJSON(t, string(output)), "path") != privateDatabase || readTestFile(t, stableDatabase) != sentinel {
-				t.Fatalf("native database escaped private path or changed stable data: %s", output)
+			canaryNativePublicSession(t, binding, environment, c.home, t.TempDir())
+			if !bytes.HasPrefix(readTestFileBytes(t, privateDatabase), []byte("SQLite format 3\x00")) || readTestFile(t, stableDatabase) != sentinel {
+				t.Fatal("native database escaped private path or changed stable data")
 			}
-			t.Logf("native database alias=%s source_sha256=%x observation=%s", key, sha256.Sum256(data), strings.TrimSpace(string(output)))
+			t.Logf("native database alias=%s private=%s stable_unchanged=true", key, privateDatabase)
 		})
 	}
 }
 
-func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is not available")
-	}
+func TestCanaryAccountOverlayFollowsCatalogueReadiness(t *testing.T) {
+	public := canaryNativePublicBinding(t)
 	zcodeTestCredentialHelper(t)
-	consumer := readTestFile(t, canaryNativeReleaseConsumer(t))
-	prelude, _, found := strings.Cut(consumer, "async function consume()")
-	if !found {
-		t.Fatal("native release consumer boundary is missing")
-	}
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	for _, activeRevision := range []string{"missing", "5", "9"} {
@@ -414,13 +387,17 @@ func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			bundleContent := readTestFile(t, zcodeTestCatalogue(t, "7"))
+			bundleContent := canaryNativeCatalogue(t, 7, "bundled")
 			if err := os.WriteFile(bundled, []byte(bundleContent), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			selectedContent := bundleContent
 			if activeRevision != "missing" {
-				activeContent := readTestFile(t, zcodeTestCatalogue(t, activeRevision))
+				revision := 5
+				if activeRevision == "9" {
+					revision = 9
+				}
+				activeContent := canaryNativeCatalogue(t, revision, "private-active")
 				if err := os.WriteFile(c.hostPaths()["catalogue"], []byte(activeContent), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -428,13 +405,25 @@ func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
 					selectedContent = activeContent
 				}
 			}
-			if err := os.WriteFile(script, []byte(prelude+canaryNativeStartupPeer), 0o600); err != nil {
+			if err := os.WriteFile(script, []byte("// native startup protocol fixture\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
 			if err := c.captureBinding(); err != nil {
 				t.Fatal(err)
 			}
+			wrapper := filepath.Join(runtimeRoot, "startup-peer")
+			quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+			wrapperBody := "#!/bin/sh\ncase \"$1\" in\n*/zcode_credential.mjs) exec " + quote(textOf(getOf(public["launch"], "executable"))) + " \"$@\" ;;\n*)\n" + strings.TrimPrefix(canaryPeerWrapper("TestCanaryNativeStartupPeer", "FORMAL_GATES_CANARY_STARTUP_PEER", "1"), "#!/bin/sh\n") + ";;\nesac\n"
+			if err := os.WriteFile(wrapper, []byte(wrapperBody), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			binding, err := buildCaptureBinding("zcode", map[string]any{"executable": wrapper, "script": getOf(c.binding["launch"], "script")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding["environment"], binding["cataloguePinned"] = c.binding["environment"], true
+			c.binding = binding
 			workspace := filepath.Join(c.home, ".formal-gates-resources", "issued")
 			if err := os.MkdirAll(workspace, 0o700); err != nil {
 				t.Fatal(err)
@@ -455,9 +444,9 @@ func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
 					t.Fatalf("first-attempt native account evidence: record=%#v result=%#v", record, result)
 				}
 				if getOf(decodeTestJSON(t, readTestFile(t, filepath.Join(directory, "identity.json"))), "identity") != identity || !valuesEqual(decodeTestJSON(t, readTestFile(t, c.hostPaths()["catalogue"])), decodeTestJSON(t, selectedContent)) || readTestFile(t, bundled) != bundleContent {
-					t.Fatal("native session identity or persisted release differs")
+					t.Fatal("program session identity or persisted fixture release differs")
 				}
-				t.Logf("native bootstrap active=%s resume=%t revision=%s", activeRevision, previous != "", revision)
+				t.Logf("program startup active=%s peer_resume=%t revision=%s observation=%s", activeRevision, previous != "", revision, readTestFile(t, filepath.Join(workspace, "native-startup-observation.json")))
 			}
 			trace := strings.Split(strings.TrimSpace(readTestFile(t, filepath.Join(workspace, "native-startup.jsonl"))), "\n")
 			wantMethods := []string{"runtime/capabilities", zcodeAccountConfigMethod, "session/create", "session/close", "runtime/capabilities", zcodeAccountConfigMethod, "session/resume", "session/close"}
@@ -473,51 +462,130 @@ func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
 	}
 }
 
-// The first queued request runs the native release consumer to completion,
-// matching the protocol service's bootstrap boundary without a clock delay.
-// The peer checks revision, workspace and session identity on every request.
-const canaryNativeStartupPeer = `
-const readline=require('node:readline');
-let release,overlay=false,opened=false,work=Promise.resolve();
-const workspace=bee.resolve(process.cwd()),identity='fixture-'+workspace;
-readline.createInterface({input:process.stdin}).on('line',line=>{
-  work=work.then(async()=>{
-    const req=JSON.parse(line);
-    if(!release){
-      if(req.method!=='runtime/capabilities'||Object.keys(req.params).length)throw Error('expected native readiness request');
-      const consumer=new UO({bundledFilePath:process.env.ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE,activeFilePath:process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,watch:false});
-      try{release=await consumer.read();}finally{consumer.dispose();}
-    }
-    let result;
-    if(req.method==='runtime/capabilities'){
-      result={independentPlanState:true};
-    }else if(req.method==='provider/updateAccountConfig'){
-      if(opened||req.params.basedOnZCodeBuiltinRevision!==release.revision||req.params.revision!=='account-config:'+release.revision+':p1'||JSON.stringify(req.params.providers)!==JSON.stringify({p1:{access:{entitled:true,type:'zhipu-account'}}})||JSON.stringify(req.params.states)!==JSON.stringify({p1:{availability:'available',current:true,entitled:true}}))throw Error('wrong native account configuration');
-      overlay=true;result={status:'received',providerCount:1};
-    }else if(req.method==='session/create'||req.method==='session/resume'){
-      if(!overlay||opened||req.params.workspace.workspacePath!==workspace||req.params.workspace.workspaceKey!==workspace||process.argv[process.argv.indexOf('--cwd')+1]!==workspace)throw Error('wrong session workspace/order');
-      if(req.method==='session/create'?(req.params.persistence!=='immediate'||req.params.titleGenerationEnabled!==false||'sessionId' in req.params):(req.params.sessionId!==identity||'persistence' in req.params||'titleGenerationEnabled' in req.params))throw Error('wrong create/resume identity');
-      opened=true;result={protocol:{name:'ZCode Protocol',version:1},session:{sessionId:identity},settings:` + zcodeSettings + `};
-    }else if(req.method==='session/close'){
-      if(!opened||req.params.sessionId!==identity)throw Error('wrong close identity');
-      result={};
-    }else throw Error('unexpected method '+req.method);
-    Snr.appendFileSync(bee.join(workspace,'native-startup.jsonl'),JSON.stringify(req)+'\n');
-    process.stdout.write(JSON.stringify({id:req.id,result})+'\n');
-  }).catch(error=>{console.error(error);process.exit(1);});
-});
-`
-
-func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is not available")
+// This local peer simulates release settlement to check the launcher's fixed
+// catalogue binding and startup sequence. It does not prove SDK promotion or
+// recovery of an empty SDK session.
+func TestCanaryNativeStartupPeer(t *testing.T) {
+	if os.Getenv("FORMAL_GATES_CANARY_STARTUP_PEER") != "1" {
+		return
 	}
-	consumer := canaryNativeReleaseConsumer(t)
+	workspace, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace = canaryCanonicalPath(workspace)
+	args := os.Args[slices.Index(os.Args, "--")+1:]
+	if !slices.Equal(args, []string{os.Getenv("FORMAL_GATES_ZCODE_SCRIPT"), "--cwd", workspace, "app-server"}) {
+		t.Fatalf("startup argv differs: %q", args)
+	}
+	c := &engineCanary{t: t, home: os.Getenv("HOME")}
+	environment := c.hostEnvironment()
+	trace, err := os.OpenFile(filepath.Join(workspace, "native-startup.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
+	decoder.UseNumber()
+	identity := "fixture-" + workspace
+	var revision string
+	step := 0
+	for {
+		var request map[string]any
+		if err := decoder.Decode(&request); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		method, params := textOf(request["method"]), objectOrEmpty(request["params"])
+		var result any
+		switch step {
+		case 0:
+			if method != "runtime/capabilities" || len(params) != 0 {
+				t.Fatal("expected native readiness request")
+			}
+			selected := decodeTestJSON(t, readTestFile(t, environment["ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"]))
+			bundledRevision, err := getOf(selected, "revision").(json.Number).Int64()
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, err := os.ReadFile(environment[zcodeBuiltinCatalogueEnv])
+			if err == nil {
+				current := decodeTestJSON(t, string(active))
+				currentRevision, err := getOf(current, "revision").(json.Number).Int64()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if currentRevision >= bundledRevision {
+					selected = current
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if err := writeAtomicJSON(environment[zcodeBuiltinCatalogueEnv], selected); err != nil {
+				t.Fatal(err)
+			}
+			revision, err = zcodeBuiltinProviderRevision(environment[zcodeBuiltinCatalogueEnv])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomicJSON(filepath.Join(workspace, "native-startup-observation.json"), map[string]any{"environment": environment, "workspace": workspace, "argv": args, "activeCatalogueBytes": readTestFile(t, environment[zcodeBuiltinCatalogueEnv]), "settlement": "local protocol fixture"}); err != nil {
+				t.Fatal(err)
+			}
+			result = map[string]any{"independentPlanState": true}
+		case 1:
+			want := map[string]any{"revision": "account-config:" + revision + ":p1", "basedOnZCodeBuiltinRevision": revision, "providers": map[string]any{"p1": map[string]any{"access": map[string]any{"entitled": true, "type": "zhipu-account"}}}, "states": map[string]any{"p1": map[string]any{"availability": "available", "current": true, "entitled": true}}}
+			if method != zcodeAccountConfigMethod || !valuesEqual(params, want) {
+				t.Fatalf("wrong account overlay/order: %#v", request)
+			}
+			result = map[string]any{"status": "received", "providerCount": 1}
+		case 2:
+			want := map[string]any{"workspace": map[string]any{"workspacePath": workspace, "workspaceKey": workspace}}
+			switch method {
+			case "session/create":
+				want["persistence"], want["titleGenerationEnabled"] = "immediate", false
+			case "session/resume":
+				want["sessionId"] = identity
+			default:
+				t.Fatalf("wrong session method: %s", method)
+			}
+			if !valuesEqual(params, want) {
+				t.Fatalf("wrong session workspace/identity: %#v", request)
+			}
+			result = map[string]any{"protocol": map[string]any{"name": zcodeProtocolName, "version": zcodeProtocolVersion}, "session": map[string]any{"sessionId": identity}, "settings": decodeTestJSON(t, zcodeSettings)}
+		case 3:
+			if method != "session/close" || !valuesEqual(params, map[string]any{"sessionId": identity}) {
+				t.Fatalf("wrong close identity: %#v", request)
+			}
+			result = map[string]any{}
+		default:
+			t.Fatalf("unexpected request: %#v", request)
+		}
+		if err := json.NewEncoder(trace).Encode(request); err != nil {
+			t.Fatal(err)
+		}
+		if err := encoder.Encode(map[string]any{"id": request["id"], "result": result}); err != nil {
+			t.Fatal(err)
+		}
+		step++
+	}
+	if step != 4 {
+		t.Fatalf("incomplete startup sequence: %d", step)
+	}
+	if err := trace.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(0)
+}
+
+// Binding capture names the private active catalogue without initializing it.
+// The SDK checks use prepared active data; settlement belongs to the local peer.
+func TestCanaryProviderCatalogueBindingKeepsActiveAndBundle(t *testing.T) {
+	public := canaryNativePublicBinding(t)
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	for _, layout := range []string{"script-directory", "source-tree", "resources"} {
 		for _, existing := range []bool{false, true} {
-			name := layout + "/missing-active"
+			name := layout + "/unprepared-active"
 			if existing {
 				name = layout + "/private-active"
 			}
@@ -543,11 +611,7 @@ func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
 				if err := os.WriteFile(script, []byte("// native runtime fixture\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				release := objectOrEmpty(decodeTestJSON(t, readTestFile(t, zcodeTestCatalogue(t, "7"))))
-				config := objectOrEmpty(release["config"])
-				config["providers"] = map[string]any{"fixture": "bundled"}
-				config["providerTemplates"], config["modelConfigRules"] = map[string]any{}, []any{}
-				bundleContent := mustMarshalCanary(t, release)
+				bundleContent := canaryNativeCatalogue(t, 7, "bundled")
 				if err := os.WriteFile(bundled, []byte(bundleContent), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -556,10 +620,10 @@ func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
 				if err := c.prepareHome(candidate, t.TempDir(), sourceRoot); err != nil {
 					t.Fatal(err)
 				}
+				active := c.hostPaths()["catalogue"]
+				var release any
 				if existing {
-					release["revision"] = 9
-					config["providers"] = map[string]any{"fixture": "private-active"}
-					active := c.hostPaths()["catalogue"]
+					release = decodeTestJSON(t, canaryNativeCatalogue(t, 9, "private-active"))
 					if err := os.MkdirAll(filepath.Dir(active), 0o700); err != nil {
 						t.Fatal(err)
 					}
@@ -567,86 +631,122 @@ func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				var persisted []byte
 				for repeat := 0; repeat < 2; repeat++ {
 					if err := c.captureBinding(); err != nil {
 						t.Fatal(err)
 					}
 					environment := zcodeLaunchEnvironment(c.binding)
-					if environment[zcodeBuiltinCatalogueEnv] != c.hostPaths()["catalogue"] || environment["ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"] != canaryCanonicalPath(bundled) || zcodePinnedCatalogue(c.binding) != environment[zcodeBuiltinCatalogueEnv] {
+					if environment[zcodeBuiltinCatalogueEnv] != active || environment["ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"] != canaryCanonicalPath(bundled) || zcodePinnedCatalogue(c.binding) != active {
 						t.Fatalf("active/bundled binding identities: %#v", environment)
 					}
-					cmd := exec.Command("node", consumer)
-					output, err := cmd.CombinedOutput()
-					if err != nil {
-						t.Fatalf("native read: %v %s", err, output)
+					if !existing {
+						if _, err := os.Stat(active); !os.IsNotExist(err) {
+							t.Fatalf("binding capture materialized an unprepared catalogue: %v", err)
+						}
+						if readTestFile(t, bundled) != bundleContent {
+							t.Fatal("binding capture changed the shared bundled release")
+						}
+						t.Logf("provider binding layout=%s capture=%d active=%s bundled=%s active_unprepared=true bundle_bytes=%s", layout, repeat+1, active, canaryCanonicalPath(bundled), bundleContent)
+						continue
 					}
-					native := objectOrEmpty(decodeTestJSON(t, string(output)))
-					revision, err := zcodeBuiltinProviderRevision(environment[zcodeBuiltinCatalogueEnv])
-					if err != nil || native["revision"] != revision || native["activeFilePath"] != environment[zcodeBuiltinCatalogueEnv] || native["bundledFilePath"] != canaryCanonicalPath(bundled) || !valuesEqual(native["providers"], config["providers"]) || !valuesEqual(decodeTestJSON(t, readTestFile(t, c.hostPaths()["catalogue"])), release) {
-						t.Fatalf("native persistent release/revision identity: native=%#v error=%v", native, err)
+					canaryNativePublicSession(t, public, environment, c.home, t.TempDir())
+					content := readTestFileBytes(t, active)
+					if persisted != nil && !bytes.Equal(content, persisted) {
+						t.Fatal("native repeated startup changed the persisted active bytes")
 					}
-					overlay, err := zcodeAccountProviderConfiguration(zcodePinnedCatalogue(c.binding), nil, zcodeTestAccountClient(t, c.home))
-					if err != nil || getOf(overlay, "based_on") != native["revision"] || getOf(overlay, "current") != "p2" || getOf(overlay, "current_source") != "provisioning-order" || getOf(getOf(overlay, "configuration"), "basedOnZCodeBuiltinRevision") != native["revision"] {
+					persisted = content
+					revision, err := zcodeBuiltinProviderRevision(active)
+					if err != nil || !valuesEqual(decodeTestJSON(t, string(content)), release) {
+						t.Fatalf("native persistent release/revision identity: error=%v", err)
+					}
+					overlay, err := zcodeAccountProviderConfiguration(active, nil, zcodeTestAccountClient(t, c.home))
+					if err != nil || getOf(overlay, "based_on") != revision || getOf(overlay, "current") != "p2" || getOf(overlay, "current_source") != "provisioning-order" || getOf(getOf(overlay, "configuration"), "basedOnZCodeBuiltinRevision") != revision {
 						t.Fatalf("native account revision identity: %#v %v", overlay, err)
 					}
 					if readTestFile(t, bundled) != bundleContent {
 						t.Fatal("native active read changed the shared bundled release")
 					}
-					if layout != "resources" {
-						lookup, err := exec.Command("node", consumer, "lookup", getOf(getOf(c.binding, "launch"), "script").(string)).CombinedOutput()
-						if err != nil || strings.TrimSpace(string(lookup)) != canaryCanonicalPath(bundled) {
-							t.Fatalf("original native lookup: %v %s", err, lookup)
-						}
-					}
-					t.Logf("native release layout=%s existing_active=%t capture=%d observation=%s account_revision=%s", layout, existing, repeat+1, strings.TrimSpace(string(output)), textOf(getOf(overlay, "based_on")))
+					t.Logf("native release layout=%s existing_active=%t capture=%d actual_catalogue=%s active_bytes=%s account_revision=%s", layout, existing, repeat+1, active, string(content), revision)
 				}
 			})
 		}
 	}
 }
 
-// The consumer runs the native file read, release selection, active write and
-// revision path hash. Schema parsing and locking are local fixture substitutes;
-// it starts no app-server, credential helper or model request.
-func canaryNativeReleaseConsumer(t *testing.T) string {
+// The SDK release schema owns these synthetic provider and model rules.
+func canaryNativeCatalogue(t *testing.T, revision int, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(zcodeDefaultScript)
-	if os.IsNotExist(err) {
-		t.Skip("native ZCode release consumer is not available")
+	return mustMarshalCanary(t, map[string]any{"schemaVersion": 1, "revision": revision, "config": map[string]any{
+		"providerConfigRules": map[string]any{"templateRules": []any{}, "providerRules": []any{
+			map[string]any{"providerId": "p1", "providerName": name, "config": map[string]any{"group": "bigmodel-family", "access": map[string]any{"type": "zhipu-account", "accountType": "bigmodel", "mode": "individual-coding-plan"}}},
+			map[string]any{"providerId": "p2", "providerName": name, "config": map[string]any{"group": "bigmodel-family", "access": map[string]any{"type": "zhipu-account", "accountType": "bigmodel", "mode": "highspeed"}}},
+		}},
+		"modelConfigRules": map[string]any{"modelRules": []any{}, "modelApiRules": []any{}, "providerSiteRules": []any{}, "templateModelRules": []any{}, "builtinProviderModelRules": []any{}},
+	}})
+}
+
+func canaryNativePublicBinding(t *testing.T) map[string]any {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
 	}
+	if _, err := os.Stat(zcodeDefaultScript); os.IsNotExist(err) {
+		t.Skip("native ZCode app-server is not available")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := buildCaptureBinding("zcode", map[string]any{"executable": resolveNativePath(node), "script": zcodeDefaultScript})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(data)
-	_, functions, found := strings.Cut(source, "async function MWt(")
-	functions, _, ended := strings.Cut(functions, "var Snr,")
-	_, class, classFound := strings.Cut(source, "UO=class")
-	class, _, classEnded := strings.Cut(class, ";r(MWt,")
-	_, lookup, lookupFound := strings.Cut(source, "async function fQi(")
-	lookup, _, lookupEnded := strings.Cut(lookup, "function mQi(")
-	if !found || !ended || !classFound || !classEnded || !lookupFound || !lookupEnded {
-		t.Fatal("native release consumer source markers are missing")
-	}
-	prelude := `const Snr=require('node:fs'),wnr=require('node:crypto'),rZe=require('node:fs/promises'),bee=require('node:path'),Zj=bee,bmr=Snr;
-const r=()=>{},Spe=x=>x,bV=x=>JSON.stringify(x),OWt=x=>x,lw=async(p,fn)=>fn(),qL=(p,data)=>rZe.writeFile(p,data);
-`
-	driver := `
-async function consume() {
-  if (process.argv[2] === 'lookup') { console.log(await fQi({entrypoint:process.argv[3]})); return; }
-  const bundledFilePath=process.env.ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE;
-  const activeFilePath=process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
-  const consumer=new UO({bundledFilePath,activeFilePath,watch:false});
-  try { console.log(JSON.stringify({...await consumer.read(),activeFilePath:consumer.activeFilePath,bundledFilePath})); }
-  finally { consumer.dispose(); }
+	return binding
 }
-consume().catch(error=>{console.error(error);process.exitCode=1});
-`
-	path := filepath.Join(t.TempDir(), "native-release-consumer.cjs")
-	if err := os.WriteFile(path, []byte(prelude+"async function MWt("+functions+"const UO=class"+class+";async function fQi("+lookup+driver), 0o600); err != nil {
+
+// Only public zero-model RPCs establish storage and provider bootstrap facts.
+func canaryNativePublicSession(t *testing.T, binding map[string]any, environment map[string]string, workspace, directory string) {
+	t.Helper()
+	client, err := newZcodeClient(objectOrEmpty(binding["launch"]), workspace, directory, environment)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("native release consumer source=%s sha256=%x", zcodeDefaultScript, sha256.Sum256(data))
-	return path
+	defer client.client.close()
+	calls := []any{}
+	request := func(method string, params map[string]any) any {
+		result, err := client.request(method, params)
+		if err != nil {
+			t.Fatalf("%v\nargv=%q\nstderr=%s\nprotocol=%s", err, client.client.cmd.Args, readTestFile(t, filepath.Join(directory, "host.stderr")), readTestFile(t, filepath.Join(directory, "protocol.jsonl")))
+		}
+		calls = append(calls, map[string]any{"method": method, "params": params, "result": result})
+		return result
+	}
+	capabilities := request("runtime/capabilities", map[string]any{})
+	if getOf(capabilities, "independentPlanState") != true {
+		t.Fatalf("native capabilities differ: %#v", capabilities)
+	}
+	snapshot := request("session/create", map[string]any{"workspace": map[string]any{"workspacePath": workspace, "workspaceKey": workspace}, "persistence": "immediate", "titleGenerationEnabled": false})
+	if _, err := zcodeHandshake(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	identity := textOf(getOf(getOf(snapshot, "session"), "sessionId"))
+	if identity == "" || !valuesEqual(getOf(getOf(snapshot, "session"), "workspace"), map[string]any{"workspacePath": workspace, "workspaceKey": workspace}) {
+		t.Fatalf("native session identity/workspace differs: %#v", snapshot)
+	}
+	if getOf(request("session/close", map[string]any{"sessionId": identity}), "closed") != true {
+		t.Fatal("native session was not closed")
+	}
+	if err := client.client.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNativeBinding(binding, "zcode"); err != nil {
+		t.Fatal(err)
+	}
+	observation := map[string]any{"argv": client.client.cmd.Args, "workspace": workspace, "environment": environment, "calls": calls, "files": binding["files"], "exitCode": client.client.cmd.ProcessState.ExitCode(), "modelCalls": 0, "protocol": readTestFile(t, filepath.Join(directory, "protocol.jsonl")), "stderr": readTestFile(t, filepath.Join(directory, "host.stderr"))}
+	if err := writeAtomicJSON(filepath.Join(directory, "public-native-observation.json"), observation); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("public_native_observation=%s", mustMarshalCanary(t, observation))
 }
 
 func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {

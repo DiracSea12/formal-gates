@@ -58,14 +58,14 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m compileall -q ."
 			plan.Batches[0].Checks[1].Command = strconv.Quote(python) + " -m unittest discover -v"
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, plan, "whitebox", "quality")
-			dev, di := d.action("engine.development.batch.v5")
+			dev, di := d.action("engine.development.batch.v6")
 			if di.Workspace == nil {
 				t.Fatal("development lacks signed workspace")
 			}
 			write(di.Workspace.Path, "app.py", "def valid(value):\n    return isinstance(value, str) and bool(value)\n")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.py"}, Summary: "validate strings"}})
 			d.drive()
-			design, in := d.action("engine.qa.design.v5")
+			design, in := d.action("engine.qa.design.v6")
 			if in.Workspace == nil || in.Workspace.Role != "whitebox-authoring" {
 				t.Fatalf("wrong authoring input: %+v", in.Workspace)
 			}
@@ -225,7 +225,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 				if set.Candidate != ri.Binding.Candidate || !reflect.DeepEqual(set.ReviewHistory, originalHistory) || snap.State.NativeActionCurrent(finalIntent, d.f.definition) {
 					t.Fatal("final receipt changed or invalidated its original artifact/review source")
 				}
-				_, execution := d.action("engine.qa.execution.v3")
+				_, execution := d.action("engine.qa.execution.v4")
 				if execution.Binding.Candidate != final.Identity || execution.Execution == nil || execution.Execution.Candidate.Identity != final.Identity {
 					t.Fatal("execution responsibility lost the combined final candidate")
 				}
@@ -237,6 +237,17 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 					t.Fatalf("original final receipt repeated its business admission: %+v", acceptance)
 				}
 			}
+			inputPath := snap.State.RequirementArtifactPath()
+			candidateRoot := snap.State.NativeResources[finalParams.WorkspaceID].Path
+			inputBytes, err := os.ReadFile(filepath.Join(candidateRoot, filepath.FromSlash(inputPath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(candidateRoot, inputPath, string(inputBytes)+"Unconfirmed requirement.\n")
+			if _, _, err := d.f.candidateEvidence(snap.State, finalIntent, false, new(bool)); err == nil || !strings.Contains(err.Error(), "requirement assembly differs from its confirmed document") {
+				t.Fatalf("unconfirmed formal input reused the original candidate receipt: %v", err)
+			}
+			write(candidateRoot, inputPath, string(inputBytes))
 			// A changed immutable test entry cannot reuse the accepted judgment.
 			changed := filepath.Join(t.TempDir(), "changed")
 			git(root, "worktree", "add", "--detach", changed, final.Identity)

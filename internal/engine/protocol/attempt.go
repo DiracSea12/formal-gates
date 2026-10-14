@@ -32,11 +32,16 @@ func (e *Engine) businessTask(key runtime.TaskKey) bool {
 // endInvalidAttempt closes one identified business execution. The ended Attempt
 // owns its retry policy until it is replaced; it never records a business PASS.
 func (s *State) endInvalidAttempt(actionID, status, reason string, record WorkerResult, nextRevision uint64) error {
-	pending, ok := s.PendingActions[actionID]
+	pending, attempt, ok := s.workerActionTarget(actionID)
+	if !ok && s.reviewResultAwaitingVerification(actionID) {
+		key := s.SpawnReceipts[actionID].Task
+		attempt, ok = s.EndedAttempts[key]
+		ok = ok && attempt.ActionID == actionID
+		pending = PendingAction{ActionID: actionID, Task: key, Step: string(key.Step), AttemptID: attempt.ID}
+	}
 	if !ok {
 		return &RejectedError{Code: CodeUnknownAction, Detail: "invalid result has no current dispatch"}
 	}
-	attempt := s.Attempts[pending.Task]
 	s.RejectedResults[actionID] = RejectedResult{ActionID: actionID, AttemptID: attempt.ID, Task: pending.Task, Status: status, Reason: reason, Payload: record}
 	attempt.Attempts++
 	attempt.RetryExhausted = attempt.Attempts >= attempt.MaxAttempts
@@ -71,9 +76,9 @@ func (s *State) endedWorkCurrent(a Attempt, cd *compiler.CompiledDefinition) boo
 	if !a.Business || s.ObsoleteActions[a.ActionID].ReplacedBy != "" {
 		return false
 	}
-	if result, ok := s.Results[a.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") {
+	if result, ok := s.Results[a.ActionID]; ok && s.RejectedResults[a.ActionID].ActionID == "" && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") {
 		role := s.validationRole(a.Task, cd)
-		checksRequired := (role == "engine.development.batch.v5" || role == "engine.repair.v6") && s.editResultCurrent(result)
+		checksRequired := (role == "engine.development.batch.v6" || role == "engine.repair.v7") && s.editResultCurrent(result)
 		if !checksRequired || s.developmentChecksPassed(result) {
 			return false
 		}

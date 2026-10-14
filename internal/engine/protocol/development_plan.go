@@ -171,8 +171,8 @@ func ValidateGranularity(p *GranularityReview) error {
 			if c.ID == "" || checks[c.ID] || !slices.Contains(DevelopmentCheckPurposes(), c.Purpose) {
 				return validationError("verification IDs and purposes must be unique and complete")
 			}
-			if (strings.TrimSpace(c.Command) == "" && strings.TrimSpace(c.Goal) == "") || (c.Command != "" && c.Goal != "") || (c.Purpose == CheckEdit && c.Command == "") {
-				return validationError("verification requires a command or goal; EDIT requires a command")
+			if (strings.TrimSpace(c.Command) == "" && strings.TrimSpace(c.Goal) == "") || (c.Command != "" && c.Goal != "") {
+				return validationError("verification requires a command or goal")
 			}
 			checks[c.ID] = true
 		}
@@ -291,7 +291,7 @@ func (s *State) ReadinessProposal() *GranularityReview {
 	return proposal
 }
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return pipelineTask(cd, "engine.development.batch.v5", planTaskScope(p, id))
+	return pipelineTask(cd, "engine.development.batch.v6", planTaskScope(p, id))
 }
 func planTaskScope(plan *GranularityReview, id string) string {
 	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
@@ -472,7 +472,7 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 	if s.SliceChild != nil {
 		return s.confirmedSlicePlan()
 	}
-	var request, revision string
+	var request string
 	var latest uint64
 	var p *GranularityReview
 	for id, d := range s.Decisions {
@@ -483,7 +483,7 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 		if source.Review == nil {
 			continue
 		}
-		request, p, revision, latest = id, source.Review.GranularityReview, source.Review.RequirementRevision, d.Revision
+		request, p, latest = id, source.Review.GranularityReview, d.Revision
 	}
 	// Identical confirmations preserve the original execution contract reference.
 	for id, d := range s.Decisions {
@@ -492,10 +492,10 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 		}
 		source := s.Results[decisionPlanConfirmation(d).ReviewActionID]
 		if source.Review != nil && planContractDigest(source.Review.GranularityReview) == planContractDigest(p) {
-			request, revision, latest = id, source.Review.RequirementRevision, d.Revision
+			request, latest = id, d.Revision
 		}
 	}
-	return request, p, revision
+	return request, p, s.requirementRevisionAt(latest)
 }
 
 // confirmedSlicePlan 取 child 已确认的片内计划：最新路线决定的内联提案
@@ -640,9 +640,9 @@ func (s *State) developmentResult(task runtime.TaskKey) *DevelopmentEvidence {
 	return record.Validation.Development
 }
 
-// bindDevelopmentChecks fills only the confirmed plan's missing calls in order.
+// BindDevelopmentChecks fills only the confirmed plan's missing calls in order.
 // The accepted development result owns these values; the plan owns their duties.
-func bindDevelopmentChecks(batch DevelopmentBatch, commands []string) ([]DevelopmentCheck, error) {
+func BindDevelopmentChecks(batch DevelopmentBatch, commands []string) ([]DevelopmentCheck, error) {
 	checks := slices.Clone(batch.Checks)
 	count := 0
 	for i := range checks {
@@ -662,7 +662,7 @@ func bindDevelopmentChecks(batch DevelopmentBatch, commands []string) ([]Develop
 }
 
 func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidence) error {
-	if _, err := bindDevelopmentChecks(batch, e.Commands); err != nil {
+	if _, err := BindDevelopmentChecks(batch, e.Commands); err != nil {
 		return err
 	}
 	if e.RemainingWork != "" {
@@ -1007,7 +1007,7 @@ func (s *State) plannedDevelopmentChecks(plan *GranularityReview, batch Developm
 		if result.Validation.Status == "CONTINUE" && len(result.Validation.Development.Commands) == 0 {
 			return batch.Checks
 		}
-		checks, err := bindDevelopmentChecks(batch, result.Validation.Development.Commands)
+		checks, err := BindDevelopmentChecks(batch, result.Validation.Development.Commands)
 		if err != nil {
 			return nil
 		}
@@ -1045,7 +1045,7 @@ func (s *State) fullProjectChecks() []DevelopmentCheck {
 }
 
 func validateDevelopmentContinuation(e *DevelopmentEvidence) error {
-	if e == nil || e.Paths == nil || strings.TrimSpace(e.Summary) == "" || strings.TrimSpace(e.RemainingWork) == "" || e.Completion != nil || len(e.RequirementResults) != 0 || len(e.CaseRuns) != 0 {
+	if e == nil || strings.TrimSpace(e.Summary) == "" || strings.TrimSpace(e.RemainingWork) == "" || e.Completion != nil || len(e.RequirementResults) != 0 || len(e.CaseRuns) != 0 {
 		return validationError("development continuation requires actual progress and remaining work without completion claims")
 	}
 	return nil

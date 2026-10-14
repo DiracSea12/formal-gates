@@ -545,7 +545,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		handler := "engine.gate.v3"
 		part := gate
 		if mode != "" {
-			handler = "engine.qa.execution.v3"
+			handler = "engine.qa.execution.v4"
 			part = string(mode)
 			target.Mode = mode
 			target.Kind = "QA"
@@ -794,7 +794,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 		return false, nil
 	}
 
-	task := pipelineTask(e.cfg.Definition, "engine.repair.v6", w.Candidate.Identity)
+	task := pipelineTask(e.cfg.Definition, "engine.repair.v7", w.Candidate.Identity)
 	// Native identities may contain separators; the logical snapshot key uses
 	// its content digest, never a platform path embedded in TaskKey syntax.
 	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")

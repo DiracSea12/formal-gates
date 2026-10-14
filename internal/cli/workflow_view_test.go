@@ -18,8 +18,10 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/requirement"
 )
 
 func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
@@ -324,99 +326,7 @@ func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := startAdmittedEngineRun(t, root, strings.TrimSpace(base))
-	var requestBinding facade.StartRequest
-	if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"), &requestBinding); err != nil {
-		t.Fatal(err)
-	}
-	provider := requestBinding.Provider
-	run, err := f.Drive()
-	if err != nil {
-		t.Fatal(err)
-	}
-	submit := func(event protocol.Event) {
-		t.Helper()
-		_, run, err = f.Submit(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	plan := &protocol.GranularityReview{Reason: "two independent components and their mainline integration", VerificationTier: "FINAL"}
-	for _, owner := range []string{"core", "tooling", "master-merge"} {
-		plan.Batches = append(plan.Batches, protocol.DevelopmentBatch{ID: owner, Owner: owner, Subtasks: []protocol.DevelopmentSubtask{{ID: owner + "-entry", Description: "implement the public " + owner + " responsibility"}}, Deliverable: owner + " public command behavior", PublicEntry: owner + " command", Artifacts: []string{owner + ".go"}, Interfaces: "documented command arguments", StateBoundary: "no persistent command state", Risk: "incorrect command output", DoD: []protocol.DevelopmentCriterion{{ID: owner + "-contract", Description: "public valid and invalid inputs have documented outcomes"}}, Checks: []protocol.DevelopmentCheck{{ID: owner + "-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: owner + "-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "revert this component", Recovery: "retry from the confirmed source", Handoff: "document the component interface and checks", ContextCost: "one independent command component"})
-	}
-	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		id := ""
-		for key, pending := range run.PendingActions {
-			if pending.ReviewSeries == action {
-				id = key
-			}
-		}
-		if id == "" {
-			t.Fatal("ordinary review was not issued", action)
-		}
-		material := run.WorkerMaterials[id]
-		identity := "review-session:" + id
-		event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn:"+id), id, provider, identity, protocol.SpawnStatusSpawned)
-		if err != nil {
-			t.Fatal(err)
-		}
-		submit(event)
-		transcript := filepath.Join(t.TempDir(), "usage.jsonl")
-		usage := []byte(`{"type":"assistant","uuid":"zero-usage","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}` + "\n")
-		mustWriteCLI(t, transcript, string(usage))
-		directory := facade.WorkerExecutionDirectory(material, "")
-		if err := os.MkdirAll(directory, 0700); err != nil {
-			t.Fatal(err)
-		}
-		descriptor, err := host.Lookup(provider)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for name, value := range map[string]any{"native-request.json": map[string]any{"provider": descriptor.InstallName, "engine": map[string]any{"root": root, "runId": run.RunID, "workerMaterial": material, "resumeActionId": ""}}, "source.json": map[string]any{"provider": descriptor.InstallName, "identity": identity, "transcript": transcript, "sha256": fmt.Sprintf("%x", sha256.Sum256(usage))}} {
-			raw, err := json.Marshal(value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mustWriteCLI(t, filepath.Join(directory, name), string(raw))
-		}
-		if err := lifecycle.ObserveNativeCompletion(root, run.RunID, id, provider, identity); err != nil {
-			t.Fatal(err)
-		}
-		evidence := protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: run.IntakeConfirmationReceipt.RequirementRevision, Status: "PASS", Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "compared the confirmed command requirement and independent component interfaces"}}
-		if action == review.StartReadiness {
-			evidence.GranularityReview = plan
-		}
-		event, err = protocol.NewReviewWorkerResultEvent(protocol.EventID("review:"+id), id, provider, "review-output:"+id, evidence)
-		if err != nil {
-			t.Fatal(err)
-		}
-		submit(event)
-		run, err = f.Drive()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	request, err := protocol.NewRequestEvent("split-request", protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "two components"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	submit(request)
-	ask := run.PendingAsks[0]
-	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, SplitCount: 2, Parallel: "two independent components", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}}
-	confirmedPlan, err := f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
-	if err != nil {
-		t.Fatal(err)
-	}
-	topology.DevelopmentPlan = &confirmedPlan.Confirmation
-	decision, err := protocol.NewReviewDecideEvent("split-confirmation", protocol.RequestID(ask.RequestID), ask.Token, "split", protocol.ReviewDecisionPayload{Topology: topology})
-	if err != nil {
-		t.Fatal(err)
-	}
-	submit(decision)
-	run, err = f.Drive()
-	if err != nil {
-		t.Fatal(err)
-	}
+	workflowSplitFixture(t, f, root)
 	runs, err := f.ControlRuns()
 	if err != nil || len(runs) < 2 {
 		t.Fatal("real child was not created", err)
@@ -489,4 +399,166 @@ func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
 		t.Fatal("original child authority was not applied", err)
 	}
 	t.Logf("actual parent global node %d -> original child Ask -> saved confirmation owner %s", node, childRun.RunID)
+}
+
+func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
+	t.Helper()
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requestBinding facade.StartRequest
+	if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, run.RunID, "request.json"), &requestBinding); err != nil {
+		t.Fatal(err)
+	}
+	provider := requestBinding.Provider
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit := func(event protocol.Event) {
+		t.Helper()
+		var accepted protocol.Acceptance
+		accepted, run, err = f.Submit(event)
+		if err != nil || accepted.Status != "ACCEPTED" {
+			t.Fatal("original node fixture event was not accepted", accepted, err)
+		}
+	}
+	plan := &protocol.GranularityReview{Reason: "two independent components and their mainline integration", VerificationTier: "FINAL"}
+	for _, owner := range []string{"core", "tooling", "master-merge"} {
+		plan.Batches = append(plan.Batches, protocol.DevelopmentBatch{ID: owner, Owner: owner, Subtasks: []protocol.DevelopmentSubtask{{ID: owner + "-entry", Description: "implement the public " + owner + " responsibility"}}, Deliverable: owner + " public command behavior", PublicEntry: owner + " command", Artifacts: []string{owner + ".go"}, Interfaces: "documented command arguments", StateBoundary: "no persistent command state", Risk: "incorrect command output", DoD: []protocol.DevelopmentCriterion{{ID: owner + "-contract", Description: "public valid and invalid inputs have documented outcomes"}}, Checks: []protocol.DevelopmentCheck{{ID: owner + "-build", Purpose: protocol.CheckFullBuild, Goal: "Build the complete component project"}, {ID: owner + "-tests", Purpose: protocol.CheckFullTests, Goal: "Run the complete component project suite"}}, Rollback: "revert this component", Recovery: "retry from the confirmed source", Handoff: "document the component interface and checks", ContextCost: "one independent command component"})
+	}
+	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
+		id := ""
+		for key, pending := range run.PendingActions {
+			if pending.ReviewSeries == action {
+				id = key
+			}
+		}
+		if id == "" {
+			t.Fatal("ordinary review was not issued", action)
+		}
+		material := run.WorkerMaterials[id]
+		body, err := os.ReadFile(material.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var issued worker.Material
+		if err := json.Unmarshal(body, &issued); err != nil {
+			t.Fatal(err)
+		}
+		if issued.Input.Pending.ActionID != id || issued.Input.Provider != provider || issued.Input.Review == nil || issued.Input.Review.Action != action || issued.Input.Review.RequirementRevision != run.IntakeConfirmationReceipt.RequirementRevision || issued.Input.RequirementDocument.Content == "" {
+			t.Fatal("independent check found a different or incomplete original review input")
+		}
+		if action == review.StartReadiness {
+			for i := range plan.Batches {
+				if plan.Batches[i].Owner == "master-merge" {
+					plan.Batches[i].RequirementPoints = requirement.PointIDs(issued.Input.RequirementPoints)
+				}
+			}
+		}
+		identity := "review-session:" + id
+		event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn:"+id), id, provider, identity, protocol.SpawnStatusSpawned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(event)
+		transcript := filepath.Join(t.TempDir(), "usage.jsonl")
+		usage := []byte(`{"type":"assistant","uuid":"zero-usage","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}` + "\n")
+		mustWriteCLI(t, transcript, string(usage))
+		directory := facade.WorkerExecutionDirectory(material, "")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		descriptor, err := host.Lookup(provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]any{"native-request.json": map[string]any{"provider": descriptor.InstallName, "engine": map[string]any{"root": root, "runId": run.RunID, "workerMaterial": material, "resumeActionId": ""}}, "source.json": map[string]any{"provider": descriptor.InstallName, "identity": identity, "transcript": transcript, "sha256": fmt.Sprintf("%x", sha256.Sum256(usage))}} {
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteCLI(t, filepath.Join(directory, name), string(raw))
+		}
+		if err := lifecycle.ObserveNativeCompletion(root, run.RunID, id, provider, identity); err != nil {
+			t.Fatal(err)
+		}
+		evidence := protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: run.IntakeConfirmationReceipt.RequirementRevision, Status: "PASS", Findings: []review.Finding{}}
+		if action == review.StartReadiness {
+			evidence.GranularityReview = plan
+		}
+		event, err = protocol.NewReviewWorkerResultEvent(protocol.EventID("review:"+id), id, provider, "review-output:"+id, evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(event)
+		if len(run.ReviewVerifications) != 1 {
+			t.Fatal("original raw review did not require independent acceptance", run.ReviewVerifications)
+		}
+		raw := run.ReviewVerifications[0]
+		if raw.ActionID != id || raw.Provider != provider || raw.Review == nil || !reflect.DeepEqual(*raw.Review, evidence) || len(raw.Review.Findings) != 0 {
+			t.Fatal("independent check found changed raw content or an unexpected finding", raw)
+		}
+		if action == review.StartReadiness {
+			if err := protocol.ValidateGranularity(raw.Review.GranularityReview); err != nil {
+				t.Fatal(err)
+			}
+			if err := protocol.ValidateProjectChecks(raw.Review.GranularityReview); err != nil {
+				t.Fatal(err)
+			}
+			for _, batch := range raw.Review.GranularityReview.Batches {
+				var owned []string
+				if batch.Owner == "master-merge" {
+					owned = requirement.PointIDs(issued.Input.RequirementPoints)
+				}
+				if !reflect.DeepEqual(batch.RequirementPoints, owned) {
+					t.Fatal("component duty differs from the original confirmed points", batch)
+				}
+			}
+		}
+		candidate, err := f.PrepareControl(facade.ControlInput{ReviewVerification: &facade.ReviewVerificationInput{Result: 1, Findings: []protocol.ReviewFindingVerification{}, Verification: []string{
+			"Compared the original action, provider and confirmed requirement revision in the complete issued material.",
+			"The original raw PASS has no findings; the readiness contract, when supplied, passes the finite-duty and project-check validators.",
+			"Read the complete original requirement and compared the retained raw result with the submitted component contract.",
+			"The original report has no finding rows or locations to validate; its input points come from the confirmed document.",
+			"The native Git baseline declares independent command components and readiness names their public entries.",
+			"Compared readiness component duties with the original issued requirement point IDs.",
+			"The submitted content concerns this product or readiness action and its original run only.",
+			"The original report has zero findings; no unsupported severity or disposition is introduced.",
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted, next, err := f.SubmitControl(candidate)
+		if err != nil || accepted.Status != "ACCEPTED" {
+			t.Fatal("independent original review acceptance failed", accepted, err)
+		}
+		run = next
+		run, err = f.Drive()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	request, err := protocol.NewRequestEvent("split-request", protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "two components"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(request)
+	ask := run.PendingAsks[0]
+	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, SplitCount: 2, Parallel: "two independent components", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}}
+	confirmedPlan, err := f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology.DevelopmentPlan = &confirmedPlan.Confirmation
+	decision, err := protocol.NewReviewDecideEvent("split-confirmation", protocol.RequestID(ask.RequestID), ask.Token, "split", protocol.ReviewDecisionPayload{Topology: topology})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(decision)
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

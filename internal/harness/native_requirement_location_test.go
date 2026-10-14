@@ -25,7 +25,7 @@ func TestNativeRequirementFindingUsesOriginalReadAcrossSourceRecovery(t *testing
 		t.Fatal(err)
 	}
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", Content: "# Frozen requirement\r\nOriginal behavior.  \r\n"}
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "original-revision"}, RequirementDocument: document}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v3", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "original-revision"}, RequirementDocument: document}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -60,10 +60,7 @@ func TestNativeRequirementFindingUsesOriginalReadAcrossSourceRecovery(t *testing
 	if getOf(read, "isError") != false || json.Unmarshal([]byte(textOf(getOf(listOf(getOf(read, "content"))[0], "text"))), &published) != nil || published.Read != 1 {
 		t.Fatal("original requirement read was not published", read)
 	}
-	value := worker.Review{Findings: []worker.Finding{{Severity: "P3", Message: "Frozen wording needs clarification", Locations: []worker.Location{{Read: published.Read, Line: 3}}}}, Verification: []string{}}
-	for range review.RequiredVerificationChecks() {
-		value.Verification = append(value.Verification, "Inspected the exact frozen original requirement")
-	}
+	value := worker.Review{Findings: []worker.Finding{{Severity: "P3", Message: "Frozen wording needs clarification", Locations: []worker.Location{{Read: published.Read, Line: 3}}}}}
 	invalid := call(nativeSemanticTool, value)
 	if getOf(invalid, "isError") != true {
 		t.Fatal("invalid finding location was published before mechanical assembly", invalid)

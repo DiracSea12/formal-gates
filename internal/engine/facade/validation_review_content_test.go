@@ -41,14 +41,14 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 					t.Fatal("fixture did not establish the original negative-test behavior")
 				}
 			}
-			id, input := d.action("engine.development.batch.v5")
+			id, input := d.action("engine.development.batch.v6")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\nfunc Validate(input string) bool { return input != \"\" }\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 			d.materialize()
 			d.materialize()
-			id, input = d.action("engine.qa.design.v5")
+			id, input = d.action("engine.qa.design.v6")
 			m := input.Manifest
 			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestPositive", Oracle: "valid input accepted", Files: []string{"app_test.go"}}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestNegative", Oracle: "invalid input rejected", Files: []string{"app_test.go"}}}
 			for _, c := range m.Cases {
@@ -72,7 +72,7 @@ func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
 			if changed {
 				testBytes = "package main\nimport \"testing\"\nfunc sharedInput() string { return \"two\" }\nfunc TestPositive(t *testing.T) { if !Validate(sharedInput()) { t.Fatal(\"valid input rejected\") } }\nfunc TestNegative(t *testing.T) { if Validate(sharedInput()) { t.Fatal(\"invalid input accepted\") } }\n"
 			}
-			id, input = d.action("engine.qa.design.v5")
+			id, input = d.action("engine.qa.design.v6")
 			if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte(testBytes), 0600); err != nil {
 				t.Fatal(err)
 			}

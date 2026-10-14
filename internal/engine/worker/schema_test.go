@@ -17,7 +17,7 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch.v5": {"summary"}, "engine.repair.v6": {"summary", "granularityReview"}, "engine.merge.resolve.v3": {"summary"}, "engine.qa.design.v5": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v3": {"records", "findings"}, "engine.gate.v3": {"findings"},
+		"engine.development.batch.v6": {"summary"}, "engine.repair.v7": {"summary", "granularityReview"}, "engine.merge.resolve.v3": {"summary"}, "engine.qa.design.v6": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v4": {"records", "findings"}, "engine.gate.v3": {"findings"},
 	}
 	for handler, names := range roles {
 		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
@@ -48,9 +48,9 @@ func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 
 func TestFindingSchemasPublishSeverityChoices(t *testing.T) {
 	for _, input := range []protocol.WorkerInput{
-		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
+		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.review.worker.v3", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
 		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}},
-		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{}},
+		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v4", Validation: &protocol.ValidationInput{}},
 	} {
 		t.Run(input.Handler, func(t *testing.T) {
 			schema, err := ResultSchema(input)
@@ -76,7 +76,7 @@ func TestDesignSchemasPublishScenarioChoicesForNewAndExistingCases(t *testing.T)
 	for _, kind := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
 		for _, scope := range []string{"initial", "full", "affected"} {
 			t.Run(string(kind)+"/"+scope, func(t *testing.T) {
-				input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.design.v5", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
+				input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.design.v6", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
 				if scope != "initial" {
 					input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved", Scenario: "SUCCESS", Oracle: "approved oracle"}}
 				}
@@ -184,12 +184,12 @@ func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t
 	}
 }
 
-func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
+func TestReviewMaterialCannotAuthorizeIndependentVerification(t *testing.T) {
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "start-readiness"}}}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
-		handler := "engine.review.worker.v2"
+		handler := "engine.review.worker.v3"
 		if action == review.StartReadiness {
-			handler = "engine.readiness.plan.v5"
+			handler = "engine.readiness.plan.v6"
 		}
 		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: action, RequirementRevision: "revision"}}
 		material, err := Render(input, catalog)
@@ -207,31 +207,23 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 				t.Fatalf("model owns %s", key)
 			}
 		}
-		checks := fields["verification"].(map[string]any)
-		if checks["minItems"] != len(review.RequiredVerificationChecks()) || checks["items"] != false {
-			t.Fatal("lost individual checks")
+		if fields["verification"] != nil {
+			t.Fatal("reviewer owns independent Operator verification")
 		}
-		value := Review{Findings: []Finding{}, Verification: []string{}}
-		for _, key := range review.RequiredVerificationChecks() {
-			value.Verification = append(value.Verification, "observed "+key)
-		}
+		value := Review{Findings: []Finding{}}
 		body, _ := json.Marshal(value)
 		event, err := DecodeResultWithPaths(input, "event", body, "original", []string{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) || event.Result.Review.RequirementRevision != "revision" {
-			t.Fatal("wrong original binding")
+		if event.Result.Review.RequirementRevision != "revision" {
+			t.Fatal("reviewer authorized independent verification or lost the original binding")
 		}
-		for index, key := range review.RequiredVerificationChecks() {
-			original := slices.Clone(value.Verification)
-			value.Verification = append(value.Verification[:index], value.Verification[index+1:]...)
-			body, _ = json.Marshal(value)
-			if _, err := DecodeResultWithPaths(input, "event", body, "original", []string{}); err == nil {
-				t.Fatalf("missing %s accepted", key)
-			}
-			value.Verification = original
+		forged := append(body[:len(body)-1], []byte(`,"verification":["reviewer self-approval"]}`)...)
+		if _, err := DecodeResultWithPaths(input, "event", forged, "original", []string{}); err == nil {
+			t.Fatal("reviewer self-approval field was accepted")
 		}
+
 	}
 }
 
@@ -245,12 +237,12 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 		kind    coverage.ReviewKind
 		author  bool
 	}{
-		{"engine.development.batch.v5", "", true},
-		{"engine.repair.v6", "", true},
+		{"engine.development.batch.v6", "", true},
+		{"engine.repair.v7", "", true},
 		{"engine.merge.resolve.v3", "", true},
-		{"engine.qa.design.v5", coverage.ReviewWhitebox, true},
-		{"engine.qa.design.v5", coverage.ReviewBlackbox, false},
-		{"engine.qa.execution.v3", "", false},
+		{"engine.qa.design.v6", coverage.ReviewWhitebox, true},
+		{"engine.qa.design.v6", coverage.ReviewBlackbox, false},
+		{"engine.qa.execution.v4", "", false},
 		{"engine.qa.review.rationale.v2", "", false},
 	} {
 		t.Run(role.handler+string(role.kind), func(t *testing.T) {
@@ -260,7 +252,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			contracts := []string{"Deliver only actual authorized artifacts", "Temporary build and test outputs are not delivery artifacts", "remove your own temporary validation outputs", "produce them outside the workspace"}
-			if role.handler == "engine.qa.design.v5" && role.author {
+			if role.handler == "engine.qa.design.v6" && role.author {
 				contracts = []string{"Associate only actual test material files", "Remove temporary build and test outputs", "produce them outside the workspace", "Do not return a separate development path declaration"}
 			}
 			if role.handler == "engine.merge.resolve.v3" {
@@ -271,7 +263,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 					t.Fatalf("role %s delivery contract mismatch: %s", role.handler, contract)
 				}
 			}
-			if role.handler == "engine.qa.design.v5" && role.author {
+			if role.handler == "engine.qa.design.v6" && role.author {
 				fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 				if fields["paths"] != nil || strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 					t.Fatal("QA author material retained a duplicate path-reporting contract")
@@ -283,7 +275,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 			} else if role.author && !strings.Contains(material.Prompt, "Deliver only actual authorized artifacts") {
 				t.Fatal("development author lost its artifact declaration")
 			}
-			if role.handler == "engine.qa.execution.v3" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
+			if role.handler == "engine.qa.execution.v4" && !strings.Contains(material.Prompt, "Compare the issued complete native execution facts") {
 				t.Fatal("execution runtime contract lost")
 			}
 		})
@@ -291,7 +283,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 }
 
 func TestQASchemaExcludesIssuedFacts(t *testing.T) {
-	for _, handler := range []string{"engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4"} {
 		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}, PendingCases: []string{"case"}, RequiredCases: []string{"case"}}}
 		input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case"}}
 		schema, err := ResultSchema(input)
@@ -299,7 +291,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 		fields := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
-		if handler == "engine.qa.design.v5" {
+		if handler == "engine.qa.design.v6" {
 			m := fields
 			for _, key := range []string{"binding", "sources", "points", "edges"} {
 				if m[key] != nil {
@@ -319,7 +311,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 				}
 			}
 		}
-		if handler == "engine.qa.execution.v3" {
+		if handler == "engine.qa.execution.v4" {
 			e := fields
 			if e["binding"] != nil || e["notExecuted"] != nil {
 				t.Fatal("model owns execution facts")
@@ -337,7 +329,7 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}, {ID: "interface", Description: "declared interface"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop the issued duty"}}}
-	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
+	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			before, _ := json.Marshal(input)
@@ -368,7 +360,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	}
 	for _, name := range []string{"no-batch", "empty-batch", "unfrozen-repair", "final-verification", "other-role"} {
 		t.Run(name, func(t *testing.T) {
-			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			switch name {
 			case "empty-batch":
 				input.Validation.Development = &protocol.DevelopmentInput{}
@@ -378,7 +370,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
 				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "final"}}
 			case "other-role":
-				input.Handler = "engine.qa.design.v5"
+				input.Handler = "engine.qa.design.v6"
 				input.Validation.Development = &protocol.DevelopmentInput{Batch: batch}
 			}
 			schema, err := ResultSchema(input)
@@ -420,7 +412,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 }
 
 func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -477,7 +469,7 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 }
 
 func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -488,23 +480,20 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 		t.Fatal("proposal still asks for existing raw paths")
 	}
 	checks := proposal["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
-	if len(checks) != 5 || checks[0].(map[string]any)["properties"].(map[string]any)["reuse"] == nil {
+	if len(checks) != 2 || checks[0].(map[string]any)["properties"].(map[string]any)["reuse"] == nil {
 		t.Fatal("approved commands have no numeric selection")
 	}
 	for index, choice := range checks {
 		branch := choice.(map[string]any)
-		if branch["additionalProperties"] != false || len(branch["properties"].(map[string]any)) != []int{1, 4, 6, 2, 2}[index] {
+		if branch["additionalProperties"] != false || len(branch["properties"].(map[string]any)) != []int{1, 2}[index] {
 			t.Fatal("check modes accept fields from another selection mode")
 		}
 	}
-	if !reflect.DeepEqual(checks[1].(map[string]any)["required"], []string{"read", "from", "to"}) {
-		t.Fatal("original command selection omits its exact read range")
+	authored := checks[1].(map[string]any)["properties"].(map[string]any)
+	if !reflect.DeepEqual(checks[1].(map[string]any)["required"], []string{"command"}) || authored["read"] != nil || authored["parts"] != nil || !reflect.DeepEqual(authored["purpose"].(map[string]any)["enum"], []string{""}) {
+		t.Fatal("new repair invocation lost its authorship or local-command policy")
 	}
-	original := checks[1].(map[string]any)["properties"].(map[string]any)
-	if original["read"] == nil || original["from"] == nil || original["to"] == nil || !reflect.DeepEqual(original["purpose"].(map[string]any)["enum"], []string{""}) {
-		t.Fatal("source command selection changed repair local-command policy")
-	}
-	command := checks[4].(map[string]any)["properties"].(map[string]any)["command"].(map[string]any)
+	command := authored["command"].(map[string]any)
 	if !reflect.DeepEqual(command["not"].(map[string]any)["enum"], []string{"approved-build"}) {
 		t.Fatal("known command can pass as newly authored content")
 	}
@@ -520,16 +509,16 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 	}
 	proposal = schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 	choices := proposal["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
-	if len(choices) != 4 || choices[0].(map[string]any)["properties"].(map[string]any)["read"] == nil || choices[3].(map[string]any)["properties"].(map[string]any)["command"] == nil {
-		t.Fatal("initial commands require original source selection or new authorship")
+	if len(choices) != 1 || choices[0].(map[string]any)["properties"].(map[string]any)["command"] == nil {
+		t.Fatal("initial repair invocation must be developer-authored")
 	}
 }
 
 func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
-	for _, handler := range []string{"engine.readiness.plan.v5", "engine.repair.v6"} {
+	for _, handler := range []string{"engine.readiness.plan.v6", "engine.repair.v7"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
-			if handler == "engine.readiness.plan.v5" {
+			if handler == "engine.readiness.plan.v6" {
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			} else {
 				input.Validation = &protocol.ValidationInput{Repair: &protocol.RepairInput{}}
@@ -583,7 +572,7 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 }
 
 func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	for _, scenario := range []string{"proposed", "issued"} {
 		t.Run(scenario, func(t *testing.T) {
 			if scenario == "issued" {
@@ -643,7 +632,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch.v5", nil}, {"engine.repair.v6", nil}, {"engine.merge.resolve.v3", nil}, {"engine.qa.design.v5", nil}, {"engine.gate.v3", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v3", nil}} {
+	}{{"engine.development.batch.v6", nil}, {"engine.repair.v7", nil}, {"engine.merge.resolve.v3", nil}, {"engine.qa.design.v6", nil}, {"engine.gate.v3", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v4", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)
@@ -662,7 +651,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 			if strings.Contains(string(encoded), "resultTemplate") {
 				t.Fatal("mechanical template retained")
 			}
-			if !material.ReadOnly && (!strings.Contains(material.Prompt, "Do not execute any VCS write operation; all VCS writes belong to engine adapters.") || !strings.Contains(material.Prompt, "Read-only VCS inspection remains permitted.")) {
+			if !material.ReadOnly && !strings.Contains(material.Prompt, "Do not execute any VCS write operation; all VCS writes belong to engine adapters.") {
 				t.Fatal("writable role lost adapter ownership or read-only inspection")
 			}
 			if strings.Contains(material.Prompt, "Do not stage, commit, submit or push") {
@@ -671,7 +660,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 		})
 	}
 	t.Run("whitebox-design-vcs-owner", func(t *testing.T) {
-		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.qa.design.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 		material, err := Render(input, catalog)
 		if err != nil {
 			t.Fatal(err)
@@ -684,7 +673,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 
 func TestExecutionMaterialExplainsFinalCompletedReport(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.qa.execution.v3"
+	input.Handler = "engine.qa.execution.v4"
 	input.RequirementDocument.Content = "confirmed requirement"
 	input.Validation.Execution = &coverage.ExecutionBinding{Candidate: coverage.ValidationCandidate{Identity: "candidate"}}
 	input.Validation.RequiredCases = []string{"new", "prior"}
@@ -750,7 +739,7 @@ func TestOrderedSchemaPreservesExactEmptyAndNonemptyDuties(t *testing.T) {
 }
 
 func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T) {
-	commands := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{CommandCases: []string{"first"}}}
+	commands := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v4", Validation: &protocol.ValidationInput{CommandCases: []string{"first"}}}
 	judgments := commands
 	judgments.Validation = &protocol.ValidationInput{PendingCases: []string{"first", "second"}}
 	first, err := StableResultSchema(commands)
@@ -783,7 +772,7 @@ func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T
 	if fields["records"].(map[string]any)["type"] != "array" {
 		t.Fatal("judgment record type is not constrained")
 	}
-	development := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v5", Validation: &protocol.ValidationInput{}}
+	development := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v6", Validation: &protocol.ValidationInput{}}
 	stable, err := StableResultSchema(development)
 	if err != nil {
 		t.Fatal(err)
@@ -804,28 +793,193 @@ func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T
 	}
 }
 
-func TestReadinessExposesOnlyOriginalCallsAndVerificationGoals(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v5", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+func TestReadinessExposesOnlyApprovedReuseAndVerificationGoals(t *testing.T) {
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v6", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "edit", Purpose: protocol.CheckEdit, Command: "project-edit"}}}
 	for _, generate := range []func(protocol.WorkerInput) (map[string]any, error){ResultSchema, StableResultSchema} {
 		schema, err := generate(input)
 		if err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(schema)
-		var result map[string]any
-		_ = json.Unmarshal(raw, &result)
 		body := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
-		plan, _ := json.Marshal(body["granularityReview"])
-		if strings.Contains(string(plan), `"command"`) || strings.Contains(string(plan), `"parts"`) {
-			t.Fatal("read-only plan still exposes command creation", string(plan))
+		plan := body["granularityReview"].(map[string]any)
+		batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+		batches := []any{batch}
+		if alternatives, ok := batch["anyOf"].([]any); ok && batch["properties"] == nil {
+			batches = alternatives
 		}
-		if !strings.Contains(string(plan), `"goal"`) || !strings.Contains(string(plan), `"read"`) {
-			t.Fatal("missing original selection or verification goal")
+		for _, batch := range batches {
+			fields := batch.(map[string]any)["properties"].(map[string]any)
+			checks := fields["checks"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
+			if len(checks) != 2 {
+				t.Fatal("review check choices must be approved reuse and a verification goal", checks)
+			}
+			for _, check := range checks {
+				branch := check.(map[string]any)
+				properties := branch["properties"].(map[string]any)
+				for _, field := range []string{"command", "parts", "read", "from", "to", "fromColumn", "toColumn"} {
+					if properties[field] != nil {
+						t.Fatalf("review still selects command text through %s", field)
+					}
+				}
+				if properties["reuse"] != nil {
+					if len(properties) != 1 || !reflect.DeepEqual(branch["required"], []string{"reuse"}) {
+						t.Fatal("approved reuse exposes authored command fields", branch)
+					}
+				} else if properties["goal"] == nil || len(properties) != 2 || !reflect.DeepEqual(properties["purpose"].(map[string]any)["enum"], protocol.DevelopmentCheckPurposes()) || !reflect.DeepEqual(branch["required"], []string{"goal"}) {
+					t.Fatal("review goal lost its ordinary or full verification purposes", branch)
+				}
+			}
 		}
 	}
-	for _, check := range []Check{{Command: "invented-tests"}, {Parts: &[]StringChange{{value: "invented-tests"}}}} {
-		if _, err := DecodeGranularity(input, &Granularity{Batches: []Batch{{Checks: []Check{check}}}}, nil, nil, false); err == nil {
-			t.Fatal("read-only authoring bypass reached plan assembly")
+}
+
+func TestNewBatchSchemaRequiresDeliveryAndVerification(t *testing.T) {
+	for _, handler := range []string{"engine.readiness.plan.v6", "engine.repair.v7"} {
+		t.Run(handler, func(t *testing.T) {
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Validation: &protocol.ValidationInput{}}
+			if handler == "engine.readiness.plan.v6" {
+				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
+			}
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)
+			batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+			fields := batch["properties"].(map[string]any)
+			for _, name := range []string{"subtasks", "dod", "checks"} {
+				if fields[name].(map[string]any)["minItems"] != 1 {
+					t.Errorf("new batch permits empty %s", name)
+				}
+				if !slices.Contains(batch["required"].([]any), any(name)) {
+					t.Errorf("new batch permits omitted %s", name)
+				}
+			}
+			delivery, ok := batch["anyOf"].([]any)
+			if !ok || len(delivery) != 2 {
+				t.Error("new batch permits both original and new delivery artifacts to be absent")
+				return
+			}
+			for i, name := range []string{"artifacts", "newArtifacts"} {
+				choice := delivery[i].(map[string]any)
+				if !reflect.DeepEqual(choice["required"], []string{name}) || choice["properties"].(map[string]any)[name].(map[string]any)["minItems"] != 1 {
+					t.Errorf("new batch permits an empty delivery choice: %s", name)
+				}
+			}
+		})
+	}
+}
+
+func TestNewBatchDeliverySourcesSatisfyGranularity(t *testing.T) {
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v6", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	facts := []LocationFact{{Kind: "read", Paths: []string{"existing.py"}}}
+	for _, sample := range []struct {
+		name         string
+		artifacts    []Location
+		newArtifacts []string
+		want         []string
+	}{
+		{"original-file", []Location{{Read: 1}}, nil, []string{"existing.py"}},
+		{"new-file", nil, []string{"created.py"}, []string{"created.py"}},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			proposal := &Granularity{Reason: "One public behavior", VerificationTier: "FINAL", Batches: []Batch{{Subtasks: []Subtask{{Description: "Implement the public behavior"}}, Deliverable: "Public behavior", PublicEntry: "Product command", Artifacts: sample.artifacts, NewArtifacts: sample.newArtifacts, Interfaces: "Command output", StateBoundary: "Project files", Risk: "Local change", DoD: []Criterion{{Description: "Public behavior holds"}}, Checks: []Check{{Goal: "Verify public behavior"}}, Rollback: "Restore base", Recovery: "Resume the duty", Handoff: "Ready for validation", ContextCost: "One cohesive duty"}}}
+			plan, err := DecodeGranularity(input, proposal, nil, facts, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := protocol.ValidateGranularity(plan); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(plan.Batches[0].Artifacts, sample.want) {
+				t.Fatal("delivery selection did not retain the original file or new path", plan.Batches[0].Artifacts)
+			}
+		})
+	}
+}
+
+func TestApprovedBatchSchemaRetainsOmittedContract(t *testing.T) {
+	original := nativePlanForInheritance()
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v6", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: original}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)
+	changed := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)[1].(map[string]any)
+	if !reflect.DeepEqual(changed["required"], []any{"reuse"}) || changed["anyOf"] != nil {
+		t.Fatal("approved batch change requires a new contract", changed)
+	}
+	for _, name := range []string{"subtasks", "dod", "checks"} {
+		if changed["properties"].(map[string]any)[name].(map[string]any)["minItems"] != nil {
+			t.Errorf("approved batch change inherited a new-batch constraint: %s", name)
 		}
+	}
+	var proposal Granularity
+	if err := json.Unmarshal([]byte(`{"batches":[{"reuse":1}]}`), &proposal); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := DecodeGranularity(input, &proposal, nil, nil, false)
+	if err != nil || !reflect.DeepEqual(retained, original) {
+		t.Fatal("minimal batch reuse did not retain the approved contract", err)
+	}
+	if err := protocol.ValidateGranularity(retained); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewBatchSchemaMatchesInheritedRepairChecks(t *testing.T) {
+	build := protocol.DevelopmentCheck{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build 'two words'\n"}
+	tests := protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests --all"}
+	edit := protocol.DevelopmentCheck{ID: "edit", Purpose: protocol.CheckEdit, Command: "project-edit --source"}
+	ordinary := protocol.DevelopmentCheck{ID: "regression", Command: "project-regression"}
+	for _, sample := range []struct {
+		name, handler string
+		approved      []protocol.DevelopmentCheck
+		inherited     []protocol.DevelopmentCheck
+	}{
+		{"readiness-approved", "engine.readiness.plan.v6", []protocol.DevelopmentCheck{build, tests, edit}, nil},
+		{"repair-no-approved", "engine.repair.v7", nil, nil},
+		{"repair-ordinary-only", "engine.repair.v7", []protocol.DevelopmentCheck{ordinary}, nil},
+		{"repair-full-build", "engine.repair.v7", []protocol.DevelopmentCheck{build}, []protocol.DevelopmentCheck{build}},
+		{"repair-full-tests", "engine.repair.v7", []protocol.DevelopmentCheck{tests}, []protocol.DevelopmentCheck{tests}},
+		{"repair-edit", "engine.repair.v7", []protocol.DevelopmentCheck{edit}, []protocol.DevelopmentCheck{edit}},
+		{"repair-project-checks", "engine.repair.v7", []protocol.DevelopmentCheck{build, tests, edit}, []protocol.DevelopmentCheck{build, tests, edit}},
+		{"repair-project-and-ordinary", "engine.repair.v7", []protocol.DevelopmentCheck{ordinary, build, tests, edit}, []protocol.DevelopmentCheck{build, tests, edit}},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: sample.handler, ApprovedChecks: sample.approved, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+			if sample.handler == "engine.readiness.plan.v6" {
+				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
+			}
+			schema, err := ResultSchema(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			planSchema := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["granularityReview"].(map[string]any)
+			batchSchema := planSchema["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
+			needsChecks := len(sample.inherited) == 0
+			if slices.Contains(batchSchema["required"].([]any), any("checks")) != needsChecks {
+				t.Errorf("schema check omission differs from inherited verification: %s", sample.name)
+			}
+			minimum := batchSchema["properties"].(map[string]any)["checks"].(map[string]any)["minItems"]
+			if needsChecks && minimum != 1 || !needsChecks && minimum != nil {
+				t.Errorf("schema empty check array differs from inherited verification: %s", sample.name)
+			}
+			for _, checks := range []string{"", `,"checks":[]`} {
+				var proposal Granularity
+				raw := `{"reason":"One cohesive repair","verificationTier":"FINAL","batches":[{"subtasks":[{"description":"Restore public behavior"}],"dod":[{"description":"Public behavior holds"}],"deliverable":"Public behavior","publicEntry":"Product command","newArtifacts":["created.py"],"interfaces":"Command output","stateBoundary":"Project files","risk":"Local change","rollback":"Restore base","recovery":"Resume original duty","handoff":"Ready for validation","contextCost":"One cohesive duty"` + checks + `}]}`
+				if err := json.Unmarshal([]byte(raw), &proposal); err != nil {
+					t.Fatal(err)
+				}
+				plan, err := DecodeGranularity(input, &proposal, nil, nil, false)
+				if err != nil || !reflect.DeepEqual(plan.Batches[0].Checks, sample.inherited) {
+					t.Fatal("original check IDs, purposes or command bytes changed during inheritance", err)
+				}
+				if err := protocol.ValidateGranularity(plan); (err == nil) != !needsChecks {
+					t.Fatalf("check omission does not match the accepted batch invariant: %v", err)
+				}
+			}
+		})
 	}
 }

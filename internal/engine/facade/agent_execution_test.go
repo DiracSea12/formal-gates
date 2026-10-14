@@ -14,7 +14,7 @@ func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
-	action, _ := d.action("engine.development.batch.v5")
+	action, _ := d.action("engine.development.batch.v6")
 	old := d.run.WorkerMaterials[action]
 	request, _, abandoned, _, err := d.f.WorkerExecutionRequest(old, "")
 	if err != nil {
@@ -111,7 +111,7 @@ func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
 // when the host resumes the original native identity.
 func TestAgentExecutionRetainsOriginalAndResumedOwners(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch.v5")
+	action, _ := d.action("engine.development.batch.v6")
 	claim := func(ref WorkerMaterial, resume string) string {
 		t.Helper()
 		request, _, directory, _, err := d.f.WorkerExecutionRequest(ref, resume)

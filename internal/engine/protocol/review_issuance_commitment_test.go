@@ -84,7 +84,7 @@ func TestCapacityDipPreservesDispatchAuthorization(t *testing.T) {
 				evidence.AuthorizationID = authorization
 				consumed = 1
 			}
-			submitReviewResult(t, engine, "capacity-dip-result", action, evidence)
+			submitVerifiedReviewResult(t, engine, "capacity-dip-result", action, evidence)
 			series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 			if series.Completed != 3 || series.ExtraConsumed != consumed {
 				t.Fatalf("the accepted evidence must determine authorization consumption: %+v", series)
@@ -110,7 +110,7 @@ func TestCapacityDipPreservesDispatchAuthorization(t *testing.T) {
 			revision = engine.LoadMustSucceed(t).State.RequirementRevision()
 			evidence = reviewEvidenceAt(review.ProductReview, next, revision, "PASS", "next requested review", nil)
 			evidence.AuthorizationID = nextAuthorization
-			submitReviewResult(t, engine, "capacity-next-result", next, evidence)
+			submitVerifiedReviewResult(t, engine, "capacity-next-result", next, evidence)
 			series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 			if series.Completed != 4 || series.ExtraConsumed != consumed+1 {
 				t.Fatalf("both obligations must finish on their own evidence: %+v", series)
@@ -135,14 +135,14 @@ func TestAutomaticReviewAfterCapacityDipSparesAuthorization(t *testing.T) {
 		t.Fatalf("invalidation must free capacity without preissuing work: %+v", snap.State.ReviewSeries.ProductReview)
 	}
 	revision := snap.State.RequirementRevision()
-	submitReviewResult(t, engine, "spared-result", action, reviewEvidenceAt(review.ProductReview, action, revision, "PASS", "record under available automatic capacity", nil))
+	submitVerifiedReviewResult(t, engine, "spared-result", action, reviewEvidenceAt(review.ProductReview, action, revision, "PASS", "record under available automatic capacity", nil))
 	redoProductReview(t, engine, "spared-next")
 	next := pendingActionID(t, engine)
 	snap = engine.LoadMustSucceed(t)
 	if authorization := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, next); authorization != "" {
 		t.Fatalf("automatic issuance must not bind the unused extra authorization: %q", authorization)
 	}
-	submitReviewResult(t, engine, "spared-next-result", next, reviewEvidenceAt(review.ProductReview, next, snap.State.RequirementRevision(), "PASS", "next automatic review", nil))
+	submitVerifiedReviewResult(t, engine, "spared-next-result", next, reviewEvidenceAt(review.ProductReview, next, snap.State.RequirementRevision(), "PASS", "next automatic review", nil))
 	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 	if series.Completed != 2 || series.ExtraConsumed != 0 || len(series.Authorizations[0].RecordedResultDigests) != 0 {
 		t.Fatalf("automatic reviews must leave the authorization unconsumed: %+v", series)
@@ -166,7 +166,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		auth1 := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].ID
 		evidence := reviewEvidenceAt(review.ProductReview, fourth, engine.LoadMustSucceed(t).State.RequirementRevision(), "PASS", "authorized review", nil)
 		evidence.AuthorizationID = auth1
-		submitReviewResult(t, engine, "result-inherit-r4", fourth, evidence)
+		submitVerifiedReviewResult(t, engine, "result-inherit-r4", fourth, evidence)
 		redoProductReview(t, engine, "inherit-fifth")
 		askAndDecide(t, engine, ControlReviewRoundGrant, "req-inherit-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 			Action: review.ProductReview, Reason: "the fifth round needs endorsement",
@@ -196,7 +196,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		// 换新携原槽入账：completed 4、槽消费。
 		evidence = reviewEvidenceAt(review.ProductReview, replacement, snap.State.RequirementRevision(), "PASS", "replacement on its inherited slot", nil)
 		evidence.AuthorizationID = auth2
-		submitReviewResult(t, engine, "result-inherit-r5", replacement, evidence)
+		submitVerifiedReviewResult(t, engine, "result-inherit-r5", replacement, evidence)
 		series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 		if series.Completed != 4 || series.ExtraConsumed != 1 {
 			t.Fatalf("final series = %+v", series)
@@ -218,7 +218,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		if review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, replacement) != "" {
 			t.Fatalf("the replacement of an unbound dispatch must stay unbound: %+v", snap.State.ReviewSeries.ProductReview.Authorizations)
 		}
-		submitReviewResult(t, engine, "result-inherit-unbound", replacement, blockingReviewEvidence(review.ProductReview, replacement, "replacement records under automatic capacity"))
+		submitVerifiedReviewResult(t, engine, "result-inherit-unbound", replacement, blockingReviewEvidence(review.ProductReview, replacement, "replacement records under automatic capacity"))
 		if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 1 || series.ExtraConsumed != 0 {
 			t.Fatalf("the unbound replacement must record as an automatic round: %+v", series)
 		}
@@ -270,7 +270,7 @@ func TestLoadRejectsDispatchBoundToTwoAuthorizationSlots(t *testing.T) {
 	auth1 := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview.Authorizations[0].ID
 	evidence := reviewEvidenceAt(review.ProductReview, fourth, engine.LoadMustSucceed(t).State.RequirementRevision(), "PASS", "authorized review", nil)
 	evidence.AuthorizationID = auth1
-	submitReviewResult(t, engine, "result-dual-r4", fourth, evidence)
+	submitVerifiedReviewResult(t, engine, "result-dual-r4", fourth, evidence)
 	redoProductReview(t, engine, "dual-fifth")
 	askAndDecide(t, engine, ControlReviewRoundGrant, "req-dual-grant-2", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "the fifth round needs endorsement",
@@ -318,7 +318,7 @@ func TestInvalidationRecoveryReusesAuthorizationWithoutConcurrentReviews(t *test
 		snap := engine.LoadMustSucceed(t)
 		evidence := reviewEvidenceAt(review.ProductReview, action, snap.State.RequirementRevision(), "PASS", "authorized review", nil)
 		evidence.AuthorizationID = review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, action)
-		submitReviewResult(t, engine, "exclusive-result-"+name, action, evidence)
+		submitVerifiedReviewResult(t, engine, "exclusive-result-"+name, action, evidence)
 		rounds = append(rounds, action)
 	}
 	invalidateRoundOf(t, engine, "exclusive-invalidate-earlier", rounds[0])
@@ -339,7 +339,7 @@ func TestInvalidationRecoveryReusesAuthorizationWithoutConcurrentReviews(t *test
 	assertSeriesCommitmentHeld(t, engine)
 	evidence := reviewEvidenceAt(review.ProductReview, inFlight, snap.State.RequirementRevision(), "PASS", "review on the released slot", nil)
 	evidence.AuthorizationID = firstAuthorization
-	submitReviewResult(t, engine, "exclusive-reused-result", inFlight, evidence)
+	submitVerifiedReviewResult(t, engine, "exclusive-reused-result", inFlight, evidence)
 	redoProductReview(t, engine, "exclusive-reuse-next")
 	next := pendingActionID(t, engine)
 	snap = engine.LoadMustSucceed(t)
@@ -348,7 +348,7 @@ func TestInvalidationRecoveryReusesAuthorizationWithoutConcurrentReviews(t *test
 	}
 	evidence = reviewEvidenceAt(review.ProductReview, next, snap.State.RequirementRevision(), "PASS", "review on the other released slot", nil)
 	evidence.AuthorizationID = secondAuthorization
-	submitReviewResult(t, engine, "exclusive-next-result", next, evidence)
+	submitVerifiedReviewResult(t, engine, "exclusive-next-result", next, evidence)
 	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 	if series.Completed != 5 || series.ExtraConsumed != 2 {
 		t.Fatalf("both reused authorizations must remain backed by distinct results: %+v", series)

@@ -16,14 +16,14 @@ import (
 func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.HostActionIntent) {
 	t.Helper()
 	d := newValidationDriver(t, "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v5")
+	dev, di := d.action("engine.development.batch.v6")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	if stage != "DEVELOPMENT" {
 		d.materialize()
 	}
 	if stage != "DEVELOPMENT" && stage != "AUTHORING" {
 		d.materialize()
-		id, in := d.action("engine.qa.design.v5")
+		id, in := d.action("engine.qa.design.v6")
 		m := in.Manifest
 		m.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "valid accepted"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "invalid rejected"}}
 		for _, c := range m.Cases {
@@ -336,12 +336,12 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 		for _, firstWorker := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/worker-first=%t", held, firstWorker), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.development.batch.v5")
+				id, input := d.action("engine.development.batch.v6")
 				key := input.Binding.Task
 				if firstWorker {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-environment-unavailable"}})
-					id, input = d.action("engine.development.batch.v5")
+					id, input = d.action("engine.development.batch.v6")
 					if input.Binding.Task != key {
 						t.Fatal("worker retry replaced logical task")
 					}
@@ -396,7 +396,7 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 				}
 				ask := d.validationAsk("RETRY")
 				decideValidation(d, ask, "approve")
-				next, ni := d.action("engine.development.batch.v5")
+				next, ni := d.action("engine.development.batch.v6")
 				if next == id || ni.Binding.Task != key {
 					t.Fatal("extra execution did not retain original task")
 				}
@@ -475,7 +475,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 				if raw := snap.State.HostActionReceipts[intent.ActionID]; raw.Step != intent.Step || raw.PayloadDigest != intent.PayloadDigest || raw.AdapterEvidence.Values["identity"] != event.HostAction.AdapterEvidence.Values["identity"] {
 					t.Fatal("completion evidence changed")
 				}
-				expected := map[string]string{"AUTHORING": "engine.qa.design.v5", "QA_ARTIFACT": "engine.qa.review.rationale.v2", "REVIEW_READY": "engine.qa.execution.v3"}[stage]
+				expected := map[string]string{"AUTHORING": "engine.qa.design.v6", "QA_ARTIFACT": "engine.qa.review.rationale.v2", "REVIEW_READY": "engine.qa.execution.v4"}[stage]
 				if stage == "DEVELOPMENT" {
 					d.drive()
 					onlyCandidate(t, d, "AUTHORING")
@@ -521,7 +521,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 
 func TestSpawnTransportRetryKeepsSpentSlotAfterSuccess(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.development.batch.v5")
+	id, input := d.action("engine.development.batch.v6")
 	failed, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), id, d.host(), "failed-transport", protocol.SpawnStatusFailed, authoring.FailureTransientEngine)
 	if err != nil {
 		t.Fatal(err)

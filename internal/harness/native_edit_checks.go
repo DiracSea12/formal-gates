@@ -14,18 +14,32 @@ import (
 	"formal-gates/internal/engine/worker"
 )
 
-func materialEditChecks(material *worker.Material) []protocol.DevelopmentCheck {
+func materialEditChecks(material *worker.Material) ([]protocol.DevelopmentCheck, error) {
 	if material == nil {
-		return nil
+		return nil, nil
 	}
 	input := material.Input
-	if input.Handler != "engine.development.batch.v5" && input.Handler != "engine.repair.v6" {
-		return nil
+	if input.Handler != "engine.development.batch.v6" && input.Handler != "engine.repair.v7" {
+		return nil, nil
 	}
 	var checks []protocol.DevelopmentCheck
 	if input.Validation != nil && input.Validation.Development != nil {
 		checks = input.Validation.Development.Batch.Checks
-	} else if input.Handler == "engine.repair.v6" {
+		for _, check := range checks {
+			if check.Purpose == protocol.CheckEdit && check.Command == "" {
+				var commands []string
+				if result := input.Validation.Development.Result; result != nil {
+					commands = result.Validation.Development.Commands
+				}
+				var err error
+				checks, err = protocol.BindDevelopmentChecks(input.Validation.Development.Batch, commands)
+				if err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
+	} else if input.Handler == "engine.repair.v7" {
 		checks = input.ApprovedChecks
 	}
 	var edits []protocol.DevelopmentCheck
@@ -34,13 +48,17 @@ func materialEditChecks(material *worker.Material) []protocol.DevelopmentCheck {
 			edits = append(edits, check)
 		}
 	}
-	return edits
+	return edits, nil
 }
 
 // edit records the original authorized mutation before its local write. Its
 // unfinished deterministic checks remain discoverable in the original job.
 func (t *nativeWorkspaceTools) edit(raw json.RawMessage, mutate func() (any, error)) (any, error) {
-	if len(materialEditChecks(t.material)) == 0 {
+	declared, err := materialEditChecks(t.material)
+	if err != nil {
+		return nil, err
+	}
+	if len(declared) == 0 {
 		return mutate()
 	}
 	number, err := t.publish(nativeToolFact{Kind: "edit", Content: raw})
@@ -86,7 +104,8 @@ func editFactChecks(fact nativeToolFact) ([]protocol.DevelopmentCheck, map[strin
 	if err := json.Unmarshal(body, &material); err != nil {
 		return nil, nil, err
 	}
-	return materialEditChecks(&material), objectOrEmpty(request), nil
+	checks, err := materialEditChecks(&material)
+	return checks, objectOrEmpty(request), err
 }
 
 func editCheckRequest(fact nativeToolFact, check protocol.DevelopmentCheck, original map[string]any) (map[string]any, error) {

@@ -9,16 +9,15 @@ import (
 	"reflect"
 	"testing"
 
-	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
 
-// A confirmed requirement and its observed document jointly qualify child work;
-// accepted physical identity and carried gate evidence survive the waiting window.
-func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
+// Complete confirmation preserves carried child evidence across recovery;
+// a pending parent review still prevents delivery.
+func TestChildConfirmedParentDocumentPreservesRecoveryAndReviewBoundary(t *testing.T) {
 	for _, reviewPending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("parent-review-pending-%t", reviewPending), func(t *testing.T) {
 			master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
@@ -34,7 +33,11 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 					children[i].ReceiptDisposition, children[i].CandidateDisposition = protocol.RequirementWorkRedo, protocol.RequirementWorkRedo
 				}
 			}
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:confirmed-document", ImpactDigest: "sha256:current-child-material", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: reviewPending, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"confirmed document"}, TransitiveImpacts: []string{"current child candidate and receipt"}, CarryReasons: []string{"unchanged child development and gate inputs"}}}
+			intake, err := prepareConfirmedIntake(master.f.root, master.run.IntakeConfirmationReceipt, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:confirmed-document", ImpactDigest: "sha256:current-child-material", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: reviewPending, Children: children, Impact: &protocol.RequirementImpact{ChangedItems: []string{"confirmed document"}, TransitiveImpacts: []string{"current child candidate and receipt"}, CarryReasons: []string{"unchanged child development and gate inputs"}}}
 			for _, work := range master.run.RequirementWork {
 				pkg.WorkDecisions = append(pkg.WorkDecisions, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "unchanged master inputs"})
 			}
@@ -44,20 +47,23 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 			}
 			master.submit(request)
 			ask := master.run.PendingRequirementAsk
-			master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, RedoStartReadiness: reviewPending, Reason: "redo current child material and carry the unchanged gate inputs"}}})
+			master.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: pkg.WorkDecisions, Children: children, Impact: pkg.Impact, RedoStartReadiness: reviewPending, Reason: "redo current child material and carry the unchanged gate inputs"}}}.WithRequirementDocument(document))
 			for range 2 {
 				child.reopen()
 				child.drive()
-				waiting := driverState(t, child)
-				if child.run.Next.Kind != decision.KindOperator && child.run.Next.Kind != decision.KindWait || waiting.FinalValidationComplete(child.f.definition) || waiting.DeliveryComplete(child.f.definition) || waiting.SliceReceipt != nil || waiting.RequirementRevision() != revision || waiting.Validation.RequirementRevision == revision {
-					t.Fatal("child crossed the unobserved current document boundary")
+				current := driverState(t, child)
+				if current.RequirementRevision() != revision || current.Validation.RequirementRevision != revision || current.Validation.Document.Content != document {
+					t.Fatal("recovery lost the complete confirmed parent document")
 				}
-				if waiting.AcceptedNativeSnapshot() != physical.AcceptedNativeSnapshot() || !reflect.DeepEqual(waiting.CandidatePromotion, physical.CandidatePromotion) || waiting.SliceChild.RequirementRevision != physical.SliceChild.RequirementRevision || !reflect.DeepEqual(waiting.IntakeConfirmationReceipt, physical.IntakeConfirmationReceipt) {
-					t.Fatal("waiting changed accepted physical identity or child origin")
+				if current.SliceChild.RequirementRevision != physical.SliceChild.RequirementRevision || !reflect.DeepEqual(current.IntakeConfirmationReceipt, physical.IntakeConfirmationReceipt) || !reflect.DeepEqual(current.SpawnReceipts, physical.SpawnReceipts) || !reflect.DeepEqual(current.Results, physical.Results) {
+					t.Fatal("confirmation and recovery changed child origin or carried execution facts")
+				}
+				if reviewPending && (current.FinalValidationComplete(child.f.definition) || current.DeliveryComplete(child.f.definition) || current.SliceReceipt != nil || current.AcceptedNativeSnapshot() != physical.AcceptedNativeSnapshot() || !reflect.DeepEqual(current.CandidatePromotion, physical.CandidatePromotion)) {
+					t.Fatal("child crossed its actual pending parent review boundary")
 				}
 			}
-			master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			if reviewPending {
+				master.drive()
 				child.reopen()
 				child.drive()
 				if !driverState(t, child).SliceChild.ParentReviewPending || child.run.Status == string(runtime.PhaseSliceReady) {
@@ -76,11 +82,18 @@ func TestChildWaitsForCurrentParentDocumentAcrossRecovery(t *testing.T) {
 					t.Fatal("missing current start-readiness dispatch")
 				}
 				master.receipt(id)
-				result, err := protocol.NewReviewWorkerResultEvent(master.eventID(), id, master.host(), string(master.eventID()), protocol.ReviewResultEvidence{GranularityReview: commandPlan(), Action: review.StartReadiness, DispatchID: id, RequirementRevision: revision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"}})
+				input, issued := driverState(t, master).WorkerInput(id, master.f.definition)
+				if !issued {
+					t.Fatal("parent review lacks its current signed input")
+				}
+				plan := splitCommandPlan()
+				fixturePlanRequirements(plan, input.RequirementPoints)
+				result, err := protocol.NewReviewWorkerResultEvent(master.eventID(), id, master.host(), string(master.eventID()), protocol.ReviewResultEvidence{GranularityReview: plan, Action: review.StartReadiness, DispatchID: id, RequirementRevision: revision, Status: "PASS", Findings: []review.Finding{}})
 				if err != nil {
 					t.Fatal(err)
 				}
 				master.submit(result)
+				verifyReviewFixture(t, master, result)
 				master.drive()
 			}
 			child.reopen()

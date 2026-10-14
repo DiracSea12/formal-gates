@@ -34,7 +34,7 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 	if product.ReviewSeries != review.ProductReview {
 		t.Fatalf("product review dispatch series = %q, want %s", product.ReviewSeries, review.ProductReview)
 	}
-	submitReviewResult(t, engine, "canonical-product-1", actions[0],
+	submitVerifiedReviewResult(t, engine, "canonical-product-1", actions[0],
 		plannedReviewEvidence(review.ProductReview, "canonical-product-1", "", "PASS", "clean", nil))
 	snap := engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || series.Effective.Status != "PASS" {
@@ -54,7 +54,7 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 	if readiness.Step != "review.readiness" || readiness.ReviewSeries != review.StartReadiness {
 		t.Fatalf("canonical readiness dispatch = %+v", readiness)
 	}
-	submitReviewResult(t, engine, "canonical-readiness-1", readinessAction,
+	submitVerifiedReviewResult(t, engine, "canonical-readiness-1", readinessAction,
 		plannedReviewEvidence(review.StartReadiness, "canonical-readiness-1", "", "PASS", "ready to start", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" {
@@ -123,7 +123,7 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 func TestCanonicalProductFailAwaitsDisposition(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "canonical-fail", product,
+	submitVerifiedReviewResult(t, engine, "canonical-fail", product,
 		plannedReviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
 			{Severity: "P1", Message: "core acceptance blocked"},
 		}))
@@ -171,7 +171,7 @@ func redoProductReview(t *testing.T, engine *Engine, requestID string) {
 func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "canonical-confirm-fail", product,
+	submitVerifiedReviewResult(t, engine, "canonical-confirm-fail", product,
 		plannedReviewEvidence(review.ProductReview, product, "", "FAIL", "blocked", []review.Finding{
 			{Severity: "P1", Message: "core acceptance blocked"},
 		}))
@@ -193,7 +193,7 @@ func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
 	}
 	assertReviewIssuanceHeld(t, engine)
 	revision := engine.LoadMustSucceed(t).State.RequirementRevision()
-	submitReviewResult(t, engine, "canonical-revised-pass", fresh,
+	submitVerifiedReviewResult(t, engine, "canonical-revised-pass", fresh,
 		reviewEvidenceAt(review.ProductReview, fresh, revision, "PASS", "revised requirement is complete", nil))
 	pendingActionByStep(t, engine, "review.readiness")
 }
@@ -206,7 +206,7 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	for round := 1; round <= 3; round++ {
 		name := "canonical-exhaust-" + string(rune('0'+round))
 		revision := engine.LoadMustSucceed(t).State.RequirementRevision()
-		submitReviewResult(t, engine, name, action,
+		submitVerifiedReviewResult(t, engine, name, action,
 			reviewEvidenceAt(review.ProductReview, action, revision, "FAIL", "blocked", []review.Finding{
 				{Severity: "P1", Message: "acceptance needs a requirement correction"},
 			}))
@@ -234,7 +234,7 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	}
 	evidence := reviewEvidenceAt(review.ProductReview, fourth, snap.State.RequirementRevision(), "PASS", "corrected requirement", nil)
 	evidence.AuthorizationID = series.Authorizations[0].ID
-	submitReviewResult(t, engine, "canonical-pass-fourth", fourth, evidence)
+	submitVerifiedReviewResult(t, engine, "canonical-pass-fourth", fourth, evidence)
 	series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 	if series.Completed != 4 || series.ExtraConsumed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("fourth round result = %+v", series)
@@ -251,9 +251,9 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "canonical-redo-product-1", product,
+	submitVerifiedReviewResult(t, engine, "canonical-redo-product-1", product,
 		plannedReviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
-	submitReviewResult(t, engine, "canonical-redo-ready-1", pendingActionByStep(t, engine, "review.readiness"),
+	submitVerifiedReviewResult(t, engine, "canonical-redo-ready-1", pendingActionByStep(t, engine, "review.readiness"),
 		plannedReviewEvidence(review.StartReadiness, pendingActionByStep(t, engine, "review.readiness"), "", "PASS", "ready", nil))
 	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-1", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "single lane",
@@ -293,14 +293,14 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	// 新鲜轮由账本提案在自动容量内签发：产品审先行（start-readiness 的顺
 	// 序门在签发侧把技术审新鲜轮扣住）。
 	freshProduct := pendingActionByStep(t, engine, "review.worker")
-	submitReviewResult(t, engine, "canonical-redo-product-2", freshProduct,
+	submitVerifiedReviewResult(t, engine, "canonical-redo-product-2", freshProduct,
 		reviewEvidenceAt(review.ProductReview, freshProduct, "rev-2", "PASS", "fresh round clean", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.FreshOwed {
 		t.Fatalf("the fresh product round must discharge the obligation: %+v", series)
 	}
 	freshReadiness := pendingActionByStep(t, engine, "review.readiness")
-	submitReviewResult(t, engine, "canonical-redo-ready-2", freshReadiness,
+	submitVerifiedReviewResult(t, engine, "canonical-redo-ready-2", freshReadiness,
 		plannedReviewEvidenceAt(review.StartReadiness, freshReadiness, "rev-2", "PASS", "fresh round ready", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.FreshOwed {
@@ -330,10 +330,10 @@ func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "canonical-void-product-1", product,
+	submitVerifiedReviewResult(t, engine, "canonical-void-product-1", product,
 		plannedReviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
 	readiness := pendingActionByStep(t, engine, "review.readiness")
-	submitReviewResult(t, engine, "canonical-void-ready-1", readiness,
+	submitVerifiedReviewResult(t, engine, "canonical-void-ready-1", readiness,
 		plannedReviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
 	snap := engine.LoadMustSucceed(t)
 	if snap.State.Phase != runtime.PhaseTopologyAndRoute {
@@ -359,7 +359,7 @@ func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
 	// 重新 PASS：上游失效解除、携结论重投影——载体步本就保持完成（闩单
 	// 调），技术审载体不被重新派发（携结论续用，不产生第二条技术审派发）。
 	second := pendingActionByStep(t, engine, "review.worker")
-	submitReviewResult(t, engine, "canonical-void-product-2", second,
+	submitVerifiedReviewResult(t, engine, "canonical-void-product-2", second,
 		plannedReviewEvidence(review.ProductReview, second, "", "PASS", "clean again", nil))
 	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.UpstreamVoid || series.Effective.Status != "PASS" || series.Completed != 1 {

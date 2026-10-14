@@ -1,12 +1,36 @@
 package protocol
 
 import (
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/requirement"
 )
+
+func TestPendingGateImpactCannotInheritBeforeItsJudgment(t *testing.T) {
+	cd := compiledCanonicalWorkflow(t)
+	s := pointResponsibilityState()
+	oldTask := pipelineTask(cd, "engine.gate.v3", "original:quality")
+	newTask := pipelineTask(cd, "engine.gate.v3", "current:quality")
+	original := &ValidationTarget{Task: oldTask, Kind: "GATE", Gate: "quality", Status: "PASS", ResultAction: "original-result"}
+	pending := &ValidationTarget{Task: newTask, Kind: "GATE", Gate: "quality", Status: "PENDING", GateImpact: &GateImpact{SourceWave: "original"}}
+	candidate := coverage.ValidationCandidate{Identity: "candidate", Digest: "candidate-tree"}
+	s.Validation.Waves = []ValidationWave{
+		{ID: "original", Candidate: candidate, Targets: map[string]*ValidationTarget{oldTask.String(): original}, Status: "COMPLETE"},
+		{ID: "current", Candidate: candidate, Targets: map[string]*ValidationTarget{newTask.String(): pending}, Status: "COLLECTING", Generation: 1},
+	}
+	s.RequirementRevisions = []ConfirmedRevision{{StateRevision: 1, WorkDecisions: []RequirementWorkDecision{{Work: RequirementWork{ActionID: original.ResultAction, Task: oldTask}, Disposition: RequirementWorkCarry, Reason: "The completed responsibility carries"}}}}
+	wave, target := s.targetResponsibility(&s.Validation.Waves[1], pending)
+	if wave.ID != "original" || target != original {
+		t.Fatal("pending impact lost its original responsibility")
+	}
+	before := *pending
+	if s.carryRequirementTargets(&s.Validation.Waves[1]) || !reflect.DeepEqual(*pending, before) {
+		t.Fatal("requirement carry discharged a gate before its impact judgment")
+	}
+}
 
 func TestRerunGateResponsibilityUsesTheAcceptedResult(t *testing.T) {
 	cd := compiledCanonicalWorkflow(t)
@@ -43,7 +67,7 @@ func TestCompletedRepairMemberRetainsTheWholeGateResponsibility(t *testing.T) {
 	s := pointResponsibilityState()
 	s.Validation.Generation, s.Validation.RequirementRevision = 1, "confirmed"
 	s.RouteMode, s.SelectedGates = "full", []string{"quality"}
-	root := pipelineTask(cd, "engine.repair.v6", "original")
+	root := pipelineTask(cd, "engine.repair.v7", "original")
 	gateTask := pipelineTask(cd, "engine.gate.v3", "original:quality")
 	original := &ValidationTarget{Task: gateTask, Kind: "GATE", Gate: "quality", Status: "FAIL", ResultAction: "gate-result"}
 	s.Validation.Waves = []ValidationWave{{ID: "original", Generation: 1, RequirementRevision: "confirmed", Status: "REPAIR", Candidate: coverage.ValidationCandidate{Identity: "original"}, Targets: map[string]*ValidationTarget{gateTask.String(): original}, Repair: &ValidationRepair{Task: root, PureP2: true}}}

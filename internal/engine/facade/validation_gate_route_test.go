@@ -31,7 +31,7 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 				t.Fatalf("confirmed route = %s %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
 			}
 			d.drive()
-			id, in := d.action("engine.development.batch.v5")
+			id, in := d.action("engine.development.batch.v6")
 			author := filepath.Join(t.TempDir(), "author")
 			if err := d.git.AddWorktree(author, driverState(t, d).InitialSnapshot); err != nil {
 				t.Fatal(err)

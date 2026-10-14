@@ -111,7 +111,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			break
 		}
 	}
-	if role == "engine.qa.design.v5" && mode == coverage.ReviewWhitebox {
+	if role == "engine.qa.design.v6" && mode == coverage.ReviewWhitebox {
 		input.ReviewBase = s.Validation.DevelopmentSnapshot
 	}
 	if role == "engine.qa.review.rationale.v2" && mode == coverage.ReviewWhitebox {
@@ -151,13 +151,13 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	if role == "engine.gate.v3" {
 		input.Gate = s.gateInput(binding, pending.Task)
 	}
-	if role == "engine.development.batch.v5" {
+	if role == "engine.development.batch.v6" {
 		input.Development = s.developmentInput(pending.Task, cd)
 	}
 	c := s.coverageContract(s.Validation.Candidate)
 	switch role {
-	case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
-		source, current := s.issuedPrewaveSources(binding, cd)
+	case "engine.qa.design.v6", "engine.qa.review.rationale.v2":
+		source, current := s.issuedPrewaveSources(binding)
 		if !current {
 			return input
 		}
@@ -171,7 +171,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Repair = s.repairComparisonInput(context)
 			input.ExecutionFacts = s.repairComparisonFacts(context, cd)
 		}
-	case "engine.repair.v6":
+	case "engine.repair.v7":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)
 		if work := s.repairMember(pending.Task); work != nil {
@@ -188,7 +188,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	input.Manifest.Points, _ = s.coveragePoints()
 	if set := s.Validation.Sets[mode]; set != nil {
 		input.Manifest = set.Manifest
-		if (role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2") && len(set.AffectedCases) > 0 {
+		if (role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2") && len(set.AffectedCases) > 0 {
 			input.AffectedCases = slices.Clone(set.AffectedCases)
 			if s.prewaveDispatchCurrent(pending.ActionID, cd) {
 				input.RevisionInstruction = s.qaRevisionInstruction(mode, binding)
@@ -211,7 +211,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		input.InheritableReviews = s.inheritableReviews(set)
 		input.InheritableSharedReviews = s.inheritableSharedReviews(set)
 	}
-	if role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2" {
+	if role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2" {
 		input.Manifest.Binding.SourceBinding = c.RequiredSources.Binding
 		if binding.RouteScope != "" {
 			input.Manifest = manifestAtRoute(input.Manifest, binding.RouteScope)
@@ -223,7 +223,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			}
 		}
 	}
-	if role == "engine.qa.execution.v3" {
+	if role == "engine.qa.execution.v4" {
 		wave := s.validationWave(binding.WaveID)
 		if wave == nil {
 			return input

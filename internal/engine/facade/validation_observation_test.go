@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,7 +14,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 	for _, decision := range []string{"ACCEPT", "DEFER"} {
 		t.Run(decision, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design.v5")
+			id, in := d.action("engine.qa.design.v6")
 			m := simpleManifest(in)
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			d.drive()
@@ -56,7 +58,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 				if next.Status != "DRAFT" || next.Review != nil {
 					t.Fatalf("affected suggestion did not reopen after barrier %+v", next)
 				}
-				id, in = d.action("engine.qa.design.v5")
+				id, in = d.action("engine.qa.design.v6")
 				m = in.Manifest
 				m.Cases[0].Preconditions += "; use an empty directory"
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
@@ -100,7 +102,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 			t.Fatal("adjudication fact was lost or duplicated")
 		}
 		for _, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.repair.v6" {
+			if input.Handler == "engine.repair.v7" {
 				t.Fatal("requirement barrier issued repair")
 			}
 		}
@@ -115,7 +117,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 	}
 	count := 0
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v6" {
+		if input.Handler == "engine.repair.v7" {
 			count++
 		}
 	}
@@ -132,7 +134,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 
 func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.qa.design.v5")
+	id, input := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(input)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -145,28 +147,28 @@ func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
 	for _, item := range d.run.RequirementWork {
 		work = append(work, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "same execution obligations"})
 	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:editorial", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: work}
+	receipt := driverState(t, d).CurrentIntakeConfirmation()
+	if err := os.WriteFile(filepath.Join(d.f.root, receipt.RequirementSource), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	intake, err := prepareConfirmedIntake(d.f.root, receipt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:editorial", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: work}
 	request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(request)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: d.revision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: work, Reason: "confirmed editorial change"}}})
-	barrier, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise requirement"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.submit(barrier)
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 	d.reopen()
 	d.drive()
 	held := d.run.Validation.Sets[coverage.ReviewBlackbox]
 	if held.Status != "FROZEN" || held.Manifest.Binding.RequirementRevision != d.revision || held.Review.Binding.RequirementRevision != d.revision {
 		t.Fatal("inventory observation rebound cases during barrier")
 	}
-	ask = d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "abort"}})
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: d.revision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: work, Reason: "confirmed editorial change"}}}.WithRequirementDocument(document))
 	d.reopen()
 	d.drive()
 	carried := d.run.Validation.Sets[coverage.ReviewBlackbox]
@@ -225,7 +227,7 @@ func TestRequirementRedoDiscardsPendingWaveSettlement(t *testing.T) {
 		t.Fatal("requirement redo erased original observation evidence")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v6" {
+		if input.Handler == "engine.repair.v7" {
 			t.Fatal("held finding issued repair after its gate was redone")
 		}
 	}

@@ -253,10 +253,10 @@ func TestMissingVerificationCallsRequireBoundActualReceipts(t *testing.T) {
 	if s.developmentResult(task) != nil {
 		t.Fatal("missing calls completed development")
 	}
-	if _, err := bindDevelopmentChecks(batch, nil); err == nil {
+	if _, err := BindDevelopmentChecks(batch, nil); err == nil {
 		t.Fatal("missing calls counted as skipped checks")
 	}
-	if _, err := bindDevelopmentChecks(batch, []string{"one"}); err == nil {
+	if _, err := BindDevelopmentChecks(batch, []string{"one"}); err == nil {
 		t.Fatal("partial binding accepted")
 	}
 	source.Validation.Development.Commands = []string{"build-project", "tests-project"}

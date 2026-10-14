@@ -24,7 +24,7 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	return key
 }
 func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave, cd *compiler.CompiledDefinition) runtime.TaskKey {
-	if s.validationRole(key, cd) == "engine.development.batch.v5" {
+	if s.validationRole(key, cd) == "engine.development.batch.v6" {
 		return key
 	}
 	for action, pending := range s.PendingActions {
@@ -108,10 +108,10 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development.batch.v5", "engine.repair.v6":
+		case "engine.development.batch.v6", "engine.repair.v7":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
-		case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
+		case "engine.qa.design.v6", "engine.qa.review.rationale.v2":
 			if set := v.Sets[s.validationMode(key)]; set != nil {
 				var affected []string
 				for _, c := range set.Manifest.Cases {
@@ -229,6 +229,9 @@ func (s *State) carryRequirementTargets(current *ValidationWave) bool {
 	changed := false
 	for _, target := range current.Targets {
 		if target.Status != "PENDING" && target.Status != "RUNTIME_ERROR" && target.Status != "RETRY_EXHAUSTED" {
+			continue
+		}
+		if target.GateImpact != nil && target.GateImpact.Decision == "" {
 			continue
 		}
 		prior, previous := s.targetResponsibility(current, target)

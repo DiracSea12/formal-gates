@@ -2,18 +2,119 @@ package facade
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
 
+func TestEmptyWhiteboxPathsDoNotRepeatPromotionAfterRecovery(t *testing.T) {
+	d := newValidationDriver(t, "whitebox", "quality")
+	d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 0}, "invalid": {ExitCode: 2}}
+	dev, input := d.action("engine.development.batch.v6")
+	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input validation"}})
+	d.materialize()
+	d.materialize()
+	design, input := d.action("engine.qa.design.v6")
+	manifest := simpleManifest(input)
+	for i := range manifest.Cases {
+		manifest.Cases[i].Mode = coverage.CaseWhitebox
+		manifest.Cases[i].PublicEntry, manifest.Cases[i].Preconditions, manifest.Cases[i].Steps = "", "", ""
+	}
+	d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{}}})
+	d.reopen()
+	state := driverState(t, d)
+	if state.Validation.Sets[coverage.ReviewWhitebox] == nil || state.Results[design].Validation == nil || state.Results[design].Validation.Development == nil {
+		t.Fatalf("empty-path whitebox design was not accepted: %+v", state.RejectedResults)
+	}
+	if state.Validation.Sets[coverage.ReviewWhitebox].Paths != nil || state.Results[design].Validation.Development.Paths == nil {
+		t.Fatal("recovery did not retain the original empty-path protocol while reloading the case set")
+	}
+	if len(state.PendingHostActions) != 1 {
+		t.Fatalf("empty-path reload left an unused workspace responsibility: %+v", state.PendingHostActions)
+	}
+	artifact := onlyCandidate(t, d, "QA_ARTIFACT")
+	completion := candidateCompletion(t, d, artifact)
+	d.submit(completion)
+	d.reopen()
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(completion)
+	after, err := d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("repeated artifact acceptance changed its original evidence or responsibility")
+	}
+	review, input := d.action("engine.qa.review.rationale.v2")
+	approved := approvedReview(input.Manifest)
+	d.business(review, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &approved})
+	d.materialize()
+	qa, input := d.action("engine.qa.execution.v4")
+	report := executionFor(input)
+	d.business(qa, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report}))
+	gate, input := d.action("engine.gate.v3")
+	d.business(gate, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+	state = driverState(t, d)
+	if !state.FinalValidationComplete(d.f.definition) || len(state.PendingHostActions) != 0 {
+		t.Fatal("completed empty-path validation retained native debt")
+	}
+	source := *state.Validation.Candidate
+	params := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: state.BaseSnapshot, TargetStart: protocol.PromotionObservation{Head: state.BaseSnapshot, Tree: frozenTree, IndexTree: frozenTree, Clean: true}, Message: "validated delivery"}
+	for id, resource := range state.NativeResources {
+		if resource.Role == "candidate" && resource.Identity == source.Identity && resource.Status == "READY" {
+			params.SourceWorkspace = id
+		}
+	}
+	if err := d.f.engine.OpenPromotion(params, protocol.Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	intent, pending := driverState(t, d).PromotionIntent()
+	if !pending {
+		t.Fatal("completed validation did not sign its promotion")
+	}
+	if _, err := d.frozen.Run(d.f.root, "git", "merge", "--ff-only", source.Identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.git.SquashToBase(params.TargetBase, params.Message); err != nil {
+		t.Fatal(err)
+	}
+	final, err := d.git.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalDigest, err := d.git.TreeDigest(final)
+	if err != nil || finalDigest != source.Digest {
+		t.Fatal("native promotion did not preserve its verified source tree")
+	}
+	proof := protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: "git", SourceWorkspace: params.SourceWorkspace, Source: source.Identity, SourceDigest: source.Digest, TargetRoot: params.TargetRoot, TargetBase: params.TargetBase, TargetStart: params.TargetStart, Final: final, FinalDigest: finalDigest}
+	if err := d.f.engine.RecordCandidatePromotion(intent.ActionID, proof, protocol.Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	d.reopen()
+	before, err = d.f.engine.Load()
+	if err != nil || !before.State.DeliveryComplete(d.f.definition) {
+		t.Fatal("recovered promotion lost completed delivery qualification")
+	}
+	if err := d.f.engine.RecordCandidatePromotion(intent.ActionID, proof, protocol.Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	if repeated, err := d.f.PrepareCandidate(""); err != nil || repeated != final {
+		t.Fatalf("completed promotion repeated its native effect: %s %v", repeated, err)
+	}
+	after, err = d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("recovery or repeated promotion changed the accepted receipt or signed another action")
+	}
+}
+
 // Completion reconciles approved cases, original evidence and current sources;
 // the wave's COMPLETE label alone cannot authorize native delivery.
 func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
 	d := repairedExecutionDriver(t)
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
-	action, input := d.action("engine.qa.execution.v3")
+	action, input := d.action("engine.qa.execution.v4")
 	report := executionFor(input)
 	d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report}))
 	d.assertRequiredValidationComplete(coverage.ScopeAffected)

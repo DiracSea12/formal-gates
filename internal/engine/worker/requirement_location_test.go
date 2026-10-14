@@ -12,7 +12,7 @@ import (
 )
 
 func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.gate.v3", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.review.worker.v3", "engine.readiness.plan.v6", "engine.gate.v3", "engine.qa.execution.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -20,10 +20,10 @@ func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing
 			input.RequirementDocument.Content = "# Frozen requirement\r\nRequired behavior.  \r\n"
 			finding := Finding{Severity: "P3", Message: "The frozen requirement needs clarification", Locations: []Location{{Read: 1, Line: 2}, {Read: 1}, {RequirementLine: 2}}}
 			var body any = Gate{Findings: []Finding{finding}}
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v5" {
+			if handler == "engine.review.worker.v3" || handler == "engine.readiness.plan.v6" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-				if handler == "engine.readiness.plan.v5" {
+				if handler == "engine.readiness.plan.v6" {
 					input.Review.Action = review.StartReadiness
 					for _, category := range review.TechnicalCategories() {
 						if review.ValidateFindingClassification(review.StartReadiness, category, "P3") == nil {
@@ -32,12 +32,9 @@ func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing
 						}
 					}
 				}
-				result := Review{Findings: []Finding{finding}, Verification: []string{}}
-				for range review.RequiredVerificationChecks() {
-					result.Verification = append(result.Verification, "The original frozen text was checked")
-				}
+				result := Review{Findings: []Finding{finding}}
 				body = result
-			} else if handler == "engine.qa.execution.v3" {
+			} else if handler == "engine.qa.execution.v4" {
 				input.Validation.Execution = &coverage.ExecutionBinding{Candidate: coverage.ValidationCandidate{Identity: "original-candidate"}, Scope: coverage.ScopeFull}
 				input.Validation.Whitelist = &coverage.ApprovedWhitelist{}
 				body = ExecutionJudgments{Execution: Execution{Records: []*Observation{}}, Findings: []Finding{finding}}
@@ -78,7 +75,7 @@ func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing
 			if _, err := DecodeResultWithFacts(input, "mismatched", raw, "original-output", nil, mismatched); err == nil {
 				t.Fatal("assembler accepted a different frozen revision")
 			}
-			if handler == "engine.qa.execution.v3" {
+			if handler == "engine.qa.execution.v4" {
 				partial, _ := json.Marshal(ExecutionInterruption{InterruptionReason: "The remaining approved fixture is unavailable", Records: []*Observation{}, Findings: []Finding{finding}})
 				if err := ValidateSemanticBody(input, partial, facts); err != nil {
 					t.Fatal("partial execution lost original finding location", err)
@@ -114,15 +111,12 @@ func TestRequirementReadNeverSelectsPhysicalDeliveryIdentity(t *testing.T) {
 
 func TestConfirmedMaterialReadsKeepSemanticAndPhysicalAuthoritySeparate(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.review.worker.v2"
+	input.Handler = "engine.review.worker.v3"
 	input.Validation = nil
 	input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
 	input.Materials = []protocol.IntakeMaterial{{Path: "design.md", Content: "# Plan\nUse original command.\n", Revision: "original-plan"}}
 	facts := []LocationFact{{Kind: "material", Paths: []string{"design.md"}, Content: []byte(input.Materials[0].Content)}}
 	body := Review{Findings: []Finding{{Severity: "P3", Message: "The confirmed plan needs clarification", Locations: []Location{{Read: 1, Line: 2}}}}}
-	for range review.RequiredVerificationChecks() {
-		body.Verification = append(body.Verification, "Inspected the original confirmed plan")
-	}
 	raw, _ := json.Marshal(body)
 	before, _ := json.Marshal(facts)
 	if err := ValidateSemanticBody(input, raw, facts); err != nil {

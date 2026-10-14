@@ -51,12 +51,19 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 	if parent == nil {
 		parent = context.Background()
 	}
+	executionContext, stop := signal.NotifyContext(parent, os.Interrupt)
+	defer stop()
+	streams.Context = executionContext
+	return consumeWorkflowContext(streams, f, root, runID, executionContext)
+}
+
+func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, executionContext context.Context) (result workflowConsumption, err error) {
 	unlease, err := coordination.AcquirePath(filepath.Join(root, facade.EngineNamespace, runID, "executor.lock"), "workflow consumer")
 	if err != nil {
 		return result, err
 	}
 	defer unlease()
-	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
+	ctx, stop := context.WithCancel(streams.Context)
 	result.Blocked = map[string]string{}
 	type completion struct {
 		key, action string
@@ -67,10 +74,23 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 	var waits sync.WaitGroup
 	active := map[string]bool{}
 	advance := true
+	recordCompletion := func(finished completion) {
+		delete(active, finished.key)
+		advance = true
+		if finished.child != nil {
+			result.Children[finished.action] = *finished.child
+		}
+		if finished.err != nil && !errors.Is(finished.err, context.Canceled) {
+			result.Blocked[finished.action] = finished.err.Error()
+		}
+	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	defer func() {
 		stop()
+		for len(active) != 0 {
+			recordCompletion(<-done)
+		}
 		waits.Wait()
 		if latest, showErr := f.Show(); showErr == nil {
 			result.Run = latest
@@ -165,12 +185,9 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 					child, err := facade.Open(root, id)
 					var consumed workflowConsumption
 					if err == nil {
-						consumed, err = consumeWorkflow(childStreams, child, root, id)
+						consumed, err = consumeWorkflowContext(childStreams, child, root, id, executionContext)
 					}
-					select {
-					case done <- completion{key: key, action: id, err: err, child: &consumed}:
-					case <-ctx.Done():
-					}
+					done <- completion{key: key, action: id, err: err, child: &consumed}
 				}()
 			}
 			resumes := map[string]protocol.HostActionIntent{}
@@ -214,11 +231,8 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 				waits.Add(1)
 				go func() {
 					defer waits.Done()
-					executionErr := executeWorkflowWorker(ctx, f, ref, resume)
-					select {
-					case done <- completion{key: key, action: id, err: executionErr}:
-					case <-ctx.Done():
-					}
+					executionErr := executeWorkflowWorker(ctx, executionContext, f, ref, resume)
+					done <- completion{key: key, action: id, err: executionErr}
 				}()
 			}
 			if len(run.PendingAsks) != 0 || run.Next.Kind == decision.KindAsk {
@@ -277,70 +291,17 @@ func consumeWorkflow(streams IO, f *facade.Facade, root, runID string) (result w
 				}
 			}
 		case finished := <-done:
-			delete(active, finished.key)
-			advance = true
-			if finished.child != nil {
-				result.Children[finished.action] = *finished.child
-			}
-			if finished.err != nil && !errors.Is(finished.err, context.Canceled) {
-				result.Blocked[finished.action] = finished.err.Error()
-			}
+			recordCompletion(finished)
 		}
 	}
 }
 
-func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) error {
-	request, supervised, directory, original, err := f.WorkerExecutionRequest(ref, resume.ActionID)
+func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) error {
+	request, directory, ref, finished, err := startWorkflowWorker(executionContext, f, ref, resume)
 	if err != nil {
 		return err
 	}
-	ref = original
 	provider := request["provider"].(string)
-	var finished <-chan error
-	if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		run, err := f.Show()
-		if err != nil {
-			return err
-		}
-		var configured settings.Values
-		if run.Settings != nil {
-			configured = run.Settings.Values
-		}
-		binding, err := harness.NativeBinding(provider, configured)
-		if err != nil {
-			return err
-		}
-		request["binding"] = binding
-		if err := os.MkdirAll(directory, 0700); err != nil {
-			return err
-		}
-		if err := writeInvocationFile(filepath.Join(directory, "native-request.json"), request); err != nil {
-			return err
-		}
-		if err := writeInvocationFile(filepath.Join(directory, "request.json"), supervised); err != nil {
-			return err
-		}
-		argv := supervised["argv"].([]string)
-		cmd := exec.Command(argv[0], "harness", "supervise", directory)
-		harness.DetachSupervisor(cmd)
-		journal, err := os.OpenFile(filepath.Join(directory, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		cmd.Stderr = journal
-		if err := cmd.Start(); err != nil {
-			journal.Close()
-			return err
-		}
-		completed := make(chan error, 1)
-		finished = completed
-		go func() { err := cmd.Wait(); journal.Close(); completed <- err }()
-	} else if err != nil {
-		return err
-	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	started := false
@@ -391,6 +352,93 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 		case <-ticker.C:
 		}
 	}
+}
+
+func startWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) (map[string]any, string, facade.WorkerMaterial, <-chan error, error) {
+	request, supervised, directory, original, err := f.WorkerExecutionRequest(ref, resume.ActionID)
+	if err != nil {
+		return nil, "", facade.WorkerMaterial{}, nil, err
+	}
+	ref = original
+	provider := request["provider"].(string)
+	var finished <-chan error
+	if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
+		if err := ctx.Err(); err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		run, err := f.Show()
+		if err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		var configured settings.Values
+		if run.Settings != nil {
+			configured = run.Settings.Values
+		}
+		binding, err := harness.NativeBinding(provider, configured)
+		if err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		request["binding"] = binding
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		if err := writeInvocationFile(filepath.Join(directory, "native-request.json"), request); err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		if err := writeInvocationFile(filepath.Join(directory, "request.json"), supervised); err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		argv := supervised["argv"].([]string)
+		cmd := exec.Command(argv[0], "harness", "supervise", directory)
+		harness.DetachSupervisor(cmd)
+		journal, err := os.OpenFile(filepath.Join(directory, "supervisor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		cmd.Stderr = journal
+		if err := ctx.Err(); err != nil {
+			journal.Close()
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			journal.Close()
+			return nil, "", facade.WorkerMaterial{}, nil, err
+		}
+		completed := make(chan error, 1)
+		finished = completed
+		go func() { err := cmd.Wait(); journal.Close(); completed <- err }()
+	} else if err != nil {
+		return nil, "", facade.WorkerMaterial{}, nil, err
+	}
+	if finished != nil {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			_, ownerErr := os.Stat(filepath.Join(directory, "owner"))
+			_, processErr := os.Stat(filepath.Join(directory, "process.json"))
+			if ownerErr == nil && processErr == nil {
+				break
+			}
+			if ownerErr != nil && !os.IsNotExist(ownerErr) {
+				return nil, "", facade.WorkerMaterial{}, nil, ownerErr
+			}
+			if processErr != nil && !os.IsNotExist(processErr) {
+				return nil, "", facade.WorkerMaterial{}, nil, processErr
+			}
+			select {
+			case <-ctx.Done():
+				return nil, "", facade.WorkerMaterial{}, nil, ctx.Err()
+			case executionErr := <-finished:
+				if _, err := os.Stat(filepath.Join(directory, "process.json")); err != nil {
+					journal, _ := os.ReadFile(filepath.Join(directory, "supervisor.log"))
+					return nil, "", facade.WorkerMaterial{}, nil, fmt.Errorf("native supervisor ended without an exit receipt: %v %s", executionErr, journal)
+				}
+				return request, directory, ref, nil, nil
+			case <-ticker.C:
+			}
+		}
+	}
+	return request, directory, ref, finished, nil
 }
 
 func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent, directory string, source map[string]any) error {

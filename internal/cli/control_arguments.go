@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/facade"
@@ -16,26 +17,29 @@ type controlChildArguments struct {
 }
 
 type controlArguments struct {
-	fs                *flag.FlagSet
-	groups            map[string]string
-	value             facade.ControlInput
-	requirement       facade.RequirementChangeInput
-	validation        facade.ValidationControlInput
-	request           string
-	validationMode    string
-	gates, owners     stringListFlag
-	redo              stringListFlag
-	changedItems      stringListFlag
-	transitiveImpact  stringListFlag
-	carryReasons      stringListFlag
-	cases             stringListFlag
-	obligations       stringListFlag
-	remedies          stringListFlag
-	work              map[int]*facade.WorkChoice
-	children          map[int]*controlChildArguments
-	selectedWork      *facade.WorkChoice
-	selectedChild     *controlChildArguments
-	selectedChildWork *facade.WorkChoice
+	fs                    *flag.FlagSet
+	groups                map[string]string
+	reviewVerification    facade.ReviewVerificationInput
+	reviewEvidence        stringListFlag
+	selectedReviewFinding *protocol.ReviewFindingVerification
+	value                 facade.ControlInput
+	requirement           facade.RequirementChangeInput
+	validation            facade.ValidationControlInput
+	request               string
+	validationMode        string
+	gates, owners         stringListFlag
+	redo                  stringListFlag
+	changedItems          stringListFlag
+	transitiveImpact      stringListFlag
+	carryReasons          stringListFlag
+	cases                 stringListFlag
+	obligations           stringListFlag
+	remedies              stringListFlag
+	work                  map[int]*facade.WorkChoice
+	children              map[int]*controlChildArguments
+	selectedWork          *facade.WorkChoice
+	selectedChild         *controlChildArguments
+	selectedChildWork     *facade.WorkChoice
 }
 
 func registerControlArguments(fs *flag.FlagSet) *controlArguments {
@@ -56,6 +60,39 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 		fs.Func(name, help, set)
 		a.groups[name] = group
 	}
+	number("review-result", &a.reviewVerification.Result, "review-verification", "current result requiring independent review verification")
+	list("review-evidence", &a.reviewEvidence, "review-verification", "independent evidence in the displayed check order")
+	text("review-invalid-reason", &a.reviewVerification.InvalidReason, "review-verification", "independent reason the original result is invalid or incomplete")
+	function("review-finding-valid", "review-verification", "accept or discard the next original finding (true/false)", func(value string) error {
+		valid, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		a.reviewVerification.Findings = append(a.reviewVerification.Findings, protocol.ReviewFindingVerification{Valid: valid})
+		a.selectedReviewFinding = &a.reviewVerification.Findings[len(a.reviewVerification.Findings)-1]
+		return nil
+	})
+	function("review-finding-reason", "review-verification", "independent evidence for the selected original finding", func(value string) error {
+		if a.selectedReviewFinding == nil {
+			return fmt.Errorf("select --review-finding-valid first")
+		}
+		a.selectedReviewFinding.Reason = strings.TrimSpace(value)
+		return nil
+	})
+	function("review-finding-severity", "review-verification", "independently corrected severity for the selected finding", func(value string) error {
+		if a.selectedReviewFinding == nil {
+			return fmt.Errorf("select --review-finding-valid first")
+		}
+		a.selectedReviewFinding.Severity = value
+		return nil
+	})
+	function("review-finding-severity-rationale", "review-verification", "rationale for independently corrected severity", func(value string) error {
+		if a.selectedReviewFinding == nil {
+			return fmt.Errorf("select --review-finding-valid first")
+		}
+		a.selectedReviewFinding.SeverityRationale = value
+		return nil
+	})
 	text("request", &a.request, "control", "semantic control request")
 	number("ask", &a.value.Ask, "control", "current Ask number")
 	number("node", &a.value.Node, "control", "current business node number to continue from")
@@ -184,14 +221,20 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 }
 
 func (a *controlArguments) input() (facade.ControlInput, bool, error) {
-	provided, requirementProvided, validationProvided := false, false, false
+	provided, requirementProvided, validationProvided, reviewProvided := false, false, false, false
 	a.fs.Visit(func(f *flag.Flag) {
 		group, ok := a.groups[f.Name]
 		provided = provided || ok
+		reviewProvided = reviewProvided || group == "review-verification"
 		requirementProvided = requirementProvided || group == "requirement"
 		validationProvided = validationProvided || group == "validation"
 	})
 	out := a.value
+	if reviewProvided {
+		v := a.reviewVerification
+		v.Verification = []string(a.reviewEvidence)
+		out.ReviewVerification = &v
+	}
 	out.Request = protocol.ControlKind(a.request)
 	if out.Node != 0 && out.Request == "" {
 		out.Request = protocol.ControlContinueNode

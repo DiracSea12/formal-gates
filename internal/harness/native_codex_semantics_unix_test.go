@@ -70,18 +70,14 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 	completedPlan := nativeWorkerGranularityFixture()
 	completedPlan.Batches[0].NewArtifacts = nil
 	batch := protocol.DevelopmentBatch{ID: "issued-batch", DoD: []protocol.DevelopmentCriterion{{ID: "issued-condition", Description: "declared behavior"}}}
-	verification := []string{}
-	for _, name := range review.RequiredVerificationChecks() {
-		verification = append(verification, "read exact current materials: "+name)
-	}
 	for _, sample := range []struct {
 		name   string
 		input  protocol.WorkerInput
 		domain any
 	}{
-		{"readiness", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, Verification: verification, GranularityReview: plan}},
-		{"confirmed-batch", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.development.batch.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
-		{"autonomous-repair", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
+		{"readiness", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "readiness-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}, worker.Review{Findings: []worker.Finding{}, GranularityReview: plan}},
+		{"confirmed-batch", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.development.batch.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "development-attempt"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}, worker.Development{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for native integration"}}},
+		{"autonomous-repair", protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v7", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair", AttemptID: "repair-attempt"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}, worker.Repair{Summary: "implemented declared behavior", Completion: &worker.Completion{DoD: []string{"complete"}, Handoff: "ready for approved checks"}, GranularityReview: completedPlan}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, err := worker.ResultSchema(sample.input)
@@ -183,7 +179,7 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v7", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +252,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 func TestCodexQAContinuationUsesCurrentSemanticsWithPersistentToolDeclaration(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["read_only"] = true
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.execution.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.execution.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}
 	commands := map[string]any{"commands": []any{[]any{map[string]any{"kind": "ARGV", "argv": []any{"printf", "accepted"}}}}}
 	prepare := func() map[string]any {
 		t.Helper()

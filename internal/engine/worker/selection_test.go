@@ -120,7 +120,7 @@ func TestProposalArtifactsReuseOriginalLocationsAndAuthorOnlyNewNames(t *testing
 }
 
 func TestDevelopmentPathsComeOnlyFromTerminalFacts(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "issued"}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "issued"}}}}
 	raw := []byte(`{"summary":"Created the authorized behavior","remainingWork":"Finish the oracle"}`)
 	event, err := DecodeResultWithPaths(input, "result", raw, "native-source", []string{"arbitrary-language/source.ext"})
 	if err != nil || !reflect.DeepEqual(event.Result.Validation.Development.Paths, []string{"arbitrary-language/source.ext"}) || event.Result.Validation.Status != "CONTINUE" {
@@ -134,7 +134,7 @@ func TestDevelopmentPathsComeOnlyFromTerminalFacts(t *testing.T) {
 }
 
 func TestVerificationGoalsRetainDistinctObligations(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v5", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v6", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	value := &Granularity{Batches: []Batch{{Checks: []Check{{Purpose: protocol.CheckFullTests, Goal: "Verify malformed options"}, {Purpose: protocol.CheckFullTests, Goal: "Verify stored state"}}}}}
 	plan, err := DecodeGranularity(input, value, nil, nil, false)
 	if err != nil {
@@ -144,7 +144,7 @@ func TestVerificationGoalsRetainDistinctObligations(t *testing.T) {
 	if len(checks) != 2 || checks[0].Goal != value.Batches[0].Checks[0].Goal || checks[1].Goal != value.Batches[0].Checks[1].Goal || checks[0].ID != "batch-1-check-1" || checks[1].ID != "batch-1-check-2" {
 		t.Fatalf("distinct goals lost their original duties or allocated identities: %+v", checks)
 	}
-	input = protocol.WorkerInput{Handler: "engine.repair.v6"}
+	input = protocol.WorkerInput{Handler: "engine.repair.v7"}
 	value.Batches[0].Checks = []Check{{Command: "original-call"}, {Command: "original-call"}}
 	plan, err = DecodeGranularity(input, value, nil, nil, false)
 	if err != nil || len(plan.Batches[0].Checks) != 1 {

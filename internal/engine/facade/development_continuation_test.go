@@ -20,6 +20,160 @@ import (
 	"formal-gates/internal/host"
 )
 
+func TestReadOnlyDevelopmentPreparationRetainsNativeContinuation(t *testing.T) {
+	for _, receiptFirst := range []bool{true, false} {
+		name := "receipt-before-result"
+		if !receiptFirst {
+			name = "result-before-receipt-reopen"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := nativeMasterDriver(t)
+			plan := commandPlan()
+			plan.Batches[0].Checks = []protocol.DevelopmentCheck{
+				{ID: "edit", Purpose: protocol.CheckEdit, Goal: "Check the declared source after every edit"},
+				{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build the complete project"},
+				{ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Test the complete project"},
+			}
+			passPreDevelopmentReviews(t, d, plan)
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one declared artifact"}})
+			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+			d.drive()
+			id, input := d.action("engine.development.batch.v6")
+			state := driverState(t, d)
+			pending, attempt := state.PendingActions[id], state.Attempts[input.Binding.Task]
+			ref := d.run.WorkerMaterials[id]
+			material, err := readWorkerMaterial(ref)
+			if err != nil || !material.ReadOnly || material.Input.Pending != pending || material.Input.Validation.Binding != input.Binding {
+				t.Fatal("issued preparation lost its read-only material or original action/attempt", err)
+			}
+			workspace := material.Input.Validation.Workspace
+			native := vcs.NewNative(workspace.Path, material.Input.VCS, nil).At(workspace.Path, workspace.Handle)
+			beforePaths, err := native.ChangedPaths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			commands := []string{"printf '%s' 'edit 中文'\r\n", "printf 'project build\\n'", "printf 'project tests\\n'"}
+			progress := worker.DevelopmentContinuation{Commands: commands, Summary: "Prepared the declared calls without changing files", RemainingWork: "Implement the confirmed command and run its approved checks"}
+			answer, err := json.Marshal(progress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, _, directory, selected, err := d.f.WorkerExecutionRequest(ref, "")
+			if err != nil || selected != ref || request["read_only"] != true {
+				t.Fatal("native preparation request differs from its issued material", err)
+			}
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			requestBody, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "native-request.json"), requestBody, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "answer.json"), answer, 0600); err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256(answer)
+			digest := "sha256:" + hex.EncodeToString(sum[:])
+			source := map[string]any{"session": "original-native-session", "answerDigest": digest}
+			verify := func(provider, path string, actual map[string]any) (worker.ResultSource, error) {
+				if provider != request["provider"] || path != directory || !reflect.DeepEqual(actual, source) || actual["effects"] != nil {
+					t.Fatal("native fixture changed original provider, request directory, session or source")
+				}
+				raw, err := os.ReadFile(filepath.Join(path, "answer.json"))
+				if err != nil {
+					return worker.ResultSource{}, err
+				}
+				actualSum := sha256.Sum256(raw)
+				if "sha256:"+hex.EncodeToString(actualSum[:]) != actual["answerDigest"] {
+					t.Fatal("native fixture source does not bind the original answer bytes")
+				}
+				return worker.ResultSource{Answer: raw, Digest: digest, Identity: actual["session"].(string)}, nil
+			}
+			if receiptFirst {
+				d.receipt(id)
+			}
+			accepted, run, err := d.f.SubmitWorkerResult(d.eventID(), ref, directory, source, verify)
+			want := "ACCEPTED"
+			if !receiptFirst {
+				want = "STAGED"
+			}
+			if err != nil || accepted.Status != want {
+				t.Fatalf("original native preparation = %+v %v", accepted, err)
+			}
+			d.run = run
+			if !receiptFirst {
+				staged := driverState(t, d).StagedResults[id]
+				if staged.PayloadDigest != digest || staged.Validation.Development.Paths != nil || !slices.Equal(staged.Validation.Development.Commands, commands) {
+					t.Fatal("staging invented path facts or lost the original preparation")
+				}
+				d.reopen()
+				d.receipt(id)
+			}
+			state = driverState(t, d)
+			first, receipt := state.Results[id], state.SpawnReceipts[id]
+			if first.PayloadDigest != digest || first.Validation.Status != "CONTINUE" || first.Validation.Binding != input.Binding || first.Validation.Development.Paths != nil || first.Validation.Development.Completion != nil || first.Validation.Development.Summary != progress.Summary || first.Validation.Development.RemainingWork != progress.RemainingWork || !slices.Equal(first.Validation.Development.Commands, commands) || state.PendingActions[id] != pending || !reflect.DeepEqual(state.Attempts[input.Binding.Task], attempt) || len(state.EndedAttempts) != 0 || len(state.RejectedResults) != 0 {
+				t.Fatal("read-only native preparation changed its original obligation or invented completion/path evidence")
+			}
+			accepted, run, err = d.f.SubmitWorkerResult(d.eventID(), ref, directory, source, verify)
+			if err != nil || accepted.Status != "DUPLICATE" {
+				t.Fatalf("repeated original preparation = %+v %v", accepted, err)
+			}
+			d.run = run
+			d.reopen()
+			d.drive()
+			continuedRef := d.run.WorkerMaterials[id]
+			continued, err := readWorkerMaterial(continuedRef)
+			if err != nil || continued.ReadOnly || continuedRef.AttemptID != ref.AttemptID || continued.Input.Pending != pending || continued.Input.Validation.Binding != input.Binding || !reflect.DeepEqual(continued.Input.Validation.Development.Result, &first) || !strings.Contains(continued.Prompt, progress.RemainingWork) {
+				t.Fatal("persistent preparation did not continue the same writable action with its exact feedback", err)
+			}
+			state = driverState(t, d)
+			if !reflect.DeepEqual(state.Results[id], first) || !reflect.DeepEqual(state.SpawnReceipts[id], receipt) || !reflect.DeepEqual(state.Attempts[input.Binding.Task], attempt) || len(state.RecoverableResults[id]) != 0 {
+				t.Fatal("repeat/reopen changed the preparation, native receipt or original attempt")
+			}
+			afterPaths, err := native.ChangedPaths()
+			if err != nil || !reflect.DeepEqual(afterPaths, beforePaths) {
+				t.Fatal("read-only preparation changed the VCS workspace", err)
+			}
+
+			// Writable continuation uses the same source-bound native codec and
+			// must reject absent terminal facts before admitting any new progress.
+			request, _, directory, selected, err = d.f.WorkerExecutionRequest(continuedRef, "")
+			if err != nil || selected != continuedRef || request["read_only"] != false {
+				t.Fatal("prepared calls did not open the original writable continuation", err)
+			}
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			requestBody, err = json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "native-request.json"), requestBody, 0600); err != nil {
+				t.Fatal(err)
+			}
+			answer = []byte(`{"summary":"Reported writable progress","remainingWork":"Finish the original implementation"}`)
+			if err := os.WriteFile(filepath.Join(directory, "answer.json"), answer, 0600); err != nil {
+				t.Fatal(err)
+			}
+			sum = sha256.Sum256(answer)
+			digest = "sha256:" + hex.EncodeToString(sum[:])
+			source = map[string]any{"session": "original-native-session", "answerDigest": digest}
+			accepted, run, err = d.f.SubmitWorkerResult(d.eventID(), continuedRef, directory, source, verify)
+			if err != nil || accepted.Status != "REJECTED_INVALID_RESULT" {
+				t.Fatalf("writable continuation without terminal facts = %+v %v", accepted, err)
+			}
+			d.run = run
+			state = driverState(t, d)
+			if !strings.Contains(state.RejectedResults[id].Reason, "original native terminal path facts") || !reflect.DeepEqual(state.Results[id], first) || !reflect.DeepEqual(state.SpawnReceipts[id], receipt) {
+				t.Fatal("writable rejection lost its original evidence or replaced accepted preparation")
+			}
+		})
+	}
+}
+
 func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	d := nativeMasterDriver(t)
 	plan := commandPlan()
@@ -29,7 +183,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one declared artifact"}})
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 	d.drive()
-	id, input := d.action("engine.development.batch.v5")
+	id, input := d.action("engine.development.batch.v6")
 	issued := driverState(t, d).Attempts[input.Binding.Task]
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\n// unfinished\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -43,6 +197,9 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	completion := &worker.Completion{Handoff: priorCompletion.Handoff}
 	for _, criterion := range input.Development.Batch.DoD {
 		completion.DoD = append(completion.DoD, priorCompletion.DoD[criterion.ID])
+	}
+	for _, point := range priorCompletion.RequirementResults {
+		completion.Requirements = append(completion.Requirements, point.Evidence)
 	}
 	original := submitDevelopmentSemanticFixture(t, d, originalMaterial, worker.Development{Summary: "delivered edit; approved source checks still own completion", Completion: completion}, "fixture-native-session")
 	d.drive()
@@ -288,10 +445,13 @@ func TestRepairFailedProjectCheckRetainsIssuedObligation(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := gateRepairResult(input)
+	result.Development.RequirementResults = fixtureImplementedPoints(input.Repair.RequiredPoints, "Report this repair edit; the actual approved checks determine whether it can complete")
 	submit := func(body protocol.ValidationResult, digest string) protocol.Event {
 		t.Helper()
 		event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: digest, SourceResult: driverState(t, d).Results[id].Digest, Validation: &body}}
-		d.submit(event)
+		if actual := d.submit(event); actual.Status != "ACCEPTED" {
+			t.Fatalf("repair edit was not accepted for its original approved checks: %+v", actual)
+		}
 		d.drive()
 		return event
 	}

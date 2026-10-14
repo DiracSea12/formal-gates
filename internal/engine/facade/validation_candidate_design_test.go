@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -40,6 +41,49 @@ func candidateSourceTree(t *testing.T, d *validationDriver, base string) map[str
 		tree[path] = string(body)
 	}
 	return tree
+}
+
+func candidateEditSource(t *testing.T, d *validationDriver, params protocol.CandidateParameters) (string, []string) {
+	t.Helper()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(params.SourceResults) == 0 || len(params.SourceResults) != len(params.SourceTasks) {
+		t.Fatal("incomplete signed edit sources")
+	}
+	stage := ""
+	var paths []string
+	for action, digest := range params.SourceResults {
+		source, exists := snapshot.State.Results[action]
+		if !exists || source.Digest != digest || source.Validation == nil || source.Validation.Development == nil || !slices.Contains(params.SourceTasks, source.Validation.Binding.Task) {
+			t.Fatal("edit source differs from its issued result")
+		}
+		var sourceStage string
+		switch source.Validation.Binding.Task.Step {
+		case "development.worker":
+			sourceStage = "DEVELOPMENT"
+		case "qa.design":
+			sourceStage = "QA_ARTIFACT"
+		default:
+			t.Fatal("unexpected edit source owner")
+		}
+		if stage != "" && stage != sourceStage {
+			t.Fatal("mixed edit source owners")
+		}
+		stage = sourceStage
+		paths = append(paths, source.Validation.Development.Paths...)
+	}
+	formal := snapshot.State.RequirementArtifactPath()
+	if formal == "" {
+		t.Fatal("confirmed intake has no formal requirement artifact")
+	}
+	nativePaths := append(slices.Clone(paths), formal)
+	slices.Sort(nativePaths)
+	if !slices.Equal(params.Paths, slices.Compact(nativePaths)) {
+		t.Fatalf("physical source differs from worker manifest and formal artifact: %v", params.Paths)
+	}
+	return stage, paths
 }
 
 func freezeCandidateSource(t *testing.T, d *validationDriver, p protocol.CandidateParameters, tree map[string]string) (string, string) {
@@ -128,18 +172,16 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 						tree[p] = b
 					}
 					stage := params.Stage
+					paths := params.Paths
 					if stage == "CHECK_SOURCE" {
-						stage = "QA_ARTIFACT"
-						if reflect.DeepEqual(params.Paths, []string{"app.go"}) {
-							stage = "DEVELOPMENT"
-						}
+						stage, paths = candidateEditSource(t, d, params)
 					}
 					switch stage {
 					case "DEVELOPMENT":
 						tree["app.go"] = "func valid(input string) bool { return input != \"\" }"
 					case "AUTHORING":
 					case "QA_ARTIFACT":
-						if !reflect.DeepEqual(params.Paths, []string{"app_test.go"}) {
+						if !reflect.DeepEqual(paths, []string{"app_test.go"}) {
 							t.Fatal("wrong test paths")
 						}
 						tree["app_test.go"] = testBytes
@@ -190,11 +232,11 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 					return observe(intent)
 				}
 				materialize := func() { t.Helper(); d.submit(observe(currentIntent())); d.drive() }
-				id, in := d.action("engine.development.batch.v5")
+				id, in := d.action("engine.development.batch.v6")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input contract"}})
 				materialize()
 				materialize()
-				id, in = d.action("engine.qa.design.v5")
+				id, in = d.action("engine.qa.design.v6")
 				manifest := in.Manifest
 				manifest.Cases = []coverage.AcceptanceCase{{CaseID: "normal", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "app_test.go::TestNormal", Oracle: "accept valid input"}, {CaseID: "invalid", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "app_test.go::TestInvalid", Oracle: "reject invalid input"}}
 				for _, c := range manifest.Cases {
@@ -217,7 +259,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				oldIdentity := oldReceipt.HostAction.AdapterEvidence.Values["identity"].(string)
 				d.chooseValidation(protocol.ValidationRequest{Kind: "QA_ARTIFACT_REPAIR", Mode: coverage.ReviewWhitebox, Category: "CASE_EXECUTABILITY", AffectedCases: []string{"normal", "invalid"}}, "")
 				testBytes = "func fixture() string { return initializedInput() }"
-				id, in = d.action("engine.qa.design.v5")
+				id, in = d.action("engine.qa.design.v6")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest, Development: &protocol.DevelopmentEvidence{Paths: []string{"app_test.go"}, Summary: "initialize shared fixture without changing TestRef or oracle"}})
 				current := d.run.Validation.Sets[coverage.ReviewWhitebox]
 				if current.DesignTask == originalDesign || !reflect.DeepEqual(current.Manifest, manifest) {
@@ -295,7 +337,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				if candidate == nil || trees[candidate.Identity]["app_test.go"] != testBytes {
 					t.Fatal("final candidate lost approved test bytes")
 				}
-				id, in = d.action("engine.qa.execution.v3")
+				id, in = d.action("engine.qa.execution.v4")
 				execution := executionFor(in)
 				d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &execution}))
 				id, in = d.gateAction("quality")

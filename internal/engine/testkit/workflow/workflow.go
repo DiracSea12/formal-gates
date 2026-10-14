@@ -21,7 +21,7 @@ var (
 	}{
 		{"engine.entry.parse", authoring.RunnerEngineLocal},
 		{"engine.entry.persist", authoring.RunnerDurableActivity},
-		{"engine.review.worker.v2", authoring.RunnerAgentWorker},
+		{"engine.review.worker.v3", authoring.RunnerAgentWorker},
 		{"engine.fan.slice", authoring.RunnerEngineLocal},
 		{"engine.fan.transport", authoring.RunnerHostAdapter},
 		{"engine.fan.join", authoring.RunnerEngineLocal},
@@ -74,13 +74,13 @@ func Workflow() *compiler.Definition {
 	must("entry.persist", err)
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIO(), authoring.AgentSpec{
-			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.review.worker.v3", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	must("review.worker", err)
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
 		reviewIO(), authoring.AgentSpec{
-			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
+			Handler: "engine.review.worker.v3", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
 		})
 	must("review.readiness", err)

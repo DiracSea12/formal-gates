@@ -9,10 +9,12 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/prompts"
+	"formal-gates/internal/requirement"
 )
 
 func TestDevelopmentResultOwnsOnlyIssuedBatchEvidence(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}}}}}
 	raw := []byte(`{"summary":"Implemented public behavior","completion":{"dod":["Public behavior implemented"],"handoff":"Ready for program checks"}}`)
 	for _, resumed := range []bool{false, true} {
 		if resumed {
@@ -50,7 +52,7 @@ func TestDevelopmentResultOwnsOnlyIssuedBatchEvidence(t *testing.T) {
 }
 
 func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "second"}}}, {Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "third"}}}}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "second"}}}, {Cases: []coverage.AcceptanceCase{{CaseID: "first"}, {CaseID: "third"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +104,7 @@ func TestRepairAffectedCasesUseOriginalContractChoices(t *testing.T) {
 }
 
 func TestCompletedRepairPlanUsesNativeArtifactsAndApprovedChecks(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests"}, {ID: "local", Command: "local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v7", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "project-build"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "project-tests"}, {ID: "local", Command: "local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	value := Repair{Summary: "Repaired the original behavior", Completion: &Completion{DoD: []string{"Behavior restored"}, Handoff: "Ready for program checks"}, GranularityReview: &Granularity{Reason: "One cohesive repair", VerificationTier: "FINAL", Batches: []Batch{{DoD: []Criterion{{Description: "Behavior restored"}}, Checks: []Check{{Reuse: 3}, {Command: "new-oracle"}}}}}}
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -154,7 +156,7 @@ func TestCompletedRepairPlanUsesNativeArtifactsAndApprovedChecks(t *testing.T) {
 
 func TestDevelopmentResultRejectsExecutionClaims(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "command", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "Public behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "actual", Command: "false"}}}
-	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
+	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 		schema, err := ResultSchema(input)
 		if err != nil {
@@ -241,7 +243,7 @@ func TestDeveloperSuppliesOnlyUnfinishedVerificationGoals(t *testing.T) {
 		{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build every production input"},
 		{ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Run the complete project suite"},
 	}}
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "edit"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 	partial, err := DecodeResultWithPaths(input, "progress", []byte(`{"summary":"Prepared project source","remainingWork":"Prepare the complete test calls"}`), "progress-output", []string{"app.ext"})
 	if err != nil || len(partial.Result.Validation.Development.Commands) != 0 {
 		t.Fatalf("unfinished goals invented command slots: %v", err)
@@ -264,14 +266,23 @@ func TestDeveloperSuppliesOnlyUnfinishedVerificationGoals(t *testing.T) {
 	}
 	input.Validation.Development.Result = nil
 	facts := []LocationFact{{Kind: "read", Content: []byte("project-build --label '原文'\r\n")}}
-	raw := []byte(`{"summary":"Implemented","commands":[{"read":1,"from":1,"to":1},"missing-project-tests"]}`)
+	for _, raw := range []string{
+		`{"summary":"Copied","commands":[{"read":1,"from":1,"to":1},"project-tests"]}`,
+		`{"summary":"Copied","commands":[{"read":1,"from":1,"to":1,"fromColumn":1,"toColumn":4},"project-tests"]}`,
+		`{"summary":"Copied","commands":[{"parts":[{"read":1,"from":1,"to":1}]},"project-tests"]}`,
+	} {
+		if _, err := DecodeResultWithFacts(input, "copied", []byte(raw), "copied-output", []string{"app.ext"}, facts); err == nil {
+			t.Fatal("developer selected command bytes through mechanical source fields")
+		}
+	}
+	raw := []byte(`{"summary":"Implemented","commands":["project-build --label '原文'\r\n","missing-project-tests"]}`)
 	event, err := DecodeResultWithFacts(input, "result", raw, "native-output", []string{"app.ext"}, facts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expected := []string{"project-build --label '原文'\r\n", "missing-project-tests"}
 	if !reflect.DeepEqual(event.Result.Validation.Development.Commands, expected) {
-		t.Fatal("source bytes or goal order changed")
+		t.Fatal("prepared command bytes or goal order changed")
 	}
 	original := protocol.WorkerResult{ActionID: input.Pending.ActionID, Digest: "accepted", Validation: event.Result.Validation}
 	input.Validation.Development.Result = &original
@@ -311,5 +322,50 @@ func TestDeveloperSuppliesOnlyUnfinishedVerificationGoals(t *testing.T) {
 	}
 	if schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["commands"] != nil {
 		t.Fatal("finished goals still expose command authorship")
+	}
+}
+
+func TestDevelopmentPreparesEditCallsBeforeWriting(t *testing.T) {
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "development", AttemptID: "original-attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Implement the confirmed command"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "command", Checks: []protocol.DevelopmentCheck{
+		{ID: "edit", Purpose: protocol.CheckEdit, Goal: "Check the declared source after every edit"},
+		{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build the complete command"},
+		{ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Test the complete command"},
+	}}}}}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}}}
+	initial, err := Render(input, catalog)
+	if err != nil || !initial.ReadOnly {
+		t.Fatal("unprepared EDIT call offered production write capability", err)
+	}
+	for _, body := range initial.ResultSchema["anyOf"].([]any) {
+		if body.(map[string]any)["properties"].(map[string]any)["completion"] != nil {
+			t.Fatal("preparation offered implementation completion")
+		}
+	}
+	if _, err := DecodeResultWithPaths(input, "premature", []byte(`{"summary":"Implemented","commands":["edit-call","build-call","test-call"],"completion":{"dod":[],"handoff":"done"}}`), "premature-source", nil); err == nil {
+		t.Fatal("preparation accepted premature implementation completion")
+	}
+	prepared, err := DecodeResultWithPaths(input, "prepared", []byte(`{"summary":"Prepared declared calls","remainingWork":"Implement the command","commands":["edit-call","build-call","test-call"]}`), "prepared-source", []string{})
+	if err != nil || prepared.Result.Validation.Status != "CONTINUE" || prepared.Result.Validation.Development.Completion != nil {
+		t.Fatal("command preparation invented implementation completion", err)
+	}
+	input.Validation.Development.Result = &protocol.WorkerResult{ActionID: prepared.Result.ActionID, Digest: "accepted-preparation", Outcome: prepared.Result.Outcome, Validation: prepared.Result.Validation}
+	continued, err := Render(input, catalog)
+	if err != nil || continued.ReadOnly || continued.Input.Pending != initial.Input.Pending {
+		t.Fatal("prepared calls did not reopen the same issued development action", err)
+	}
+	carried, err := DecodeResultWithPaths(input, "continued", []byte(`{"summary":"Continue the original implementation","remainingWork":"Complete the command"}`), "continued-source", []string{})
+	if err != nil || carried.Result.SourceResult != "accepted-preparation" || !reflect.DeepEqual(carried.Result.Validation.Development.Commands, prepared.Result.Validation.Development.Commands) {
+		t.Fatal("continuation lost the accepted preparation owner", err)
+	}
+	stored, _ := json.Marshal(input)
+	var reopened protocol.WorkerInput
+	if err := json.Unmarshal(stored, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := Render(reopened, catalog)
+	originalBody, originalErr := json.Marshal(continued)
+	recoveredBody, recoveredErr := json.Marshal(recovered)
+	if err != nil || originalErr != nil || recoveredErr != nil || string(originalBody) != string(recoveredBody) {
+		t.Fatal("recovery changed prepared-call ownership or write capability", err)
 	}
 }

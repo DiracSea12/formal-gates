@@ -31,7 +31,7 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 			if plan.Next.Kind != decision.KindAsk || !slices.Contains(plan.Next.Ask.Requests, "begin-change") || !state.requirementChangePending() || state.PendingAsks["begin-change"].Package != nil || len(state.RequirementRevisions) != 1 {
 				t.Fatalf("initial barrier = %+v, ask=%+v", plan.Next, state.PendingAsks)
 			}
-			acceptance := submitReviewResult(t, engine, "during-clarification", action, reviewEvidenceAt(review.ProductReview, action, "rev-1", "PASS", "review completed during clarification", nil))
+			acceptance := submitVerifiedReviewResult(t, engine, "during-clarification", action, reviewEvidenceAt(review.ProductReview, action, "rev-1", "PASS", "review completed during clarification", nil))
 			if acceptance.Status != "QUARANTINED" {
 				t.Fatalf("result escaped barrier: %+v", acceptance)
 			}
@@ -103,6 +103,7 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 			if _, err = engine.Submit(event, Observation{}); err != nil {
 				t.Fatal(err)
 			}
+			verifyCompleteFixtureReview(t, engine, action)
 			state = engine.LoadMustSucceed(t).State
 			wantRevision := "rev-1"
 			wantEntries := 1
@@ -204,11 +205,11 @@ func TestReconfirmedContentOwnsFreshReviewGeneration(t *testing.T) {
 	cd, reg := singleCarrierFixture(t)
 	engine, dir := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "initial-review", first, reviewEvidenceAt(review.ProductReview, first, "rev-1", "PASS", "reviewed original content", nil))
+	submitVerifiedReviewResult(t, engine, "initial-review", first, reviewEvidenceAt(review.ProductReview, first, "rev-1", "PASS", "reviewed original content", nil))
 	redoProductReview(t, engine, "different-content")
 	second := pendingActionID(t, engine)
 	revision := engine.LoadMustSucceed(t).State.RequirementRevision()
-	submitReviewResult(t, engine, "second-review", second, reviewEvidenceAt(review.ProductReview, second, revision, "PASS", "reviewed changed content", nil))
+	submitVerifiedReviewResult(t, engine, "second-review", second, reviewEvidenceAt(review.ProductReview, second, revision, "PASS", "reviewed changed content", nil))
 	payload := &RequirementDecisionPayload{BaseRevision: revision, CandidateRevision: "rev-1", DeltaDigest: "delta:restore", ImpactDigest: "impact:restore", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged, RedoProductReview: true, Reason: "restore content and request an independent fresh review"}
 	askAndDecideRequirement(t, engine, "restore-original", "proceed", payload)
 	var err error
@@ -224,7 +225,7 @@ func TestReconfirmedContentOwnsFreshReviewGeneration(t *testing.T) {
 	if fresh == first || fresh == second || state.issuedRevisionOf(fresh) < state.ReviewSeries.ProductReview.FreshFloor {
 		t.Fatal("restored content reused historical dispatch identity")
 	}
-	submitReviewResult(t, engine, "restored-review", fresh, reviewEvidenceAt(review.ProductReview, fresh, "rev-1", "PASS", "fresh review of restored content", nil))
+	submitVerifiedReviewResult(t, engine, "restored-review", fresh, reviewEvidenceAt(review.ProductReview, fresh, "rev-1", "PASS", "fresh review of restored content", nil))
 	state = engine.LoadMustSucceed(t).State
 	if state.ReviewSeries.ProductReview.FreshOwed || state.ReviewSeries.ProductReview.Completed != 3 || len(state.RequirementRevisions) != 3 {
 		t.Fatalf("fresh completion did not retain all confirmations: %+v", state.ReviewSeries.ProductReview)

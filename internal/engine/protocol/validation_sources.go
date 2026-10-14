@@ -91,7 +91,7 @@ func (s *State) validateCoverageRelations() error {
 	covered := map[SourcePoint]bool{}
 	for _, manifest := range s.coverageContract(nil).Manifests {
 		for _, edge := range manifest.Edges {
-			covered[SourcePoint{edge.SourceID, edge.PointID}] = true
+			covered[SourcePoint{SourceID: edge.SourceID, PointID: edge.PointID}] = true
 		}
 	}
 	_, links := s.coveragePoints()

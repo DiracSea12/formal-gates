@@ -6,7 +6,7 @@
 ## 真实判据
 
 步骤写明真实入口/调用、参数/输入、前提与构造方法、操作顺序及取证；oracle 写精确可观察输出、消息、列表顺序、数值/边界与失败信号，不能只有“符合预期”。每个声明的范围必须由步骤和判据实际覆盖。
-机械明确的准备/动作用有序 ARGV/SHELL operations 表达；原 command、stdin、argv 参数和 artifacts 元素用 workspace read/from/to 选择原字节，字符串仅填真正新创作的语义，不解析 shell 或去除换行。保留参数空串、引号、shell 和 stdin 原值；共同准备放共享步骤。完整步骤、前置与 oracle 可先不声明 command，批准后由执行职责填实际 invocation；不能用缺 command 代替用例可执行性。共享步骤的 artifacts 声明产物，independent 表示独立准备本身须实跑。
+机械明确的准备/动作用有序 ARGV/SHELL operations 表达。已有批准操作使用 reuse 或省略字段保留；原 argv 元素按发布序号 reuse，新 command 与参数值由当前职责创作，不按原文行列或 parts 拼调用。stdin 与 artifacts 元素仍可用 workspace read/from/to 选择原字节，不解析 shell 或去除换行。保留参数空串、引号、shell 和 stdin 原值；共同准备放共享步骤。完整步骤、前置与 oracle 可先不声明 command，批准后由执行职责填实际 invocation；不能用缺 command 代替用例可执行性。共享步骤的 artifacts 声明产物，independent 表示独立准备本身须实跑。
 脚本只做准备、真实调用、取证和断言；缺陷回归能报原错误，关键失败判据用已知错误样例核验。未改且仍有效的脚本不重复完整审批。
 
 ## 测试准备可构造

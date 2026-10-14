@@ -57,7 +57,7 @@ func (state *State) requirementWork(cd *compiler.CompiledDefinition) []Requireme
 		// queued or stopped work whose PASS has not been accepted.
 		var work []RequirementWork
 		for _, item := range state.PendingAsks[d.RequestID].Reset.Work {
-			if state.validationRole(item.Task, cd) == "engine.development.batch.v5" {
+			if state.validationRole(item.Task, cd) == "engine.development.batch.v6" {
 				work = append(work, item)
 			}
 		}

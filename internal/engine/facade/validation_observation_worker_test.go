@@ -169,7 +169,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 			}
 			d.reopen()
 			d.drive()
-			_, qa := d.action("engine.qa.execution.v3")
+			_, qa := d.action("engine.qa.execution.v4")
 			if len(qa.ExecutionFacts) != len(required) {
 				t.Fatal("comparison did not receive every required native case")
 			}
@@ -257,9 +257,10 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 					release()
 					t.Fatal("prepared superseded work passed original launch admission")
 				}
-			} else if execution == "unknown" {
+			} else if execution == "unknown" || execution == "owned" {
+				correlation := state.SpawnReceipts[id].Correlation
 				for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-					observed, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), id, "original-worker", edge)
+					observed, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), correlation, "original-worker", edge)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -273,9 +274,6 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				if execution == "owned" {
-					d.receipt(id)
-				}
 				d.completeWorkerTerminations()
 			}
 			state = driverState(t, d)

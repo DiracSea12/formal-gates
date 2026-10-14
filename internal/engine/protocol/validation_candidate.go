@@ -59,6 +59,9 @@ func candidateCorrelation(p CandidateParameters) string {
 	default:
 		key = p
 	}
+	if len(key.Paths) == 0 {
+		key.Paths = nil
+	}
 	return "candidate:" + digestOfCanonical(key)
 }
 
@@ -315,8 +318,7 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 		if p.BlackboxManifest != nil {
 			paths = append(paths, ".gates/results/"+s.RunID+".blackbox-cases.md")
 		}
-		slices.Sort(paths)
-		return slices.Equal(p.Paths, paths) && s.validateFinalCoverage() == nil
+		return slices.Equal(p.Paths, s.candidateSourcePaths(paths)) && s.validateFinalCoverage() == nil
 	}
 	return false
 }
@@ -642,8 +644,8 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			manifest := set.Manifest
 			params.BlackboxManifest = &manifest
 			params.Paths = append(params.Paths, ".gates/results/"+s.RunID+".blackbox-cases.md")
-			slices.Sort(params.Paths)
 		}
+		params.Paths = s.candidateSourcePaths(params.Paths)
 	}
 	if s.NativeRoot != "" {
 		r := s.candidateResource(params, cd)

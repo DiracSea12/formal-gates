@@ -107,6 +107,11 @@ func TestFakeWorkerResultBeforeReceiptReplaysAfterRestart(t *testing.T) {
 	if _, err := restarted.Host.Spawn(actionID, "agent-1", protocol.SpawnStatusSpawned); err != nil {
 		t.Fatalf("receipt after restart: %v", err)
 	}
+	snapshot, err = restarted.Engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyFakeReviewFixture(t, restarted.Engine, snapshot.State.Results[actionID])
 	summary, err = Summarize(restarted.Engine)
 	if err != nil {
 		t.Fatalf("summary after receipt: %v", err)
@@ -123,6 +128,27 @@ func TestFakeWorkerResultBeforeReceiptReplaysAfterRestart(t *testing.T) {
 	refill, ok := snapshot.State.PendingActions[actionIDOfStep(snapshot.State, "review.readiness")]
 	if !ok || refill.Step != "review.readiness" {
 		t.Fatalf("settled pending actions = %+v, want the refilled review.readiness dispatch", snapshot.State.PendingActions)
+	}
+}
+
+// The synthetic worker and independent actor are separate protocol inputs.
+// This actor accepts only the declared fake complete/no-finding review after
+// checking its original receipted source and confirmed fixture requirement.
+func verifyFakeReviewFixture(t *testing.T, engine *protocol.Engine, expected protocol.WorkerResult) {
+	t.Helper()
+	snapshot, err := engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State
+	source := state.Results[expected.ActionID]
+	receipt := state.SpawnReceipts[expected.ActionID]
+	if !reflect.DeepEqual(source, expected) || source.Review == nil || source.Review.DispatchID != source.ActionID || source.Review.RequirementRevision != state.RequirementRevision() || source.Provider != "fake-host" || receipt.Provider != source.Provider || receipt.Status != protocol.SpawnStatusSpawned || source.PayloadDigest == "" || source.Review.Status != "PASS" || source.Review.Message != "fake review round" || len(source.Review.Findings) != 0 || len(state.PendingReviewVerifications()) != 1 || state.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatalf("independent synthetic actor received another source or declared semantic scenario: %+v", source)
+	}
+	observation := protocol.Event{ID: protocol.EventID("independent-fixture:" + source.ActionID), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: source.ActionID, Review: &protocol.ReviewVerificationObservation{ResultDigest: source.Digest, Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "Independent synthetic actor compared the exact fake-host result, original spawn receipt, confirmed fixture requirement, complete declared review and no-finding normal scenario. This fixture has no filesystem defect or severity claim."}}}}
+	if accepted, err := engine.Submit(observation, protocol.Observation{}); err != nil || accepted.Status != "ACCEPTED" {
+		t.Fatalf("independent synthetic actor rejected: %+v %v", accepted, err)
 	}
 }
 

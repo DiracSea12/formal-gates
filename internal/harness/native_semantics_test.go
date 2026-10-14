@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
@@ -16,7 +15,7 @@ import (
 
 func TestNativeSemanticSubmissionPreservesOriginalToolEvidence(t *testing.T) {
 	workspace, directory := t.TempDir(), t.TempDir()
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v3", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -47,11 +46,7 @@ func TestNativeSemanticSubmissionPreservesOriginalToolEvidence(t *testing.T) {
 		}
 		return getOf(getOf(reply, "result"), "isError") == false
 	}
-	verification := []string{}
-	for range review.RequiredVerificationChecks() {
-		verification = append(verification, "中文 \"quoted\"\nnext line")
-	}
-	value := map[string]any{"findings": []any{}, "verification": verification}
+	value := map[string]any{"findings": []any{}}
 	if !call(value) || !call(value) {
 		t.Fatal("original and repeated submission rejected")
 	}
@@ -81,8 +76,8 @@ func TestNativeSemanticSubmissionPreservesOriginalToolEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Result.ActionID != input.Pending.ActionID || event.Result.Review.RequirementRevision != "confirmed" || !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) {
-		t.Fatal("program-owned binding or verification changed")
+	if event.Result.ActionID != input.Pending.ActionID || event.Result.Review.RequirementRevision != "confirmed" {
+		t.Fatal("program-owned review binding changed")
 	}
 	before, err := os.ReadFile(filepath.Join(directory, nativeToolCallsFile))
 	if err != nil {

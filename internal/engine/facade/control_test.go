@@ -446,7 +446,7 @@ func TestRouteRequestPreservesDevelopedRouteConstraints(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 	d.confirmRoute(routeDecisionForGates([]string{catalog[2]}))
 	d.drive()
-	action, _ := d.action("engine.development.batch.v5")
+	action, _ := d.action("engine.development.batch.v6")
 	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
 	if err != nil {
 		t.Fatal(err)

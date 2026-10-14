@@ -631,6 +631,77 @@ type WorkerMaterial struct {
 	ReadOnly  bool   `json:"readOnly"`
 }
 
+// ReviewVerificationContext exposes original immutable semantic input. Native
+// invocation ownership selects its material; typed inputs use the confirmed
+// intake receipt in force when their dispatch was issued.
+type ReviewVerificationContext struct {
+	Material *WorkerMaterial       `json:"material,omitempty"`
+	Input    *protocol.WorkerInput `json:"input,omitempty"`
+	Intake   *IntakePreview        `json:"intake,omitempty"`
+}
+
+func (f *Facade) reviewVerificationContexts(state *protocol.State) (map[string]ReviewVerificationContext, error) {
+	contexts := map[string]ReviewVerificationContext{}
+	for _, result := range state.PendingReviewVerifications() {
+		attempt := state.EndedAttempts[state.SpawnReceipts[result.ActionID].Task]
+		invocations, err := claimedWorkerInvocations(f.root, f.runID, result.ActionID, attempt.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, invocation := range invocations {
+			ref := invocation.binding.WorkerMaterial
+			id := WorkerResultEventID(*ref, invocation.binding.ResumeActionID)
+			event := protocol.Event{ID: id, Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Outcome, PayloadDigest: result.PayloadDigest, SourceResult: result.SourceResult, InterruptionReason: result.InterruptionReason, InvalidReason: result.InvalidReason, FailureClass: result.FailureClass, Review: result.Review, Validation: result.Validation}}
+			digest, err := event.Digest()
+			if err != nil {
+				return nil, err
+			}
+			recorded := state.Events[string(id)]
+			if recorded.Acceptance.ActionID == result.ActionID && recorded.Digest == digest {
+				if original := contexts[result.ActionID].Material; original != nil && original.Digest != ref.Digest {
+					return nil, fmt.Errorf("original review result is bound to multiple different native input materials")
+				}
+				contexts[result.ActionID] = ReviewVerificationContext{Material: ref, Input: &invocation.material.Input}
+			}
+		}
+		if contexts[result.ActionID].Material != nil {
+			continue
+		}
+		receipt := state.IntakeReceipt.Confirmation
+		for _, entry := range state.RequirementRevisions {
+			if entry.StateRevision <= state.DispatchIssueRevisions[result.ActionID] && entry.Intake != nil {
+				receipt = *entry.Intake
+			}
+		}
+		originals, err := f.originalWorkerMaterials()
+		if err != nil {
+			return nil, err
+		}
+		for ref, material := range originals {
+			input := material.Input
+			if ref.ActionID != result.ActionID || ref.AttemptID != attempt.ID || input.Review == nil || input.Review.Action != result.Review.Action || input.Review.RequirementRevision != result.Review.RequirementRevision || !reflect.DeepEqual(input.Intake, &receipt) {
+				continue
+			}
+			if prior := contexts[result.ActionID].Material; prior != nil && prior.Digest != ref.Digest {
+				return nil, fmt.Errorf("completed typed review has multiple different original material bindings")
+			}
+			contexts[result.ActionID] = ReviewVerificationContext{Material: &ref, Input: &input}
+		}
+		if contexts[result.ActionID].Material != nil {
+			continue
+		}
+		if strings.TrimPrefix(receipt.RequirementRevision, "sha256:") != strings.TrimPrefix(result.Review.RequirementRevision, "sha256:") {
+			return nil, fmt.Errorf("original review has no matching confirmed intake at its issuance")
+		}
+		intake, err := f.confirmedIntake(Run{IntakeConfirmationReceipt: &receipt})
+		if err != nil {
+			return nil, err
+		}
+		contexts[result.ActionID] = ReviewVerificationContext{Intake: &intake}
+	}
+	return contexts, nil
+}
+
 func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]WorkerMaterial, error) {
 	refs := map[string]WorkerMaterial{}
 	inputs := s.WorkerInputs(f.definition)
@@ -638,31 +709,11 @@ func (f *Facade) workerMaterials(s *protocol.State, write bool) (map[string]Work
 		return refs, nil
 	}
 	if !write {
-		entries, err := os.ReadDir(filepath.Join(f.stateDir, "materials"))
-		if os.IsNotExist(err) {
-			return refs, nil
-		}
+		materials, err := f.originalWorkerMaterials()
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-				continue
-			}
-			path := filepath.Join(f.stateDir, "materials", entry.Name())
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return nil, err
-			}
-			var value worker.Material
-			if err := json.Unmarshal(body, &value); err != nil {
-				return nil, err
-			}
-			ref := WorkerMaterial{ActionID: value.Input.Pending.ActionID, AttemptID: value.Input.Pending.AttemptID, Path: path, Digest: "sha256:" + strings.TrimSuffix(entry.Name(), ".json"), ReadOnly: value.ReadOnly}
-			value, err = readWorkerMaterial(ref)
-			if err != nil {
-				return nil, err
-			}
+		for ref, value := range materials {
 			input, current := inputs[ref.ActionID]
 			if !current {
 				continue
@@ -766,7 +817,7 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	event := protocol.Event{ID: protocol.EventID("intake.requirement:" + revision), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: string(data)}}}
-	_, err = f.engine.Submit(event, requirementObservation(path, data))
+	_, err = f.engine.Submit(event, intakeObservation(f.root, []IntakeMaterial{{Path: receipt.RequirementSource, Revision: requirementContentRevision(data)}}))
 	return err
 }
 
@@ -830,4 +881,36 @@ func (f *Facade) routeRequestPayload(child bool) (*protocol.RequestPayload, erro
 		candidates = slices.DeleteFunc(candidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
 	return &protocol.RequestPayload{Control: protocol.ControlSelectRoute, RouteGates: candidates, Options: []protocol.AskOption{{ID: "full", Label: "Run all proposed gates"}, {ID: "custom", Label: "Choose the proposed gates"}}}, nil
+}
+
+func (f *Facade) originalWorkerMaterials() (map[WorkerMaterial]worker.Material, error) {
+	materials := map[WorkerMaterial]worker.Material{}
+	entries, err := os.ReadDir(filepath.Join(f.stateDir, "materials"))
+	if os.IsNotExist(err) {
+		return materials, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(f.stateDir, "materials", entry.Name())
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var value worker.Material
+		if err := json.Unmarshal(body, &value); err != nil {
+			return nil, err
+		}
+		ref := WorkerMaterial{ActionID: value.Input.Pending.ActionID, AttemptID: value.Input.Pending.AttemptID, Path: path, Digest: "sha256:" + strings.TrimSuffix(entry.Name(), ".json"), ReadOnly: value.ReadOnly}
+		value, err = readWorkerMaterial(ref)
+		if err != nil {
+			return nil, err
+		}
+		materials[ref] = value
+	}
+	return materials, nil
 }

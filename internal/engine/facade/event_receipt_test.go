@@ -10,7 +10,7 @@ import (
 
 func TestAcceptanceIncludesCommittedRefill(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, _ := d.action("engine.development.batch.v5")
+	id, _ := d.action("engine.development.batch.v6")
 	d.receipt(id)
 	event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "interrupted development"}}
 	got := d.submit(event)

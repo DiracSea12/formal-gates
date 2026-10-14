@@ -309,7 +309,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		}
 		if !reused || item.changes.Checks != nil {
 			batch.Checks = nil
-			if input.Handler == "engine.repair.v6" {
+			if input.Handler == "engine.repair.v7" {
 				for _, check := range input.ApprovedChecks {
 					if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests || check.Purpose == protocol.CheckEdit {
 						batch.Checks = append(batch.Checks, check)
@@ -318,41 +318,25 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			}
 			for i, check := range item.Checks {
 				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command, Goal: check.Goal}
-				if input.Review != nil && (check.Command != "" || check.Parts != nil) {
-					return nil, fmt.Errorf("review selects an original verification call or proposes its goal")
+				if input.Review != nil && check.Command != "" {
+					return nil, fmt.Errorf("review reuses an approved check or proposes a verification goal")
 				}
 				if check.Goal != "" {
-					if input.Review == nil || check.Purpose == protocol.CheckEdit || check.Command != "" || check.Reuse != 0 || check.Read != 0 || check.Parts != nil {
-						return nil, fmt.Errorf("verification goal belongs to a missing batch-boundary call")
+					if input.Review == nil || check.Reuse != 0 {
+						return nil, fmt.Errorf("review declares a missing verification goal without a reused check")
 					}
 				} else if check.Reuse != 0 {
-					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Read != 0 || check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil || check.Parts != nil || check.Goal != "" {
+					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Goal != "" {
 						return nil, fmt.Errorf("check reuse selects only an original approved check")
 					}
 					selected = input.ApprovedChecks[check.Reuse-1]
 				} else {
-					if check.Read != 0 || check.Parts != nil {
-						if check.Command != "" {
-							return nil, fmt.Errorf("check requires an original published read without an authored command")
-						}
-						var err error
-						if check.Parts != nil {
-							selected.Command, err = (StringChange{Parts: check.Parts}).text(nil, facts)
-						} else {
-							selected.Command, err = sourceReadText(facts, check.Read, check.From, check.To, check.FromColumn, check.ToColumn)
-						}
-						if err != nil {
-							return nil, err
-						}
-					} else if check.From != 0 || check.To != 0 || check.FromColumn != nil || check.ToColumn != nil {
-						return nil, fmt.Errorf("check range requires an original published read")
-					}
 					for _, approved := range input.ApprovedChecks {
 						if approved.Command == selected.Command {
 							return nil, fmt.Errorf("approved command requires its original check selection")
 						}
 					}
-					if selected.Command == "" || input.Handler == "engine.repair.v6" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+					if selected.Command == "" || input.Handler == "engine.repair.v7" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
 						return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
 					}
 				}

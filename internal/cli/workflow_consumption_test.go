@@ -252,7 +252,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	}
 	directory := facade.WorkerExecutionDirectory(material, "")
 	for range 2 {
-		err := executeWorkflowWorker(context.Background(), f, material, protocol.HostActionIntent{})
+		err := executeWorkflowWorker(context.Background(), context.Background(), f, material, protocol.HostActionIntent{})
 		if err == nil || !strings.Contains(err.Error(), "native supervisor ended without an exit receipt") {
 			t.Fatalf("consumer did not reach the local supervisor refusal: %v", err)
 		}

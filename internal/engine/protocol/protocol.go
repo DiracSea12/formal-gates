@@ -274,8 +274,8 @@ type SpawnReceipt struct {
 }
 
 // WorkerResult 是落账的 typed worker result（含 result-before-receipt
-// 暂存复用同一形态）。Review 非空时是审查派发的语义证据：随结果接纳交
-// review 内核记账，并随回执字节一并参与幂等/冲突判定。
+// 暂存复用同一形态）。Review 保留原始审查内容；独立 Operator observation
+// 接纳后才进入 review 内核，原内容参与结果的幂等/冲突判定。
 type WorkerResult struct {
 	SourceResult       string                 `json:"sourceResult,omitempty"`
 	InterruptionReason string                 `json:"interruptionReason,omitempty"`
@@ -357,10 +357,11 @@ type ReconciledEffect struct {
 // 对账项（Subject，如 actionID/receipt 标识）+ 复用 decision.Fact 的
 // typed 事实集合。
 type OperatorObservation struct {
-	Subject  string          `json:"subject"`
-	Facts    []decision.Fact `json:"facts"`
-	EventID  string          `json:"eventId"`
-	Revision uint64          `json:"revision"`
+	Review   *ReviewVerificationObservation `json:"review,omitempty"`
+	Subject  string                         `json:"subject"`
+	Facts    []decision.Fact                `json:"facts"`
+	EventID  string                         `json:"eventId"`
+	Revision uint64                         `json:"revision"`
 }
 
 // HostActionOperation 是 HostAction 的封闭操作集合。Adapter operation 是

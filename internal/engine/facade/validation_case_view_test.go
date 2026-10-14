@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			d := candidateSourceDriver(t, "whitebox")
 			trees := map[string]map[string]string{}
+			reviewIntents := map[string]protocol.HostActionIntent{}
 			changed := false
 			negativeRef := "negative_test.go::TestNegative"
 			observe := func(intent protocol.HostActionIntent) protocol.Event {
@@ -34,10 +36,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				}
 				stage := params.Stage
 				if stage == "CHECK_SOURCE" {
-					stage = "QA_ARTIFACT"
-					if len(params.Paths) == 1 && params.Paths[0] == "app.go" {
-						stage = "DEVELOPMENT"
-					}
+					stage, _ = candidateEditSource(t, d, params)
 				}
 				switch stage {
 				case "DEVELOPMENT":
@@ -89,6 +88,12 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 					t.Fatal("wrong adapter method")
 				}
 				if params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
+					if params.DesignTasks[coverage.ReviewWhitebox] != d.run.Validation.Sets[coverage.ReviewWhitebox].DesignTask {
+						t.Fatal("issued intent has wrong design source")
+					}
+					if params.Stage == "QA_ARTIFACT" {
+						reviewIntents[intent.ActionID] = intent
+					}
 					rawParams, _ := json.Marshal(intent.Adapter.Params)
 					var shape map[string]any
 					if err := json.Unmarshal(rawParams, &shape); err != nil {
@@ -168,11 +173,11 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				}
 
 			}
-			id, in := d.action("engine.development.batch.v5")
+			id, in := d.action("engine.development.batch.v6")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "two independent predicates"}})
 			materialize()
 			materialize()
-			id, in = d.action("engine.qa.design.v5")
+			id, in = d.action("engine.qa.design.v6")
 			m := in.Manifest
 			m.Cases = []coverage.AcceptanceCase{{CaseID: "positive", Mode: coverage.CaseWhitebox, Scenario: "SUCCESS", TestRef: "positive_test.go::TestPositive", Oracle: "positive true"}, {CaseID: "negative", Mode: coverage.CaseWhitebox, Scenario: "FAILURE", TestRef: "negative_test.go::TestNegative", Oracle: "negative false"}}
 			for _, c := range m.Cases {
@@ -189,7 +194,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 			r.SourceDecisions[0].Status = coverage.StatusFail
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "FAIL", Review: &r})
 			changed = true
-			id, in = d.action("engine.qa.design.v5")
+			id, in = d.action("engine.qa.design.v6")
 			m.Cases[0].Oracle = "positive equals true with actual value reported"
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m, Development: &protocol.DevelopmentEvidence{Paths: []string{"positive_test.go", "negative_test.go", "fixture_test.go"}}})
 			materialize()
@@ -230,7 +235,11 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 			}
 			for _, candidate := range []string{old, now} {
 				found := false
-				for _, receipt := range s.State.HostActionReceipts {
+				for action, intent := range reviewIntents {
+					receipt, recorded := s.State.HostActionReceipts[action]
+					if !recorded || receipt.ActionID != action || receipt.PayloadDigest != intent.PayloadDigest || receipt.Correlation != intent.Correlation || receipt.AdapterOperation != intent.Adapter.Operation {
+						t.Fatal("original QA candidate receipt binding was lost")
+					}
 					if receipt.AdapterEvidence == nil || receipt.AdapterEvidence.Values["identity"] != candidate {
 						continue
 					}
@@ -246,10 +255,16 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 					if v.TestRef != "negative_test.go::TestNegative" || len(v.Inputs) != 4 {
 						t.Fatal("original dependency view was lost")
 					}
-					for path, digest := range v.Inputs {
-						if digest != fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(trees[candidate][path]))) {
-							t.Fatal("stored view differs from original dependency bytes")
+					inputs := map[string]string{}
+					for _, path := range []string{"app.go", "negative_test.go", "fixture_test.go", "go.mod"} {
+						content, exists := trees[candidate][path]
+						if !exists {
+							t.Fatalf("original dependency bytes missing: %s", path)
 						}
+						inputs[path] = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(content)))
+					}
+					if !maps.Equal(v.Inputs, inputs) {
+						t.Fatal("stored view differs from original dependency paths and bytes")
 					}
 					found = true
 				}
@@ -263,7 +278,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				negativeRef = "negative_test.go::TestNegativeAlternate"
 				for _, affected := range []string{"negative", "positive"} {
 					d.chooseValidation(protocol.ValidationRequest{Kind: "THAW", Category: "CASE_EXECUTABILITY", Mode: coverage.ReviewWhitebox, AffectedCases: []string{affected}}, "")
-					design, di := d.action("engine.qa.design.v5")
+					design, di := d.action("engine.qa.design.v6")
 					m = di.Manifest
 					m.Cases[1].TestRef = negativeRef
 					if affected == "positive" {
@@ -290,7 +305,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 				return
 			}
 			materialize()
-			qa, qi := d.action("engine.qa.execution.v3")
+			qa, qi := d.action("engine.qa.execution.v4")
 			execution := executionFor(qi)
 			d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &execution}))
 			if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {

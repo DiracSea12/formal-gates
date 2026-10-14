@@ -272,19 +272,8 @@ func (w *FakeWorker) ResultBeforeReceipt(actionID, outcome, payloadDigest string
 	return w.Result(actionID, outcome, payloadDigest, class)
 }
 
-// fakeReviewVerification is the complete record of the operator's eight
-// checks, as the fake adapter books each round it drives.
-func fakeReviewVerification() review.OperatorVerification {
-	return review.OperatorVerification{
-		Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
-		Evidence: "the fake adapter re-ran the bound dispatch and compared the recorded evidence",
-	}
-}
-
 // ReviewResult submits a typed worker result carrying review evidence: a
-// ledger review-series dispatch completes only through the review-ledger
-// projection, so driving its round requires semantic evidence bound to the
-// authoritative requirement revision.
+// complete review awaits independent Operator admission before it counts.
 func (w *FakeWorker) ReviewResult(actionID string, action review.Action, payloadDigest string) (protocol.Acceptance, error) {
 	wireID := protocol.EventID(fmt.Sprintf("fake-worker-review-%d", w.seq.Add(1)))
 	return w.ReviewResultEvent(wireID, actionID, action, payloadDigest)
@@ -299,7 +288,7 @@ func (w *FakeWorker) ReviewResultEvent(eventID protocol.EventID, actionID string
 	}
 	ev, err := protocol.NewReviewWorkerResultEvent(eventID, actionID, w.Provider, payloadDigest, protocol.ReviewResultEvidence{
 		Action: action, DispatchID: actionID, RequirementRevision: snapshot.State.RequirementRevision(),
-		Status: protocol.OutcomePass, Message: "fake review round", Verification: fakeReviewVerification(),
+		Status: protocol.OutcomePass, Message: "fake review round",
 	})
 	if err != nil {
 		return protocol.Acceptance{}, err

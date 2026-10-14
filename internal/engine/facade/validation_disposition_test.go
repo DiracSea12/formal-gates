@@ -100,7 +100,7 @@ func TestDisposedValidationTargetRetiresEveryRetryDelivery(t *testing.T) {
 					t.Fatal("disposed task was reissued")
 				}
 			}
-			qa, qi := d.action("engine.qa.execution.v3")
+			qa, qi := d.action("engine.qa.execution.v4")
 			report := executionFor(qi)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			d.reopen()
@@ -118,12 +118,12 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 			t.Run(fmt.Sprintf("retry=%v/%s", retry, choice), func(t *testing.T) {
 				d, finding, wave := validationWithGateFinding(t)
 				resolveGateFinding(d, finding, wave)
-				id, input := d.action("engine.repair.v6")
+				id, input := d.action("engine.repair.v7")
 				if retry {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "unavailable-workspace"}})
 					d.drive()
-					id, input = d.action("engine.repair.v6")
+					id, input = d.action("engine.repair.v7")
 				}
 				result := gateRepairResult(input)
 				delivered := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "verified-repair", Validation: &result}}
@@ -189,7 +189,7 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, wave)
-			id, input := d.action("engine.repair.v6")
+			id, input := d.action("engine.repair.v7")
 			d.receipt(id)
 			if terminal {
 				for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
@@ -236,7 +236,7 @@ func TestUnavailableTargetDispositionAfterQARerun(t *testing.T) {
 		t.Run(choice, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
-			_, qaInput := d.action("engine.qa.execution.v3")
+			_, qaInput := d.action("engine.qa.execution.v4")
 			var target string
 			var failedBinding protocol.WorkBinding
 			var failures []string
@@ -304,7 +304,7 @@ func TestUnavailableTargetDisposalRejectsReplacedQADuty(t *testing.T) {
 	d.reviewReady()
 	var target string
 	for i := 0; i < 2; i++ {
-		id, input := d.action("engine.qa.execution.v3")
+		id, input := d.action("engine.qa.execution.v4")
 		target = input.Binding.Task.String()
 		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "INVALID"})
 		d.drive()

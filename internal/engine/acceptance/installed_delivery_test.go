@@ -32,10 +32,11 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			d := newCandidateDriver(t, scenario.mode)
-			d.plan = candidatePlan()
+			d.plan = candidatePlan(nil)
 			command := d.plan.Batches[0]
 			spike := command
 			spike.ID, spike.Spike = "investigate", true
+			spike.RequirementPoints = nil
 			spike.Subtasks = []protocol.DevelopmentSubtask{{ID: "uncertainty", Description: "Establish the command input boundary"}}
 			spike.Deliverable, spike.Artifacts, spike.Handoff = "Input boundary conclusion", []string{"probe.go"}, "Use the established input boundary"
 			command.DependsOn = []string{spike.ID}
@@ -57,7 +58,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			find := func(batchID string) (string, protocol.ValidationInput) {
 				t.Helper()
 				for id, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.development.batch.v5" && input.Development != nil && input.Development.Batch.ID == batchID {
+					if input.Handler == "engine.development.batch.v6" && input.Development != nil && input.Development.Batch.ID == batchID {
 						return id, input
 					}
 				}
@@ -74,7 +75,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			}
 			conclusion := protocol.ValidationResult{Binding: spikeInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{
 				Paths: []string{"probe.go"}, Summary: "Nonempty command input is accepted; empty input is rejected",
-
+				Commands:   []string{"go build ./...", "go test -timeout=0 ./..."},
 				Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input boundary established"}, Handoff: spike.Handoff},
 			}}
 			d.business(spikeAction, conclusion)
@@ -198,7 +199,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 	for _, mode := range []string{"none", "blackbox"} {
 		t.Run(mode, func(t *testing.T) {
 			d := newCandidateDriver(t, mode)
-			d.plan = candidatePlan()
+			d.plan = candidatePlan(nil)
 			extension := d.plan.Batches[0]
 			extension.ID = "extension"
 			extension.Subtasks = []protocol.DevelopmentSubtask{{ID: "extend", Description: "Use the validated command in an extension"}}
@@ -225,7 +226,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 			var action string
 			var input protocol.ValidationInput
 			for id, in := range d.run.ValidationInputs {
-				if in.Handler == "engine.development.batch.v5" && in.Development != nil && in.Development.Batch.ID == "extension" {
+				if in.Handler == "engine.development.batch.v6" && in.Development != nil && in.Development.Batch.ID == "extension" {
 					action, input = id, in
 				}
 			}
@@ -390,7 +391,7 @@ func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
 			} else {
 				d.reviews()
 				for id, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.development.batch.v5" {
+					if in.Handler == "engine.development.batch.v6" {
 						d.develop(id, in)
 					}
 				}

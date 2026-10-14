@@ -107,6 +107,22 @@ func (f *Facade) PrepareCurrentControl(input ControlInput) (ControlCandidate, er
 	if err != nil {
 		return ControlCandidate{}, err
 	}
+	if input.ReviewVerification != nil {
+		remaining := input.ReviewVerification.Result
+		for _, item := range current {
+			if remaining > 0 && remaining <= len(item.run.ReviewVerifications) {
+				local := input
+				value := *input.ReviewVerification
+				value.Result = remaining
+				local.ReviewVerification = &value
+				candidate, err := item.owner.prepareControl(local, item.run)
+				candidate.Input = input
+				return candidate, err
+			}
+			remaining -= len(item.run.ReviewVerifications)
+		}
+		return ControlCandidate{}, fmt.Errorf("review verification position %d is outside the current %d choices", input.ReviewVerification.Result, input.ReviewVerification.Result-remaining)
+	}
 	if input.Request == protocol.ControlContinueNode {
 		remaining := input.Node
 		for _, item := range current {

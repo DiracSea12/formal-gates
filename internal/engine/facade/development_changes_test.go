@@ -13,7 +13,7 @@ func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T
 	for _, status := range []string{protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			action, _ := d.action("engine.development.batch.v5")
+			action, _ := d.action("engine.development.batch.v6")
 			identity := observeWorkerDispatch(d, action, status)
 			d.reopen()
 			before, err := d.f.engine.Load()
@@ -249,8 +249,8 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 
 func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	developer, _ := d.action("engine.development.batch.v5")
-	qa, _ := d.action("engine.qa.design.v5")
+	developer, _ := d.action("engine.development.batch.v6")
+	qa, _ := d.action("engine.qa.design.v6")
 	d.receipt(qa)
 	for _, request := range []struct{ action, reason string }{
 		{qa, "selected the QA worker by mistake"},
@@ -303,7 +303,7 @@ func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
 
 func TestHandoffWaitsForUnknownSpawnIdentity(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch.v5")
+	action, _ := d.action("engine.development.batch.v6")
 	worker := workerNumberForAction(d.run, action)
 	unknown, err := protocol.NewSpawnReceiptEvent(d.eventID(), action, d.host(), action, protocol.SpawnStatusUnknown)
 	if err != nil {

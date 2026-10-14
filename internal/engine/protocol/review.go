@@ -1,5 +1,5 @@
 // review.go 是开发前审查纯内核（internal/engine/review）在提交协议层的
-// 嫁接点：审查证据随 WORKER_RESULT 接纳入账、四个审查类业务控制的
+// 嫁接点：原始审查结果保存、独立 Operator 核实接纳、审查类业务控制的
 // DECIDE 账目变换、run phase 的门控推进与加载/提交边界的账本完整性
 // 校验。所有持久化都经 Engine 的事务紧随其后原子完成，本文件只做
 // 校验与 state 变换、不做 I/O。
@@ -252,7 +252,7 @@ func (s *State) effectivePass(series review.Series) bool {
 	}
 	// FreshOwed 在则该系列不算 PASS：重走义务未清偿时，即便投影被纠正
 	// 刷成携已确认 revision 的 PASS，门也不开。
-	return series.Effective.Status == reviewStatusPass && !series.FreshOwed && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
+	return series.Effective.Status == reviewStatusPass && !series.FreshOwed && !s.reviewDispositionPending(series) && !s.reviewVerificationPending(series.Action) && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
 }
 
 // dualReviewPass 报告双 series 的 effective 结论是否都是携带已确认
@@ -332,7 +332,7 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 	return nil
 }
 
-func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
+func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, verification review.OperatorVerification, actionID string, issuedRevision uint64) (review.Set, error) {
 	if err := s.reviewAdmission(evidence, actionID, issuedRevision); err != nil {
 		return review.Set{}, err
 	}
@@ -344,7 +344,7 @@ func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID str
 			AuthorizationID:     evidence.AuthorizationID,
 		},
 		review.Result{Status: evidence.Status, Message: evidence.Message, Findings: evidence.Findings},
-		evidence.Verification)
+		verification)
 	if err != nil {
 		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 	}
@@ -365,23 +365,25 @@ func isSequenceGate(err error) bool {
 
 // prepareReviewResult validates the complete worker content without mutating its
 // review series. Dispatch admission remains separate from invalid result handling.
-func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidence, actionID string) (review.Set, error) {
-	updated, err := state.admitReviewEvidence(evidence, actionID, state.issuedRevisionOf(actionID))
-	if err != nil {
-		return review.Set{}, err
+func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidence, actionID string) error {
+	if err := state.reviewAdmission(evidence, actionID, state.issuedRevisionOf(actionID)); err != nil {
+		return err
+	}
+	if err := review.ValidateResult(evidence.Action, review.Result{Status: evidence.Status, Message: evidence.Message, Findings: evidence.Findings}); err != nil {
+		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 	}
 	if pipelineEnabled(state, e.cfg.Definition) && evidence.Action == review.StartReadiness && evidence.Status == "PASS" {
 		if err := ValidateGranularity(evidence.GranularityReview); err != nil {
-			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+			return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
 		if err := state.validatePlanRequirementCoverage(evidence.GranularityReview, true); err != nil {
-			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+			return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
 		if err := ValidateProjectChecks(evidence.GranularityReview); err != nil {
-			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+			return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
 	}
-	return updated, nil
+	return nil
 }
 
 // ---- 审查类决定的账目变换（DECIDE 接纳路径） ----
@@ -464,6 +466,12 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "REVIEW_FINDING_DECISION takes the correction branch"}
 		}
 		correction := *payload.Correction
+		if strings.HasPrefix(requestID, "review-finding:") {
+			bound, current := state.ReviewFindingBinding(requestID)
+			if !current || bound.Action != correction.Action || bound.ResultDigest != correction.ResultDigest || bound.FindingID != correction.FindingID || bound.DispatchID != correction.DispatchID {
+				return reviewReject(fmt.Errorf("finding decision differs from its displayed automatic Ask"))
+			}
+		}
 		decision, findingID, ok := parseDecisionChoice(decide.Choice)
 		if !ok || strings.ToUpper(strings.TrimSpace(correction.Decision)) != decision || strings.TrimSpace(correction.FindingID) != findingID {
 			return &RejectedError{
@@ -847,4 +855,229 @@ func verifyReviewIntegrity(state *State) error {
 		}
 	}
 	return state.verifyPhaseAgainstLedgers()
+}
+
+// ReviewVerificationObservation binds independent semantic judgments to the
+// unchanged worker result. Finding judgments follow its original finding order.
+type ReviewVerificationObservation struct {
+	ResultDigest  string                      `json:"resultDigest"`
+	Verification  review.OperatorVerification `json:"verification"`
+	Findings      []ReviewFindingVerification `json:"findings"`
+	InvalidReason string                      `json:"invalidReason,omitempty"`
+}
+
+type ReviewFindingVerification struct {
+	Valid             bool   `json:"valid"`
+	Reason            string `json:"reason"`
+	Severity          string `json:"severity,omitempty"`
+	SeverityRationale string `json:"severityRationale,omitempty"`
+}
+
+// PendingReviewVerifications derives semantic duties from completed source
+// results. The admitted candidate and existing rejection own their disposition.
+func (s *State) PendingReviewVerifications() []WorkerResult {
+	results := []WorkerResult{}
+	if s.Phase == runtime.PhaseTerminal || s.requirementChangePending() || s.abortRequested() {
+		return results
+	}
+	for id, result := range s.Results {
+		if result.Review == nil || result.Outcome != OutcomePass {
+			continue
+		}
+		if _, retired := s.ObsoleteActions[id]; retired {
+			continue
+		}
+		if receipt, receipted := s.SpawnReceipts[id]; !receipted || !inflightWitnessReceipt(receipt.Status) {
+			continue
+		}
+		series, ok := s.ReviewSeries.Series(result.Review.Action)
+		if !ok || slices.ContainsFunc(series.RawCandidates, func(candidate review.RawCandidate) bool { return candidate.DispatchID == id }) {
+			continue
+		}
+		generation, confirmed := s.confirmedRevisionGeneration(result.Review.RequirementRevision)
+		if !confirmed || generation < series.FreshFloor || s.issuedRevisionOf(id) < series.FreshFloor {
+			continue
+		}
+		results = append(results, result)
+	}
+	slices.SortFunc(results, func(a, b WorkerResult) int { return strings.Compare(a.ActionID, b.ActionID) })
+	return results
+}
+
+func (s *State) reviewVerificationPending(action review.Action) bool {
+	return slices.ContainsFunc(s.PendingReviewVerifications(), func(result WorkerResult) bool { return result.Review.Action == action })
+}
+
+func (e *Engine) acceptReviewVerification(s *State, observation *OperatorObservationPayload, nextRevision uint64) (string, error) {
+	for _, accepted := range s.OperatorObservations {
+		if accepted.Subject == observation.Subject && accepted.Review != nil {
+			if digestOfCanonical(accepted.Review) == digestOfCanonical(observation.Review) {
+				return "DUPLICATE", nil
+			}
+			return "", &RejectedError{Code: CodeReceiptConflict, Detail: "independent verification already disposed this original result; use the finding correction contract"}
+		}
+	}
+	index := slices.IndexFunc(s.PendingReviewVerifications(), func(result WorkerResult) bool { return result.ActionID == observation.Subject })
+	if index < 0 {
+		return "", &RejectedError{Code: CodeEventNotCurrent, Detail: "review verification has no current completed source result"}
+	}
+	result := s.Results[observation.Subject]
+	judgment := observation.Review
+	if judgment.ResultDigest != result.Digest {
+		return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review verification differs from the original result digest"}
+	}
+	if strings.TrimSpace(judgment.InvalidReason) != "" {
+		if len(judgment.Findings) != 0 {
+			return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "invalid review result cannot contain finding judgments"}
+		}
+		return "REJECTED_INVALID_RESULT", s.endInvalidAttempt(result.ActionID, "REJECTED_INVALID_RESULT", judgment.InvalidReason, result, nextRevision)
+	}
+	if strings.TrimSpace(judgment.Verification.Evidence) == "" {
+		return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "independent review verification requires original evidence"}
+	}
+	if len(judgment.Findings) != len(result.Review.Findings) {
+		return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "independently verify each original finding in order"}
+	}
+	evidence := *result.Review
+	evidence.Findings = []review.Finding{}
+	verification := judgment.Verification
+	for i, verified := range judgment.Findings {
+		if strings.TrimSpace(verified.Reason) == "" {
+			return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "each finding requires independent verification evidence"}
+		}
+		verification.Evidence += fmt.Sprintf("\nfinding %d valid=%t: %s", i+1, verified.Valid, verified.Reason)
+		if !verified.Valid {
+			continue
+		}
+		finding := result.Review.Findings[i]
+		if verified.Severity != "" {
+			if strings.TrimSpace(verified.SeverityRationale) == "" {
+				return "", &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "an independently revised severity requires its rationale"}
+			}
+			finding.Severity, finding.SeverityRationale = verified.Severity, verified.SeverityRationale
+		}
+		evidence.Findings = append(evidence.Findings, finding)
+	}
+	updated, err := s.admitReviewEvidence(&evidence, verification, result.ActionID, s.issuedRevisionOf(result.ActionID))
+	if err != nil {
+		return "", err
+	}
+	s.ReviewSeries = updated
+	delete(s.EndedAttempts, s.SpawnReceipts[result.ActionID].Task)
+	if err := s.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
+		return "", err
+	}
+	s.routingReleasedCapacity = true
+	return "ACCEPTED", nil
+}
+
+// ReviewFindingRevised derives remedy completion from its confirmed requirement
+// delta. Finding corrections replace the disposition, not that confirmation.
+func (s *State) ReviewFindingRevised(finding review.Finding) bool {
+	for _, entry := range s.RequirementRevisions {
+		ask := s.PendingAsks[entry.RequestID]
+		if ask.Package != nil && ask.Package.FindingDigest == finding.Digest {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) reviewDispositionPending(series review.Series) bool {
+	for _, candidate := range series.RawCandidates {
+		if review.ResultExcluded(series, candidate.ResultDigest) || candidate.RequirementRevision != series.Effective.RequirementRevision {
+			continue
+		}
+		for _, finding := range candidate.Findings {
+			disposition, _, _ := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+			if disposition == "" || (disposition == "CONFIRM" || disposition == "RESEVERITIZE") && !s.ReviewFindingRevised(finding) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reconcileReviewAsks publishes each established finding through the existing
+// user-disposition contract. Each request retains its candidate/finding identity;
+// source results and original findings remain immutable.
+func (e *Engine) reconcileReviewAsks(s *State) bool {
+	changed := e.reconcileReviewGrantAsks(s)
+	if s.requirementChangePending() || s.abortRequested() {
+		return changed
+	}
+	offers := map[string][]AskOption{}
+	for _, series := range []review.Series{s.ReviewSeries.ProductReview, s.ReviewSeries.StartReadiness} {
+		for _, candidate := range series.RawCandidates {
+			if review.ResultExcluded(series, candidate.ResultDigest) || candidate.RequirementRevision != series.Effective.RequirementRevision {
+				continue
+			}
+			for _, finding := range candidate.Findings {
+				disposition, _, _ := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+				if disposition != "" {
+					continue
+				}
+				id := reviewFindingAskID(candidate, finding)
+				offers[id] = []AskOption{{ID: AskOptionID("confirm:" + finding.ID), Label: "Confirm the problem; its correction requires the complete review delta"}, {ID: AskOptionID("dismiss:" + finding.ID), Label: "Dismiss this finding"}}
+			}
+		}
+	}
+	for id, ask := range s.PendingAsks {
+		if !strings.HasPrefix(id, "review-finding:") || ask.Resolved {
+			continue
+		}
+		if _, current := offers[id]; !current {
+			ask.Resolved = true
+			s.PendingAsks[id] = ask
+			changed = true
+		}
+	}
+	for id, options := range offers {
+		if _, exists := s.PendingAsks[id]; exists {
+			continue
+		}
+		s.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlReviewFindingDecision, Options: options}
+		changed = true
+	}
+	return changed
+}
+
+func reviewFindingAskID(candidate review.RawCandidate, finding review.Finding) string {
+	return "review-finding:" + digestOfCanonical([]string{candidate.ResultDigest, finding.ID})
+}
+
+// ReviewFindingBinding supplies the exact source of one current automatic Ask.
+func (s *State) ReviewFindingBinding(requestID string) (review.CorrectionInput, bool) {
+	for _, series := range []review.Series{s.ReviewSeries.ProductReview, s.ReviewSeries.StartReadiness} {
+		for _, candidate := range series.RawCandidates {
+			for _, finding := range candidate.Findings {
+				if requestID == reviewFindingAskID(candidate, finding) {
+					return review.CorrectionInput{Action: series.Action, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, FindingID: finding.ID, RequirementRevision: candidate.RequirementRevision, ExpectedEffectiveRevision: series.Effective.Revision}, true
+				}
+			}
+		}
+	}
+	return review.CorrectionInput{}, false
+}
+
+func (s *State) reviewResultAwaitingVerification(actionID string) bool {
+	return slices.ContainsFunc(s.PendingReviewVerifications(), func(result WorkerResult) bool { return result.ActionID == actionID })
+}
+
+func (s *State) pendingReviewCorrections() []review.Finding {
+	findings := []review.Finding{}
+	for _, series := range []review.Series{s.ReviewSeries.ProductReview, s.ReviewSeries.StartReadiness} {
+		for _, candidate := range series.RawCandidates {
+			if review.ResultExcluded(series, candidate.ResultDigest) || candidate.RequirementRevision != series.Effective.RequirementRevision {
+				continue
+			}
+			for _, finding := range candidate.Findings {
+				disposition, _, _ := review.EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+				if (disposition == "CONFIRM" || disposition == "RESEVERITIZE") && !s.ReviewFindingRevised(finding) {
+					findings = append(findings, finding)
+				}
+			}
+		}
+	}
+	return findings
 }

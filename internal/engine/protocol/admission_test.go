@@ -45,7 +45,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	step, err := authoring.NewAgentStep(
 		authoring.Header{ID: "retry.worker", NodeID: "retry", DefinitionVersion: definition.Version},
 		authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
-		authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}},
+		authoring.AgentSpec{Handler: "engine.review.worker.v3", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 3}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -550,6 +550,15 @@ func TestUnknownSpawnReceiptAfterTerminalPreservesReviewPairing(t *testing.T) {
 	if got := settled.Results[action]; got.Review == nil || got.Review.DispatchID != action || got.PayloadDigest != "sha256:review-result" {
 		t.Fatalf("paired review = %+v", got)
 	}
+	source := settled.Results[action]
+	if source.Provider != testProvider || !reflect.DeepEqual(*source.Review, evidence) || settled.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatal("raw pairing changed the original review or performed independent acceptance")
+	}
+	verification := Event{ID: "paired-review-verification", Kind: KindOperatorObservation, Observation: &OperatorObservationPayload{Subject: action, Review: &ReviewVerificationObservation{ResultDigest: source.Digest, Verification: reviewVerification(), Findings: []ReviewFindingVerification{{Valid: true, Reason: "The independently checked synthetic scenario declares this original P1 blocker and preserves its binding and severity."}}}}}
+	if accepted, err := engine.Submit(verification, observedInput); err != nil || accepted.Status != "ACCEPTED" {
+		t.Fatal("independent original paired review was not accepted", accepted, err)
+	}
+	settled = engine.LoadMustSucceed(t).State
 	if len(settled.StagedResults) != 0 || len(settled.EndedAttempts) != 0 || settled.ReviewSeries.ProductReview.Completed != 1 || len(settled.ReviewSeries.ProductReview.RawCandidates) != 1 {
 		t.Fatalf("review settlement = %+v", settled.ReviewSeries.ProductReview)
 	}
@@ -751,7 +760,7 @@ func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
 	if err != nil || a.Status != "OBSOLETE_RESULT" {
 		t.Fatalf("late result %+v %v", a, err)
 	}
-	submitReviewResult(t, engine, "replacement-pass", replacement, reviewEvidenceAt(review.ProductReview, replacement, snap.State.RequirementRevision(), "PASS", "review completed", nil))
+	submitVerifiedReviewResult(t, engine, "replacement-pass", replacement, reviewEvidenceAt(review.ProductReview, replacement, snap.State.RequirementRevision(), "PASS", "review completed", nil))
 	snap = engine.LoadMustSucceed(t)
 	if snap.State.ReviewSeries.ProductReview.Completed != 1 || snap.State.Results[replacement].Outcome != OutcomePass {
 		t.Fatal("replacement did not complete exactly one semantic round")
@@ -1132,7 +1141,7 @@ func TestFailedBranchRefillsTheFreedCapacityImmediately(t *testing.T) {
 	observedInput := Observation{}
 
 	first := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "result-refill-product", first, reviewEvidence(review.ProductReview, first, "", "PASS", "clean", nil))
+	submitVerifiedReviewResult(t, engine, "result-refill-product", first, reviewEvidence(review.ProductReview, first, "", "PASS", "clean", nil))
 	snap := engine.LoadMustSucceed(t)
 	if len(snap.State.PendingActions) != 2 {
 		t.Fatalf("capacity 2 must hold two tail dispatches: %+v", snap.State.PendingActions)

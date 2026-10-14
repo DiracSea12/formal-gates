@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
 	"os"
 	"path/filepath"
@@ -90,9 +91,22 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 					p.CheckpointGroups = [][]string{{"parser", "independent"}, {"command"}}
 					p.CheckpointReason = "The command consumes a separately verifiable parser and independent utility boundary"
 				}
-				d := plannedValidationDriver(t, nil, p, "quality")
+				d := nativeMasterDriver(t)
+				passPreDevelopmentReviews(t, d, p)
+				d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Command consumes parser while utility is independent"}})
+				d.confirmRoute(routeDecisionForGates([]string{"quality"}))
+				d.drive()
 				id, a := planBatchAction(d, "parser")
 				other, b := planBatchAction(d, "independent")
+				contents := map[string]string{}
+				for _, input := range []protocol.ValidationInput{a, b} {
+					for _, path := range input.Development.Batch.Artifacts {
+						contents[path] = "package main\n// " + input.Development.Batch.Deliverable + "\n"
+						if err := os.WriteFile(filepath.Join(input.Workspace.Path, path), []byte(contents[path]), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
 				for _, input := range d.run.ValidationInputs {
 					if input.Development != nil && input.Development.Batch.ID == "command" {
 						t.Fatal("dependent batch issued before predecessor evidence")
@@ -102,10 +116,14 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 					t.Fatalf("future batch omitted from work: %+v", d.run.RequirementWork)
 				}
 				d.business(other, protocol.ValidationResult{Binding: b.Binding, Status: "PASS", Development: batchEvidence(b)})
-				if len(d.run.AdapterIntents) != 0 {
-					t.Fatal("partial group materialized")
+				for _, intent := range d.run.AdapterIntents {
+					if intent.Adapter != nil && intent.Adapter.Operation == "op.candidate" && intent.Adapter.Params["stage"] == "DEVELOPMENT" {
+						t.Fatal("partial group materialized")
+					}
 				}
+				d.drive()
 				d.business(id, protocol.ValidationResult{Binding: a.Binding, Status: "PASS", Development: batchEvidence(a)})
+				d.drive()
 				if reopen {
 					d.reopen()
 					d.drive()
@@ -125,17 +143,36 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 				if !reflect.DeepEqual(in.Development.Dependencies["parser"].Validation.Development, batchEvidence(a)) || in.Development.Dependencies["parser"].Validation.Binding != a.Binding {
 					t.Fatal("dependency handoff lost original evidence")
 				}
+				for _, path := range in.Development.Batch.Artifacts {
+					contents[path] = "package main\n// " + in.Development.Batch.Deliverable + "\n"
+					if err := os.WriteFile(filepath.Join(in.Workspace.Path, path), []byte(contents[path]), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
+				d.drive()
+				snapshot := driverState(t, d)
+				contents[snapshot.RequirementArtifactPath()] = validationDocument
+				paths := make([]string, 0, len(contents))
+				for path := range contents {
+					paths = append(paths, path)
+				}
+				slices.Sort(paths)
+				candidateWave := snapshot.Validation.Waves[len(snapshot.Validation.Waves)-1]
+				if len(candidateWave.SourceTasks) != 3 || !slices.Contains(candidateWave.SourceTasks, a.Binding.Task) || !slices.Contains(candidateWave.SourceTasks, b.Binding.Task) || !slices.Contains(candidateWave.SourceTasks, in.Binding.Task) {
+					t.Fatalf("candidate omitted batch sources: %+v", candidateWave.SourceTasks)
+				}
 				found := false
-				for _, intent := range d.run.AdapterIntents {
-					raw, _ := json.Marshal(intent.Adapter.Params)
-					var params protocol.CandidateParameters
-					_ = json.Unmarshal(raw, &params)
-					if params.Stage == "DEVELOPMENT" {
+				for _, receipt := range snapshot.HostActionReceipts {
+					if receipt.AdapterOperation != "op.candidate" || receipt.AdapterEvidence == nil {
+						continue
+					}
+					var evidence protocol.CandidateEvidence
+					if err := decodeReceiptEvidence(receipt, &evidence); err != nil {
+						t.Fatal(err)
+					}
+					if evidence.Identity == candidateWave.Candidate.Identity && slices.Equal(evidence.Paths, paths) {
 						found = true
-						if len(params.SourceTasks) != 3 || len(params.Paths) != 3 {
-							t.Fatalf("candidate omitted batch sources: %+v", params)
-						}
 					}
 				}
 				if !found {
@@ -150,6 +187,12 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 					d.reopen()
 				}
 				wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				for path, want := range contents {
+					body, err := (vcs.ExecRunner{}).RunRaw(d.f.root, "git", nil, "show", wave.Candidate.Identity+":"+path)
+					if err != nil || string(body) != want {
+						t.Fatalf("frozen delivery %s = %q, want %q: %v", path, body, want, err)
+					}
+				}
 				if wave.Status != "COMPLETE" || len(wave.CheckpointTasks) != 0 {
 					t.Fatal("final complete plan did not receive final validation")
 				}
@@ -180,6 +223,14 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			before, _ := d.f.engine.Load()
 			raw, _ := json.Marshal(before.State.Results[parser])
 			document := validationDocument + "\nImplementation must retain parser output while adding the command's diagnostic contract.\n"
+			receipt := before.State.CurrentIntakeConfirmation()
+			if err := os.WriteFile(filepath.Join(d.f.root, receipt.RequirementSource), []byte(document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			intake, err := prepareConfirmedIntake(d.f.root, receipt, true)
+			if err != nil {
+				t.Fatal(err)
+			}
 			revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
 			var choices []protocol.RequirementWorkDecision
 			for _, w := range d.run.RequirementWork {
@@ -191,15 +242,14 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			}
 			// 本场景同时勾选重走路线：解除绑定后由下面的重新选择确认新计
 			// 划（重选通道常开，直接重选同样可达——见需求侧同名场景）。
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:diagnostic-contract", ImpactDigest: "sha256:command-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices}
+			pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "sha256:diagnostic-contract", ImpactDigest: "sha256:command-only", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationChanged, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices}
 			request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(request)
 			ask := d.run.PendingRequirementAsk
-			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices, Reason: "Confirm changed batch contract"}}})
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: true, RedoRoute: true, WorkDecisions: choices, Reason: "Confirm changed batch contract"}}}.WithRequirementDocument(document))
 			if reopen {
 				d.reopen()
 			}
@@ -217,13 +267,19 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 				t.Fatal("plan change omitted fresh readiness")
 			}
 			d.receipt(ready)
-			ev, err := protocol.NewReviewWorkerResultEvent(d.eventID(), ready, DefaultProvider, "new plan", protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: ready, RequirementRevision: revision, Status: "PASS", GranularityReview: &nextPlan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Compared changed command DoD and retained parser contract"}})
+			worker, issued := driverState(t, d).WorkerInput(ready, d.f.definition)
+			if !issued {
+				t.Fatal("readiness fixture lacks its original issued input")
+			}
+			fixturePlanRequirements(&nextPlan, worker.RequirementPoints)
+			ev, err := protocol.NewReviewWorkerResultEvent(d.eventID(), ready, DefaultProvider, "new plan", protocol.ReviewResultEvidence{Action: review.StartReadiness, DispatchID: ready, RequirementRevision: revision, Status: "PASS", GranularityReview: &nextPlan, Findings: []review.Finding{}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(ev)
+			verifyReviewFixture(t, d, ev)
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.development.batch.v5" {
+				if input.Handler == "engine.development.batch.v6" {
 					t.Fatal("new contract executed before plan confirmation")
 				}
 			}
@@ -305,13 +361,13 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 				t.Fatal("repair allowance detached from checkpoint obligation")
 			}
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v6" || input.Development != nil {
+				if input.Handler == "engine.repair.v7" || input.Development != nil {
 					t.Fatal("checkpoint bypassed finite repair decision")
 				}
 			}
 			break
 		}
-		repair, ri := d.action("engine.repair.v6")
+		repair, ri := d.action("engine.repair.v7")
 		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
@@ -330,7 +386,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	repair, ri := d.action("engine.repair.v6")
+	repair, ri := d.action("engine.repair.v7")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()
@@ -420,17 +476,19 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 			}
 			fixturePlanRequirements(plan, input.RequirementPoints)
 		}
-		event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Checked proposal and current requirement"}})
+		event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}})
 		if err != nil {
 			d.t.Fatal(err)
 		}
 		return id, event
 	}
-	for _, kind := range []string{"missing", "duplicate-batch", "cycle", "duplicate-subtask", "missing-check", "missing-handoff", "checkpoint-omission"} {
+	for _, kind := range []string{"missing", "duplicate-batch", "cycle", "duplicate-subtask", "missing-check", "missing-full-tests", "missing-handoff", "checkpoint-omission"} {
 		t.Run(kind, func(t *testing.T) {
 			d := startValidationDriver(t, nil)
 			_, product := finish(d, review.ProductReview, nil)
 			d.submit(product)
+			verifyReviewFixture(t, d, product)
+			d.drive()
 			p := commandPlan()
 			switch kind {
 			case "missing":
@@ -443,6 +501,8 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 				p.Batches[0].Subtasks = append(p.Batches[0].Subtasks, p.Batches[0].Subtasks[0])
 			case "missing-check":
 				p.Batches[0].Checks = nil
+			case "missing-full-tests":
+				p.Batches[0].Checks[1].Purpose = ""
 			case "missing-handoff":
 				p.Batches[0].Handoff = ""
 			case "checkpoint-omission":
@@ -466,7 +526,10 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 			if rejected.Status != "REJECTED_INVALID_RESULT" || rejected.Reason == "" || !reflect.DeepEqual(rejected.Payload.Review, event.Result.Review) {
 				t.Fatalf("invalid proposal lost original evidence: %+v", rejected)
 			}
-			if snap.State.ReviewSeries.StartReadiness.Completed != 0 || snap.State.ReviewSeries.StartReadiness.FirstPass || snap.State.RouteMode != "" {
+			if kind == "missing-full-tests" && !strings.Contains(rejected.Reason, protocol.CheckFullTests) {
+				t.Fatal("missing project-test purpose was rejected for another reason", rejected.Reason)
+			}
+			if snap.State.ReviewSeries.StartReadiness.Completed != 0 || snap.State.ReviewSeries.StartReadiness.FirstPass || snap.State.RouteMode != "" || len(snap.State.SliceChildren) != 0 {
 				t.Fatal("invalid worker content unlocked route or counted a semantic round")
 			}
 			var retry string
@@ -489,6 +552,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 			}
 			_, valid := finish(d, review.StartReadiness, commandPlan())
 			d.submit(valid)
+			verifyReviewFixture(t, d, valid)
 			completed, err := d.f.engine.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -501,8 +565,11 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	d := startValidationDriver(t, nil)
 	_, product := finish(d, review.ProductReview, nil)
 	d.submit(product)
+	verifyReviewFixture(t, d, product)
+	d.drive()
 	_, ready := finish(d, review.StartReadiness, commandPlan())
 	d.submit(ready)
+	verifyReviewFixture(t, d, ready)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	route := routeDecisionForGates([]string{"blackbox", "quality"})
 	req, err := protocol.NewRouteRequestEvent(d.eventID(), route.Gates, protocol.AskOption{ID: "custom", Label: "Custom"})
@@ -539,7 +606,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	}
 	d.submit(event)
 	d.drive()
-	id, in := d.action("engine.development.batch.v5")
+	id, in := d.action("engine.development.batch.v6")
 	d.receipt(id)
 	evidence := batchEvidence(in)
 	delete(evidence.Completion.DoD, "input-contract")
@@ -547,7 +614,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	if a.Status != "REJECTED_INVALID_RESULT" {
 		t.Fatal("partial DoD completed batch")
 	}
-	retry, ri := d.action("engine.development.batch.v5")
+	retry, ri := d.action("engine.development.batch.v6")
 	if ri.Binding.Task != in.Binding.Task || d.run.Attempts[in.Binding.Task].Attempts != 1 {
 		t.Fatal("DoD rejection escaped original finite duty")
 	}
@@ -639,12 +706,16 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
 	driver.drive()
 	route := protocol.RouteDecision{Mode: "full", Gates: []string{"gate.quality"}}
+	expected, err := parent.SliceDevelopmentPlan("lane-core")
+	if err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(filepath.Join(child.stateDir, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	preview, err := child.DevelopmentPlan(route)
-	if err != nil || len(preview.Proposal.Batches) != 1 || !reflect.DeepEqual(preview.Proposal.Batches[0], splitCommandPlan().Batches[0]) {
+	if err != nil || len(preview.Proposal.Batches) != 1 || !reflect.DeepEqual(preview.Proposal, *expected) {
 		t.Fatal("released child did not project its confirmed creator contract", preview, err)
 	}
 	after, err := os.ReadFile(filepath.Join(child.stateDir, "state.json"))
@@ -661,62 +732,14 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 	}
 }
 
-func TestSplitPlanPreviewRejectsUnreadySliceWithoutWrites(t *testing.T) {
-	master := nativeMasterDriver(t)
-	plan := splitCommandPlan()
-	plan.Batches[0].Checks[1].Purpose = ""
-	passPreDevelopmentReviews(t, master, plan)
-	path := filepath.Join(master.f.stateDir, "state.json")
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = master.f.DevelopmentPlan(protocol.RouteDecision{}, *splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}))
-	if err == nil || !strings.Contains(err.Error(), protocol.CheckFullTests) {
-		t.Fatal("incomplete slice verification passed prospective split admission", err)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || string(after) != string(before) || len(driverState(t, master).SliceChildren) != 0 {
-		t.Fatal("rejected split preview wrote authority or released children", err)
-	}
-	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	master.submit(request)
-	var token string
-	for _, ask := range master.run.PendingAsks {
-		if ask.RequestID == string(request.ID) {
-			token = ask.Token
-		}
-	}
-	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
-	topology.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{ReviewActionID: "readiness", Digest: "sha256:unconfirmed"}
-	event, err := protocol.NewReviewDecideEvent(master.eventID(), protocol.RequestID(request.ID), token, "split", protocol.ReviewDecisionPayload{Topology: topology})
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := master.f.Submit(event); err == nil || !strings.Contains(err.Error(), protocol.CheckFullTests) {
-		t.Fatal("direct split decision bypassed complete slice verification", err)
-	}
-	after, err = os.ReadFile(path)
-	if err != nil || string(after) != string(before) {
-		t.Fatal("rejected direct split decision changed authority", err)
-	}
-}
-
 func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.T) {
 	master := nativeMasterDriver(t)
 	plan := splitCommandPlan()
 	plan.VerificationTier = "CHECKPOINT"
 	plan.CheckpointReason = "Independent child delivery precedes master integration"
 	plan.CheckpointGroups = [][]string{{plan.Batches[0].ID, plan.Batches[1].ID}, {plan.Batches[2].ID}}
-	original, _ := json.Marshal(plan)
 	passPreDevelopmentReviews(t, master, plan)
+	original, _ := json.Marshal(driverState(t, master).ReadinessProposal())
 	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "split"})
 	if err != nil {
 		t.Fatal(err)

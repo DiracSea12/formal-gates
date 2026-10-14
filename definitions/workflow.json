@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "25",
+  "version": "26",
   "stateSchemaVersion": "2",
   "writer": "engine",
   "transactionOwner": "engine",
@@ -22,7 +22,7 @@
       "nodeId": "children",
       "ordinal": 3,
       "kind": "LOCAL",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -41,7 +41,7 @@
       "nodeId": "children",
       "ordinal": 4,
       "kind": "HOST_ACTION",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "children.prepare"
       ],
@@ -64,7 +64,7 @@
       "nodeId": "children",
       "ordinal": 5,
       "kind": "LOCAL",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "children.workspace"
       ],
@@ -83,7 +83,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -99,7 +99,7 @@
       "nodeId": "review",
       "ordinal": 1,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "entry.registered"
       ],
@@ -115,7 +115,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.review.worker.v2",
+        "handler": "engine.review.worker.v3",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "product-review",
         "timeoutNs": 0
@@ -126,7 +126,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.worker"
       ],
@@ -142,7 +142,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.readiness.plan.v5",
+        "handler": "engine.readiness.plan.v6",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "start-readiness",
         "timeoutNs": 0
@@ -153,7 +153,7 @@
       "nodeId": "validation",
       "ordinal": 6,
       "kind": "HOST_ACTION",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -176,7 +176,7 @@
       "nodeId": "validation",
       "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -199,7 +199,7 @@
       "nodeId": "validation",
       "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -222,7 +222,7 @@
       "nodeId": "validation",
       "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -238,7 +238,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.repair.v6",
+        "handler": "engine.repair.v7",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -251,7 +251,7 @@
       "nodeId": "validation",
       "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -267,7 +267,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.development.batch.v5",
+        "handler": "engine.development.batch.v6",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -280,7 +280,7 @@
       "nodeId": "validation",
       "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -309,7 +309,7 @@
       "nodeId": "validation",
       "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -325,7 +325,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.qa.design.v5",
+        "handler": "engine.qa.design.v6",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -338,7 +338,7 @@
       "nodeId": "validation",
       "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -354,7 +354,7 @@
         ]
       },
       "payload": {
-        "handler": "engine.qa.execution.v3",
+        "handler": "engine.qa.execution.v4",
         "nonProgrammableReason": "SEMANTIC_JUDGMENT",
         "timeoutNs": 0,
         "retry": {
@@ -367,7 +367,7 @@
       "nodeId": "validation",
       "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -397,7 +397,7 @@
       "nodeId": "validation",
       "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -426,7 +426,7 @@
       "nodeId": "validation",
       "ordinal": 16,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -456,7 +456,7 @@
       "nodeId": "validation",
       "ordinal": 17,
       "kind": "AGENT",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],
@@ -485,7 +485,7 @@
       "nodeId": "validation",
       "ordinal": 18,
       "kind": "HOST_ACTION",
-      "definitionVersion": "25",
+      "definitionVersion": "26",
       "dependencies": [
         "review.readiness"
       ],

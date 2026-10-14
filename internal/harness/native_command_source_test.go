@@ -18,16 +18,16 @@ import (
 	"formal-gates/internal/engine/worker"
 )
 
-func TestNativeRequirementFragmentsOwnOriginalQAValues(t *testing.T) {
+func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
 	for _, entrypoint := range []string{"design", "commands", "revision"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
 			command, argument, stdin := "printf '<片段>\\n'; cat", " 中文 'two words' ", " first🙂\r\nsecond尾"
 			original := "命令🙂 [" + command + "] end\r\n参数 [" + argument + "] tail\r\n输入 [" + stdin + "] end\r\n程序 [/usr/bin/printf]\r\n格式 [%s]"
-			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path, input.RequirementDocument.Content = "requirements.md", original
 			if entrypoint == "commands" {
-				input.Handler, input.Validation.CommandCases = "engine.qa.execution.v3", []string{"approved-case"}
+				input.Handler, input.Validation.CommandCases = "engine.qa.execution.v4", []string{"approved-case"}
 			} else if entrypoint == "revision" {
 				input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved-case", Scenario: "SUCCESS", Oracle: "approved output", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "other invocation"}}}}
 				input.Validation.AffectedCases = []string{"approved-case"}
@@ -52,12 +52,12 @@ func TestNativeRequirementFragmentsOwnOriginalQAValues(t *testing.T) {
 			columns := func(line, first, last int) any {
 				return map[string]any{"read": number, "from": line, "to": line, "fromColumn": first, "toColumn": last}
 			}
-			commandFirst, argumentFirst := utf8.RuneCountInString("命令🙂 [")+1, utf8.RuneCountInString("参数 [")+1
+			argumentFirst := utf8.RuneCountInString("参数 [") + 1
 			argumentMiddle := argumentFirst + utf8.RuneCountInString(argument)/2
 			argumentParts := map[string]any{"parts": []any{columns(2, argumentFirst, argumentMiddle-1), columns(2, argumentMiddle, argumentFirst+utf8.RuneCountInString(argument)-1)}}
 			operations := []any{
-				map[string]any{"kind": "SHELL", "command": map[string]any{"parts": []any{columns(1, commandFirst, commandFirst+utf8.RuneCountInString(command)-1)}}, "stdin": map[string]any{"read": number, "from": 3, "to": 4, "fromColumn": utf8.RuneCountInString("输入 [") + 1, "toColumn": utf8.RuneCountInString("second尾")}},
-				map[string]any{"kind": "ARGV", "argv": []any{columns(5, 5, 5+utf8.RuneCountInString("/usr/bin/printf")-1), columns(6, 5, 6), map[string]any{"parts": []any{}}, argumentParts}},
+				map[string]any{"kind": "SHELL", "command": command, "stdin": map[string]any{"read": number, "from": 3, "to": 4, "fromColumn": utf8.RuneCountInString("输入 [") + 1, "toColumn": utf8.RuneCountInString("second尾")}},
+				map[string]any{"kind": "ARGV", "argv": []string{"/usr/bin/printf", "%s", "", argument}},
 			}
 			value := map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "approved output", "operations": operations}}, "sharedSteps": []any{map[string]any{"procedure": "original preparation", "artifacts": []any{argumentParts}, "operations": operations}}, "coverage": []any{}}
 			if entrypoint == "commands" {
@@ -117,12 +117,12 @@ func TestNativeRequirementFragmentsOwnOriginalQAValues(t *testing.T) {
 			if _, err := worker.LocationPaths([]worker.Location{{Read: number}}, workerLocationFacts(facts), input.RequirementDocument); err == nil {
 				t.Fatal("semantic fragment source acquired physical location identity")
 			}
-			t.Logf("%s: original read=%d, exact SHELL/stdin and ARGV bytes, shared parts and restart verified", entrypoint, number)
+			t.Logf("%s: authored calls, original stdin/artifact fragments and restart verified (read=%d)", entrypoint, number)
 		})
 	}
 }
 
-func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
+func TestNativeQAAuthorsCallsAndRetainsRequirementPayloads(t *testing.T) {
 	for _, entrypoint := range []string{"design", "commands", "revision"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
@@ -130,12 +130,12 @@ func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
 			stdin := " 中文 \"input\"\r\n\r\n"
 			argument := " two words \"quoted\"\r\n"
 			original := "Confirmed values:\n" + command + stdin + argument + "/usr/bin/printf"
-			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path = "requirements.md"
 			input.RequirementDocument.Content = original
 			input.RequirementDocument.ContentDigest = "confirmed-original"
 			if entrypoint == "commands" {
-				input.Handler = "engine.qa.execution.v3"
+				input.Handler = "engine.qa.execution.v4"
 				input.Validation.CommandCases = []string{"approved-case"}
 			} else if entrypoint == "revision" {
 				input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved-case", Scenario: "SUCCESS", Oracle: "approved output", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "other invocation"}}}}
@@ -190,7 +190,7 @@ func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
 				t.Fatal("repeated requirement read replaced its original source position")
 			}
 			selectLines := func(from, to int) any { return map[string]any{"read": number, "from": from, "to": to} }
-			operations := []any{map[string]any{"kind": "SHELL", "command": selectLines(2, 2), "stdin": selectLines(3, 4)}, map[string]any{"kind": "ARGV", "argv": []any{selectLines(6, 6), "%s", selectLines(5, 5)}}}
+			operations := []any{map[string]any{"kind": "SHELL", "command": command, "stdin": selectLines(3, 4)}, map[string]any{"kind": "ARGV", "argv": []string{"/usr/bin/printf", "%s", argument}}}
 			value := map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "approved output", "operations": operations}}, "sharedSteps": []any{map[string]any{"procedure": "original preparation", "artifacts": []any{selectLines(5, 5)}, "operations": operations}}, "coverage": []any{}}
 			if entrypoint == "commands" {
 				value = map[string]any{"commands": []any{operations}}
@@ -263,12 +263,12 @@ func TestNativeRequirementReadOwnsOriginalQAValues(t *testing.T) {
 			if body, err := os.ReadFile(filepath.Join(workspace, "requirements.md")); err != nil || string(body) != "unconfirmed mutable bytes" {
 				t.Fatal("bound requirement selection changed workspace content", err)
 			}
-			t.Logf("%s original read=%d: command/stdin/argv byte equality, actual output and native restart verified", entrypoint, number)
+			t.Logf("%s: authored calls, original stdin/artifact bytes, actual output and native restart verified (read=%d)", entrypoint, number)
 		})
 	}
 }
 
-func nativeProjectCommandSource(t *testing.T, input protocol.WorkerInput, semantic func(int) any) (protocol.Event, string, string) {
+func nativeProjectCallFixture(t *testing.T, input protocol.WorkerInput, semantic func(int, string) any) (protocol.Event, string, string) {
 	t.Helper()
 	directory, workspace := nativeToolFixture(t)
 	command := "./checks/project-check --label \"原命令 two words\" ''\nprintf 'next-line\\n'\n"
@@ -327,7 +327,7 @@ func nativeProjectCommandSource(t *testing.T, input protocol.WorkerInput, semant
 	}
 	read := call(nativeWorkspaceTool, map[string]any{"action": "read", "listing": intOf(listing["listing"]), "entry": entry})
 	number := intOf(read["read"])
-	value := semantic(number)
+	value := semantic(number, command)
 	call(nativeSemanticTool, value)
 	if err := os.WriteFile(filepath.Join(directory, "native-source.json"), []byte(`{"sessionId":"original-session","turn":1}`), 0600); err != nil {
 		t.Fatal(err)
@@ -370,30 +370,40 @@ func nativeProjectCommandSource(t *testing.T, input protocol.WorkerInput, semant
 	return event, workspace, command
 }
 
-func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
-	event, workspace, command := nativeProjectCommandSource(t, input, func(number int) any {
-		verification := []string{}
-		for range review.RequiredVerificationChecks() {
-			verification = append(verification, "Explicit fixture evidence for the current project and plan")
-		}
+func TestNativeDeveloperPreparesDeclaredProjectCheckCalls(t *testing.T) {
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	event, workspace, command := nativeProjectCallFixture(t, input, func(number int, command string) any {
 		checks := []any{}
 		for _, purpose := range []string{protocol.CheckEdit, protocol.CheckFullBuild, protocol.CheckFullTests} {
-			checks = append(checks, map[string]any{"read": number, "from": 2, "to": 3, "purpose": purpose})
+			checks = append(checks, map[string]any{"goal": "Verify the declared project check", "purpose": purpose})
 		}
 		batch := map[string]any{"subtasks": []any{map[string]any{"description": "Deliver the public command"}}, "deliverable": "Public command", "publicEntry": "Project command", "artifacts": []any{map[string]any{"read": number}}, "interfaces": "Public arguments", "stateBoundary": "Project source", "risk": "Keep existing behavior", "dod": []any{map[string]any{"description": "Public behavior matches the oracle"}}, "checks": checks, "rollback": "Restore project source", "recovery": "Continue the original task", "handoff": "Original command checks are available", "contextCost": "One capability"}
-		return map[string]any{"findings": []any{}, "verification": verification, "granularityReview": map[string]any{"reason": "One independent capability", "verificationTier": "FINAL", "batches": []any{batch}}}
+		return map[string]any{"findings": []any{}, "granularityReview": map[string]any{"reason": "One independent capability", "verificationTier": "FINAL", "batches": []any{batch}}}
 	})
 	plan := event.Result.Review.GranularityReview
 	if err := protocol.ValidateGranularity(plan); err != nil {
 		t.Fatal(err)
 	}
 	for _, check := range plan.Batches[0].Checks {
-		if check.Command != command {
-			t.Fatalf("original command bytes changed: %q", check.Command)
+		if check.Command != "" || check.Goal == "" {
+			t.Fatal("reviewer authored a call or lost its declared goal")
 		}
 	}
-	argv := coverage.ShellCommand(plan.Batches[0].Checks[0].Command)
+	input.Handler, input.Review = "engine.development.batch.v6", nil
+	input.Validation = &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: plan.Batches[0]}}
+	raw, err := json.Marshal(map[string]any{"summary": "Prepared the declared project calls", "remainingWork": "Implement the confirmed command", "commands": []string{command, command, command}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := worker.DecodeResultWithPaths(input, "prepared", raw, "prepared-output", []string{})
+	if err != nil || prepared.Result.Validation.Status != "CONTINUE" {
+		t.Fatal("developer could not prepare the declared calls without implementation completion", err)
+	}
+	checks, err := protocol.BindDevelopmentChecks(plan.Batches[0], prepared.Result.Validation.Development.Commands)
+	if err != nil || checks[0].Command != command || checks[0].Goal != "" || checks[0].Purpose != protocol.CheckEdit {
+		t.Fatal("accepted preparation lost the declared EDIT invocation", err)
+	}
+	argv := coverage.ShellCommand(checks[0].Command)
 	actual := exec.Command(argv[0], argv[1:]...)
 	actual.Dir = workspace
 	out, err := actual.CombinedOutput()
@@ -402,16 +412,16 @@ func TestNativeReadOwnsDeclaredProjectCheckCommand(t *testing.T) {
 	}
 }
 
-func TestNativeReadOwnsOriginalQAInvocation(t *testing.T) {
+func TestNativeQAAuthorsProjectInvocations(t *testing.T) {
 	for _, kind := range []string{"design", "commands"} {
 		t.Run(kind, func(t *testing.T) {
-			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{RequirementRevision: "confirmed", Generation: 7}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "confirmed", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "the documented behavior", Oracle: "the documented output"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "source", PointID: "point"}}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{RequirementRevision: "confirmed", Generation: 7}, Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "confirmed", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point", ObservableBehavior: "the documented behavior", Oracle: "the documented output"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "source", PointID: "point"}}}}
 			if kind == "commands" {
-				input.Handler = "engine.qa.execution.v3"
+				input.Handler = "engine.qa.execution.v4"
 				input.Validation.CommandCases = []string{"approved-case"}
 			}
-			event, workspace, original := nativeProjectCommandSource(t, input, func(read int) any {
-				operation := map[string]any{"kind": "SHELL", "command": map[string]any{"read": read, "from": 2, "to": 3}}
+			event, workspace, original := nativeProjectCallFixture(t, input, func(read int, command string) any {
+				operation := map[string]any{"kind": "SHELL", "command": command}
 				if kind == "commands" {
 					return map[string]any{"commands": [][]any{{operation}}}
 				}

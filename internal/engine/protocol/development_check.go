@@ -342,7 +342,7 @@ func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefi
 		return false
 	}
 	role := s.validationRole(pending.Task, cd)
-	return (role == "engine.development.batch.v5" || role == "engine.repair.v6") && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(result))
+	return (role == "engine.development.batch.v6" || role == "engine.repair.v7") && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(result))
 }
 
 func (s *State) nextCheckParameters(action string) (CheckParameters, bool) {
@@ -416,7 +416,7 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if len(s.editChecks(r)) == 0 {
 			continue
 		}
-		if role := s.validationRole(r.Validation.Binding.Task, e.cfg.Definition); s.developmentChecksPassed(r) && (role == "engine.development.batch.v5" || role == "engine.repair.v6") {
+		if role := s.validationRole(r.Validation.Binding.Task, e.cfg.Definition); s.developmentChecksPassed(r) && (role == "engine.development.batch.v6" || role == "engine.repair.v7") {
 			if _, outstanding := s.PendingActions[action]; outstanding {
 				if err := s.terminalizeTask(r.Validation.Binding.Task); err != nil {
 					return false, err
@@ -486,7 +486,7 @@ func (s *State) editChecks(r WorkerResult) []DevelopmentCheck {
 		if r.Validation.Development != nil {
 			commands = r.Validation.Development.Commands
 		}
-		checks, _ = bindDevelopmentChecks(batch, commands)
+		checks, _ = BindDevelopmentChecks(batch, commands)
 	}
 	if r.Validation.Binding.Task.Step == "development.repair" {
 		for _, check := range s.fullProjectChecks() {

@@ -18,22 +18,32 @@ import (
 // one-based in the current Show projection; zero owner denotes master-merge.
 // It carries no event identity, freshness token, original digest or work binding.
 type ControlInput struct {
-	Node              int                     `json:"node,omitempty"`
-	Request           protocol.ControlKind    `json:"request,omitempty"`
-	Ask               int                     `json:"ask,omitempty"`
-	Choice            string                  `json:"choice,omitempty"`
-	Reason            string                  `json:"reason,omitempty"`
-	Gates             []int                   `json:"gates,omitempty"`
-	Parallel          string                  `json:"parallel,omitempty"`
-	Owners            []int                   `json:"owners,omitempty"`
-	Review            int                     `json:"review,omitempty"`
-	Candidate         int                     `json:"candidate,omitempty"`
-	Finding           int                     `json:"finding,omitempty"`
-	Severity          string                  `json:"severity,omitempty"`
-	SeverityRationale string                  `json:"severityRationale,omitempty"`
-	Invalidity        string                  `json:"invalidity,omitempty"`
-	Requirement       *RequirementChangeInput `json:"requirement,omitempty"`
-	Validation        *ValidationControlInput `json:"validation,omitempty"`
+	ReviewVerification *ReviewVerificationInput `json:"reviewVerification,omitempty"`
+	Node               int                      `json:"node,omitempty"`
+	Request            protocol.ControlKind     `json:"request,omitempty"`
+	Ask                int                      `json:"ask,omitempty"`
+	Choice             string                   `json:"choice,omitempty"`
+	Reason             string                   `json:"reason,omitempty"`
+	Gates              []int                    `json:"gates,omitempty"`
+	Parallel           string                   `json:"parallel,omitempty"`
+	Owners             []int                    `json:"owners,omitempty"`
+	Review             int                      `json:"review,omitempty"`
+	Candidate          int                      `json:"candidate,omitempty"`
+	Finding            int                      `json:"finding,omitempty"`
+	Severity           string                   `json:"severity,omitempty"`
+	SeverityRationale  string                   `json:"severityRationale,omitempty"`
+	Invalidity         string                   `json:"invalidity,omitempty"`
+	Requirement        *RequirementChangeInput  `json:"requirement,omitempty"`
+	Validation         *ValidationControlInput  `json:"validation,omitempty"`
+}
+
+// ReviewVerificationInput contains only a current result position and independent
+// semantic evidence; the program supplies all original result bindings.
+type ReviewVerificationInput struct {
+	Result        int                                  `json:"result"`
+	Verification  []string                             `json:"verification"`
+	Findings      []protocol.ReviewFindingVerification `json:"findings"`
+	InvalidReason string                               `json:"invalidReason,omitempty"`
 }
 
 type WorkChoice struct {
@@ -121,6 +131,36 @@ func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
 
 func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, error) {
 	candidate := ControlCandidate{Root: f.root, Input: input, Run: run}
+	if input.ReviewVerification != nil {
+		if input.Request != "" || input.Ask != 0 {
+			return candidate, fmt.Errorf("review verification cannot submit a user decision")
+		}
+		value := input.ReviewVerification
+		result, err := position(run.ReviewVerifications, value.Result, "review verification")
+		if err != nil {
+			return candidate, err
+		}
+		checks := review.RequiredVerificationChecks()
+		if value.InvalidReason == "" && len(value.Verification) != len(checks) {
+			return candidate, fmt.Errorf("independent review verification requires evidence for each of %d checks", len(checks))
+		}
+		judgment := protocol.ReviewVerificationObservation{ResultDigest: result.Digest, Findings: value.Findings, InvalidReason: value.InvalidReason}
+		if value.InvalidReason == "" {
+			evidence := []string{}
+			for i, check := range checks {
+				if strings.TrimSpace(value.Verification[i]) == "" {
+					return candidate, fmt.Errorf("independent review verification evidence is empty: %s", check)
+				}
+				evidence = append(evidence, check+": "+value.Verification[i])
+			}
+			judgment.Verification = review.OperatorVerification{Checks: checks, Evidence: strings.Join(evidence, "\n")}
+		}
+		candidate.Event = protocol.Event{ID: protocol.EventID("review-verification:" + controlDigest(struct {
+			Revision         uint64
+			Result, Judgment any
+		}{run.Revision, result.Digest, judgment})), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: result.ActionID, Review: &judgment}}
+		return candidate, candidate.Event.Validate()
+	}
 	event := protocol.Event{Kind: protocol.KindDecide}
 	if input.Request != "" {
 		event.Kind = protocol.KindRequestControl
@@ -220,6 +260,19 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		// the semantic action; the program binds its selected current finding.
 		if ask.Control == protocol.ControlReviewFindingDecision {
 			correction, e := correctionFromRun(run, input)
+			if strings.HasPrefix(ask.RequestID, "review-finding:") {
+				snapshot, err := f.engine.Load()
+				if err != nil {
+					return candidate, err
+				}
+				var current bool
+				correction, current = snapshot.State.ReviewFindingBinding(ask.RequestID)
+				if !current {
+					return candidate, fmt.Errorf("finding Ask no longer has its original current binding")
+				}
+				correction.Decision, correction.Reason = strings.ToUpper(input.Choice), input.Reason
+				e = nil
+			}
 			if e != nil {
 				return candidate, e
 			}
@@ -413,7 +466,7 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 	if candidate.Run.RunID != f.runID || !vcs.SamePath(candidate.Root, f.root) {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation belongs to a different project or run")
 	}
-	if candidate.Event.Request == nil && candidate.Event.Decide == nil {
+	if candidate.Event.Request == nil && candidate.Event.Decide == nil && (candidate.Event.Observation == nil || candidate.Event.Observation.Review == nil) {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation contains no program-generated control")
 	}
 	_, recorded, err := f.recordedEvent(candidate.Event)

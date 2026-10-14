@@ -117,23 +117,9 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 	if strings.TrimSpace(dispatch.RequirementRevision) == "" {
 		return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s candidate requires a requirement revision", action)
 	}
-	findings := make([]Finding, 0, len(result.Findings))
-	findingIDs := map[string]bool{}
-	for _, raw := range result.Findings {
-		if raw.Message == "" || !validSeverity(raw.Severity) {
-			return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s result finding %q is malformed: severity must be P0-P3 and message non-empty", action, raw.Message)
-		}
-		if err := ValidateFindingClassification(action, raw.Category, raw.Severity); err != nil {
-			return Set{}, EffectiveStatus{}, err
-		}
-		finding := raw
-		finding.Digest = findingDigest(finding)
-		finding.ID = "finding-" + shortDigest(finding.Digest)
-		if findingIDs[finding.ID] {
-			return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s result repeats finding identity %s for identical content", action, finding.ID)
-		}
-		findingIDs[finding.ID] = true
-		findings = append(findings, finding)
+	findings, err := resultFindings(action, result)
+	if err != nil {
+		return Set{}, EffectiveStatus{}, err
 	}
 	resultDigest := candidateDigest(runID, RawCandidate{
 		Action: action, DispatchID: dispatch.ID, RequirementRevision: dispatch.RequirementRevision,
@@ -505,4 +491,35 @@ func newCorrectionReceipt(runID string, candidate RawCandidate, input Correction
 	}
 	receipt.ID = "review-correction-" + shortDigest(digestValue(receipt))
 	return receipt
+}
+
+// ValidateResult checks reviewer content before independent Operator admission.
+func ValidateResult(action Action, result Result) error {
+	_, err := resultFindings(action, result)
+	return err
+}
+
+func resultFindings(action Action, result Result) ([]Finding, error) {
+	if result.Status != statusPass && result.Status != statusFail {
+		return nil, fmt.Errorf("review: %s result status %q cannot become a review candidate (only PASS or FAIL)", action, result.Status)
+	}
+	findings := make([]Finding, 0, len(result.Findings))
+	findingIDs := map[string]bool{}
+	for _, raw := range result.Findings {
+		if raw.Message == "" || !validSeverity(raw.Severity) {
+			return nil, fmt.Errorf("review: %s result finding %q is malformed: severity must be P0-P3 and message non-empty", action, raw.Message)
+		}
+		if err := ValidateFindingClassification(action, raw.Category, raw.Severity); err != nil {
+			return nil, err
+		}
+		finding := raw
+		finding.Digest = findingDigest(finding)
+		finding.ID = "finding-" + shortDigest(finding.Digest)
+		if findingIDs[finding.ID] {
+			return nil, fmt.Errorf("review: %s result repeats finding identity %s for identical content", action, finding.ID)
+		}
+		findingIDs[finding.ID] = true
+		findings = append(findings, finding)
+	}
+	return findings, nil
 }

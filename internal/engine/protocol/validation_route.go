@@ -12,7 +12,7 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 	}
 	started := false
 	for _, binding := range s.DispatchBindings {
-		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v5" {
+		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v6" {
 			started = true
 		}
 	}
@@ -171,7 +171,7 @@ func (s *State) carryValidationTarget(target, previous *ValidationTarget, prior,
 // targetResponsibility locates the frozen duty behind a current projection or
 // repair-derived verdict. Identity lookup grants no result or scope reuse.
 func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTarget) (*ValidationWave, *ValidationTarget) {
-	if target.GateImpact != nil && target.GateImpact.Decision == "INHERIT" {
+	if target.GateImpact != nil && (target.GateImpact.Decision == "" || target.GateImpact.Decision == "INHERIT") {
 		if source := s.validationWave(target.GateImpact.SourceWave); source != nil {
 			for _, original := range source.Targets {
 				if sameTarget(original, target) {

@@ -115,7 +115,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v5", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v5", "", false}, {"engine.qa.execution.v3", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v5", "", false},
+		{"engine.review.worker.v3", review.ProductReview, true}, {"engine.readiness.plan.v6", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v6", "", false}, {"engine.qa.execution.v4", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v6", "", false},
 	}
 	for _, role := range roles {
 		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
@@ -127,6 +127,7 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 			input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
 			if role.handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{}
+				input.Validation.Contract = &coverage.CoverageContract{}
 			}
 		}
 		material, err := worker.Render(input, catalog)

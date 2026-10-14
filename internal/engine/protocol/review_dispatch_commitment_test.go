@@ -332,7 +332,7 @@ func TestTerminalReviewDispatchRemainsRecordableAcrossReceipts(t *testing.T) {
 					if slot := review.AuthorizationOfDispatch(snap.State.ReviewSeries.ProductReview, replacement); slot != "" {
 						t.Fatalf("retry under automatic capacity must not consume a slot: %s", slot)
 					}
-					submitReviewResult(t, engine, "replacement-review", replacement, reviewEvidence(review.ProductReview, replacement, "", "PASS", "the owed review completed", nil))
+					submitVerifiedReviewResult(t, engine, "replacement-review", replacement, reviewEvidence(review.ProductReview, replacement, "", "PASS", "the owed review completed", nil))
 					if _, err := submitFailureResult(t, engine, "different-failure", action); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
 						t.Fatalf("a distinct second result must conflict with the settled evidence: %v", err)
 					}
@@ -351,6 +351,7 @@ func TestTerminalReviewDispatchRemainsRecordableAcrossReceipts(t *testing.T) {
 					if result := engine.LoadMustSucceed(t).State.Results[action]; result.Review == nil || result.PayloadDigest != "sha256:payload-late-review" {
 						t.Fatalf("late evidence was not retained: %+v", result)
 					}
+					verifyCompleteFixtureReview(t, engine, action)
 					assertReviewIssuanceHeld(t, engine)
 				}
 				snap := engine.LoadMustSucceed(t)
@@ -404,6 +405,7 @@ func TestTerminalReviewAuthorizationRemainsExclusiveUntilSettlement(t *testing.T
 			if err := submitLateDispatchResult(t, engine, "late-authorized", action, evidence); err != nil {
 				t.Fatalf("late authorized result: %v", err)
 			}
+			verifyCompleteFixtureReview(t, engine, action)
 			series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 			if series.Completed != 4 || series.ExtraConsumed != 1 || !review.OccupiedAuthorizationIDs(series)[authorization] {
 				t.Fatalf("recorded result must consume its original authorization: %+v", series)
@@ -422,7 +424,7 @@ func TestTerminalReviewAuthorizationRemainsExclusiveUntilSettlement(t *testing.T
 			revision = engine.LoadMustSucceed(t).State.RequirementRevision()
 			evidence = reviewEvidenceAt(review.ProductReview, next, revision, "PASS", "next authorized result", nil)
 			evidence.AuthorizationID = nextAuthorization
-			submitReviewResult(t, engine, "next-authorized-result", next, evidence)
+			submitVerifiedReviewResult(t, engine, "next-authorized-result", next, evidence)
 			if series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview; series.Completed != 5 || series.ExtraConsumed != 2 {
 				t.Fatalf("both distinct authorizations must be consumed: %+v", series)
 			}
@@ -451,7 +453,7 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 			}
 			evidence := blockingReviewEvidence(review.ProductReview, action, "quarantined review")
 			if rejected {
-				evidence.Verification = review.OperatorVerification{}
+				evidence.Status = "INCOMPLETE"
 			}
 			event, err := NewReviewWorkerResultEvent("quarantined-review", action, testProvider, "sha256:quarantined-review", evidence)
 			if err != nil {
@@ -488,6 +490,7 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 					t.Fatalf("admissible late evidence: %v", err)
 				}
 			}
+			verifyCompleteFixtureReview(t, engine, action)
 			snap = engine.LoadMustSucceed(t)
 			if result := snap.State.Results[action]; result.Review == nil || result.ActionID != action {
 				t.Fatalf("accepted evidence did not settle the bound dispatch: %+v", result)
@@ -529,6 +532,8 @@ func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
 	if result.PayloadDigest != "sha256:staged-review" || result.Review == nil || result.Review.DispatchID != action {
 		t.Fatalf("attaching transaction did not preserve the paired evidence: %+v", result)
 	}
+	verifyCompleteFixtureReview(t, engine, action)
+	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 || len(series.RawCandidates) != 1 {
 		t.Fatalf("pairing must count one review: %+v", series)
 	}
@@ -561,6 +566,8 @@ func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
 	if result := snap.State.Results[action]; result.Review == nil || result.PayloadDigest != "sha256:payload-recovered-review" {
 		t.Fatalf("recovery lost the original dispatch evidence: %+v", result)
 	}
+	verifyCompleteFixtureReview(t, engine, action)
+	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 1 {
 		t.Fatalf("recovered result must count once: %+v", series)
 	}
@@ -571,7 +578,8 @@ func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *te
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
-	submitReviewResult(t, engine, "product-advisory", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory finding", []review.Finding{{Severity: "P2", Message: "a documented path needs correction"}}))
+	submitVerifiedReviewResult(t, engine, "product-advisory", product, reviewEvidence(review.ProductReview, product, "", "FAIL", "advisory finding", []review.Finding{{Severity: "P2", Message: "a documented path needs correction"}}))
+	settleFixtureFinding(t, engine, review.ProductReview, "initial-advisory-disposition", "DISMISS")
 	readiness := pendingActionID(t, engine)
 	event, err := NewReviewWorkerResultEvent("staged-readiness", readiness, testProvider, "sha256:staged-readiness", reviewEvidence(review.StartReadiness, readiness, "", "PASS", "readiness evidence", nil))
 	if err != nil {
@@ -587,6 +595,7 @@ func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *te
 	askAndDecide(t, engine, ControlReviewFindingDecision, "upgrade-product", []AskOption{upgrade}, upgrade.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
 		Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision,
 		ResultDigest: candidate.ResultDigest, FindingID: finding.ID, Decision: "RESEVERITIZE", Severity: "P1",
+		Supersedes:        review.LatestDecisionID(series, candidate.ResultDigest, finding.ID),
 		SeverityRationale: "the defect blocks the documented acceptance path", Reason: "user verified the wider impact", ExpectedEffectiveRevision: series.Effective.Revision,
 	}})
 	submitUnknownReceipt(t, engine, "spawn-suspended", readiness, "correlation-suspended")
@@ -622,6 +631,8 @@ func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *te
 	if result := snap.State.Results[readiness]; result.PayloadDigest != "sha256:staged-readiness" || result.Review == nil {
 		t.Fatalf("resumed pairing lost the original evidence: %+v", result)
 	}
+	verifyCompleteFixtureReview(t, engine, readiness)
+	snap = engine.LoadMustSucceed(t)
 	if series := snap.State.ReviewSeries.StartReadiness; series.Completed != 1 || series.Effective.Status != "PASS" {
 		t.Fatalf("readiness must finish once after product recovery: %+v", series)
 	}

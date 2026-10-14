@@ -546,6 +546,11 @@ func (f *Facade) ensureRef(ref, identity string, mayWrite bool, invoked *bool) (
 	return err == nil, err
 }
 func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParameters, mayWrite bool, invoked *bool) (bool, error) {
+	switch p.Resource.Role {
+	case "development", "whitebox-authoring", "blackbox-design", "merge-design", "candidate":
+	default:
+		return true, nil
+	}
 	receipt := s.CurrentIntakeConfirmation()
 	if receipt == nil {
 		return false, fmt.Errorf("workspace requires intake artifacts")
@@ -630,7 +635,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		return nativeResult{}, false, fmt.Errorf("candidate has no admitted native workspace")
 	}
 	native := f.vcs.At(r.Path, r.Handle)
-	if p.Stage == "REVIEW_READY" && p.Base == s.RequirementAssemblySource() {
+	if p.Stage == "REVIEW_READY" && slices.Contains(p.Paths, s.RequirementArtifactPath()) {
 		path := s.RequirementArtifactPath()
 		body, err := os.ReadFile(filepath.Join(r.Path, filepath.FromSlash(path)))
 		if err != nil {
@@ -1172,7 +1177,7 @@ func reviewedArtifact(s *protocol.State, p protocol.CandidateParameters) error {
 
 func (f *Facade) reviewedArtifactOwnership(s *protocol.State, p protocol.CandidateParameters, identity string, before, after map[string]bool) error {
 	paths := []string{}
-	if p.Base == s.RequirementAssemblySource() {
+	if slices.Contains(p.Paths, s.RequirementArtifactPath()) {
 		paths = append(paths, s.RequirementArtifactPath())
 	}
 	for _, artifact := range p.QAArtifacts {

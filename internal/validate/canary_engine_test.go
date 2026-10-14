@@ -78,7 +78,7 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 		if material.Input.RunID != "canary" || material.Input.Provider != "codex" || material.Input.Pending.ActionID == "" || !strings.Contains(material.Input.RequirementDocument.Content, "The installed workflow must complete its verified route.") || material.Input.RequirementDocument.ContentDigest == "" || !strings.Contains(material.Prompt, "workspace requirement operation reads the complete original confirmed document") || len(material.ResultSchema) == 0 {
 			t.Fatalf("worker material lost complete production context: %s", path)
 		}
-		if material.Input.Handler == "engine.qa.execution.v3" {
+		if material.Input.Handler == "engine.qa.execution.v4" {
 			in := material.Input.Validation
 			if len(in.ExecutionFacts) != 2 {
 				t.Fatalf("execution omitted real native case facts: %+v", in)
@@ -142,7 +142,7 @@ func portablePackageFixture(t *testing.T) string {
 }
 
 func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.development.batch.v5", Validation: &protocol.ValidationInput{Handler: "engine.development.batch.v5", Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", Checks: []protocol.DevelopmentCheck{{Purpose: protocol.CheckFullTests, Goal: "Compare built-delivery.txt with delivery newline"}}}}}}
+	input := protocol.WorkerInput{Handler: "engine.development.batch.v6", Validation: &protocol.ValidationInput{Handler: "engine.development.batch.v6", Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", Checks: []protocol.DevelopmentCheck{{Purpose: protocol.CheckFullTests, Goal: "Compare built-delivery.txt with delivery newline"}}}}}}
 	var facts []worker.LocationFact
 	payload, err := portableWorkerResult(input, map[string]bool{}, &facts)
 	if err != nil {
@@ -167,13 +167,13 @@ func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
 
 func TestPortableWorkerResultsCoverIssuedRequirementPoints(t *testing.T) {
 	points := []requirement.Point{{ID: "AC-001", Text: "Committed marker contains delivery newline", Oracle: "delivery.txt bytes"}, {ID: "AC-002", Text: "Missing committed marker is rejected", Oracle: "git show exits nonzero"}}
-	for _, handler := range []string{"engine.readiness.plan.v5", "engine.development.batch.v5", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.readiness.plan.v6", "engine.development.batch.v6", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "engine", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementPoints: points}
 			switch handler {
-			case "engine.readiness.plan.v5":
+			case "engine.readiness.plan.v6":
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
-			case "engine.development.batch.v5":
+			case "engine.development.batch.v6":
 				input.Validation = &protocol.ValidationInput{Handler: handler, Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", RequirementPoints: requirement.PointIDs(points), DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}}}}
 			case "engine.gate.v3":
 				input.Validation = &protocol.ValidationInput{Handler: handler, Gate: &protocol.GateInput{Gate: "quality"}}
@@ -204,11 +204,11 @@ func TestPortableWorkerResultsCoverIssuedRequirementPoints(t *testing.T) {
 				t.Fatalf("portable semantic fixture rejected for issued points: %v; payload=%s", err, raw)
 			}
 			switch handler {
-			case "engine.readiness.plan.v5":
+			case "engine.readiness.plan.v6":
 				if got := event.Result.Review.GranularityReview.Batches[0].RequirementPoints; len(got) != 2 || got[0] != points[0].ID || got[1] != points[1].ID {
 					t.Fatal("portable plan lost issued points", got)
 				}
-			case "engine.development.batch.v5":
+			case "engine.development.batch.v6":
 				got := event.Result.Validation.Development.Completion.RequirementResults
 				if len(got) != 2 || got[0].PointID != points[0].ID || got[1].PointID != points[1].ID || got[0].Evidence == got[1].Evidence {
 					t.Fatal("portable completion lost distinct original evidence", got)

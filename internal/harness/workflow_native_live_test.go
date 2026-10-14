@@ -236,7 +236,7 @@ const nativeCommandRequirement = `# 文本转换命令
 ## 方案
 使用既有 app.py 与 size.py、Python 标准库，不新增产品功能或依赖。保留 CLI 的既有调用/输出接线，开发只实现 upper_word 和 word_size。开发不改 flag 处理；AC-004 的已知缺口由本 run 的真实验证判定和已授权主线返修闭环满足，不改变该验收条件。返修可以修改 app.py 拒绝以 -- 开头的首参数。
 %s
-完整构建检查为 python3 -m py_compile app.py size.py；完整开发测试为 python3 -c 'from app import upper_word; from size import word_size; assert upper_word("héLLo")=="HÉLLO"; assert upper_word("")==""; assert word_size("héLLo")==6; assert word_size("")==0'。分片批次测试只断言自己函数；完整构建检查相同。没有其他构建依赖或测试义务。DoD 为本批函数满足相应 AC；回退恢复该批函数占位；恢复沿原会话/原批继续；交接报告实际文件和检查结果。最终独立 QA 与测试使用设计、审查批准后冻结的命令/操作；不得执行时临时造配方或用开发自测代替独立 QA。
+项目声明编辑后的低成本 EDIT 检查为 python3 -m py_compile app.py size.py，每次正常 workspace 编辑后由程序执行并保留实际双流与退出证据。完整构建检查为 python3 -m py_compile app.py size.py；完整开发测试为 python3 -c 'from app import upper_word; from size import word_size; assert upper_word("héLLo")=="HÉLLO"; assert upper_word("")==""; assert word_size("héLLo")==6; assert word_size("")==0'。分片批次测试只断言自己函数；完整构建检查相同。没有其他构建依赖或测试义务。DoD 为本批函数满足相应 AC；回退恢复该批函数占位；恢复沿原会话/原批继续；交接报告实际文件和检查结果。最终独立 QA 与测试使用设计、审查批准后冻结的命令/操作；不得执行时临时造配方或用开发自测代替独立 QA。
 `
 
 const nativeCommandSource = `import sys
@@ -818,7 +818,7 @@ func (f *automaticNativeFlow) assertNativeSources() {
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.development.batch.v5", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v6"} {
+	for _, handler := range []string{"engine.review.worker.v3", "engine.readiness.plan.v6", "engine.development.batch.v6", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v7"} {
 		if !handlers[handler] {
 			f.t.Fatal("default consumer did not preserve a required actual native model responsibility", handler)
 		}

@@ -177,7 +177,7 @@ func TestPortableComparisonRetainsActualExecutionFailures(t *testing.T) {
 
 func TestPortableWhiteboxCasesObserveArtifacts(t *testing.T) {
 	workspace := t.TempDir()
-	input := protocol.WorkerInput{Validation: &protocol.ValidationInput{Handler: "engine.qa.design.v5", Workspace: &protocol.NativeResource{Path: workspace}}}
+	input := protocol.WorkerInput{Validation: &protocol.ValidationInput{Handler: "engine.qa.design.v6", Workspace: &protocol.NativeResource{Path: workspace}}}
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox
 	var facts []worker.LocationFact
 	value, err := portableWorkerResult(input, map[string]bool{}, &facts)

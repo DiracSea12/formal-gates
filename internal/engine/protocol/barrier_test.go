@@ -375,6 +375,14 @@ func driveCompletionOrder(t *testing.T, terminalFirst bool) completionFacts {
 	if acceptance, err := engine.Submit(result, observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("result: %v %+v", err, acceptance)
 	}
+	source := engine.LoadMustSucceed(t).State.Results[product]
+	if source.PayloadDigest != result.Result.PayloadDigest || source.Review.RequirementRevision != "rev-1" || source.Review.Status != "PASS" || len(source.Review.Findings) != 0 {
+		t.Fatal("independent arrival-order fixture lost its original complete review")
+	}
+	observation := Event{ID: "independent-completion-verification", Kind: KindOperatorObservation, Observation: &OperatorObservationPayload{Subject: product, Review: &ReviewVerificationObservation{ResultDigest: source.Digest, Verification: reviewVerification()}}}
+	if _, err := engine.Submit(observation, observedInput); err != nil {
+		t.Fatal(err)
+	}
 
 	snap := engine.LoadMustSucceed(t)
 	series := snap.State.ReviewSeries.ProductReview
@@ -489,15 +497,19 @@ func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
 
 	abortExistingAsk(t, engine, "req-attach-hold")
 	snap = engine.LoadMustSucceed(t)
-	series := snap.State.ReviewSeries.ProductReview
-	if series.Completed != 1 || series.Effective.Status != "PASS" {
-		t.Fatalf("the paired round did not complete at the lift: completed=%d %+v", series.Completed, series.Effective)
-	}
 	if _, admitted := snap.State.Results[product]; !admitted {
 		t.Fatal("the paired result must reach Results in the lifting transaction")
 	}
 	if _, kept := snap.State.StagedResults[product]; kept {
 		t.Fatalf("the paired round must leave staging: %+v", snap.State.StagedResults)
+	}
+	if snap.State.ReviewSeries.ProductReview.Completed != 0 {
+		t.Fatal("physical receipt pairing must not count a semantic round")
+	}
+	verifyOriginalFixtureReview(t, engine, staged)
+	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+	if series.Completed != 1 || series.Effective.Status != "PASS" {
+		t.Fatalf("the independently accepted paired round did not complete: completed=%d %+v", series.Completed, series.Effective)
 	}
 	if _, err := engine.Load(); err != nil {
 		t.Fatalf("load: %v", err)

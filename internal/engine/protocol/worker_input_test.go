@@ -22,7 +22,7 @@ func TestWorkerInputBindsDefinitionCodecs(t *testing.T) {
 		}
 	}
 	input, ok := s.WorkerInput(pending.ActionID, e.cfg.Definition)
-	if !ok || input.InputCodec != WorkerInputCodec || input.OutputCodec != "codec.any.out" || input.Handler != "engine.development.batch.v5" {
+	if !ok || input.InputCodec != WorkerInputCodec || input.OutputCodec != "codec.any.out" || input.Handler != "engine.development.batch.v6" {
 		t.Fatalf("issued input lost definition codecs or role: %+v", input)
 	}
 	body, err := json.Marshal(s)
@@ -74,9 +74,9 @@ func TestWorkerInputKeepsIssuedParallelValidationFrontier(t *testing.T) {
 			t.Fatal("recovery changed parallel role input")
 		}
 		switch input.Handler {
-		case "engine.qa.design.v5":
+		case "engine.qa.design.v6":
 			qa++
-		case "engine.development.batch.v5":
+		case "engine.development.batch.v6":
 			development++
 		}
 	}
@@ -89,9 +89,9 @@ func parallelValidationInputState(t *testing.T) (*Engine, *State, decision.Issue
 	t.Helper()
 	e, _ := canonicalReviewEngine(t)
 	product := issueReady(t, e)[0]
-	submitReviewResult(t, e, "parallel-product", product, plannedReviewEvidence(review.ProductReview, product, "", "PASS", "complete", nil))
+	submitVerifiedReviewResult(t, e, "parallel-product", product, plannedReviewEvidence(review.ProductReview, product, "", "PASS", "complete", nil))
 	readiness := pendingActionID(t, e)
-	submitReviewResult(t, e, "parallel-readiness", readiness, plannedReviewEvidence(review.StartReadiness, readiness, "", "PASS", "complete", nil))
+	submitVerifiedReviewResult(t, e, "parallel-readiness", readiness, plannedReviewEvidence(review.StartReadiness, readiness, "", "PASS", "complete", nil))
 	askAndDecide(t, e, ControlConfirmTopology, "input-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one workspace"}})
 	confirmPlannedRoute(t, e, "input-route", RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox"}})
 	snap := e.LoadMustSucceed(t)
@@ -121,7 +121,7 @@ func parallelValidationInputState(t *testing.T) (*Engine, *State, decision.Issue
 }
 
 func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.validation.observation.v2"} {
+	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7", "engine.validation.observation.v2"} {
 		t.Run(role, func(t *testing.T) {
 			e, state, pending := unfinishedDevelopmentState(t, role)
 			if role == "engine.validation.observation.v2" {
@@ -174,7 +174,7 @@ func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
 }
 
 func TestReadinessInputReusesPreparedCallsFromConfirmedBatch(t *testing.T) {
-	engine, s, _ := unfinishedDevelopmentState(t, "engine.development.batch.v5")
+	engine, s, _ := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	cd := engine.cfg.Definition
 	plan := s.Results["readiness"].Review.GranularityReview
 	batch := &plan.Batches[0]
@@ -186,7 +186,7 @@ func TestReadinessInputReusesPreparedCallsFromConfirmedBatch(t *testing.T) {
 	s.Results["edit-action"] = WorkerResult{ActionID: "edit-action", Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: "PASS", Development: &DevelopmentEvidence{Commands: []string{"prepared-build", "prepared-tests", "prepared-regression"}}}}
 	reviewTask := runtime.TaskKey{Scope: "readiness-replan"}
 	for _, step := range cd.Steps {
-		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok && payload.Handler == "engine.readiness.plan.v5" {
+		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok && payload.Handler == "engine.readiness.plan.v6" {
 			reviewTask.Node, reviewTask.Step = step.Header.NodeID, step.Header.ID
 		}
 	}
@@ -195,7 +195,7 @@ func TestReadinessInputReusesPreparedCallsFromConfirmedBatch(t *testing.T) {
 	s.Attempts[reviewTask] = Attempt{IssuedAction: decision.IssuedAction{ActionID: pending.ActionID, Task: reviewTask}, ID: pending.AttemptID}
 	s.Tasks[reviewTask] = runtime.TaskRunning
 	input, ok := s.WorkerInput(pending.ActionID, cd)
-	if !ok || input.Handler != "engine.readiness.plan.v5" || input.ApprovedPlan != plan {
+	if !ok || input.Handler != "engine.readiness.plan.v6" || input.ApprovedPlan != plan {
 		t.Fatal("readiness did not retain its confirmed plan")
 	}
 	commands := []string{}

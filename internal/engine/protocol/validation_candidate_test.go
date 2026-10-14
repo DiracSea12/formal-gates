@@ -1,13 +1,89 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 )
+
+func TestEmptyCandidatePathsPreserveIdentityAndAllowanceAfterReload(t *testing.T) {
+	set := CaseSet{Paths: []string{}}
+	data, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored CaseSet
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Paths != nil {
+		t.Fatal("saved empty case paths did not exercise the nil reload boundary")
+	}
+	original := CandidateParameters{Stage: "QA_ARTIFACT", Base: "development-source", Paths: set.Paths, RouteScope: "issued-route", DesignTasks: map[coverage.ReviewKind]runtime.TaskKey{coverage.ReviewWhitebox: {Node: "validation", Step: "qa.design", Scope: "whitebox"}}}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	correlation := candidateCorrelation(original)
+	after, err := json.Marshal(original)
+	if err != nil || !bytes.Equal(raw, after) || original.Paths == nil {
+		t.Fatal("semantic identity changed the original protocol parameters")
+	}
+	current := original
+	current.Paths, current.RouteScope = restored.Paths, "current-route"
+	state := &State{RunID: "delivery", NativeRoot: t.TempDir(), HostActionFailures: map[string][]HostActionReceipt{}, ReconciledEffects: map[string]ReconciledEffect{}}
+	issuedResource := state.resource("candidate", original.Base, "ownership:"+correlation)
+	if candidateCorrelation(current) != correlation || state.resource("candidate", current.Base, "ownership:"+candidateCorrelation(current)) != issuedResource {
+		t.Fatal("state reload or route context replaced the same empty-path responsibility")
+	}
+	for i, id := range []string{"first-call", "second-call"} {
+		state.HostActionFailures[id] = []HostActionReceipt{{ActionID: id, AdapterOperation: "op.candidate", Correlation: correlation, Status: HostActionStatusFailed, FailureClass: authoring.FailureTransientEngine}}
+		state.ReconciledEffects[id] = ReconciledEffect{Intent: &HostActionIntent{ActionID: id, Revision: uint64(i + 1)}}
+	}
+	intent := HostActionIntent{Correlation: candidateCorrelation(current)}
+	_, used, max := state.candidateFailureRoute(intent)
+	if used != 2 || max != 2 || state.admitNativeSigning(intent) == nil {
+		t.Fatal("empty-path reload or route context reset the exhausted native allowance")
+	}
+	for _, changed := range []CandidateParameters{
+		{Stage: original.Stage, Base: original.Base, Paths: []string{"app_test.go"}, DesignTasks: original.DesignTasks},
+		{Stage: original.Stage, Base: "different-source", DesignTasks: original.DesignTasks},
+	} {
+		changedCorrelation := candidateCorrelation(changed)
+		changedIntent := HostActionIntent{Correlation: changedCorrelation}
+		_, used, max := state.candidateFailureRoute(changedIntent)
+		if changedCorrelation == correlation || used != 0 || max != 2 || state.admitNativeSigning(changedIntent) != nil {
+			t.Fatal("different paths or source inherited an unrelated responsibility")
+		}
+	}
+	current.Paths = []string{"app_test.go"}
+	changed := current
+	changed.Paths = []string{"other_test.go"}
+	if candidateCorrelation(current) == candidateCorrelation(changed) {
+		t.Fatal("nonempty path differences lost their effect identity")
+	}
+}
+
+func TestCandidateSourcePathsRetainsTheFormalInput(t *testing.T) {
+	state := &State{NativeRoot: t.TempDir(), IntakeConfirmationReceipt: &IntakeConfirmationReceipt{RequirementSource: "docs/contract.md", Artifacts: []IntakeArtifact{{Path: "docs/contract.md"}}}}
+	manifest := []string{"app.go"}
+	want := []string{"app.go", "docs/contract.md"}
+	if actual := state.candidateSourcePaths(manifest); !reflect.DeepEqual(actual, want) || !reflect.DeepEqual(manifest, []string{"app.go"}) {
+		t.Fatalf("native source lost its formal input or changed the worker manifest: %v", actual)
+	}
+	if actual := state.candidateSourcePaths(want); !reflect.DeepEqual(actual, want) {
+		t.Fatalf("already declared formal input changed: %v", actual)
+	}
+	state.NativeRoot = ""
+	if actual := state.candidateSourcePaths(manifest); !reflect.DeepEqual(actual, manifest) {
+		t.Fatalf("non-native source invented a physical input: %v", actual)
+	}
+}
 
 // A carried artifact needs a complete original version witness and unchanged
 // source-to-case content. Independent QA progress does not change its inputs.

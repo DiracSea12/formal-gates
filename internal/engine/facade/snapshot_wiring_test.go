@@ -198,7 +198,7 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	runner := vcs.ExecRunner{}
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -331,7 +331,7 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -375,7 +375,7 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	base := snapshotRepoCommits(t, root, "dev commit")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -410,7 +410,7 @@ func TestBlackboxWorkspaceReceiptProjectsOriginalSource(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-	_, input := d.action("engine.qa.design.v5")
+	_, input := d.action("engine.qa.design.v6")
 	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -510,11 +510,12 @@ func (d *validationDriver) reviewPass(plan *protocol.GranularityReview) {
 				return plan
 			}
 			return nil
-		}(), Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the exact submitted requirement and all listed acceptance conditions"}})
+		}(), Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", Findings: []review.Finding{}})
 		if err != nil {
 			d.t.Fatal(err)
 		}
 		d.submit(e)
+		verifyReviewFixture(d.t, d, e)
 		d.drive()
 	}
 }
@@ -524,7 +525,7 @@ func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-	_, input := d.action("engine.qa.design.v5")
+	_, input := d.action("engine.qa.design.v6")
 	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -630,7 +631,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	}
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -682,7 +683,7 @@ func completePromotionPipeline(t *testing.T, runner vcs.Runner, root, base strin
 	t.Helper()
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, runner, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
-	qa, qi := d.action("engine.qa.execution.v3")
+	qa, qi := d.action("engine.qa.execution.v4")
 	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
@@ -1913,7 +1914,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	}
 	confirmValidationDocument(d, development, nil, validationDocument+strings.Repeat("\n", revision))
 	advance()
-	id, input := d.action("engine.development.batch.v5")
+	id, input := d.action("engine.development.batch.v6")
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -1929,7 +1930,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	advance()
 	for id, input := range d.run.ValidationInputs {
 		switch input.Handler {
-		case "engine.qa.execution.v3":
+		case "engine.qa.execution.v4":
 			report := executionFor(input)
 			tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})

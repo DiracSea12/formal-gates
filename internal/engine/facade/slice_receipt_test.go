@@ -231,15 +231,6 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 	if !unavailable || second.Receipt.Cost.Owner != nil {
 		t.Fatal("missing child transcript/owner did not retain its actual availability")
 	}
-	common := false
-	for id := range first.Receipt.Cost.Dispatches {
-		if _, exists := second.Receipt.Cost.Dispatches[id]; exists {
-			common = true
-		}
-	}
-	if !common {
-		t.Fatal("normal child dispatch identities did not exercise the shared namespace key")
-	}
 	var wg sync.WaitGroup
 	errs := make(chan error, 3)
 	for _, receipt := range []protocol.SliceReceipt{first, first, second} {
@@ -506,7 +497,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 		finding = id
 	}
 	resolveGateFinding(child, finding, wave.ID)
-	repair, input := child.action("engine.repair.v6")
+	repair, input := child.action("engine.repair.v7")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\n// documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +661,7 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 		if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
 			key := runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID}
 			basis.Definition.ExternalSteps = append(basis.Definition.ExternalSteps, key)
-			if payload.Handler == "engine.qa.design.v5" {
+			if payload.Handler == "engine.qa.design.v6" {
 				if payload.Retry != nil {
 					attempts = payload.Retry.MaxAttempts
 				}

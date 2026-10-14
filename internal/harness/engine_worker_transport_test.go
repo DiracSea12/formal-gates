@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -42,16 +41,13 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker.v2", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker.v3", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
 	material, err := worker.Render(input, catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.request["prompt"], s.request["schema"], s.request["read_only"] = material.Prompt, material.ResultSchema, true
-	payload := worker.Review{Findings: []worker.Finding{}, Verification: []string{}}
-	for _, key := range review.RequiredVerificationChecks() {
-		payload.Verification = append(payload.Verification, "read complete confirmed delivery document: "+key)
-	}
+	payload := worker.Review{Findings: []worker.Finding{}}
 	answer, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -83,17 +79,15 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if event.Result.PayloadDigest != "sha256:"+textOf(callsProof["sha256"]) || !bytes.Equal(answerBytes, readTestFileBytes(t, filepath.Join(s.directory, "answer.json"))) {
 		t.Fatal("final event lost its original semantic call proof or canonical bytes")
 	}
-	expectedEvidence := []string{}
-	for index, key := range review.RequiredVerificationChecks() {
-		expectedEvidence = append(expectedEvidence, key+": "+payload.Verification[index])
+	encoded, err := json.Marshal(event.Result.Review)
+	if err != nil || bytes.Contains(encoded, []byte(`"verification"`)) {
+		t.Fatal("native reviewer result carries independent Operator authority")
 	}
-	if event.Result.Review.Verification.Evidence != strings.Join(expectedEvidence, "\n") || !reflect.DeepEqual(event.Result.Review.Verification.Checks, review.RequiredVerificationChecks()) {
-		t.Fatal("native core evidence was rewritten")
-	}
+
 }
 
 func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.repair.v7", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -118,7 +112,7 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 }
 
 func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -147,10 +141,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 				plan.CheckpointReason = "independent batches preserve frozen interfaces"
 				plan.CheckpointGroups = [][]int{{1}, {2}}
 			}
-			payload := worker.Review{GranularityReview: plan, Findings: []worker.Finding{}, Verification: []string{}}
-			for _, key := range review.RequiredVerificationChecks() {
-				payload.Verification = append(payload.Verification, "checked current signed input: "+key)
-			}
+			payload := worker.Review{GranularityReview: plan, Findings: []worker.Finding{}}
 			body, _ := json.Marshal(payload)
 			domain, err := decodeNativeJSON(body)
 			if err != nil {
@@ -181,7 +172,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 }
 
 func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
-	for _, handler := range []string{"engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4"} {
 		t.Run(handler, func(t *testing.T) {
 			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
 			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
@@ -194,21 +185,21 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			}
 			var payload any
 			switch handler {
-			case "engine.qa.design.v5":
+			case "engine.qa.design.v6":
 				payload = &worker.Design{DesignManifest: worker.DesignManifest{Cases: []worker.DesignedCase{{Case: 1, Scenario: "BOUNDARY", PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Coverage: [][]int{{1}}}}
 			case "engine.qa.review.rationale.v2":
 				payload = &worker.CaseReview{SourceDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []*worker.Decision{{Status: coverage.StatusPass, Reason: "oracle valid"}}}
-			case "engine.qa.execution.v3":
+			case "engine.qa.execution.v4":
 				payload = &worker.ExecutionJudgments{Execution: worker.Execution{Records: []*worker.Observation{{Result: coverage.ExecutedPass, Comparison: "matches"}}}, Findings: []worker.Finding{}}
 			}
 			expected := protocol.ValidationResult{Binding: input.Validation.Binding, Status: "PASS"}
 			switch handler {
-			case "engine.qa.design.v5":
+			case "engine.qa.design.v6":
 				expected.DesignChange = &protocol.QADesignChange{RemoveCases: []string{}, RemoveSharedSteps: []string{}, CoveragePoints: []string{"AC"}}
 				expected.Manifest = &coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: manifest.Points, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox, Scenario: "BOUNDARY", SharedSteps: manifest.Cases[0].SharedSteps, PublicEntry: "app ''", Preconditions: "built app", Steps: "run empty word", Oracle: "empty result"}}, Edges: manifest.Edges}
 			case "engine.qa.review.rationale.v2":
 				expected.Review = &coverage.ReviewResult{Binding: binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ", Status: coverage.StatusPass, Reason: "covered"}}, PointDecisions: []coverage.ReviewDecision{{ID: "AC", Status: coverage.StatusPass, Reason: "observed"}}, CaseDecisions: []coverage.ReviewDecision{{ID: "case", Status: coverage.StatusPass, Reason: "oracle valid"}}, SharedStepDecisions: []coverage.ReviewDecision{}, SetStatus: coverage.StatusPass}
-			case "engine.qa.execution.v3":
+			case "engine.qa.execution.v4":
 				expected.Execution = &coverage.ExecutionReport{Binding: execution, Records: []coverage.ExecutionRecord{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case", Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted, Procedure: "run app", Observation: "empty", Comparison: "matches"}}}
 				expected.Execution.Binding.ActualCaseIDs = []string{"case"}
 				expected.Tool, expected.Environment = "app", "issued environment"
@@ -241,7 +232,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if handler == "engine.qa.design.v5" {
+			if handler == "engine.qa.design.v6" {
 				actual := event.Result.Validation.Manifest
 				if actual == nil || len(actual.Cases) != 1 || actual.Cases[0].CaseID == "" || actual.Cases[0].CaseID != "case" {
 					t.Fatal("substantive design replacement changed its original program identity")
@@ -260,7 +251,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 
 func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
-	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
+	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		t.Run(role, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			schema, err := worker.ResultSchema(input)
@@ -313,7 +304,7 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3"} {
+	for _, handler := range []string{"engine.development.batch.v6", "engine.repair.v7", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
@@ -355,16 +346,12 @@ func TestNativeApprovedPlanDeltaUsesOriginalSubmittedFacts(t *testing.T) {
 	plan := canaryLocalPlan(false)
 	plan.Reason = "original plan rationale"
 	plan.Batches[0].Risk = "original risk"
-	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v5", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v6", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verification := []string{}
-	for range review.RequiredVerificationChecks() {
-		verification = append(verification, "Verified original responsibilities and current source")
-	}
-	domain := map[string]any{"findings": []any{}, "verification": verification, "granularityReview": map[string]any{"batches": []any{map[string]any{"reuse": 1, "risk": "new risk"}}}}
+	domain := map[string]any{"findings": []any{}, "granularityReview": map[string]any{"batches": []any{map[string]any{"reuse": 1, "risk": "new risk"}}}}
 	source, err := nativeSemanticToolRoundTrip(t, schema, domain)
 	if err != nil {
 		t.Fatal(err)

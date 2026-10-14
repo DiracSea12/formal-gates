@@ -16,6 +16,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/prompts"
 )
 
 func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
@@ -48,7 +49,7 @@ func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
 	material.Input.VCS = "git"
 	material.Input.Validation.Workspace.Source = git("rev-parse", "HEAD")
-	material.Input.Handler = "engine.development.batch.v5"
+	material.Input.Handler = "engine.development.batch.v6"
 	material.Input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "approved", Checks: []protocol.DevelopmentCheck{{ID: "edit", Purpose: protocol.CheckEdit, Command: "printf edit; printf diagnostic >&2; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\""}, {ID: "full", Purpose: protocol.CheckFullTests, Command: "touch full-ran"}, {ID: "ordinary", Command: "touch ordinary-ran"}}}}
 	if err := os.MkdirAll(filepath.Join(workspace, ".gates", "tmp"), 0700); err != nil {
 		t.Fatal(err)
@@ -103,6 +104,98 @@ func TestNativeWorkspaceRunsDeclaredEditChecks(t *testing.T) {
 	body, _ = os.ReadFile(filepath.Join(workspace, ".gates", "tmp", "check-count"))
 	if string(body) != "xx" {
 		t.Fatal("receipt recovery re-executed the check", string(body))
+	}
+}
+
+func TestNativeWorkspacePreparesDeclaredEditCallsBeforeMutation(t *testing.T) {
+	for _, command := range []string{"printf checked; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\"", "printf failed >&2; exit 7"} {
+		tools, workspace := nativeEditCheckFixture(t)
+		material := *tools.material
+		input := material.Input
+		input.InputCodec, input.OutputCodec, input.Provider = protocol.WorkerInputCodec, worker.OutputCodec, "codex"
+		input.Pending.AttemptID = "original-attempt"
+		input.RequirementDocument.Content = "Create the confirmed production file and check every edit"
+		input.Validation.Development.Batch.Checks[0].Command = ""
+		input.Validation.Development.Batch.Checks[0].Goal = "Run the declared deterministic source check after every edit"
+		catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker"}}}
+		request, err := readJSONFile(filepath.Join(tools.directory, "native-request.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
+		publish := func(input protocol.WorkerInput) *nativeWorkspaceTools {
+			t.Helper()
+			material, err := worker.Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomicJSON(path, material); err != nil {
+				t.Fatal(err)
+			}
+			request.(map[string]any)["read_only"] = material.ReadOnly
+			request.(map[string]any)["schema"] = material.ResultSchema
+			if err := writeAtomicJSON(filepath.Join(tools.directory, "native-request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			current, err := newNativeWorkspaceTools(tools.directory, ExecutionServices{Admit: nativeToolAdmission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return current
+		}
+		tools = publish(input)
+		workspaceSchema := nativeWorkspaceToolSchema(tools.readOnly, tools.material)["inputSchema"].(map[string]any)
+		for _, action := range workspaceSchema["oneOf"].([]any) {
+			name := getOf(getOf(getOf(action, "properties"), "action"), "const")
+			if name == "create" || name == "replace" || name == "remove" {
+				t.Fatal("unprepared edit call published production write capability")
+			}
+		}
+		if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"production.txt","content":"confirmed"}`)); err == nil {
+			t.Fatal("production mutation ran before its declared edit call was prepared")
+		}
+		if _, err := os.Stat(filepath.Join(workspace, "production.txt")); !os.IsNotExist(err) {
+			t.Fatal("preparation modified production", err)
+		}
+		raw, _ := json.Marshal(map[string]any{"summary": "Prepared the declared edit call", "remainingWork": "Create the confirmed production file", "commands": []string{command}})
+		prepared, err := worker.DecodeResultWithPaths(input, "prepared", raw, "native-preparation-source", []string{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.Validation.Development.Result = &protocol.WorkerResult{ActionID: prepared.Result.ActionID, Digest: "accepted-preparation", Outcome: prepared.Result.Outcome, Validation: prepared.Result.Validation}
+		tools = publish(input)
+		if tools.readOnly || tools.material.Input.Pending.ActionID != prepared.Result.ActionID {
+			t.Fatal("accepted preparation did not continue the original writable action")
+		}
+		result := callWorkspace(t, tools, `{"action":"create","name":"production.txt","content":"confirmed"}`)
+		checks := result["checks"].([]any)
+		wantExit := 0
+		if strings.Contains(command, "exit 7") {
+			wantExit = 7
+		}
+		if len(checks) != 1 || !valuesEqual(getOf(checks[0], "exitCode"), wantExit) {
+			t.Fatal("prepared invocation did not preserve its actual exit", checks)
+		}
+		for number, fact := range tools.facts {
+			if fact.Kind != "edit" {
+				continue
+			}
+			checkRequest, err := readJSONFile(filepath.Join(editCheckDirectory(fact, number+1, 0), "request.json"))
+			if err != nil || getOf(getOf(checkRequest, "check"), "command") != command || getOf(getOf(checkRequest, "check"), "goal") != nil {
+				t.Fatal("native edit did not consume the accepted original command", err)
+			}
+		}
+		recovered, err := newNativeWorkspaceTools(tools.directory, ExecutionServices{Admit: nativeToolAdmission})
+		if err != nil {
+			t.Fatal(err)
+		}
+		callWorkspace(t, recovered, `{"action":"list"}`)
+		if wantExit == 0 {
+			count, err := os.ReadFile(filepath.Join(workspace, ".gates/tmp/check-count"))
+			if err != nil || string(count) != "x" {
+				t.Fatal("recovery repeated the prepared edit invocation", string(count), err)
+			}
+		}
 	}
 }
 

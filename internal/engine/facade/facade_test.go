@@ -594,9 +594,6 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 	if run.Next.Kind != decision.KindAsk || run.Next.Ask == nil {
 		t.Fatalf("next during the barrier = %+v, want the ask boundary", run.Next)
 	}
-	if len(run.AvailableActions) != 1 || run.AvailableActions[0] != "submit" {
-		t.Fatalf("available actions during the barrier = %v", run.AvailableActions)
-	}
 	if statusRun, err := f.Status(); err != nil || statusRun.PendingRequirementAsk == nil {
 		t.Fatalf("status during the barrier = %v %v", statusRun.PendingRequirementAsk, err)
 	}
@@ -604,12 +601,20 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 		t.Fatalf("next during the barrier = %+v %v", next, err)
 	}
 	// 屏障期 Drive：签发冻结＝等待用户，不是错误。
+	before, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	driven, err := f.Drive()
 	if err != nil {
 		t.Fatalf("drive during the barrier: %v", err)
 	}
-	if driven.PendingRequirementAsk == nil {
-		t.Fatal("drive during the barrier lost the ask face")
+	if !reflect.DeepEqual(driven.PendingRequirementAsk, face) {
+		t.Fatal("drive during the barrier changed the original ask package or token")
+	}
+	after, err := f.engine.Load()
+	if err != nil || !reflect.DeepEqual(before.State.PendingActions, after.State.PendingActions) || !reflect.DeepEqual(before.State.PendingHostActions, after.State.PendingHostActions) || !reflect.DeepEqual(before.State.NativeResources, after.State.NativeResources) {
+		t.Fatal("requirement barrier issued work or native effects", err)
 	}
 	// 放弃变更：断言屏障解除、确认包投影消失。
 	token, err := f.Freshness("req-face-ask")

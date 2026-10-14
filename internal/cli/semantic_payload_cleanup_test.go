@@ -18,6 +18,7 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 			fixture := t.TempDir()
 			startAdmittedEngineRun(t, fixture)
 			root, runID := fixture, "writer-exclusive"
+			payloadKind, payloadPosition := "control", 0
 			call := func(args ...string) []byte {
 				t.Helper()
 				var out, stderr bytes.Buffer
@@ -44,11 +45,13 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 				mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Save the original progress before terminal cleanup."))
 				intake := candidate(call("start", "--precheck", "--route", "lightweight", "--document", "1"), "intake")
 				call("start", "--route", "lightweight", "--run-id", runID, "--intake", strconv.Itoa(intake))
-				candidate(call("progress", "--save-progress"), "progress")
+				payloadKind = "progress"
+				payloadPosition = candidate(call("progress", "--save-progress"), "progress")
 			} else {
 				position := candidate(call("next", "--request", "ABORT"), "confirmationCandidate")
 				call("submit", "--confirmation-candidate", strconv.Itoa(position), "--single-step")
 				position = candidate(call("next", "--ask", "1", "--choice", "abort"), "confirmationCandidate")
+				payloadPosition = position
 				call("submit", "--confirmation-candidate", strconv.Itoa(position), "--single-step")
 				before := snapshotEngineRunTree(t, root, runID)
 				call("submit", "--confirmation-candidate", strconv.Itoa(position), "--single-step")
@@ -57,13 +60,19 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 				}
 			}
 			directory := filepath.Join(root, facade.EngineNamespace, runID)
-			payloads, err := filepath.Glob(filepath.Join(directory, "payloads", "*", "payload-*"))
-			if err != nil || len(payloads) == 0 {
+			payloads, err := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, runID, payloadKind))
+			if err != nil || payloadPosition < 1 || payloadPosition > len(payloads) {
 				t.Fatal("public CLI did not create its original owned payload", payloads, err)
 			}
-			original, err := os.ReadFile(payloads[0])
+			original, err := os.ReadFile(payloads[payloadPosition-1])
 			if err != nil || !json.Valid(original) || !bytes.Contains(original, []byte(`"runId"`)) {
 				t.Fatal("program payload lost its original run content", err)
+			}
+			if payloadKind == "progress" {
+				var progress facade.Progress
+				if err := json.Unmarshal(original, &progress); err != nil || progress.Root != root || progress.RunID != runID {
+					t.Fatal("original progress belongs to another project or run", err, progress)
+				}
 			}
 			unrelated := filepath.Join(root, "payloads", "user-data")
 			mustWriteCLI(t, unrelated, "unrelated user bytes\r\n原文  ")

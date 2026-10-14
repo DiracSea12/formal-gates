@@ -39,9 +39,42 @@ type SharedStepChange struct {
 type OperationChange struct {
 	Reuse   *int                    `json:"reuse,omitempty"`
 	Kind    *coverage.OperationKind `json:"kind,omitempty"`
-	Argv    *[]StringChange         `json:"argv,omitempty"`
-	Command *StringChange           `json:"command,omitempty"`
+	Argv    *[]ArgumentChange       `json:"argv,omitempty"`
+	Command *string                 `json:"command,omitempty"`
 	Stdin   *StringChange           `json:"stdin,omitempty"`
+}
+
+// ArgumentChange authors a new argument or selects one original argument value.
+type ArgumentChange struct {
+	Reuse *int `json:"reuse,omitempty"`
+	value string
+}
+
+func (change *ArgumentChange) UnmarshalJSON(raw []byte) error {
+	*change = ArgumentChange{}
+	if len(raw) > 0 && raw[0] == '"' {
+		return json.Unmarshal(raw, &change.value)
+	}
+	type body ArgumentChange
+	if err := decodeObject(raw, (*body)(change)); err != nil {
+		return err
+	}
+	if change.Reuse == nil || *change.Reuse < 1 {
+		return fmt.Errorf("argument reuse selects an original element position")
+	}
+	return nil
+}
+
+func (change ArgumentChange) MarshalJSON() ([]byte, error) {
+	if change.Reuse != nil {
+		type body ArgumentChange
+		return json.Marshal(body(change))
+	}
+	return json.Marshal(change.value)
+}
+
+func (change ArgumentChange) text(original []string) (string, error) {
+	return (StringChange{Reuse: change.Reuse, value: change.value}).text(original, nil)
 }
 
 // StringChange selects original field positions or read bytes, or authors new text.
@@ -158,19 +191,19 @@ func reviseOperations(original []coverage.Operation, changes []OperationChange, 
 			item.Kind = *change.Kind
 		}
 		if change.Argv != nil {
-			var err error
-			item.Argv, err = reviseStrings(item.Argv, *change.Argv, facts)
-			if err != nil {
-				return nil, err
+			arguments := make([]string, 0, len(*change.Argv))
+			for _, argument := range *change.Argv {
+				value, err := argument.text(item.Argv)
+				if err != nil {
+					return nil, err
+				}
+				arguments = append(arguments, value)
 			}
+			item.Argv = arguments
 		}
 		item.Argv = slices.Clone(item.Argv)
 		if change.Command != nil {
-			var err error
-			item.Command, err = change.Command.text(nil, facts)
-			if err != nil {
-				return nil, err
-			}
+			item.Command = *change.Command
 		}
 		if change.Stdin != nil {
 			var err error

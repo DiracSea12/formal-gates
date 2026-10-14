@@ -180,7 +180,10 @@ func TestStringRevisionSchemaBindsEachOriginalArray(t *testing.T) {
 			if !reflect.DeepEqual(properties["reuse"].(map[string]any)["enum"], []int{index + 1}) {
 				t.Fatal("argv choices detached from original operation")
 			}
-			checkArray(t, properties["argv"].(map[string]any), want)
+			arguments := properties["argv"].(map[string]any)["items"].(map[string]any)["anyOf"].([]any)
+			if len(arguments) != 2 || arguments[0].(map[string]any)["type"] != "string" || !reflect.DeepEqual(arguments[1].(map[string]any)["properties"].(map[string]any)["reuse"].(map[string]any)["enum"], want) {
+				t.Fatal("argument choices expose source text or lost original value positions", arguments)
+			}
 		}
 		checkArray(t, step["properties"].(map[string]any)["artifacts"].(map[string]any), []int{1, 2})
 	}

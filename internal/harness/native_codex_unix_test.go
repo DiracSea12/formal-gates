@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
 	"io"
 	"os"
@@ -345,17 +344,12 @@ func TestCodexRPCPeer(t *testing.T) {
 		}
 		domain := map[string]any{"interruptionReason": "The gate peer needs an explicit user decision"}
 		if peer.Mode == "workflow-invalid-review" {
-			if input.Review == nil || input.Handler != "engine.review.worker.v2" {
+			if input.Review == nil || input.Handler != "engine.review.worker.v3" {
 				panic("invalid review fixture received another duty")
 			}
-			verification := []string{}
-			for _, key := range review.RequiredVerificationChecks() {
-				verification = append(verification, "Checked current "+key)
-			}
-			verification[0] = " "
-			domain = map[string]any{"findings": []any{}, "verification": verification}
+			domain = map[string]any{"findings": []any{map[string]any{"severity": "P9", "message": "The review finding has an unclassified severity"}}}
 		}
-		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v5" {
+		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v6" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
@@ -368,7 +362,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			domain = map[string]any{"summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
 		}
 
-		if input.Handler == "engine.development.batch.v5" && peer.Mode == "workflow-progress" {
+		if input.Handler == "engine.development.batch.v6" && peer.Mode == "workflow-progress" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if len(history) > 1 && (input.Validation.Development.Result == nil || input.Validation.Development.Result.Validation == nil || input.Validation.Development.Result.Validation.Development == nil || input.Validation.Development.Result.Validation.Development.RemainingWork == "") {
@@ -389,6 +383,18 @@ func TestCodexRPCPeer(t *testing.T) {
 				}
 				domain = map[string]any{"summary": "Delivered app.go", "completion": map[string]any{"dod": dod, "handoff": "Ready for the approved project checks"}}
 			}
+		}
+		if completion, ok := domain["completion"].(map[string]any); ok {
+			if len(input.RequirementPoints) != 1 || input.RequirementPoints[0].ID != "AC-001" || input.RequirementPoints[0].Text != "go run app.go 退出 0，并输出一行非空完成文本。" {
+				panic("native completion received another requirement duty")
+			}
+			command := exec.Command("go", "run", "app.go")
+			command.Dir = cwd
+			output, err := command.CombinedOutput()
+			if err != nil || len(bytes.TrimSpace(output)) == 0 || len(bytes.Split(bytes.TrimSpace(output), []byte{'\n'})) != 1 {
+				panic(fmt.Sprintf("actual native completion command failed: %v %s", err, output))
+			}
+			completion["requirements"] = []string{"go run app.go exited 0 and returned one completion line: " + string(output)}
 		}
 		answer = domain
 	}
@@ -525,7 +531,12 @@ func newCodexScenario(t *testing.T) *codexScenario {
 		t.Fatal(err)
 	}
 	binding["environment"] = map[string]any{"HOME": home, "CODEX_HOME": config}
-	schema := map[string]any{"type": "object"}
+	schema := map[string]any{"type": "object", "properties": map[string]any{
+		"status":        map[string]any{"type": "string", "enum": []string{"PASS"}},
+		"summary":       map[string]any{"type": "string"},
+		"findings":      map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+		"check_reviews": map[string]any{"type": "object"},
+	}, "required": []string{"status", "summary", "findings", "check_reviews"}, "additionalProperties": false}
 	request := map[string]any{"provider": "codex", "binding": binding, "workspace": workspace, "prompt": "original prompt", "schema": schema, "read_only": false, "model": "peer-model", "reasoning_effort": "high"}
 	s := &codexScenario{request: request, directory: directory, workspace: workspace, home: home, config: config}
 	// Retain raw local peer evidence when the execution harness requests it.

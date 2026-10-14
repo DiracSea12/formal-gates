@@ -13,7 +13,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
-// Original workspace reads supply exact invocation values at every QA ingress.
+// Authored invocations retain exact values; workspace reads supply semantic payloads.
 func qaRecipeFacts(t *testing.T) []LocationFact {
 	t.Helper()
 	contents := []string{"Recipe:\nprintf '%s\\n' '中文'\nprintf '%s\\n' '\"quoted\"'\n", "public-tool", "two words \"quoted\" 中文", "Input:\n first line\nsecond 中文\n", "outputs/中文 raw"}
@@ -33,14 +33,14 @@ func qaRecipeFacts(t *testing.T) []LocationFact {
 	return facts
 }
 
-const qaSourceOperations = `[{"kind":"SHELL","command":{"read":1,"from":2,"to":3},"stdin":{"read":4,"from":2,"to":3}},{"kind":"ARGV","argv":[{"read":2,"from":1,"to":1},"",{"read":3,"from":1,"to":1}],"stdin":{"read":4,"from":2,"to":3}}]`
+const qaInvocationOperations = `[{"kind":"SHELL","command":"printf '%s\\n' '中文'\nprintf '%s\\n' '\"quoted\"'\n","stdin":{"read":4,"from":2,"to":3}},{"kind":"ARGV","argv":["public-tool","","two words \"quoted\" 中文"],"stdin":{"read":4,"from":2,"to":3}}]`
 
 func qaExpectedOperations() []coverage.Operation {
 	stdin := " first line\nsecond 中文\n"
 	return []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf '%s\\n' '中文'\nprintf '%s\\n' '\"quoted\"'\n", Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{"public-tool", "", "two words \"quoted\" 中文"}, Stdin: stdin}}
 }
 
-func TestQAInitialRecipesSelectOriginalReadValues(t *testing.T) {
+func TestQAInitialRecipesAuthorCallsAndRetainOriginalPayloads(t *testing.T) {
 	facts := qaRecipeFacts(t)
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		for _, shared := range []bool{false, true} {
@@ -49,9 +49,9 @@ func TestQAInitialRecipesSelectOriginalReadValues(t *testing.T) {
 				input.Validation.Manifest.Binding.ReviewKind = mode
 				input.Validation.Manifest.Cases = nil
 				input.Validation.Manifest.SharedSteps = nil
-				raw := []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"exact original output","operations":` + qaSourceOperations + `}],"coverage":[[1],[1]]}`)
+				raw := []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"exact original output","operations":` + qaInvocationOperations + `}],"coverage":[[1],[1]]}`)
 				if shared {
-					raw = []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"exact original output","sharedSteps":[1]}],"sharedSteps":[{"procedure":"prepare original recipe","artifacts":[{"read":5,"from":1,"to":1}],"operations":` + qaSourceOperations + `}],"coverage":[[1],[1]]}`)
+					raw = []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"exact original output","sharedSteps":[1]}],"sharedSteps":[{"procedure":"prepare original recipe","artifacts":[{"read":5,"from":1,"to":1}],"operations":` + qaInvocationOperations + `}],"coverage":[[1],[1]]}`)
 				}
 				assertQARecipeReplay(t, input, raw, facts, func(event protocol.Event) {
 					manifest := event.Result.Validation.Manifest
@@ -70,9 +70,9 @@ func TestQAInitialRecipesSelectOriginalReadValues(t *testing.T) {
 		}
 	}
 	input := semanticInput()
-	input.Handler = "engine.qa.execution.v3"
+	input.Handler = "engine.qa.execution.v4"
 	input.Validation.CommandCases = []string{"approved-original"}
-	raw := []byte(`{"commands":[` + qaSourceOperations + `]}`)
+	raw := []byte(`{"commands":[` + qaInvocationOperations + `]}`)
 	assertQARecipeReplay(t, input, raw, facts, func(event protocol.Event) {
 		commands := event.Result.Validation.QACommands
 		if len(commands) != 1 || commands[0].CaseID != "approved-original" || !event.Result.Validation.Checkpoint || !reflect.DeepEqual(commands[0].Operations, qaExpectedOperations()) {
@@ -123,7 +123,7 @@ func assertQARecipeReplay(t *testing.T, input protocol.WorkerInput, raw []byte, 
 	}
 }
 
-func TestQARecipeRevisionSharesOriginalValueAssembly(t *testing.T) {
+func TestQARecipeRevisionReusesArgumentsAndRetainsOriginalPayloads(t *testing.T) {
 	facts := qaRecipeFacts(t)
 	original := []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"original-tool", "", "retained 中文"}, Stdin: "old argv input"}, {Kind: coverage.OperationShell, Command: "original shell", Stdin: "old shell input"}}
 	for _, affected := range []bool{false, true} {
@@ -131,7 +131,7 @@ func TestQARecipeRevisionSharesOriginalValueAssembly(t *testing.T) {
 		input.Validation.Manifest.Cases[0].Operations = original
 		input.Validation.Manifest.SharedSteps[0].Operations = original
 		input.Validation.Manifest.SharedSteps[0].Artifacts = []string{"old/path", "retained/path"}
-		operations := `[{"reuse":2,"command":{"read":1,"from":2,"to":3},"stdin":{"read":4,"from":2,"to":3}},{"reuse":1,"argv":[{"reuse":1},{"reuse":2},{"read":3,"from":1,"to":1},{"reuse":3}]}]`
+		operations := `[{"reuse":2,"command":"printf '%s\\n' '中文'\nprintf '%s\\n' '\"quoted\"'\n","stdin":{"read":4,"from":2,"to":3}},{"reuse":1,"argv":[{"reuse":1},{"reuse":2},"two words \"quoted\" 中文",{"reuse":3}]}]`
 		artifacts := `[{"reuse":2},{"read":5,"from":1,"to":1},{"reuse":2}]`
 		raw := []byte(`{"cases":[{"case":1,"operations":` + operations + `}],"sharedSteps":[{"step":1,"operations":` + operations + `,"artifacts":` + artifacts + `}],"coverage":[null,null]}`)
 		if affected {
@@ -148,73 +148,29 @@ func TestQARecipeRevisionSharesOriginalValueAssembly(t *testing.T) {
 	}
 }
 
-func TestQARecipeSourceRejectsInvalidShapeAndUnavailableOriginal(t *testing.T) {
+func TestQARecipeIdentityUsesAuthoredInvocationContent(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Cases = nil
 	input.Validation.Manifest.SharedSteps = nil
-	facts := qaRecipeFacts(t)
-	rawFor := func(value string) []byte {
-		return []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"source bytes","operations":[{"kind":"SHELL","command":` + value + `}]}],"coverage":[[1],[1]]}`)
-	}
-	for _, value := range []string{`{}`, `{"read":0,"from":1,"to":1}`, `{"read":1,"from":0,"to":1}`, `{"read":1,"from":3,"to":2}`, `{"read":1,"from":1}`, `{"read":1,"from":1,"to":null}`, `{"read":1,"from":1,"to":1,"reuse":1}`, `{"read":1,"from":1,"to":1,"value":"copy"}`, `{"reuse":1}`} {
-		if err := ValidateSemanticBody(input, rawFor(value), facts); err == nil {
-			t.Fatal("invalid source shape admitted", value)
+	decode := func(command string) protocol.Event {
+		t.Helper()
+		value, _ := json.Marshal(map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "output", "operations": []any{map[string]any{"kind": "SHELL", "command": command}}}}, "coverage": [][]int{{1}, {1}}})
+		event, err := DecodeResultWithFacts(input, "result", value, "output", []string{}, nil)
+		if err != nil {
+			t.Fatal(err)
 		}
+		return event
 	}
-	for _, sample := range []struct {
-		name   string
-		facts  []LocationFact
-		source string
-	}{
-		{"missing", nil, `{"read":1,"from":2,"to":3}`},
-		{"unpublished", facts, `{"read":99,"from":1,"to":1}`},
-		{"outside-range", facts, `{"read":1,"from":2,"to":99}`},
-		{"listing", []LocationFact{{Kind: "listing", Content: []byte("printf wrong")}}, `{"read":1,"from":1,"to":1}`},
-		{"empty", []LocationFact{{Kind: "read"}}, `{"read":1,"from":1,"to":1}`},
-		{"blank-command", []LocationFact{{Kind: "read", Content: []byte(" \n")}}, `{"read":1,"from":1,"to":1}`},
-	} {
-		t.Run(sample.name, func(t *testing.T) {
-			raw := rawFor(sample.source)
-			if err := ValidateSemanticBody(input, raw, sample.facts); err == nil {
-				t.Fatal("source admission accepted unavailable or invalid original bytes")
-			}
-			if _, err := DecodeResultWithFacts(input, "invalid", raw, "original-output", []string{}, sample.facts); err == nil {
-				t.Fatal("missing/invalid original source admitted")
-			}
-		})
-	}
-	for _, operations := range []string{`[{"kind":"ARGV","argv":["tool"],"command":{"read":1,"from":2,"to":3}}]`, `[{"kind":"SHELL","argv":["tool"],"command":{"read":1,"from":2,"to":3}}]`, `[{"argv":[{"read":2,"from":1,"to":1}]}]`} {
-		raw := []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"source bytes","operations":` + operations + `}],"coverage":[[1],[1]]}`)
-		if err := ValidateSemanticBody(input, raw, facts); err == nil {
-			t.Fatal("source selection relaxed invocation kind", operations)
-		}
-	}
-}
-
-func TestQARecipeIdentityUsesAssembledOriginalContent(t *testing.T) {
-	input := semanticInput()
-	input.Validation.Manifest.Cases = nil
-	input.Validation.Manifest.SharedSteps = nil
-	raw := []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"output","operations":[{"kind":"SHELL","command":{"read":1,"from":1,"to":1}}]}],"coverage":[[1],[1]]}`)
-	first, err := DecodeResultWithFacts(input, "result", raw, "output", []string{}, []LocationFact{{Kind: "read", Content: []byte("printf first")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := DecodeResultWithFacts(input, "result", raw, "output", []string{}, []LocationFact{{Kind: "read", Content: []byte("printf second")}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first, second := decode("printf first"), decode("printf second")
 	if first.Result.Validation.Manifest.Cases[0].CaseID == second.Result.Validation.Manifest.Cases[0].CaseID {
-		t.Fatal("new case identity lost assembled command content")
+		t.Fatal("new case identity lost its authored invocation content")
 	}
-	copied := []byte(`{"cases":[{"scenario":"SUCCESS","oracle":"output","operations":[{"kind":"SHELL","command":"printf first"}]}],"coverage":[[1],[1]]}`)
-	authored, err := DecodeResultWithFacts(input, "result", copied, "output", []string{}, nil)
-	if err != nil || !reflect.DeepEqual(first, authored) {
-		t.Fatal("same final original values have different identity", err)
+	if !reflect.DeepEqual(first, decode("printf first")) {
+		t.Fatal("the same authored invocation changed its identity")
 	}
 }
 
-func TestQARecipeSchemaPublishesOriginalSourcesAtAllFields(t *testing.T) {
+func TestQARecipeSchemaSeparatesInvocationValuesAndOriginalPayloads(t *testing.T) {
 	input := semanticInput()
 	input.Validation.Manifest.Cases = nil
 	input.Validation.Manifest.SharedSteps = nil
@@ -232,9 +188,13 @@ func TestQARecipeSchemaPublishesOriginalSourcesAtAllFields(t *testing.T) {
 		if fields["reuse"] != nil || !reflect.DeepEqual(schema["required"], []any{"kind"}) {
 			t.Fatal("new invocation schema advertises unissued operation", schema)
 		}
-		sourceString(fields["command"].(map[string]any))
+		if fields["command"].(map[string]any)["type"] != "string" {
+			t.Fatal("command still exposes mechanical text sources")
+		}
 		sourceString(fields["stdin"].(map[string]any))
-		sourceString(fields["argv"].(map[string]any)["items"].(map[string]any))
+		if fields["argv"].(map[string]any)["items"].(map[string]any)["type"] != "string" {
+			t.Fatal("new arguments still expose mechanical text sources")
+		}
 	}
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		input.Validation.Manifest.Binding.ReviewKind = mode
@@ -251,7 +211,7 @@ func TestQARecipeSchemaPublishesOriginalSourcesAtAllFields(t *testing.T) {
 			}
 		}
 	}
-	input.Handler = "engine.qa.execution.v3"
+	input.Handler = "engine.qa.execution.v4"
 	input.Validation.CommandCases = []string{"original-approved"}
 	schema, err := ResultSchema(input)
 	if err != nil {
@@ -263,4 +223,35 @@ func TestQARecipeSchemaPublishesOriginalSourcesAtAllFields(t *testing.T) {
 		t.Fatal("missing command duty weakened")
 	}
 	operation(item["items"].(map[string]any))
+}
+
+func TestQACallValuesRejectMechanicalTextSources(t *testing.T) {
+	facts := []LocationFact{{Kind: "listing"}, {Kind: "requirement", Content: []byte("Build uses project-build; test uses project-tests.\n")}}
+	for _, value := range []string{`{"read":2,"from":1,"to":1}`, `{"read":2,"from":1,"to":1,"fromColumn":1,"toColumn":5}`, `{"parts":[{"read":2,"from":1,"to":1}]}`} {
+		for _, operation := range []string{`{"kind":"SHELL","command":` + value + `}`, `{"kind":"ARGV","argv":[` + value + `]}`} {
+			for _, entry := range []string{"design", "revision", "preparation"} {
+				input := semanticInput()
+				raw := `{"cases":[{"scenario":"SUCCESS","oracle":"complete output","operations":[` + operation + `]}],"coverage":[[1],[1]]}`
+				switch entry {
+				case "design":
+					input.Validation.Manifest.Cases = nil
+					input.Validation.Manifest.SharedSteps = nil
+				case "revision":
+					input = retainedDesignInput()
+					input.Validation.AffectedCases = []string{"keep"}
+					raw = `{"cases":[{"operations":[` + operation + `]}]}`
+				case "preparation":
+					input.Handler = "engine.qa.execution.v4"
+					input.Validation.CommandCases = []string{"approved-case"}
+					raw = `{"commands":[[` + operation + `]]}`
+				}
+				if err := ValidateSemanticBody(input, []byte(raw), facts); err == nil {
+					t.Fatalf("%s exposed a mechanical invocation source: %s", entry, operation)
+				}
+				if _, err := DecodeResultWithFacts(input, "invalid", []byte(raw), "native-source", []string{}, facts); err == nil {
+					t.Fatalf("%s admitted a mechanical invocation source", entry)
+				}
+			}
+		}
+	}
 }

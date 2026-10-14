@@ -25,7 +25,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}
-	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v6" {
+	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v7" {
 		input.AvailableRouteCandidates = catalog.RouteCandidates()
 		input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
@@ -41,19 +41,22 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		if input.Review.Action == review.StartReadiness {
 			instructions += " Every finding requires a technical category from the schema; implementation-detail has severity P2 or P3."
-			instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Checks declare EDIT for project low-cost deterministic checks after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. Existing project commands select original workspace or bound requirement read/from/to line ranges; the program supplies their exact bytes. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
+			instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Approved EDIT checks run after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
 		}
-		instructions += " verification follows the issued check order with non-empty actual evidence; do not copy keys. Findings carry independent evidence and severity rationale."
+		instructions += " Findings carry observed evidence and severity rationale. Independent Operator admission is a separate responsibility."
 
 	} else if input.Validation != nil {
 		switch input.Handler {
-		case "engine.development.batch.v5":
-			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. Supply commands only for its missing verification goals in their issued order; select existing read bytes or author genuinely new calls. Accepted calls are retained by the program. If work remains, return summary and actual remainingWork instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
-			value.ReadOnly = false
+		case "engine.development.batch.v6":
+			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. Supply newly prepared command strings only for its missing verification goals in their issued order. Accepted calls are retained by the program. If work remains, return summary, actual remainingWork and any prepared commands instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
+			value.ReadOnly = missingEditCalls(input)
+			if value.ReadOnly {
+				instructions = "Prepare the declared EDIT calls before changing production files. The workspace is read-only. Return summary, actual remainingWork and prepared command strings for the issued missing verification goals; the program retains these values and continues the same action. Do not claim implementation completion."
+			}
 		case "engine.repair.verify.v2":
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
 			value.ReadOnly = true
-		case "engine.repair.v6":
+		case "engine.repair.v7":
 			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report summary. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
 			if len(repairCaseIDs(input.Validation)) > 0 {
 				instructions += " affectedCases selects the affected cases from contract manifests in their original order, with duplicates removed; use 1-based positions."
@@ -62,7 +65,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.merge.resolve.v3":
 			instructions = "Report only the semantic resolution summary. The program supplies the exact original conflict paths."
 			value.ReadOnly = false
-		case "engine.qa.design.v5":
+		case "engine.qa.design.v6":
 			instructions = "Return only the necessary case/shared-step increment. Omitted entries remain unchanged. case/step selects an existing entry by its 1-based original position; omit it for a new entry whose stable ID is supplied by the program. removeCases/removeSharedSteps explicitly select original positions to delete; replace explicitly replaces the whole set. Coverage follows issued point order and selects original cases followed by new cases; [] clears relations and null preserves them. Case sharedSteps selects original shared instructions followed by new ones."
 			if len(input.Validation.AffectedCases) > 0 {
 				instructions = "Return one change per affectedCases item in its input order, containing only changed semantic fields, or remove:true to explicitly remove that issued item. revisionInstruction supplies the original accepted reason/category; older suggestions cannot replace it. Optional sharedSteps changes follow the original referenced instructions in manifest order; omit when unchanged. The program preserves IDs, untouched content and original coverage."
@@ -75,7 +78,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			value.ReadOnly = input.Validation.Manifest.Binding.ReviewKind != coverage.ReviewWhitebox
 		case "engine.qa.review.rationale.v2":
 			instructions = "Return real status and reason in issued source/point order and non-inherited case/shared order, without inherited placeholders. Suggestions contain only P2/P3, message and reason."
-		case "engine.qa.execution.v3":
+		case "engine.qa.execution.v4":
 			instructions = "Compare the issued complete native execution facts with each approved case oracle. Return records in issued pending required fact order, with comparison and EXECUTED_PASS/EXECUTED_FAIL, or null for unfinished comparison. The program derives checkpoint and overall status. Completed FAIL judgments are complete; when no new judgments remain, return records []. Missing native facts never establish PASS."
 			if len(input.Validation.CommandCases) > 0 {
 				instructions = "Return commands in commandCases/commandSources order, each an ordered nonempty ARGV/SHELL operation list. commandSources identifies the missing case invocation or shared preparation invocation at each position. Supply only these missing invocation values; preserve the approved shared procedures, case steps, oracle and all declared operations. The program supplies all identities, binds the candidate and workspace, executes the operations and collects real stdout/stderr/exit. Do not run shell yourself or judge PASS before the original facts return."
@@ -91,16 +94,16 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	} else {
 		return Material{}, fmt.Errorf("worker material has no typed role input")
 	}
-	if !value.ReadOnly && input.Handler != "engine.qa.execution.v3" && input.Handler != "engine.qa.design.v5" && input.Handler != "engine.merge.resolve.v3" {
+	if !value.ReadOnly && input.Handler != "engine.qa.execution.v4" && input.Handler != "engine.qa.design.v6" && input.Handler != "engine.merge.resolve.v3" {
 		instructions += " Deliver only actual authorized artifacts; the program captures registered VCS differences. Temporary build and test outputs are not delivery artifacts; remove your own temporary validation outputs from the workspace before reporting completion, or produce them outside the workspace."
 	}
 	if input.Handler == "engine.merge.resolve.v3" {
 		instructions += " Remove your temporary build and test outputs before reporting completion, or produce them outside the workspace."
 	}
-	if input.Handler == "engine.qa.design.v5" && !value.ReadOnly {
+	if input.Handler == "engine.qa.design.v6" && !value.ReadOnly {
 		instructions += " Associate only actual test material files with cases or their referenced shared steps. Remove temporary build and test outputs from the workspace before reporting completion, or produce them outside the workspace. Do not return a separate development path declaration."
 	}
-	if completionBatch(input) != nil {
+	if completionBatch(input) != nil && !value.ReadOnly {
 		instructions += " completion.dod is an ordered array matching the issued batch criteria, each with non-empty semantic evidence; do not copy IDs. Approved command execution and its evidence belong to the program."
 	}
 	schema, err := ResultSchema(input)
@@ -110,19 +113,19 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	value.ResultSchema = schema
 	actionID := ""
 	switch input.Handler {
-	case "engine.review.worker.v2":
+	case "engine.review.worker.v3":
 		actionID = "product-review"
-	case "engine.readiness.plan.v5":
+	case "engine.readiness.plan.v6":
 		actionID = "start-readiness"
-	case "engine.development.batch.v5", "engine.repair.v6":
+	case "engine.development.batch.v6", "engine.repair.v7":
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
 		actionID = "qa-execution"
-	case "engine.qa.design.v5":
+	case "engine.qa.design.v6":
 		actionID = "qa-design"
 	case "engine.qa.review.rationale.v2":
 		actionID = "qa-review"
-	case "engine.qa.execution.v3":
+	case "engine.qa.execution.v4":
 		actionID = "qa-execution"
 	case "engine.validation.observation.v2":
 		actionID = "validation-observation"
@@ -167,7 +170,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				}
 			}
 		}
-	case "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3":
+	case "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4":
 		mode := "blackbox"
 		if input.Validation.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
 			mode = "whitebox"
@@ -191,7 +194,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		if input.Review != nil && input.Review.Action == review.StartReadiness {
 			instructions += " Each proposed batch requirements selects assigned point positions from requirementPoints; the whole plan covers every issued point. Use the original batch responsibilities to explain the assignment."
 		}
-		if input.Handler == "engine.repair.v6" && completionBatch(input) == nil {
+		if input.Handler == "engine.repair.v7" && completionBatch(input) == nil {
 			instructions += " requirementPoints is the complete confirmed choice inventory for repair planning; repair.requiredPoints contains only actual duties bound to the original confirmed findings and execution facts. Complete a small repair directly with summary and ordered requirements evidence for repair.requiredPoints, without selecting points or creating a plan. A necessary plan selects only actually affected contributions from the confirmed inventory and completion supplies evidence for the proposed single batch's selected points; omit outer requirements. An issued batch uses only completion.requirements. A quality repair without requiredPoints does not claim requirement points completed. Original quality and readability obligations remain effective without reimplementing the whole project."
 		}
 		if completionBatch(input) != nil {
@@ -240,7 +243,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
 	}
-	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
+	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v7" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		if input.ApprovedPlan != nil {
 			contextValue["approvedPlan"] = input.ApprovedPlan
@@ -262,17 +265,17 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		var names []string
 		switch input.Handler {
-		case "engine.development.batch.v5":
+		case "engine.development.batch.v6":
 			names = []string{"development"}
-		case "engine.repair.v6":
+		case "engine.repair.v7":
 			names = []string{"repair", "development", "contract"}
 		case "engine.merge.resolve.v3":
 			names = []string{"conflict"}
-		case "engine.qa.design.v5":
+		case "engine.qa.design.v6":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases"}
 		case "engine.qa.review.rationale.v2":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
-		case "engine.qa.execution.v3":
+		case "engine.qa.execution.v4":
 			names = []string{"manifest", "commandCases", "commandSources", "executionFacts", "requiredCases", "pendingCases"}
 		case "engine.repair.verify.v2":
 			names = []string{"repair", "contract", "executionFacts"}
@@ -330,7 +333,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			}
 		}
 		var currentCases []string
-		if input.Handler == "engine.qa.execution.v3" {
+		if input.Handler == "engine.qa.execution.v4" {
 			currentCases = executionCaseIDs(input.Validation)
 			if len(input.Validation.CommandCases) > 0 {
 				currentCases = input.Validation.CommandCases
@@ -391,7 +394,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				return Material{}, err
 			}
 		}
-		if input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && validation["repair"] != nil {
+		if input.Handler == "engine.repair.v7" && input.Validation.Repair != nil && validation["repair"] != nil {
 			var repair map[string]json.RawMessage
 			if err := json.Unmarshal(validation["repair"], &repair); err != nil {
 				return Material{}, err
@@ -459,15 +462,15 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
-	if planRole || input.Handler == "engine.development.batch.v5" || input.Handler == "engine.repair.v6" || input.Handler == "engine.qa.design.v5" {
+	if planRole || input.Handler == "engine.development.batch.v6" || input.Handler == "engine.repair.v7" || input.Handler == "engine.qa.design.v6" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {
 		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files."
 		if input.Review != nil {
-			instructions += " Verification calls select original read bytes or approved check numbers. Missing calls declare only goal and purpose for the developer; EDIT requires an existing call."
+			instructions += " Verification calls reuse approved check numbers. Missing calls declare only goal and purpose for the developer to prepare. Declared EDIT calls are prepared before the first production edit. Do not author commands or select command text by read, line or column coordinates."
 		} else {
-			instructions += " A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional repair checks reuse a number, select a new local command by original read/from/to lines, or author a new local invocation."
+			instructions += " A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional repair checks reuse a number or author a genuinely new local invocation."
 		}
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}

@@ -236,10 +236,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err := os.MkdirAll(directory, 0700); err != nil {
 				t.Fatal(err)
 			}
-			payload := worker.Review{Findings: []worker.Finding{}, Verification: []string{}}
-			for _, key := range review.RequiredVerificationChecks() {
-				payload.Verification = append(payload.Verification, "verified full current requirement: "+key)
-			}
+			payload := worker.Review{Findings: []worker.Finding{}}
 			parsed, err := json.Marshal(payload)
 			if err != nil {
 				t.Fatal(err)
@@ -347,7 +344,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 					}
 				}
 			}
-			accepted, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
+			accepted, _, err := f.SubmitWorkerResult(WorkerResultEventID(ref, ""), ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -379,7 +376,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 				t.Fatal("raw evidence digest or lifecycle correlation was rewritten")
 			}
 			before := readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))
-			repeated, _, err := f.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
+			repeated, _, err := f.SubmitWorkerResult(WorkerResultEventID(ref, ""), ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || !reflect.DeepEqual(repeated, accepted) || !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
 				t.Fatalf("normal repeated native result bypassed core idempotence: %v", err)
 			}
@@ -387,7 +384,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			repeated, _, err = reopened.SubmitWorkerResult("worker-result", ref, directory, source, harness.NativeWorkerResultEvidence)
+			repeated, _, err = reopened.SubmitWorkerResult(WorkerResultEventID(ref, ""), ref, directory, source, harness.NativeWorkerResultEvidence)
 			if err != nil || !reflect.DeepEqual(repeated, accepted) || !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
 				t.Fatalf("lost-response/reopen native result changed state: %v", err)
 			}
@@ -401,6 +398,29 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 				t.Fatalf("duplicate event replay did not retain its core record: %+v %v", replay, err)
 			}
 			snap, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := reopened.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			context := current.ReviewVerificationContexts[ref.ActionID]
+			if len(current.ReviewVerifications) != 1 || context.Material == nil || *context.Material != ref || len(snap.State.ReviewSeries.ProductReview.RawCandidates) != 0 {
+				t.Fatal("native completion lost its original material or bypassed independent verification")
+			}
+			evidence := []string{}
+			for _, check := range review.RequiredVerificationChecks() {
+				evidence = append(evidence, "Independently checked "+check+" against the fixture's exact original signed material, requirement and successful native call proof")
+			}
+			candidate, err := reopened.PrepareControl(ControlInput{ReviewVerification: &ReviewVerificationInput{Result: 1, Verification: evidence}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := reopened.SubmitControl(candidate); err != nil {
+				t.Fatal(err)
+			}
+			snap, err = reopened.engine.Load()
 			if err != nil {
 				t.Fatal(err)
 			}

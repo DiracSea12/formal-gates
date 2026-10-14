@@ -63,7 +63,7 @@ func TestGuardAuthorizedSetCountsConfirmedDependentBatchesStably(t *testing.T) {
 // 次，再次到达上限重新拒绝（不累积）。
 func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	id, _ := d.action("engine.qa.design.v5")
+	id, _ := d.action("engine.qa.design.v6")
 	d.receipt(id)
 	// RESUME 回执要求 durable lifecycle buffer 里有该身份的 start 事件。
 	start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), DefaultProvider, id, id, protocol.LifecycleStart)
@@ -189,8 +189,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	}
 	result, err := protocol.NewReviewWorkerResultEvent("result", action, "claude-code", "sha256:result", protocol.ReviewResultEvidence{
 		Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
-		Findings:     []review.Finding{},
-		Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
+		Findings: []review.Finding{},
 	})
 	if err != nil {
 		t.Fatal(err)

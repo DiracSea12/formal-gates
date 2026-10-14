@@ -128,7 +128,7 @@ func TestRetirementWithoutSourceOrDispatchDoesNotReadStore(t *testing.T) {
 func TestFreshExecutionUsesFinalOriginalCostBeforeBudget(t *testing.T) {
 	for _, handoff := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fresh", true: "handoff"}[handoff], func(t *testing.T) {
-			e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
+			e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 			state.Topology = nil
 			state.PendingAsks = map[string]PendingAsk{}
 			original := state.Attempts[pending.Task]
@@ -154,7 +154,7 @@ func TestFreshExecutionUsesFinalOriginalCostBeforeBudget(t *testing.T) {
 }
 
 func TestHandoffRetainsOriginalCostAndMetersReplacementSeparately(t *testing.T) {
-	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
+	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	state.Topology = nil
 	state.PendingAsks = map[string]PendingAsk{}
 	probe := &costSourceProbe{state: CostSourceReady, usage: cost.Usage{InputCacheMissTokens: 25, OutputTokens: 7}}

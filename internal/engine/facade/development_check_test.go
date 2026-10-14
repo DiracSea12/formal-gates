@@ -464,7 +464,7 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 	consumer := *batch
 	consumer.ID, consumer.DependsOn = "consumer", []string{batch.ID}
 	consumer.Subtasks = []protocol.DevelopmentSubtask{{ID: "consume", Description: "Consume verified implementation"}}
-	consumer.Artifacts, consumer.Checks = []string{"consumer.go"}, []protocol.DevelopmentCheck{{ID: "consumer-check", Command: "true"}}
+	consumer.Artifacts, consumer.Checks = []string{"consumer.go"}, commandPlan().Batches[0].Checks
 	plan.Batches = append(plan.Batches, consumer)
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One verified dependency"}})
@@ -593,7 +593,21 @@ func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
 	if !ok {
 		t.Fatal("missing original developer input")
 	}
-	raw := []byte(`{"summary":"Prepared complete project verification","commands":["go build ./...","go test -timeout=0 -count=1 ./..."],"completion":{"dod":["Existing command contract is ready for program verification"],"handoff":"Ready for checks"}}`)
+	if len(issued.RequirementPoints) != 1 || issued.RequirementPoints[0].ID != "AC-001" || issued.RequirementPoints[0].Text != "正常输入成功，错误输入拒绝。" {
+		t.Fatal("clean command fixture received another requirement duty", issued.RequirementPoints)
+	}
+	for _, value := range []string{"valid", "invalid"} {
+		command := exec.Command("./app", "run", value)
+		command.Dir = input.Workspace.Path
+		output, err := command.CombinedOutput()
+		if value == "valid" && err != nil || value == "invalid" && err == nil {
+			t.Fatal("existing public command differs from its original point", value, err, string(output))
+		}
+	}
+	raw, err := json.Marshal(worker.Development{Summary: "Prepared complete project verification", Commands: []string{"go build ./...", "go test -timeout=0 -count=1 ./..."}, Completion: &worker.Completion{DoD: []string{"Existing command contract is ready for program verification"}, Handoff: "Ready for checks", Requirements: []string{"Ran the existing ./app run valid command with exit 0 and ./app run invalid with a nonzero exit; no implementation files changed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	event, err := worker.DecodeResultWithFacts(issued, d.eventID(), raw, "prepared-clean-workspace-calls", paths, nil)
 	if err != nil {
 		t.Fatal(err)

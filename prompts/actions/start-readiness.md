@@ -15,4 +15,4 @@
 完整项目构建与全量测试各至少一个 check，明确 FULL_BUILD/FULL_TESTS 目的；无编译阶段/测试套件也说明适用语义和实际完整验证命令，不能默认为跳过即通过。
 建议拆分时，每片计划独立可执行，含本片完整构建/测试且无跨 owner 批次依赖；主线合并计划另核完整集成。owner 与路线只按注入 schema 选择，计划是建议而非用户授权。
 
-项目声明的低成本确定性检查使用 EDIT purpose，每次正常 workspace 编辑后由程序执行并保留原双流与退出证据。空 purpose 的普通回归及 FULL_BUILD/FULL_TESTS 只在批边界执行；模型不转抄或执行已有命令。批准检查使用 reuse；项目原文已有命令使用原 workspace read 与 from/to 闭区间行号，程序保留该区间的原字节；缺少调用时只声明 goal 和 purpose，由开发代理准备；不填写 command 或 parts。EDIT 必须选择原命令。purpose 仍由语义判断选择。
+项目声明的低成本确定性检查使用 EDIT purpose，每次正常 workspace 编辑后由程序执行并保留原双流与退出证据。空 purpose 的普通回归及 FULL_BUILD/FULL_TESTS 只在批边界执行；模型不转抄或执行已有命令。批准检查仅使用 reuse；缺少调用时只声明 goal 和 purpose，由开发代理准备。尚未绑定的 EDIT 调用必须在首次生产编辑前完成准备，由程序持有调用后再继续开发。不填写 command、parts 或命令原文的 read/from/to/列坐标。

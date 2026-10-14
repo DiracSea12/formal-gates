@@ -10,7 +10,7 @@ func TestSharedApprovalRetainsItsOwnContentAndRationale(t *testing.T) {
 	for _, variation := range []string{"unchanged", "changed-instructions", "changed-reason"} {
 		t.Run(variation, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.qa.design.v5")
+			id, in := d.action("engine.qa.design.v6")
 			m := simpleManifest(in)
 			// The shared ID deliberately overlaps a case ID; their approvals differ.
 			m.SharedSteps = []coverage.SharedStep{{ID: "normal", Procedure: "Create a clean project and install the documented fixture"}}
@@ -28,7 +28,7 @@ func TestSharedApprovalRetainsItsOwnContentAndRationale(t *testing.T) {
 			sg := d.run.Validation.Sets[coverage.ReviewBlackbox].Suggestions[0]
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: "diagnostic", Validation: &protocol.ValidationObservation{Kind: "SUGGESTION", Mode: coverage.ReviewBlackbox, SuggestionID: sg.ID, Decision: "ACCEPT", Reason: "Specify the exact invalid diagnostic", AffectedCases: []string{"invalid"}}}})
 			d.drive()
-			id, in = d.action("engine.qa.design.v5")
+			id, in = d.action("engine.qa.design.v6")
 			m = in.Manifest
 			m.Cases[1].Oracle = "rejects invalid input with its documented diagnostic"
 			if variation == "changed-instructions" {

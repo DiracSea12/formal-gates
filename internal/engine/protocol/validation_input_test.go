@@ -16,7 +16,7 @@ func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
 			key := runtime.TaskKey{Node: "qa", Step: "design", Scope: "current-duty"}
 			pending := PendingAction{ActionID: "retry", Task: key, AttemptID: "current-attempt"}
 			binding := WorkBinding{Task: key, Generation: 2, RequirementRevision: "confirmed"}
-			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v5"}}}}
+			cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v6"}}}}
 			state := &State{DispatchBindings: map[string]WorkBinding{"retry": binding, "rejected": binding}, Attempts: map[runtime.TaskKey]Attempt{key: {PreviousAction: "rejected"}}, RejectedResults: map[string]RejectedResult{"rejected": {ActionID: "rejected", Task: key, AttemptID: "original-attempt", Status: "REJECTED_INVALID_RESULT", Reason: "original semantic defect", Payload: WorkerResult{Outcome: OutcomePass}}}, RecoveryRecords: []RecoveryRecord{{ActionID: "rejected", Task: key, AttemptID: "original-attempt", Detail: "original semantic defect"}}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
 			switch changed {
 			case "task":
@@ -151,12 +151,12 @@ func TestIntakeConfirmationFollowsSignedWorkEpoch(t *testing.T) {
 }
 
 func TestCarriedReviewRequiresOriginalCasesAndCandidate(t *testing.T) {
-	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{NodeID: "qa", ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v5"}}, {Header: compiler.CompiledHeader{NodeID: "qa", ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
+	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{NodeID: "qa", ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v6"}}, {Header: compiler.CompiledHeader{NodeID: "qa", ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		for _, variant := range []string{"carry", "no-carry", "redo", "missing-intake", "case-content", "candidate-content", "reopened"} {
 			t.Run(string(mode)+"/"+variant, func(t *testing.T) {
 				original := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "original", SolutionRevision: "original-solution"}, ReviewKind: mode, RouteScope: "original-route"}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Oracle: "documented result"}}}
-				set := &CaseSet{Status: "REVIEW", DesignTask: pipelineTask(cd, "engine.qa.design.v5", fmt.Sprintf("0:%s:1", mode)), Manifest: original, Candidate: "original-candidate"}
+				set := &CaseSet{Status: "REVIEW", DesignTask: pipelineTask(cd, "engine.qa.design.v6", fmt.Sprintf("0:%s:1", mode)), Manifest: original, Candidate: "original-candidate"}
 				state := &State{RunID: "run", SelectedGates: []string{"blackbox", "whitebox", mergeQAGateID}, IntakeConfirmationReceipt: &IntakeConfirmationReceipt{RequirementRevision: "original", SolutionRevision: "original-solution"}, Validation: &Validation{Generation: 10, RequirementRevision: "current", Sets: map[coverage.ReviewKind]*CaseSet{mode: set}}}
 				binding := WorkBinding{Task: state.reviewTask(mode, 0, digestOfCanonical(original), cd), RequirementRevision: "original", RouteScope: "original-route", CaseVersion: digestOfCanonical(original), Candidate: "original-candidate"}
 				choice := RequirementWorkDecision{Work: RequirementWork{ActionID: "review", Task: binding.Task, RequirementRevision: "original", IssuedRevision: 2}, Disposition: RequirementWorkCarry, Reason: "unchanged review duty"}

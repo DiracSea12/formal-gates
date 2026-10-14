@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -29,7 +31,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 	resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid", Module: "command", RootCause: "valid input rejected", Consequence: "public success path unusable", Severity: "P1", SeverityRationale: "Supported command cannot complete", Verification: review.FindingVerification{Scope: "confirmed command contract", Severity: "main path unusable", Causality: "input dispatch branch", Reproduction: "valid input rejected", Classification: "implementation"}, Reason: "Reproduced public input rejection"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	repair, ri := d.action("engine.repair.v6")
+	repair, ri := d.action("engine.repair.v7")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct dispatch"}})
 	d.materialize()
 	d.materialize()
@@ -82,7 +84,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 		d.materialize()
 		d.drive()
 	}
-	next, nextInput := d.action("engine.repair.v6")
+	next, nextInput := d.action("engine.repair.v7")
 	if nextInput.Binding.Task == ri.Binding.Task {
 		t.Fatal("replacement reused retired repair task")
 	}
@@ -190,7 +192,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 					resolveGateFinding(d, finding, wave.ID)
 				}
 				d.drive()
-				repair, ri := d.action("engine.repair.v6")
+				repair, ri := d.action("engine.repair.v7")
 				actions = append(actions, repair)
 				oldInputs = append(oldInputs, ri)
 				if n == 1 && inflight {
@@ -198,9 +200,6 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				}
 				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply exact output correction"}}
 				d.business(repair, edit)
-				if ri.Binding.PureP2 {
-					d.verifyRepair(edit)
-				}
 				d.materialize()
 				d.materialize()
 				// Pure P2's successful carry may complete without a new gate. Requesting a
@@ -232,28 +231,32 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				}
 				choices = append(choices, protocol.RequirementWorkDecision{Work: w, Disposition: disposition, Reason: "explicitly repeat both original corrections"})
 			}
-			pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "formatting", ImpactDigest: "two original corrections", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+			intakeReceipt := driverState(t, d).CurrentIntakeConfirmation()
+			if err := os.WriteFile(filepath.Join(d.f.root, intakeReceipt.RequirementSource), []byte(document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			intake, err := prepareConfirmedIntake(d.f.root, intakeReceipt, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, DeltaDigest: "formatting", ImpactDigest: "two original corrections", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
 			request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(request)
 			ask := d.run.PendingRequirementAsk
-			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirm both obligations"}}})
-			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirm both obligations"}}}.WithRequirementDocument(document))
 			if reopen {
 				d.reopen()
 			}
 			if inflight {
-				id, in := d.action("engine.repair.v6")
+				id, in := d.action("engine.repair.v7")
 				if in.Binding != oldInputs[1].Binding {
 					t.Fatal("pending carried repair lost signed input")
 				}
 				edit := protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "finish carried correction"}}
 				d.business(id, edit)
-				if in.Binding.PureP2 {
-					d.verifyRepair(edit)
-				}
 			}
 			d.materialize()
 			var replacements []protocol.WorkBinding
@@ -262,7 +265,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				countRedos = 1
 			}
 			for n := 0; n < countRedos; n++ {
-				repair, ri := d.action("engine.repair.v6")
+				repair, ri := d.action("engine.repair.v7")
 				if ri.Binding.Task == oldInputs[n].Binding.Task || ri.Binding.WaveID != oldInputs[n].Binding.WaveID || ri.Binding.Candidate != d.run.Validation.DevelopmentSnapshot {
 					t.Fatal("repair lost original order or actual materialized base")
 				}
@@ -271,7 +274,7 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				}
 				count := 0
 				for _, input := range d.run.ValidationInputs {
-					if input.Handler == "engine.repair.v6" {
+					if input.Handler == "engine.repair.v7" {
 						count++
 					}
 				}
@@ -281,9 +284,6 @@ func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
 				replacements = append(replacements, ri.Binding)
 				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "redo original correction on actual current production base"}}
 				d.business(repair, edit)
-				if ri.Binding.PureP2 {
-					d.verifyRepair(edit)
-				}
 				if reopen {
 					d.reopen()
 				}

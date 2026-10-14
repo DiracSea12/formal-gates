@@ -81,7 +81,7 @@ func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
 				if _, err := engine.Load(); err != nil {
 					t.Fatal(err)
 				}
-				submitReviewResult(t, engine, "redo-fresh-pass", fresh,
+				submitVerifiedReviewResult(t, engine, "redo-fresh-pass", fresh,
 					reviewEvidenceAt(review.ProductReview, fresh, snap.State.RequirementRevision(), "PASS", "new revision reviewed", nil))
 				series = engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
 				if series.Completed != 1 || series.FreshOwed || series.Effective.Status != "PASS" {
@@ -133,7 +133,7 @@ func TestRequirementRedoRetiresExhaustedReviewDuty(t *testing.T) {
 	if pending.Task == original || after.State.Attempts[pending.Task].Attempts != 0 {
 		t.Fatal("new series duty reused old retry allowance")
 	}
-	submitReviewResult(t, e, "fresh-review-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, after.State.RequirementRevision(), "PASS", "new revision reviewed", nil))
+	submitVerifiedReviewResult(t, e, "fresh-review-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, after.State.RequirementRevision(), "PASS", "new revision reviewed", nil))
 	if got := e.LoadMustSucceed(t).State.ReviewSeries.ProductReview; got.Completed != 1 || got.FreshOwed {
 		t.Fatalf("new duty failed to settle once: %+v", got)
 	}

@@ -100,7 +100,11 @@ func TestMakeDSHPatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := mustCanonical(t, []any{map[string]any{"insert": []any{map[string]any{"config": map[string]any{"directory": directory, "read_only": true, "executable": executable, "tools": []any{nativeWorkspaceToolSchema(true), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": map[string]any{"type": "object"}}}, "managed_tools": true}, "id": "harness-native", "inject": []any{"tools", "sandboxPolicy"}, "name": plugin}}}, map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}}})
+	expected, err := json.Marshal([]any{map[string]any{"insert": []any{map[string]any{"config": map[string]any{"directory": directory, "read_only": true, "executable": executable, "tools": []any{nativeWorkspaceToolSchema(true), map[string]any{"name": nativeSemanticTool, "description": "Submit this invocation's semantic result once. The program binds the role, identities and receipt; final messages only finish or explain.", "inputSchema": map[string]any{"type": "object"}}}, "managed_tools": true}, "id": "harness-native", "inject": []any{"tools", "sandboxPolicy"}, "name": plugin}}}, map[string]any{"id": "acp", "inject": []any{"acpAppStartup", "harnessNativeReady"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mustCanonical(t, decodeTestJSON(t, string(expected)))
 	if got := readTestFileBytes(t, path); string(got) != want {
 		t.Fatalf("patch:\n got %s\nwant %s", got, want)
 	}

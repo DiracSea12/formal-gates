@@ -30,7 +30,7 @@ func TestSupplementaryMessageKeepsOriginalActionAndUncertainDeliveryAcrossReopen
 	for _, status := range []string{protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			action, _ := d.action("engine.development.batch.v5")
+			action, _ := d.action("engine.development.batch.v6")
 			identity := observeWorkerDispatch(d, action, status)
 			d.reopen()
 			before, err := d.f.engine.Load()
@@ -118,7 +118,7 @@ func TestCancellationKeepsInFlightMessageDeliveryOwner(t *testing.T) {
 	for _, outcome := range []string{"accepted", "failed", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			action, _ := d.action("engine.development.batch.v5")
+			action, _ := d.action("engine.development.batch.v6")
 			d.receipt(action)
 			started, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), action, protocol.LifecycleStart)
 			if err != nil {
@@ -213,7 +213,7 @@ func TestCancellationKeepsInFlightMessageDeliveryOwner(t *testing.T) {
 
 func TestProgressUsesActualProcessesAndCursorWithoutCallingOrWriting(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch.v5")
+	action, _ := d.action("engine.development.batch.v6")
 	initial, err := d.f.ProgressSince(0, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -280,8 +280,8 @@ func TestProgressUsesActualProcessesAndCursorWithoutCallingOrWriting(t *testing.
 // reopen never write state.
 func TestProgressReportsRevisionIncrementalWorkerResults(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
-	design, designInput := d.action("engine.qa.design.v5")
-	development, developmentInput := d.action("engine.development.batch.v5")
+	design, designInput := d.action("engine.qa.design.v6")
+	development, developmentInput := d.action("engine.development.batch.v6")
 	before, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestProgressReportsRevisionIncrementalWorkerResults(t *testing.T) {
 	first := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: design, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &protocol.ValidationResult{Binding: designInput.Binding, Status: "PASS", Manifest: &manifest}}})
 	d.drive()
 	d.receipt(development)
-	second := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: development, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &protocol.ValidationResult{Binding: developmentInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}}}})
+	second := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: development, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &protocol.ValidationResult{Binding: developmentInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: batchEvidence(developmentInput).Completion, Paths: []string{"app.go"}, Summary: "implemented input checks"}}}})
 	d.drive()
 	settled, err := d.f.engine.Load()
 	if err != nil {
@@ -374,7 +374,7 @@ func TestProgressRespectsObservedSpawnIdentity(t *testing.T) {
 	for _, status := range []string{protocol.SpawnStatusUnknown, protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
-			action, _ := d.action("engine.development.batch.v5")
+			action, _ := d.action("engine.development.batch.v6")
 			if status == protocol.SpawnStatusUnknown {
 				event, err := protocol.NewSpawnReceiptEvent(d.eventID(), action, d.host(), action+"/transport", status)
 				if err != nil {

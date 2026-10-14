@@ -30,13 +30,13 @@ func materialFindingDriver(t *testing.T, severity string) *validationDriver {
 	d.receipt(id)
 	event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, d.host(), "actual-review-evidence", protocol.ReviewResultEvidence{
 		Action: review.ProductReview, DispatchID: id, RequirementRevision: d.revision, Status: "PASS",
-		Findings:     []review.Finding{{Severity: severity, Message: "已确认文档的说明需要修订", Requirement: "REQ-001", NormalPath: "阅读需求与独立方案", ActualError: "说明文本不完整", Locations: []string{"solution.md:2"}}},
-		Verification: review.OperatorVerification{Checks: review.RequiredVerificationChecks(), Evidence: "核实原完整需求与方案、正常阅读入口和说明不完整证据"},
+		Findings: []review.Finding{{Severity: severity, Message: "已确认文档的说明需要修订", Requirement: "REQ-001", NormalPath: "阅读需求与独立方案", ActualError: "说明文本不完整", Locations: []string{"solution.md:2"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.submit(event)
+	verifyReviewFixture(t, d, event)
 	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlReviewFindingDecision, Review: 1, Candidate: 1, Finding: 1, Choice: "CONFIRM", Reason: "用户确认问题与唯一完整修法"})
 	if err != nil {
 		t.Fatal(err)
