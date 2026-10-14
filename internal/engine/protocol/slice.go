@@ -31,7 +31,7 @@ const (
 
 // SliceChildBinding 是 child run 状态上的继承事实：分片身份（master run 与
 // 分片名）加上继承结论绑定的需求 revision。产品审/技术审的整体结论来源就
-// 是 MasterRunID——child 继承 master 的整体产品/技术审，不自行增加 series。
+// 是 MasterRunID——child 沿用 master 的整体产品/技术审选择与已有结论，不自行增加 series。
 // InheritedIntake 保存创建时完整材料确认，不随后续 ParentChange 替换。
 type SliceChildBinding struct {
 	MasterRunID         string                      `json:"masterRunId"`
@@ -46,11 +46,12 @@ type SliceChildBinding struct {
 }
 
 // SliceRunStart 是 child run 启动（Init）一次落账的完整继承事实：身份绑定
-// 加上从 master 继承的拓扑确认（不可重切）。继承拓扑落账为 child 自身的
+// 加上从 master 继承的主流程选择与拓扑确认（不可重切）。继承拓扑落账为 child 自身的
 // State.Topology——child 状态自含，引擎不跨 run 读账。
 type SliceRunStart struct {
-	Binding  SliceChildBinding
-	Topology TopologyBinding
+	Binding       SliceChildBinding
+	Topology      TopologyBinding
+	FlowSelection *FlowSelection
 }
 
 // SliceReceipt binds the frozen checkpoint to its canonical content digest.
@@ -524,11 +525,11 @@ func copyTopology(binding TopologyBinding) TopologyBinding {
 }
 
 // inheritedReviewPass 报告 child 的整体审查结论是否经继承事实等价满足：
-// 继承结论绑定的需求 revision 仍在确认账本内（含义不变的再确认按 carry
+// 该系列已选，继承结论绑定的需求 revision 仍在确认账本内（含义不变的再确认按 carry
 // 语义续用），且该系列无重走义务。与 master 侧 effectivePass 的判据同构
 // （改动接纳判据本身，不建第二套判定路径）。
 func (s *State) inheritedReviewPass(series review.Series) bool {
-	return !s.SliceChild.ParentReviewPending && !series.FreshOwed && s.confirmedRequirementRevision(s.SliceChild.RequirementRevision)
+	return s.FlowNodeEnabled(string(series.Action)) && !s.SliceChild.ParentReviewPending && !series.FreshOwed && s.confirmedRequirementRevision(s.SliceChild.RequirementRevision)
 }
 
 // FreezeAbortedSlice replaces a success checkpoint with the abort authority only

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -39,7 +40,37 @@ func splitControlWorkflow(t *testing.T) (*facade.Facade, *codexScenario, string)
 		t.Fatalf("missing actual %s Ask", control)
 		return 0
 	}
-	topology, err := master.PrepareControl(facade.ControlInput{Ask: askPosition(t, run, protocol.ControlConfirmTopology), Choice: "split", Parallel: "Two independent deliveries", Owners: []int{0, 0}})
+	if run.Review.ReadinessProposal == nil || run.Validation == nil {
+		t.Fatal("original readiness plan and acceptance conditions are required")
+	}
+	var proposed []string
+	pointOwners := map[string]string{}
+	for _, batch := range run.Review.ReadinessProposal.Batches {
+		if batch.Owner != "" && batch.Owner != "master-merge" && !slices.Contains(proposed, batch.Owner) {
+			proposed = append(proposed, batch.Owner)
+		}
+		for _, point := range batch.RequirementPoints {
+			if owner, exists := pointOwners[point]; exists && owner != batch.Owner {
+				t.Fatal("original plan has ambiguous acceptance ownership", point)
+			}
+			pointOwners[point] = batch.Owner
+		}
+	}
+	var owners []int
+	for _, requirement := range run.Validation.Document.Requirements {
+		for _, condition := range requirement.AcceptanceConditions {
+			owner := pointOwners[condition.ID]
+			if owner == "" {
+				t.Fatal("original plan has no acceptance owner", condition.ID)
+			}
+			position := 0
+			if owner != "master-merge" {
+				position = slices.Index(proposed, owner) + 1
+			}
+			owners = append(owners, position)
+		}
+	}
+	topology, err := master.PrepareControl(facade.ControlInput{Ask: askPosition(t, run, protocol.ControlConfirmTopology), Choice: "split", Parallel: "Two independent deliveries", Owners: owners})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -247,6 +247,122 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 	}
 }
 
+func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *testing.T) {
+	for _, development := range []bool{true, false} {
+		name := "development-disabled"
+		if development {
+			name = "development-enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			disabled := []string{"product-review", "start-readiness"}
+			if !development {
+				disabled = append(disabled, "development")
+			}
+			intake, err := PrepareIntake(root, "requirements.md", "", nil, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
+				RunID: "selected-replan", Route: "regular", BaseSnapshot: base,
+				FlowSelection: &protocol.FlowSelection{Disabled: disabled}, IntakeConfirmationReceipt: intake.IntakeCandidate,
+			}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := &validationDriver{t: t, f: f, run: run}
+			d.drive()
+			var oldAction string
+			var oldBinding protocol.WorkBinding
+			if development {
+				action, input := d.action("engine.development.plan.v1")
+				oldAction, oldBinding = action, input.Binding
+				d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", GranularityReview: commandPlan()})
+			}
+			confirmChoice := func(choice string) ControlCandidate {
+				t.Helper()
+				if requested, err := d.f.RequestWorkflowChoice(); err != nil || !requested {
+					t.Fatal("original topology/route confirmation was not offered", choice, err)
+				}
+				candidate, err := d.f.PrepareCurrentControl(ControlInput{Ask: 1, Choice: choice, Reason: "confirm the displayed requirement and plan scope"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, d.run, err = d.f.SubmitControl(candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return candidate
+			}
+			confirmChoice("no-split")
+			original := confirmChoice("custom")
+			if development && (original.DevelopmentPlan == nil || original.DevelopmentPlan.Confirmation.ReviewActionID != oldAction) {
+				t.Fatal("original confirmation did not bind the prepared proposal")
+			}
+			before := d.run
+			choices := make([]WorkChoice, len(before.RequirementWork))
+			for i := range choices {
+				choices[i] = WorkChoice{Disposition: protocol.RequirementWorkCarry, Reason: "existing unfinished obligation remains valid"}
+				if development && before.RequirementWork[i].Task == original.DevelopmentPlan.Tasks[0].Tasks[0] {
+					choices[i] = WorkChoice{Disposition: protocol.RequirementWorkRedo, Reason: "the changed batch contract requires fresh execution"}
+				}
+			}
+			request, err := d.f.PrepareReplan(RequirementChangeInput{Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"implementation plan"}, CarryReasons: []string{"confirmed product requirement remains identical"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := request.Event.Request.Package
+			if pkg.RedoProductReview || pkg.RedoStartReadiness || pkg.RedoTopology || !pkg.RedoRoute {
+				t.Fatal("replan enabled an unselected review or changed topology", pkg)
+			}
+			_, d.run, err = d.f.SubmitControl(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmation, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "confirm the unchanged requirement and exact work dispositions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			acceptance, confirmed, err := d.f.SubmitControl(confirmation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.run = confirmed
+			d.reopen()
+			if d.run.Review.RequirementRevision != before.Review.RequirementRevision || !reflect.DeepEqual(d.run.Review.Topology, before.Review.Topology) || !reflect.DeepEqual(d.run.Review.Actions, before.Review.Actions) || !reflect.DeepEqual(d.run.FlowSelection, before.FlowSelection) || d.run.Review.RouteMode != "" || d.run.Review.ReadinessProposal != nil {
+				t.Fatal("replan changed source/selection/reviews/topology or reused an expired proposal")
+			}
+			if replay, replayed, err := d.f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, acceptance) || !reflect.DeepEqual(replayed, d.run) {
+				t.Fatal("replayed confirmation changed its original facts", err)
+			}
+			d.drive()
+			var freshAction string
+			if development {
+				action, input := d.action("engine.development.plan.v1")
+				freshAction = action
+				if action == oldAction || input.Binding.Task == oldBinding.Task || input.Binding.Generation <= oldBinding.Generation || input.Binding.RequirementRevision != oldBinding.RequirementRevision {
+					t.Fatal("same requirement did not receive a new preparation identity", input.Binding)
+				}
+				if source := driverState(t, d).Results[oldAction]; source.Validation == nil || source.Validation.Binding != oldBinding {
+					t.Fatal("replan lost the original proposal evidence")
+				}
+				plan := commandPlan()
+				plan.Batches[0].DoD = append(plan.Batches[0].DoD, protocol.DevelopmentCriterion{ID: "diagnostic", Description: "Invalid input reports its specific diagnostic"})
+				d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", GranularityReview: plan})
+			}
+			reselected := confirmChoice("custom")
+			if development {
+				if reselected.DevelopmentPlan == nil || reselected.DevelopmentPlan.Confirmation.ReviewActionID != freshAction || len(reselected.DevelopmentPlan.Proposal.Batches[0].DoD) != 2 {
+					t.Fatal("route reconfirmation did not bind the new prepared plan")
+				}
+			} else if reselected.DevelopmentPlan != nil || d.run.Review.ReadinessProposal != nil || len(d.run.PendingActions) != 0 {
+				t.Fatal("disabled development manufactured a plan or worker")
+			}
+		})
+	}
+}
+
 func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	developer, _ := d.action("engine.development.batch.v6")

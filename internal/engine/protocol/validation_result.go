@@ -264,7 +264,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	requirementCarry := b.Generation != s.Validation.Generation
 	routeCarry := b.RouteScope != "" && b.RouteScope != s.validationRouteDigest()
 	if requirementCarry || routeCarry {
-		if requirementCarry && !s.validationWorkCarryAuthorized("", b.Task) {
+		if requirementCarry && !s.prewaveCarryAuthorized(b.Task, e.cfg.Definition) {
 			return validationError("result has no current requirement carry authorization")
 		}
 		projected := *p
@@ -300,8 +300,8 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 	if p.Status == "CONTINUE" && role != "engine.development.batch.v6" && role != "engine.repair.v7" {
 		return validationError("only development and repair can continue unfinished work")
 	}
-	if p.GranularityReview != nil && role != "engine.repair.v7" {
-		return validationError("only a repair worker can submit a repair execution plan")
+	if p.GranularityReview != nil && role != "engine.repair.v7" && role != "engine.development.plan.v1" {
+		return validationError("development proposals belong to plan preparation or repair")
 	}
 	if p.DesignChange != nil && role != "engine.qa.design.v6" {
 		return validationError("only QA design can change its manifest")
@@ -329,6 +329,17 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 		return validationError("observation duties belong to the semantic observation worker")
 	}
 	switch role {
+	case "engine.development.plan.v1":
+		if count != 0 || p.Status != OutcomePass || p.GranularityReview == nil || len(p.Findings) != 0 || !s.FlowNodeEnabled("development") || s.FlowNodeEnabled("start-readiness") || s.SliceChild != nil || b.Task != pipelineTask(e.cfg.Definition, role, s.developmentPlanPreparationScope()) || !s.validationRequirementCurrent() {
+			return validationError("development plan preparation requires only its current proposed execution contract")
+		}
+		if err := ValidateGranularity(p.GranularityReview); err != nil {
+			return err
+		}
+		if err := s.validatePlanRequirementCoverage(p.GranularityReview, true); err != nil {
+			return err
+		}
+		return ValidateProjectChecks(p.GranularityReview)
 	case "engine.validation.observation.v2":
 		if count != 1 || p.Status != "PASS" || p.Observations == nil {
 			return validationError("semantic observation requires only its complete issued judgments")

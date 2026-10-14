@@ -25,7 +25,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}
-	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v7" {
+	if input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled || input.Handler == "engine.development.plan.v1" || input.Handler == "engine.repair.v7" {
 		input.AvailableRouteCandidates = catalog.RouteCandidates()
 		input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
@@ -35,18 +35,26 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		if input.Review.Action == review.ProductReview {
 			instructions = "Report actual document defects, not known baseline gaps explicitly assigned to authorized repair."
 		} else if input.Review.Action == review.StartReadiness {
-			instructions = "granularityReview omits IDs. Dependencies/checkpointGroups select 1-based batch numbers; owner is 0 for master merge or a positive slice number."
+			if !input.DevelopmentDisabled {
+				instructions = "granularityReview omits IDs. Dependencies/checkpointGroups select 1-based batch numbers; owner is 0 for master merge or a positive slice number."
+			} else {
+				instructions = "Development is disabled for this run. Complete the technical review without a development proposal."
+			}
 		} else {
 			return Material{}, fmt.Errorf("unsupported review role %s", input.Review.Action)
 		}
 		if input.Review.Action == review.StartReadiness {
 			instructions += " Every finding requires a technical category from the schema; implementation-detail has severity P2 or P3."
-			instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Approved EDIT checks run after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
+			if !input.DevelopmentDisabled {
+				instructions += " FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. Approved EDIT checks run after each workspace mutation; ordinary checks and FULL_BUILD/FULL_TESTS run at the batch boundary. When approvedPlan is issued, batch reuse selects its original batch position and only changed semantic fields are supplied; omitted original batch values are preserved."
+			}
 		}
 		instructions += " Findings carry observed evidence and severity rationale. Independent Operator admission is a separate responsibility."
 
 	} else if input.Validation != nil {
 		switch input.Handler {
+		case "engine.development.plan.v1":
+			instructions = "Prepare the development execution proposal from the confirmed requirement and solution. Return only granularityReview, without review findings or verdict. It omits IDs; dependencies/checkpointGroups select 1-based batch numbers, owner is 0 for master merge or a positive slice number. FINAL omits checkpoints; CHECKPOINT groups cover every batch position once in dependency order. The proposal requires user confirmation before implementation."
 		case "engine.development.batch.v6":
 			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. Supply newly prepared command strings only for its missing verification goals in their issued order. Accepted calls are retained by the program. If work remains, return summary, actual remainingWork and any prepared commands instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
 			value.ReadOnly = missingEditCalls(input)
@@ -117,6 +125,8 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "product-review"
 	case "engine.readiness.plan.v6":
 		actionID = "start-readiness"
+	case "engine.development.plan.v1":
+		actionID = "development-plan"
 	case "engine.development.batch.v6", "engine.repair.v7":
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
@@ -131,7 +141,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		actionID = "validation-observation"
 	}
 	blocks := []string{}
-	if value.ReadOnly {
+	if value.ReadOnly && input.Handler != "engine.development.plan.v1" {
 		blocks = append(blocks, "[Shared reviewer contract]\n"+catalog.Base)
 	}
 	if input.Handler == "engine.gate.v3" {
@@ -149,6 +159,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 			return Material{}, fmt.Errorf("worker action %s has no bound prompt", actionID)
 		}
 		blocks = append(blocks, "[Action]\n"+action.Content)
+		if input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled {
+			plan, ok := catalog.Action("development-plan")
+			if !ok {
+				return Material{}, fmt.Errorf("worker action development-plan has no bound prompt")
+			}
+			blocks = append(blocks, "[Development plan contract]\n"+plan.Content)
+		}
 	}
 	var ruleIDs []string
 	switch input.Handler {
@@ -191,7 +208,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if len(input.RequirementPoints) > 0 {
 		contextValue["requirementPoints"] = input.RequirementPoints
 		instructions += " requirementPoints supplies the complete confirmed parent requirement, point, oracle and source in issued order. Judge all assigned points; never copy their IDs, original text, revision or binding into the result. Point coverage supplements the original responsibilities: development retains correctness, readability, simplicity, coupling, maintainability, redundancy, overengineering, defensive programming, abstraction and hardcoding; each reviewer retains its own gate dimensions and findings outside individual points. It does not establish QA execution."
-		if input.Review != nil && input.Review.Action == review.StartReadiness {
+		if input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled || input.Handler == "engine.development.plan.v1" {
 			instructions += " Each proposed batch requirements selects assigned point positions from requirementPoints; the whole plan covers every issued point. Use the original batch responsibilities to explain the assignment."
 		}
 		if input.Handler == "engine.repair.v7" && completionBatch(input) == nil {
@@ -243,7 +260,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
 	}
-	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v7" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
+	planRole := input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled || input.Handler == "engine.development.plan.v1" || input.Handler == "engine.repair.v7" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		if input.ApprovedPlan != nil {
 			contextValue["approvedPlan"] = input.ApprovedPlan
@@ -467,7 +484,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	if planRole {
 		instructions += " Proposal artifacts select original read/listing entries; newArtifacts names only new authored files."
-		if input.Review != nil {
+		if proposesVerificationGoals(input) {
 			instructions += " Verification calls reuse approved check numbers. Missing calls declare only goal and purpose for the developer to prepare. Declared EDIT calls are prepared before the first production edit. Do not author commands or select command text by read, line or column coordinates."
 		} else {
 			instructions += " A completed single-batch repair omits both artifact fields; the program supplies its native paths. When approvedChecks is present, its FULL and EDIT checks are supplied automatically; optional repair checks reuse a number or author a genuinely new local invocation."

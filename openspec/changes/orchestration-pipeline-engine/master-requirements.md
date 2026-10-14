@@ -81,7 +81,7 @@
 
 1. lightweight/regular 模式（用户尚未明确时）；lightweight 是 `start` bootstrap 例外，不能由 regular run 后期切入。
 2. 高置信拆分的精确拓扑：边界、数量、依赖、并行度；低置信不拆或不确定由 engine 自动记录 no-split 理由。
-3. regular 非分片 run 与每个 child 的 full/custom 路线；UI 可批量接受统一默认，但每个 child 持久化独立决定。
+3. regular 非分片 run 与每个 child 的 full/custom 路线；custom 可选择当前候选门的任意子集（含空集）或全集。UI 可批量接受统一默认，但每个 child 持久化独立决定。
 4. 产品审、技术审经 Operator 验证成立的每条 P0/P1/P2/P3 finding，以稳定 ID+digest 逐项 confirm/dismiss；可同屏展示但不得只存一条全局决定。Ask 已附带唯一、完整修法时，confirm 同时批准该修法，不再重复询问；只确认问题而修法仍含用户拥有的产品/重大技术选择时，必须继续澄清并按 §7.2.1 确认完整候选的 review-delta 后才能修订。用户还可对已接纳 finding 的有效性、严重度或 adjudication 发起绑定原 result/finding digest 与当前 revision 的 typed correction Ask；原始结果保留，纠正只 supersede 裁决并重算有效状态。
 
 ### 6.3 条件 Ask 与用户主动事件
@@ -149,7 +149,7 @@
 3. child 继承整体产品/技术审与精确拓扑，各自持久化 full/custom 路线；child 只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。child 达标后进入可恢复的 `SLICE_READY` checkpoint，不作为独立最终 SEALED，也不提前删除恢复信息。
 4. durable `SliceTerminalReceipt` 至少含状态、child/slice/master ID、版本、VCS snapshot/tree/digest、需求/拓扑/路线 bindings、普通门结果、成本和最后 request/event digest；`SelectedQA` 与 `ApprovedCases` 为空，明确未选择普通 QA。master 只按期望 map 接纳 receipt。
 5. 分片 QA 集中在 master 合并后执行；merge QA 的批准用例覆盖完整已确认需求与方案中适用的 QA 义务，其设计和审查与各 slice 开发并行。master 收齐 receipts 后由 engine VCS adapter 按固定 topology 顺序完成 Git/SVN/P4 集成，并在主线 snapshot 前物化已批准的 merge cases/其他 VCS 内最终 artifact；只有实际内容冲突需要语义判断时才派主线开发 worker，且它只编辑冲突内容，后续 resolved 校验、resolve/add、提交和 snapshot 仍由 adapter 执行。
-6. 合并后始终并行执行合并 QA 与合并门。冲突处置或主线返修后，Controller 以 topology ownership、VCS diff 和每个 child receipt 的 validation view 机械计算 `AffectedChildSet`：若只改 integration-owned glue/跨片接缝且所有 child view 精确相等，只重跑合并 QA/合并门；若改变某个 child-owned 内容或无法证明其 view 未变，则在同一最终主线候选上额外补跑该 child 受影响的普通门义务。仍不回 child、不重新 Seal child、不重复路线或澄清；所有当前 eligible 验证最大并行。Operator 核实完成后处置仍不唯一时才生成 `VALIDATION_DETAIL_DISPOSITION` Ask；处置完成后，`wave >= 3` 才生成三轮统一 Ask。
+6. 合并后并行执行所选合并 QA 与质量门审查职责。冲突处置或主线返修后，Controller 以 topology ownership、VCS diff 和每个 child receipt 的 validation view 机械计算 `AffectedChildSet`：若只改 integration-owned glue/跨片接缝且所有 child view 精确相等，只重跑合并 QA/合并门；若改变某个 child-owned 内容或无法证明其 view 未变，则在同一最终主线候选上额外补跑该 child 受影响的普通门义务。仍不回 child、不重新 Seal child、不重复路线或澄清；所有当前 eligible 验证最大并行。Operator 核实完成后处置仍不唯一时才生成 `VALIDATION_DETAIL_DISPOSITION` Ask；处置完成后，`wave >= 3` 才生成三轮统一 Ask。
 7. child abort 产生 ABORTED receipt 并阻塞 master；master abort/reset/重大需求变化按已授权策略级联，不得遗留 orphan child。master 最终 Seal 绑定集中 QA 的批准用例和执行结果，汇总 child receipts/cost 并清理 checkpoint；整体需求保证以完整 receipt map 和当前主线验证证据为准。
 
 ### 8.2 强制并行不变量
@@ -178,7 +178,7 @@
 ### 8.4 发现项、QA scope 与三轮
 
 1. 普通非分片的黑盒、白盒与 master 的 merge QA Review 共用 PreWaveReviewPolicy 与逐项 approved whitelist；P1 修改后 fresh review，集合级 P2/P3 以稳定 suggestion ID 吸收并留来源、不复审。全部建议吸收且确定性覆盖通过才 FROZEN；无建议则 PASS 后立即冻结。首次 FULL，合法增量 AFFECTED；普通代码返修不重新设计。既有 pre-wave 语义轮数上限保留，与运行错误 attempt、开发后 wave 分开计数。
-QA 覆盖先把同一次需求/方案确认中登记的有限 `requiredSources` 与当前 revision、route/topology scope 一起冻结，再生成有限验收点集合 `AcceptanceManifest`，并用 source↔point↔case 映射建立双向追踪。标准需求案适配器把每个 `REQ` 投影为 `RequiredSource(PRODUCT_REQUIREMENT, QA)`、每个 `AC` 投影为 `AcceptancePoint`、已设计 QA case 投影为 `AcceptanceCase`，关系只由 `CoverageEdge` 表达；标准需求案中的全部 `AC` 都必须有 approved case，不允许以“非 QA 验证处置”绕过，其他合法 source 才可按自身协议使用显式非 QA 处置。review 必须显式返回完整 `SourceDecisions`、`PointDecisions`、`CaseDecisions` 和未绑定集合，不得由 case PASS 自动推导或补写 source/point PASS；三层全部逐项 PASS 后才能生成 whitelist，仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。source inventory/manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为 `sourceID → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。Controller/validator 负责结构校验；覆盖率、mutation、property-based test 和 fuzz 只作辅助信号，不设固定阈值。
+实际选择 QA 模式时，QA 覆盖先把同一次需求/方案确认中登记的有限 `requiredSources` 与当前 revision、route/topology scope 一起冻结，再生成有限验收点集合 `AcceptanceManifest`，并用 source↔point↔case 映射建立双向追踪。标准需求案适配器把每个 `REQ` 投影为 `RequiredSource(PRODUCT_REQUIREMENT, QA)`、每个 `AC` 投影为 `AcceptancePoint`、已设计 QA case 投影为 `AcceptanceCase`，关系只由 `CoverageEdge` 表达；标准需求案中的全部 `AC` 都必须有 approved case，不允许以“非 QA 验证处置”绕过，其他合法 source 才可按自身协议使用显式非 QA 处置。review 必须显式返回完整 `SourceDecisions`、`PointDecisions`、`CaseDecisions` 和未绑定集合，不得由 case PASS 自动推导或补写 source/point PASS；三层全部逐项 PASS 后才能生成 whitelist，仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。source inventory/manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为 `sourceID → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。Controller/validator 负责结构校验；覆盖率、mutation、property-based test 和 fuzz 只作辅助信号，不设固定阈值。
 2. 开发后 finding 由 Operator semantic adjudication 按需求、正常失败场景、模块、根因、后果逐条核实，保存 raw finding、独立 severity rationale、范围/严重度/因果/复现证据、稳定 finding/problem ID、NEW/SAME_AS/DISMISSED 裁决及历史。Controller 只校验完整性、引用和版本绑定、机械路由，不自动判断语义真假、严重度、根因或重复关系。P1 理由须说明已确认需求、正常路径、实际后果及为何 P2 不足；P0 还须证明需求无法成立、核心验收无可用路径或交付受阻。条目 FAIL 不自动成为 P0/P1，整批套话不能替代逐条理由。
 3. 仅已核实 finding 的处置仍不唯一才 Ask；核实本身属于 Operator。pending disposition 不形成返修 obligation。QA artifact 修订须满足 THAW 条件并重新冻结候选；需求变化遵循 §7.2.1 授权，DISMISSED 只留历史。
 4. wave 收齐且 adjudication 完成后，QA FAIL、有效 P0/P1 与门审 P2 归入同一快照唯一 RepairObligation/统一返修计划。同根因归并 canonical problem，同一快照不得第二次逻辑返修。门审 P2 必修但不复审、不增加审查轮次，纯 P2 以完整构建、全量测试、受影响项逐一自跑及结构化完成/carry 凭据继承 gate PASS；门审 P3 不返修，只在 Seal 前一次性 advisory，范围外 P3 同样不进入 obligation。
@@ -258,6 +258,7 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - 用户主动提出 formal-gates 后不重复询问是否进入；插件只非阻塞提醒一次或复杂需求时两次。
 - 完整需求/方案仍须单独确认；lightweight 是 start bootstrap 例外，full/custom 在拆分决定后确认。
 - 所有用户选择能力保留为 typed Ask/available action，经唯一 `submit` 入口落账。
+- 用户可自由组合产品审、开发前技术审、初始开发、QA、质量门审查和业务返修六项主要职责，保持所选职责原有相对顺序与并行关系。QA 按设计、独立审查、执行整条链运行；黑盒、白盒在线路阶段各按整组选取，具体模式仅由原 SelectedGates 持有，关闭 QA 职责也关闭 merge QA。启动入口从同源定义目录展示并绑定明确用户选择，state 只保存这一份主流程选择，恢复和节点继续均不改变它；关闭职责不暗跑、不伪造 PASS。初始开发与业务返修分别选择，关闭返修仍保留真实失败与义务。质量门审查独立控制普通门、固定合并门与返修成员门，关闭时不建立门目标、不补写门 PASS；child 继承同一选择，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
 - 产品/技术审 P0/P1 修订做完整新鲜复审；P2/P3 逐项询问并修复，但不因级别本身复审。
 - 产品审和技术审各自最多自动完成三轮语义审查；只有有效 PASS/FAIL 计轮，revision 变化不清零。仍需第 4 轮时由 typed Ask 逐动作、逐轮授权；授权增加一个 fresh-review TaskKey，不增加该任务的 retry 次数，split child 不另开额度。
 - 只有用户主动需求变化使用影响集增量复审，且可发生在任意非终态时刻；不计也不重置 run 级 wave。

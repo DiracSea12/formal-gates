@@ -64,7 +64,11 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 			case compiler.CompiledParallelStep:
 				settle = true
 			case compiler.CompiledAgentStep:
-				if validationHandler(*step) != "" {
+				if node := flowStepNode(*step); node != "" && node != "repair" && !s.FlowNodeEnabled(node) {
+					settle = true
+				} else if payload.Handler == "engine.development.plan.v1" {
+					settle = s.readinessPreparationReady()
+				} else if validationHandler(*step) != "" {
 					settle = s.DeliveryComplete(compiled)
 				} else {
 					settle = s.carrierLatched(payload)

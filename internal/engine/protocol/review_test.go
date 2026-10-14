@@ -1089,11 +1089,11 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 	})
 
-	t.Run("custom route with an empty selection is schema invalid", func(t *testing.T) {
+	t.Run("custom route can select no validation gates", func(t *testing.T) {
 		if _, err := NewReviewDecideEvent("evt-empty", "req-route", "sha256:token", "custom", ReviewDecisionPayload{Route: &RouteDecision{
 			Mode: "custom", Gates: []string{"gate.a", "gate.b"}, Selected: []string{},
-		}}); err == nil {
-			t.Fatal("empty custom subset constructed")
+		}}); err != nil {
+			t.Fatalf("empty custom subset rejected: %v", err)
 		}
 	})
 
@@ -1457,8 +1457,8 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 		t.Fatal("route accepted while product-review is re-blocked")
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 		t.Fatalf("route-under-block code = %q", code)
-	} else if !strings.Contains(err.Error(), "both pre-development reviews") {
-		t.Fatalf("route-under-block rejection does not name the dual gate: %v", err)
+	} else if !strings.Contains(err.Error(), "selected pre-development reviews and current development preparation") {
+		t.Fatalf("route-under-block rejection does not name the pre-development prerequisites: %v", err)
 	}
 
 	// 失效窗口内：技术审对自己的建议项升级 P1——合法落账，投影仍被失

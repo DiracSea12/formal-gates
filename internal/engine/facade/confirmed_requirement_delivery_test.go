@@ -93,8 +93,8 @@ func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validation
 			t.Fatal("child lost startup content", err)
 		}
 		body, err = os.ReadFile(filepath.Join(c.NativeRoot, "requirements.md"))
-		if err != nil || string(body) != currentDocument {
-			t.Fatal("child lost its complete confirmed requirement material", err)
+		if err != nil || string(body) != validationDocument {
+			t.Fatal("child changed its immutable source requirement material", err)
 		}
 		committed, err := runner.RunRaw(c.NativeRoot, "git", nil, "show", h+":requirements.md")
 		if err != nil || string(committed) != validationDocument {

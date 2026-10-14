@@ -185,7 +185,7 @@ func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t
 }
 
 func TestReviewMaterialCannotAuthorizeIndependentVerification(t *testing.T) {
-	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "start-readiness"}}}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "product-review"}, {ID: "start-readiness"}, {ID: "development-plan"}}}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		handler := "engine.review.worker.v3"
 		if action == review.StartReadiness {
@@ -554,7 +554,7 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 				}
 			}
 			input.AvailableRouteCandidates = nil
-			material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-worker"}}})
+			material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-plan"}, {ID: "development-worker"}}})
 			if err != nil {
 				t.Fatal(err)
 			}

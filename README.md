@@ -21,7 +21,7 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
    技术审形成 Batch→Subtask、依赖、DoD 与恢复计划。
 4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再确认 default/full/custom。
    非分片 run 的 default 选全部普通门、不含黑盒/白盒 QA；full 选全部普通门与双 QA
-   （QA 阶段较重，适合大型任务）；custom 可选当前候选的非空子集或全集。推荐仍须确认。
+   （QA 阶段较重，适合大型任务）；custom 可选当前候选的任意子集（含空集）或全集。推荐仍须确认。
    每个 child 独立决定；child 不选普通 QA，default/full 均选全部普通门，master 强制合并验证。
    start 不预判 split，child 由 engine 创建。
 5. **并发开发。** 选择黑盒时，开发与其设计/审查并发。黑盒只读基线，开发者与审查者隔离。

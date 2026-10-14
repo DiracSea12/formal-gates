@@ -104,15 +104,43 @@ func (s *State) designReopening(mode coverage.ReviewKind) (string, uint64) {
 
 func (s *State) reviewTask(mode coverage.ReviewKind, generation uint64, version string, cd *compiler.CompiledDefinition) runtime.TaskKey {
 	set := s.Validation.Sets[mode]
+	if source, carried := s.carriedReviewSource(mode); carried {
+		generation = source.Generation
+	}
 	return pipelineTask(cd, "engine.qa.review.rationale.v2", fmt.Sprintf("%d:%s:%s:%s:%d", generation, mode, version, strings.TrimPrefix(digestOfCanonical(set.DesignTask), "sha256:"), len(set.ReviewHistory)+1))
+}
+
+// A carried design retains the source epoch of its unchanged review chain.
+func (s *State) carriedReviewSource(mode coverage.ReviewKind) (WorkBinding, bool) {
+	set := s.Validation.Sets[mode]
+	if set != nil && s.validationWorkCarryAuthorized("", set.DesignTask) {
+		for _, binding := range s.DispatchBindings {
+			if binding.Task == set.DesignTask && binding.RequirementRevision == s.Validation.RequirementRevision {
+				return binding, true
+			}
+		}
+	}
+	return WorkBinding{}, false
+}
+
+func (s *State) prewaveCarryAuthorized(task runtime.TaskKey, cd *compiler.CompiledDefinition) bool {
+	if _, decided := s.requirementWorkReplacement(task); decided {
+		return s.validationWorkCarryAuthorized("", task)
+	}
+	if s.validationRole(task, cd) != "engine.qa.review.rationale.v2" {
+		return false
+	}
+	mode := s.validationMode(task)
+	source, carried := s.carriedReviewSource(mode)
+	return carried && task == s.reviewTask(mode, source.Generation, s.Validation.Sets[mode].Version, cd)
 }
 
 // issuedPrewaveSources preserves the run/child identity of this validation
 // owner and restores material revisions only for explicitly carried work.
-func (s *State) issuedPrewaveSources(b WorkBinding) (coverage.SourceBinding, bool) {
+func (s *State) issuedPrewaveSources(b WorkBinding, cd *compiler.CompiledDefinition) (coverage.SourceBinding, bool) {
 	source := s.coverageContract(nil).RequiredSources.Binding
 	if b.Generation != s.Validation.Generation {
-		if !s.validationWorkCarryAuthorized("", b.Task) {
+		if !s.prewaveCarryAuthorized(b.Task, cd) {
 			return coverage.SourceBinding{}, false
 		}
 		receipt := s.intakeConfirmationForWork(b)
@@ -129,6 +157,9 @@ func (s *State) issuedPrewaveSources(b WorkBinding) (coverage.SourceBinding, boo
 // inapplicable dispatch keeps its receipt/identity bookkeeping until observed.
 func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinition) bool {
 	role := s.validationRole(b.Task, cd)
+	if role == "engine.development.plan.v1" {
+		return !s.FlowNodeEnabled("start-readiness") && s.FlowNodeEnabled("development") && s.SliceChild == nil && b.Task == pipelineTask(cd, role, s.developmentPlanPreparationScope()) && b.RequirementRevision == s.RequirementRevision() && b.Generation == s.requirementGeneration()
+	}
 	if role == "engine.validation.observation.v2" {
 		input := s.validationObservationInput()
 		return input != nil && s.sourceValidationTask(b.Task) == observationTask(cd, input)
@@ -139,7 +170,7 @@ func (s *State) prewaveWorkCurrent(b WorkBinding, cd *compiler.CompiledDefinitio
 	if s.Validation == nil {
 		return false
 	}
-	issuedSources, current := s.issuedPrewaveSources(b)
+	issuedSources, current := s.issuedPrewaveSources(b, cd)
 	if !current {
 		return false
 	}
@@ -231,7 +262,7 @@ func (s *State) prewaveInputsCurrent(b WorkBinding) bool {
 // A carried target retains its original wave binding while the current wave
 // may project that exact Task; candidate equality alone grants no authority.
 func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinition) bool {
-	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized("", b.Task) {
+	if s.Validation == nil || b.Generation != s.Validation.Generation && !s.prewaveCarryAuthorized(b.Task, cd) {
 		return false
 	}
 	if s.validationRole(b.Task, cd) == "engine.validation.observation.v2" {
@@ -245,6 +276,10 @@ func (s *State) validationWorkOwed(b WorkBinding, cd *compiler.CompiledDefinitio
 	if s.validationRole(b.Task, cd) == "engine.development.batch.v6" {
 		_, _, _, current := s.developmentBatch(b.Task, cd)
 		return current && s.developmentResult(b.Task) == nil
+	}
+	if s.validationRole(b.Task, cd) == "engine.development.plan.v1" {
+		_, plan := s.preparedDevelopmentPlan()
+		return s.prewaveWorkCurrent(b, cd) && plan == nil
 	}
 	if b.WaveID == "" {
 		return true

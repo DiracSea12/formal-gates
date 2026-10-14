@@ -27,6 +27,13 @@ func workflowRunView(run facade.Run) map[string]any {
 		view["summaryPath"] = run.SummaryPath
 	}
 	view["availableActions"] = run.AvailableActions
+	if len(run.FlowNodes) != 0 {
+		nodes := []map[string]any{}
+		for index, node := range run.FlowNodes {
+			nodes = append(nodes, map[string]any{"node": index + 1, "description": node.Description, "enabled": node.Enabled})
+		}
+		view["flowNodes"] = nodes
+	}
 	if len(run.BusinessNodes) != 0 {
 		nodes := []map[string]any{}
 		for i, n := range run.BusinessNodes {

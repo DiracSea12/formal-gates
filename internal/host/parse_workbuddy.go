@@ -46,7 +46,7 @@ func parseWorkBuddyTranscript(reader io.Reader) (Usage, error) {
 				invalid = err
 				continue
 			}
-			creation, err := workbuddyFirstPositive(raw, "cache_creation_input_tokens", "cacheCreationInputTokens", "prompt_cache_write_tokens", "prompt_cache_miss_tokens")
+			creation, err := workbuddyFirstPositive(raw, "cache_creation_input_tokens", "cacheCreationInputTokens", "prompt_cache_write_tokens")
 			if err != nil {
 				invalid = err
 				continue

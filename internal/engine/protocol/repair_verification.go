@@ -35,7 +35,7 @@ func (s *State) repairComparisonResult(task runtime.TaskKey) *WorkerResult {
 
 func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repairComparison {
 	var contexts []repairComparison
-	if s.Validation == nil {
+	if s.Validation == nil || !s.FlowNodeEnabled("repair") {
 		return contexts
 	}
 	for _, work := range s.repairWork() {

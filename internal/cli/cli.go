@@ -356,6 +356,9 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs.Var(&artifactDocuments, "artifact-document", "original displayed confirmation material position; repeatable")
 	listMaterials := fs.Bool("materials", false, "list project confirmation materials without saving a candidate")
 	precheck := fs.Bool("precheck", false, "read and project the complete requirement before confirmation; creates no run")
+	listNodes := fs.Bool("nodes", false, "list user-selectable main-flow nodes without starting a run")
+	var disabledNodes positionListFlag
+	fs.Var(&disabledNodes, "disable-node", "user decision: disable an original --nodes position at start; repeatable")
 	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated intake candidate; creates no run")
 	requirementPath := fs.String("requirement", "", "requirement document path for --precheck")
 	solutionPath := fs.String("solution", "", "solution material for --precheck; defaults to the requirement document")
@@ -364,11 +367,27 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if *listNodes {
+		if len(disabledNodes) != 0 {
+			return 1, fmt.Errorf("--nodes lists choices; use --disable-node when starting the confirmed run")
+		}
+		if *machine {
+			return printJSON(streams.Stdout, map[string]any{"flowNodes": definition.MainFlowNodes(), "choiceOwner": "user"})
+		}
+		return printJSON(streams.Stdout, map[string]any{"flowNodes": workflowFlowNodeChoices(), "choiceOwner": "user"})
+	}
+	flowSelection, err := selectFlowNodes(disabledNodes)
+	if err != nil {
+		return 1, err
+	}
 	routeName := strings.ToLower(strings.TrimSpace(*route))
 	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
 		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
 	}
 	if *precheck {
+		if flowSelection != nil {
+			return 1, fmt.Errorf("--disable-node records the user's decision at start, after intake confirmation")
+		}
 		if *listMaterials {
 			return printIntakeMaterials(*root, streams.Stdout)
 		}
@@ -446,7 +465,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if transcript != "" && ownerProvider != "" {
 		owner.Transcript, owner.Provider = transcript, ownerProvider
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}

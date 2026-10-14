@@ -331,13 +331,17 @@ func TestChildWaitingBoundariesPreserveUserDecisions(t *testing.T) {
 	}
 }
 
-func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.CoverageInventory) *validationDriver {
+func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.CoverageInventory, selections ...*protocol.FlowSelection) *validationDriver {
 	t.Helper()
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	receipt := testReceipt()
 	receipt.Coverage = inventory
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	var selection *protocol.FlowSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt, FlowSelection: selection}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,6 +33,9 @@ type Repair struct {
 	GranularityReview *Granularity `json:"granularityReview,omitempty"`
 	Requirements      []string     `json:"requirements,omitempty"`
 }
+type DevelopmentPlan struct {
+	GranularityReview *Granularity `json:"granularityReview"`
+}
 type Design struct {
 	DesignManifest
 	Checkpoint bool `json:"checkpoint,omitempty"`
@@ -725,6 +728,8 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
 	switch input.Handler {
+	case "engine.development.plan.v1":
+		return &DevelopmentPlan{}, nil
 	case "engine.development.batch.v6":
 		if missingEditCalls(input) {
 			return &DevelopmentContinuation{}, nil
@@ -822,6 +827,9 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		if input.Review.Action != review.StartReadiness && result.Review.GranularityReview != nil {
 			return result, "", fmt.Errorf("product review cannot propose development granularity")
 		}
+		if input.DevelopmentDisabled && result.Review.GranularityReview != nil {
+			return result, "", fmt.Errorf("a disabled development node has no development proposal")
+		}
 		for _, finding := range result.Review.Findings {
 			if err := review.ValidateFindingClassification(input.Review.Action, finding.Category, finding.Severity); err != nil {
 				return result, "", err
@@ -834,6 +842,8 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 			return result, "", err
 		}
 		switch body := target.(type) {
+		case *DevelopmentPlan:
+			v.GranularityReview = body.GranularityReview
 		case *Development:
 			v.Development = body
 		case *Repair:

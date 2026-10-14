@@ -355,7 +355,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch.v6", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.validation.observation.v2", "engine.gate.v3", "engine.repair.v7", "engine.repair.verify.v2":
+	case "engine.development.plan.v1", "engine.development.batch.v6", "engine.merge.resolve.v3", "engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.validation.observation.v2", "engine.gate.v3", "engine.repair.v7", "engine.repair.verify.v2":
 		return string(p.Handler)
 	}
 	return ""
@@ -383,6 +383,9 @@ func (s *State) currentValidationWave() *ValidationWave {
 	return &s.Validation.Waves[len(s.Validation.Waves)-1]
 }
 func (s *State) validationKinds() []coverage.ReviewKind {
+	if !s.FlowNodeEnabled("qa") {
+		return nil
+	}
 	var kinds []coverage.ReviewKind
 	for _, g := range s.SelectedGates {
 		switch g {
@@ -398,9 +401,7 @@ func (s *State) validationKinds() []coverage.ReviewKind {
 	return kinds
 }
 
-// routeHasNoQAModes 报告所选路线是否不含任何 QA 审查模式——覆盖义务豁免
-// 的唯一语义判据（default、QA-free custom 与 QA-free full child 同判；普通 full 必
-// 含双内建 QA，由路线接纳层强制，不会落入本形态）。
+// routeHasNoQAModes reports that the selected flow and route have no active QA.
 func (s *State) routeHasNoQAModes() bool {
 	return len(s.validationKinds()) == 0
 }
@@ -495,6 +496,10 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	role := s.validationRole(key, cd)
+	if role == "engine.development.plan.v1" {
+		b.RouteScope = ""
+		return b
+	}
 	if role == "engine.validation.observation.v2" {
 		if input := s.validationObservationInput(); input != nil && s.sourceValidationTask(key) == observationTask(cd, input) {
 			b.WaveID, b.Candidate = input.WaveID, input.Candidate.Identity
@@ -535,8 +540,13 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	if role == "engine.qa.review.rationale.v2" {
-		if set := v.Sets[mode]; set != nil && set.Candidate != "" {
-			b.Candidate = set.Candidate
+		if set := v.Sets[mode]; set != nil {
+			if source, carried := s.carriedReviewSource(mode); carried && key == s.reviewTask(mode, b.Generation, set.Version, cd) {
+				b.Generation = source.Generation
+			}
+			if set.Candidate != "" {
+				b.Candidate = set.Candidate
+			}
 		}
 	}
 	if role == "engine.repair.v7" {
@@ -595,6 +605,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			view.RequiredTasks[step.Header.ID] = nil
 		}
 	}
+	s.projectDevelopmentPlanTasks(view, cd)
 	if !s.validationRequirementCurrent() || s.Topology == nil || s.RouteMode == "" {
 		return
 	}

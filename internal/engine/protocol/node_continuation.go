@@ -142,6 +142,11 @@ func (s *State) BusinessNodes(cd *compiler.CompiledDefinition, parents ...Snapsh
 	add("cleanup")
 	add("abort")
 	for i := range nodes {
+		if !s.nodeFlowEnabled(nodes[i].Kind) {
+			nodes[i].Unavailable = "该职责已由用户关闭；节点继续不改变主流程选择"
+			nodes[i].Missing = append(nodes[i].Missing, nodes[i].Unavailable)
+			continue
+		}
 		if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil && s.nodeCheckpointChanges(nodes[i], cd) {
 			parent := parents[0].State
 			if parent.SliceEnteredMainline(s.RunID) {
@@ -542,21 +547,32 @@ func (s *State) nodeContinuationPending() bool {
 	return ok && d.Continuation.AppliedRevision == 0 && s.PendingAsks[d.RequestID].Continuation.To.Kind != "abort" && s.PendingAsks[d.RequestID].Continuation.To.Kind != "cleanup"
 }
 
+func (s *State) nodeFlowEnabled(kind string) bool {
+	switch kind {
+	case "qa-design", "qa-review", "qa-execution":
+		kind = "qa"
+	}
+	return s.FlowNodeEnabled(kind)
+}
+
 func (s *State) nodeInputsReady(n BusinessNode, cd *compiler.CompiledDefinition) bool {
+	if !s.nodeFlowEnabled(n.Kind) {
+		return false
+	}
 	switch n.Kind {
 	case "intake":
 		return s.IntakeReceipt != nil
 	case "product-review":
 		return s.IntakeReceipt != nil
 	case "start-readiness":
-		return s.effectivePass(s.ReviewSeries.ProductReview)
+		return s.preDevelopmentReviewSatisfied(review.ProductReview)
 	case "topology":
-		return s.effectivePass(s.ReviewSeries.StartReadiness)
+		return s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	case "route":
-		return s.Topology != nil && s.dualReviewPass()
+		return s.Topology != nil && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	case "development":
 		_, plan, _ := s.confirmedDevelopmentPlan()
-		return plan != nil && s.developmentPlanCurrent(plan) && s.RouteMode != "" && s.dualReviewPass()
+		return plan != nil && s.developmentPlanCurrent(plan) && s.RouteMode != "" && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	case "qa-design":
 		return s.validationRequirementCurrent() && slices.Contains(s.validationKinds(), n.Mode) && (n.Mode != coverage.ReviewWhitebox || s.Validation.AuthoringWorkspace != "")
 	case "qa-review":

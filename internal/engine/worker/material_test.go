@@ -269,7 +269,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 
 func TestReadinessUsesOneOrdinaryGateChoiceOrder(t *testing.T) {
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
-	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}, Gates: []prompts.PromptDefinition{{ID: "quality"}}}
+	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-plan"}}, Gates: []prompts.PromptDefinition{{ID: "quality"}}}
 	material, err := Render(input, catalog)
 	if err != nil {
 		t.Fatal(err)

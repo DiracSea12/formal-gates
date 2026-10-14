@@ -141,7 +141,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		return NativeResource{}
 	}
 	for _, b := range s.DispatchBindings {
-		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.validationWorkCarryAuthorized("", b.Task)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
+		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.prewaveCarryAuthorized(b.Task, cd)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
 			return s.NativeResources[b.WorkspaceID]
 		}
 	}
@@ -292,6 +292,9 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 		}
 		return s.integrationResource()
 	case "DEVELOPMENT":
+		if !s.FlowNodeEnabled("development") && len(p.SourceTasks) == 0 {
+			return s.resource("candidate", p.Base, candidateCorrelation(p)+":"+strconv.FormatUint(s.Validation.Generation, 10))
+		}
 		if p.RepairTask != nil {
 			return s.taskResource(*p.RepairTask, cd)
 		}
@@ -609,7 +612,7 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 		return false
 	}
 	current := p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation
-	carried := p.Task != nil && s.validationWorkCarryAuthorized("", *p.Task)
+	carried := p.Task != nil && s.prewaveCarryAuthorized(*p.Task, cd)
 	if !current && !carried {
 		return false
 	}
@@ -698,7 +701,7 @@ func (s *State) WorkspaceMirrorSuperseded(intent HostActionIntent, cd *compiler.
 			return false
 		}
 		current := after.RequirementRevision == s.Validation.RequirementRevision && after.Generation == s.Validation.Generation
-		carried := after.Task != nil && s.validationWorkCarryAuthorized("", *after.Task)
+		carried := after.Task != nil && s.prewaveCarryAuthorized(*after.Task, cd)
 		if !current && !carried {
 			return false
 		}

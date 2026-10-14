@@ -15,7 +15,7 @@ type ValidationReuse struct {
 }
 
 func (s *State) addChildValidationTargets(w *ValidationWave, cd *compiler.CompiledDefinition) {
-	if !s.mergeMaster() {
+	if !s.mergeMaster() || !s.FlowNodeEnabled("gate") {
 		return
 	}
 	views := s.candidateChildViews()

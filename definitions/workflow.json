@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "26",
+  "version": "27",
   "stateSchemaVersion": "2",
   "writer": "engine",
   "transactionOwner": "engine",
@@ -20,11 +20,11 @@
     {
       "id": "children.prepare",
       "nodeId": "children",
-      "ordinal": 3,
+      "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
@@ -39,9 +39,9 @@
     {
       "id": "children.workspace",
       "nodeId": "children",
-      "ordinal": 4,
+      "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
         "children.prepare"
       ],
@@ -62,9 +62,9 @@
     {
       "id": "children.publish",
       "nodeId": "children",
-      "ordinal": 5,
+      "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
         "children.workspace"
       ],
@@ -79,11 +79,40 @@
       }
     },
     {
+      "id": "development.plan",
+      "nodeId": "development",
+      "ordinal": 3,
+      "kind": "AGENT",
+      "definitionVersion": "27",
+      "dependencies": [
+        "review.readiness"
+      ],
+      "authority": "AGENT",
+      "runner": "AGENT_WORKER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "postconditions": [
+          {
+            "id": "pred.review.post"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.development.plan.v1",
+        "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
+        "timeoutNs": 0,
+        "retry": {
+          "maxAttempts": 2
+        }
+      }
+    },
+    {
       "id": "entry.registered",
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -99,7 +128,7 @@
       "nodeId": "review",
       "ordinal": 1,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
         "entry.registered"
       ],
@@ -126,7 +155,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
         "review.worker"
       ],
@@ -151,11 +180,11 @@
     {
       "id": "candidate.materialize",
       "nodeId": "validation",
-      "ordinal": 6,
+      "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "ENGINE",
       "runner": "HOST_ADAPTER",
@@ -174,11 +203,11 @@
     {
       "id": "check.execute",
       "nodeId": "validation",
-      "ordinal": 7,
+      "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "ENGINE",
       "runner": "HOST_ADAPTER",
@@ -197,11 +226,11 @@
     {
       "id": "cleanup.materialize",
       "nodeId": "validation",
-      "ordinal": 8,
+      "ordinal": 9,
       "kind": "HOST_ACTION",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "ENGINE",
       "runner": "HOST_ADAPTER",
@@ -220,11 +249,11 @@
     {
       "id": "development.repair",
       "nodeId": "validation",
-      "ordinal": 9,
+      "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -249,11 +278,11 @@
     {
       "id": "development.worker",
       "nodeId": "validation",
-      "ordinal": 10,
+      "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -278,11 +307,11 @@
     {
       "id": "merge.resolve",
       "nodeId": "validation",
-      "ordinal": 11,
+      "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -307,11 +336,11 @@
     {
       "id": "qa.design",
       "nodeId": "validation",
-      "ordinal": 12,
+      "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -336,11 +365,11 @@
     {
       "id": "qa.execution",
       "nodeId": "validation",
-      "ordinal": 13,
+      "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -365,11 +394,11 @@
     {
       "id": "qa.review",
       "nodeId": "validation",
-      "ordinal": 14,
+      "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -395,11 +424,11 @@
     {
       "id": "repair.verification",
       "nodeId": "validation",
-      "ordinal": 15,
+      "ordinal": 16,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -424,11 +453,11 @@
     {
       "id": "validation.gate",
       "nodeId": "validation",
-      "ordinal": 16,
+      "ordinal": 17,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -454,11 +483,11 @@
     {
       "id": "validation.observation",
       "nodeId": "validation",
-      "ordinal": 17,
+      "ordinal": 18,
       "kind": "AGENT",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -483,11 +512,11 @@
     {
       "id": "workspace.materialize",
       "nodeId": "validation",
-      "ordinal": 18,
+      "ordinal": 19,
       "kind": "HOST_ACTION",
-      "definitionVersion": "26",
+      "definitionVersion": "27",
       "dependencies": [
-        "review.readiness"
+        "development.plan"
       ],
       "authority": "ENGINE",
       "runner": "HOST_ADAPTER",

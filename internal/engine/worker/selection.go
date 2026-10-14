@@ -123,6 +123,10 @@ func assembleRequirementDecisions(points []requirement.Point, values []Requireme
 	}
 	return result, nil
 }
+func proposesVerificationGoals(input protocol.WorkerInput) bool {
+	return input.Review != nil || input.Handler == "engine.development.plan.v1"
+}
+
 func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []string, facts []LocationFact, completed bool) (*protocol.GranularityReview, error) {
 	if value == nil {
 		return nil, nil
@@ -318,12 +322,12 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			}
 			for i, check := range item.Checks {
 				selected := protocol.DevelopmentCheck{ID: fmt.Sprintf("%s-check-%d", batch.ID, i+1), Purpose: check.Purpose, Command: check.Command, Goal: check.Goal}
-				if input.Review != nil && check.Command != "" {
-					return nil, fmt.Errorf("review reuses an approved check or proposes a verification goal")
+				if proposesVerificationGoals(input) && check.Command != "" {
+					return nil, fmt.Errorf("plan preparation reuses an approved check or proposes a verification goal")
 				}
 				if check.Goal != "" {
-					if input.Review == nil || check.Reuse != 0 {
-						return nil, fmt.Errorf("review declares a missing verification goal without a reused check")
+					if !proposesVerificationGoals(input) || check.Reuse != 0 {
+						return nil, fmt.Errorf("plan preparation declares a missing verification goal without a reused check")
 					}
 				} else if check.Reuse != 0 {
 					if check.Reuse < 1 || check.Reuse > len(input.ApprovedChecks) || check.Command != "" || check.Purpose != "" || check.Goal != "" {

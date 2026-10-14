@@ -12,7 +12,7 @@ import (
 	"formal-gates/internal/requirement"
 )
 
-// GranularityReview is the readiness worker's proposed development contract.
+// GranularityReview is the proposed development contract.
 // Confirmation owns authorization; Results owns this proposal and raw evidence.
 type GranularityReview struct {
 	Reason           string             `json:"reason"`
@@ -269,6 +269,9 @@ func ValidateGranularity(p *GranularityReview) error {
 	return nil
 }
 func (s *State) readinessProposal() (string, *GranularityReview) {
+	if !s.FlowNodeEnabled("start-readiness") {
+		return s.preparedDevelopmentPlan()
+	}
 	series := s.ReviewSeries.StartReadiness
 	if !s.effectivePass(series) {
 		return "", nil
@@ -285,7 +288,70 @@ func (s *State) readinessProposal() (string, *GranularityReview) {
 	return "", nil
 }
 
-// ReadinessProposal projects the effective readiness worker's original contract.
+func (s *State) developmentPlanPreparationScope() string {
+	return fmt.Sprintf("%d:%s", s.requirementGeneration(), s.RequirementRevision())
+}
+
+// Preparation is development input work. Its original accepted result supplies
+// the proposal; route or topology confirmation supplies execution authorization.
+func (s *State) preparedDevelopmentPlan() (string, *GranularityReview) {
+	var action string
+	var latest uint64
+	var plan *GranularityReview
+	for id, result := range s.Results {
+		if _, obsolete := s.ObsoleteActions[id]; obsolete {
+			continue
+		}
+		if result.Outcome != OutcomePass || result.Validation == nil || result.Validation.Status != OutcomePass || result.Validation.GranularityReview == nil {
+			continue
+		}
+		binding := result.Validation.Binding
+		if binding.Task.Step != "development.plan" || binding.Task.Scope != s.developmentPlanPreparationScope() || binding.RequirementRevision != s.RequirementRevision() || binding.Generation != s.requirementGeneration() {
+			continue
+		}
+		if issued := s.DispatchIssueRevisions[id]; plan == nil || issued > latest || issued == latest && id < action {
+			action, plan, latest = id, result.Validation.GranularityReview, issued
+		}
+	}
+	return action, plan
+}
+
+func (s *State) readinessPreparationReady() bool {
+	if s.FlowNodeEnabled("start-readiness") {
+		return s.effectivePass(s.ReviewSeries.StartReadiness)
+	}
+	if !s.FlowNodeEnabled("development") || s.SliceChild != nil {
+		return true
+	}
+	_, plan := s.preparedDevelopmentPlan()
+	return plan != nil
+}
+
+func (s *State) developmentPlanTasks(cd *compiler.CompiledDefinition) []decision.RequiredTask {
+	if s.FlowNodeEnabled("start-readiness") || !s.FlowNodeEnabled("development") || s.SliceChild != nil || !pipelineEnabled(s, cd) || !s.PreDevelopmentReviewsSatisfied() || !s.validationRequirementCurrent() || s.requirementChangePending() || s.abortRequested() {
+		return nil
+	}
+	if _, plan := s.preparedDevelopmentPlan(); plan != nil {
+		return nil
+	}
+	if _, registered := pipelineStep(cd, "engine.development.plan.v1"); !registered {
+		return nil
+	}
+	key := pipelineTask(cd, "engine.development.plan.v1", s.developmentPlanPreparationScope())
+	reason := decision.WaitReason("")
+	if retry, ok := s.EndedAttempts[key]; ok && retry.RetryExhausted {
+		reason = decision.WaitCapacity
+	}
+	return []decision.RequiredTask{{Task: key, BlockedBy: reason}}
+}
+
+func (s *State) projectDevelopmentPlanTasks(view *decision.State, cd *compiler.CompiledDefinition) {
+	if step, registered := pipelineStep(cd, "engine.development.plan.v1"); registered {
+		view.RequiredTasks[step.Header.ID] = s.developmentPlanTasks(cd)
+	}
+}
+
+// ReadinessProposal projects the original development proposal supplying confirmation.
 func (s *State) ReadinessProposal() *GranularityReview {
 	_, proposal := s.readinessProposal()
 	return proposal
@@ -297,6 +363,9 @@ func planTaskScope(plan *GranularityReview, id string) string {
 	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
 }
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
+	if !s.FlowNodeEnabled("development") {
+		return nil, validationError("development is disabled for this run")
+	}
 	id, p := s.readinessProposal()
 	if s.SliceChild != nil {
 		// Child route confirmation carries its exact inline proposal.
@@ -479,19 +548,18 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 		if decisionPlanConfirmation(d) == nil || d.Revision < latest {
 			continue
 		}
-		source := s.Results[decisionPlanConfirmation(d).ReviewActionID]
-		if source.Review == nil {
+		proposal := s.decisionPlanProposal(d)
+		if proposal == nil {
 			continue
 		}
-		request, p, latest = id, source.Review.GranularityReview, d.Revision
+		request, p, latest = id, proposal, d.Revision
 	}
 	// Identical confirmations preserve the original execution contract reference.
 	for id, d := range s.Decisions {
 		if d.Revision >= latest || decisionPlanConfirmation(d) == nil {
 			continue
 		}
-		source := s.Results[decisionPlanConfirmation(d).ReviewActionID]
-		if source.Review != nil && planContractDigest(source.Review.GranularityReview) == planContractDigest(p) {
+		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == planContractDigest(p) {
 			request, latest = id, d.Revision
 		}
 	}
@@ -548,10 +616,13 @@ func (s *State) decisionPlanProposal(d RecordedDecision) *GranularityReview {
 		return confirmation.Proposal
 	}
 	source := s.Results[confirmation.ReviewActionID]
-	if source.Review == nil {
-		return nil
+	if source.Review != nil {
+		return source.Review.GranularityReview
 	}
-	return source.Review.GranularityReview
+	if source.Validation != nil && source.Validation.Binding.Task.Step == "development.plan" {
+		return source.Validation.GranularityReview
+	}
+	return nil
 }
 
 // latestSlicePlanProposal 返回 child 最近一次路线决定携带的片内计划提案
@@ -697,6 +768,9 @@ func (s *State) developmentBatch(task runtime.TaskKey, cd *compiler.CompiledDefi
 	return "", nil, DevelopmentBatch{}, false
 }
 func (s *State) planTasks(cd *compiler.CompiledDefinition) []runtime.TaskKey {
+	if !s.FlowNodeEnabled("development") {
+		return nil
+	}
 	_, p, _ := s.confirmedDevelopmentPlan()
 	var tasks []runtime.TaskKey
 	if p != nil {
@@ -731,6 +805,12 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 	return input
 }
 func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error {
+	if !s.FlowNodeEnabled("development") {
+		if route.DevelopmentPlan != nil {
+			return validationError("a disabled development node has no plan confirmation")
+		}
+		return nil
+	}
 	if !pipelineEnabled(s, e.cfg.Definition) {
 		return nil
 	}
@@ -747,7 +827,7 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 			return validationError("a slice child route must confirm its exact inline slice development plan")
 		}
 	} else if route.DevelopmentPlan == nil || *route.DevelopmentPlan != preview.Confirmation {
-		return validationError("route must confirm the exact readiness development plan")
+		return validationError("route must confirm the exact proposed development plan")
 	}
 	// 计划换约纪律不分流：已确认计划与本次提案内容不一致时，逐批变更须
 	// 有用户工作决定授权——child 的已确认片内计划与普通 run 的 readiness
@@ -834,6 +914,9 @@ func sameTaskSet(a, b []runtime.TaskKey) bool {
 	return true
 }
 func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.CompiledDefinition) {
+	if !s.FlowNodeEnabled("development") {
+		return
+	}
 	if s.mergeMaster() {
 		_, _, _, complete := s.integratedSources()
 		if !complete {
@@ -879,6 +962,9 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 	}
 }
 func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.TaskKey, []string, string, bool) {
+	if s.Validation == nil {
+		return nil, nil, "", false
+	}
 	if s.mergeMaster() {
 		sources, paths, base, complete := s.integratedSources()
 		if !complete {
@@ -900,33 +986,40 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 		slices.Sort(paths)
 		return sources, slices.Compact(paths), base, true
 	}
-	_, p, _ := s.confirmedDevelopmentPlan()
-	if p == nil || !s.developmentPlanCurrent(p) {
-		return nil, nil, "", false
-	}
-	tasks, _ := s.planCheckpoint(cd, p)
 	var sources []runtime.TaskKey
 	var paths []string
-	for _, b := range p.Batches {
-		task := s.currentPlanTask(cd, p, b.ID)
-		if !slices.Contains(tasks, task) {
-			continue
-		}
-		e := s.developmentResult(task)
-		if e == nil {
+	base := ""
+	if !s.FlowNodeEnabled("development") {
+		base = s.AcceptedNativeSnapshot()
+		if base == "" {
 			return nil, nil, "", false
 		}
-		if b.Spike {
-			continue
+	} else {
+		_, p, _ := s.confirmedDevelopmentPlan()
+		if p == nil || !s.developmentPlanCurrent(p) {
+			return nil, nil, "", false
 		}
-		sources = append(sources, task)
-		for _, path := range e.Paths {
-			if !slices.Contains(paths, path) {
-				paths = append(paths, path)
+		tasks, _ := s.planCheckpoint(cd, p)
+		for _, b := range p.Batches {
+			task := s.currentPlanTask(cd, p, b.ID)
+			if !slices.Contains(tasks, task) {
+				continue
+			}
+			e := s.developmentResult(task)
+			if e == nil {
+				return nil, nil, "", false
+			}
+			if b.Spike {
+				continue
+			}
+			sources = append(sources, task)
+			for _, path := range e.Paths {
+				if !slices.Contains(paths, path) {
+					paths = append(paths, path)
+				}
 			}
 		}
 	}
-	base := ""
 	for _, work := range s.repairWork() {
 		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {
 			continue
@@ -954,7 +1047,7 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 
 	paths = s.candidateSourcePaths(paths)
 	slices.SortFunc(sources, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
-	return sources, paths, base, len(sources) > 0
+	return sources, paths, base, len(sources) > 0 || !s.FlowNodeEnabled("development")
 }
 
 func planContractDigest(p *GranularityReview) string {
@@ -1017,6 +1110,9 @@ func (s *State) plannedDevelopmentChecks(plan *GranularityReview, batch Developm
 }
 
 func (s *State) fullProjectChecks() []DevelopmentCheck {
+	if !s.FlowNodeEnabled("development") {
+		return nil
+	}
 	_, confirmed, _ := s.confirmedDevelopmentPlan()
 	p := confirmed
 	if s.mergeMaster() {

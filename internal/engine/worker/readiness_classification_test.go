@@ -15,7 +15,7 @@ import (
 
 func TestReadinessMaterialAndSemanticBodyCarryTechnicalClassification(t *testing.T) {
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.readiness.plan.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "revision"}}
-	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}})
+	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-plan"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

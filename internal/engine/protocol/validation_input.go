@@ -111,6 +111,9 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			break
 		}
 	}
+	if role == "engine.development.plan.v1" {
+		return input
+	}
 	if role == "engine.qa.design.v6" && mode == coverage.ReviewWhitebox {
 		input.ReviewBase = s.Validation.DevelopmentSnapshot
 	}
@@ -157,7 +160,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 	c := s.coverageContract(s.Validation.Candidate)
 	switch role {
 	case "engine.qa.design.v6", "engine.qa.review.rationale.v2":
-		source, current := s.issuedPrewaveSources(binding)
+		source, current := s.issuedPrewaveSources(binding, cd)
 		if !current {
 			return input
 		}

@@ -149,7 +149,7 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 			properties["artifacts"] = map[string]any{"type": "array", "items": location}
 			check := properties["checks"].(map[string]any)["items"].(map[string]any)
 			check["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": append(protocol.DevelopmentCheckPurposes(), "")}
-			if input.Review != nil {
+			if proposesVerificationGoals(input) {
 				choices := []any{fixedObject(map[string]any{"reuse": map[string]any{"type": "integer", "minimum": 1}}, []string{"reuse"})}
 				choices = append(choices, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}}, []string{"goal"}))
 				properties["checks"] = map[string]any{"type": "array", "items": map[string]any{"anyOf": choices}}
@@ -168,7 +168,7 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 		properties["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{created, changed}}
 		plan["required"] = []string{}
 	}
-	if input.Review != nil && input.Review.Action != review.StartReadiness {
+	if input.Review != nil && (input.Review.Action != review.StartReadiness || input.DevelopmentDisabled) {
 		delete(fields, "granularityReview")
 	}
 	if input.Handler == "engine.qa.design.v6" && fields["cases"] != nil {
@@ -274,13 +274,13 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 				purpose["enum"] = []string{""}
 			}
 		}
-		if input.Review != nil {
+		if proposesVerificationGoals(input) {
 			alternatives = append(alternatives, fixedObject(map[string]any{"goal": map[string]any{"type": "string", "minLength": 1}, "purpose": map[string]any{"type": "string", "enum": protocol.DevelopmentCheckPurposes()}}, []string{"goal"}))
 		} else {
 			alternatives = append(alternatives, fixedObject(map[string]any{"command": command, "purpose": purpose}, []string{"command"}))
 		}
 		check := map[string]any{"anyOf": alternatives, "description": "Reuse an original approved check or author a genuinely new local invocation."}
-		if input.Review != nil {
+		if proposesVerificationGoals(input) {
 			check["description"] = "Reuse an original approved check or declare a missing verification goal for the developer to prepare."
 		}
 		properties["checks"] = map[string]any{"type": "array", "items": check}
@@ -375,9 +375,10 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 	}
 	if input.Review != nil {
-		if input.Review.Action != review.StartReadiness {
+		if input.Review.Action != review.StartReadiness || input.DevelopmentDisabled {
 			delete(fields, "granularityReview")
-		} else {
+		}
+		if input.Review.Action == review.StartReadiness {
 			finding := fields["findings"].(map[string]any)["items"].(map[string]any)
 			finding["required"] = append(finding["required"].([]any), "category")
 			choices := []any{}

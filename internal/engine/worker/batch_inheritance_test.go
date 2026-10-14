@@ -61,7 +61,7 @@ func TestApprovedPlanRetainsOmittedTopLevelContract(t *testing.T) {
 	original := nativePlanForInheritance()
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v6", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, ApprovedPlan: original, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	before, _ := json.Marshal(original)
-	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}})
+	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}, {ID: "development-plan"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

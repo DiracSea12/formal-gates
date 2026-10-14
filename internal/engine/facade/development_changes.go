@@ -21,7 +21,13 @@ func (f *Facade) PrepareReplan(input RequirementChangeInput) (ControlCandidate, 
 		return ControlCandidate{}, fmt.Errorf("replan keeps the requirement and topology; use ordinary requirement change for a changed requirement")
 	}
 	input.Classification = protocol.RequirementClassificationPreserved
-	input.Redo = []string{"start-readiness", "route"}
+	input.Redo = []string{"route"}
+	for _, node := range run.FlowNodes {
+		if node.ID == "start-readiness" && node.Enabled {
+			input.Redo = []string{"start-readiness", "route"}
+			break
+		}
+	}
 	candidate, err := f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &input})
 	if err != nil {
 		return ControlCandidate{}, err

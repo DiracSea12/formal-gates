@@ -268,7 +268,7 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 				}
 			}
 		}
-		if s.mergeMaster() {
+		if s.mergeMaster() && slices.Contains(s.validationKinds(), coverage.ReviewMerge) {
 			set := v.Sets[coverage.ReviewMerge]
 			if set == nil || set.Status != "FROZEN" || digestOfCanonical(p.MergeManifest) != digestOfCanonical(&set.Manifest) {
 				return false
@@ -546,7 +546,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 		params.Stage, params.Base, params.ReviewBase = "REVIEW_READY", s.RequirementAssemblySource(), s.BaseSnapshot
 		params.Paths, params.Finalize = []string{s.RequirementArtifactPath()}, true
 	case v.DevelopmentSnapshot == "":
-		if s.mergeMaster() {
+		if s.mergeMaster() && slices.Contains(s.validationKinds(), coverage.ReviewMerge) {
 			if !s.caseSetReady(coverage.ReviewMerge) || s.validateFinalCoverage() != nil {
 				return CandidateParameters{}, false, nil
 			}
@@ -629,14 +629,14 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			params.DesignTasks[mode] = set.DesignTask
 		}
 	}
-	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" && !s.mergeMaster() {
+	if s.NativeRoot != "" && params.Stage == "DEVELOPMENT" && !s.mergeMaster() && s.FlowNodeEnabled("development") {
 		params.Base = s.candidateResource(params, cd).Identity
 		if params.Base == "" {
 			params.Base = s.candidateResource(params, cd).Source
 		}
 	}
 	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" {
-		if s.mergeMaster() {
+		if s.mergeMaster() && slices.Contains(s.validationKinds(), coverage.ReviewMerge) {
 			manifest := v.Sets[coverage.ReviewMerge].Manifest
 			params.MergeManifest = &manifest
 		}

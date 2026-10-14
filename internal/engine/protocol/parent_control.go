@@ -144,7 +144,7 @@ func (e *Engine) SyncParentRequirement(parent *State, input Observation) error {
 		}
 		changed = true
 	}
-	reviewPending := !parent.effectivePass(parent.ReviewSeries.ProductReview) || !parent.effectivePass(parent.ReviewSeries.StartReadiness)
+	reviewPending := !parent.PreDevelopmentReviewsSatisfied()
 	if reviewPending != s.SliceChild.ParentReviewPending {
 		s.SliceChild.ParentReviewPending = reviewPending
 		changed = true

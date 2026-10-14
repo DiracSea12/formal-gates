@@ -45,7 +45,11 @@ func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
 			}
 		}
 	}
-	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, InheritedIntake: s.ChildCreation.Intake, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
+	start := &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, InheritedIntake: s.ChildCreation.Intake, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
+	if s.FlowSelection != nil {
+		start.FlowSelection = &FlowSelection{Disabled: slices.Clone(s.FlowSelection.Disabled)}
+	}
+	return start
 }
 
 func (s *State) CreationChild(resourceID string) (ChildPreparation, bool) {
@@ -139,7 +143,7 @@ func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 		return false
 	}
 	expected := s.ChildStart(child)
-	return actual.NativeVCS() == s.NativeVCS() && actual.NativeHandle == s.NativeResources[child.ResourceID].Handle && actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.InheritedIntake) == digestOfCanonical(expected.Binding.InheritedIntake) && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
+	return actual.NativeVCS() == s.NativeVCS() && actual.NativeHandle == s.NativeResources[child.ResourceID].Handle && actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.InheritedIntake) == digestOfCanonical(expected.Binding.InheritedIntake) && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && digestOfCanonical(actual.FlowSelection) == digestOfCanonical(expected.FlowSelection) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
 }
 
 func (e *Engine) RecordPreparedChildren(children []*State, input Observation) error {

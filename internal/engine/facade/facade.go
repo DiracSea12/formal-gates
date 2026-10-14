@@ -66,6 +66,7 @@ const (
 // for diagnostics and is always set to "engine" by Start. MasterRunID and
 // SliceID bind Controller-created children; public Start creates top-level runs.
 type StartRequest struct {
+	FlowSelection             *protocol.FlowSelection   `json:"flowSelection,omitempty"`
 	RuntimeFiles              *vcs.RuntimeFiles         `json:"runtimeFiles,omitempty"`
 	VCS                       string                    `json:"vcs,omitempty"`
 	NativeHandle              vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
@@ -94,6 +95,8 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	FlowSelection        *protocol.FlowSelection              `json:"flowSelection,omitempty"`
+	FlowNodes            []FlowNodeFace                       `json:"flowNodes,omitempty"`
 	TaskMessages         map[string]protocol.TaskMessage      `json:"taskMessages,omitempty"`
 	Settings             *settings.Effective                  `json:"settings,omitempty"`
 	MasterRunID          string                               `json:"masterRunId,omitempty"`
@@ -496,6 +499,9 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if req.Route != "lightweight" && req.Route != "regular" {
 		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
 	}
+	if err := protocol.ValidateFlowSelection(req.FlowSelection); err != nil {
+		return nil, Run{}, err
+	}
 	runUnlock, err := coordination.AcquireRun(root, req.RunID)
 	if err != nil {
 		return nil, Run{}, err
@@ -746,7 +752,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)})
+	eng, err := protocol.New(store, protocol.Config{FlowSelection: req.FlowSelection, Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)})
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -1627,6 +1633,8 @@ func (f *Facade) project() (Run, error) {
 		return Run{}, err
 	}
 	run := Run{
+		FlowSelection:              snap.State.FlowSelection,
+		FlowNodes:                  flowNodeFaces(snap.State),
 		ReviewVerificationContexts: verificationContexts,
 		TaskMessages:               snap.State.TaskMessages,
 		Settings:                   stateSettings(snap.State),
@@ -2029,6 +2037,8 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 func runFromSummary(summary TerminalSummary) Run {
 	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
+		run.FlowSelection = s.FlowSelection
+		run.FlowNodes = flowNodeFaces(s)
 		run.Review = reviewFace(s)
 		run.ReviewVerifications = s.PendingReviewVerifications()
 		run.TaskMessages = s.TaskMessages
@@ -2535,11 +2545,14 @@ func publishFileAtomic(path string, data []byte, mode os.FileMode, exclusive boo
 
 // DevelopmentPlan projects the exact proposal and bindings for route confirmation.
 func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...protocol.TopologyDecision) (*protocol.DevelopmentPlanPreview, error) {
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		return nil, err
+	}
+	if !snapshot.State.FlowNodeEnabled("development") {
+		return nil, nil
+	}
 	if len(topology) == 0 && route.DevelopmentPlan == nil {
-		snapshot, err := f.engine.Load()
-		if err != nil {
-			return nil, err
-		}
 		if child := snapshot.State.SliceChild; child != nil {
 			parent, err := Open(f.root, child.MasterRunID, f.runtimeFiles)
 			if err != nil {

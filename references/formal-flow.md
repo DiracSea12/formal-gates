@@ -98,6 +98,8 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 ## 启动与 run 控制
 
 ```bash
+formal-gates workflow start --nodes
+
 formal-gates workflow start --run-id <新名称> --route regular --vcs <git|svn|p4> \
   --intake <原载荷序号>
 
@@ -114,6 +116,8 @@ formal-gates workflow submit --confirmation-candidate <原载荷序号>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
+
+`start --nodes` 只读展示产品审、技术审、初始开发、整组 QA、质量门审查和业务返修六项主要职责。用户自由组合，保留原相对顺序与并行关系；关闭职责通过启动时重复 `--disable-node <原展示序号>` 提交，由程序从定义目录取原身份并随 run 持久化。QA 启用后按原设计→独立审查→执行链运行，黑盒、白盒在路线阶段各按整组选择，模式只归原 SelectedGates；关闭 QA 也关闭 merge QA。未选择关闭时保留默认流程，不暗跑关闭职责或伪造 PASS。恢复和节点继续不改变选择。关闭质量门审查同时不派普通门、合并门和返修成员门；child 继承同一决定，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
 
 show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。精确 `submit --confirmation` 供人工或程序集成，仍从原候选自动绑定目标。
 
@@ -214,7 +218,7 @@ P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成�
 恢复与交接。审查者只选择既有检查调用或提出验证目标，不填写 command/parts；缺少调用由开发者准备，程序绑定并执行。
 用户确认计划与精确 split 拓扑或 no-split 理由之后，确认 default/full/custom。
 非分片 run 的 default 选择全部普通门、不含黑盒/白盒 QA；full 选择全部普通门与双 QA
-（QA 阶段较重，适合大型任务）；custom 选择当前候选的非空子集或全集，保留 custom 身份。
+（QA 阶段较重，适合大型任务）；custom 选择当前候选的任意子集（含空集）或全集，保留 custom 身份。
 推荐不代替用户确认；每个 child 独立确认，child 候选不含普通 QA，default/full 均选全部普通门。
 Batch 是现有任务的分组，不新增生命周期；程序为每个开发 Batch 派发全新的零上下文代理，开发会话不跨批复用，Subtask 不能独立派发。
 批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
@@ -233,7 +237,7 @@ ValidationCandidate 冻结前纳入其身份；Git 多提交压缩在最后必�
 
 ## 开发后审查
 
-冻结唯一 expected-set，在容量内并行推进 QA execution 与所有已选门；一项 FAIL 或
+冻结唯一 expected-set，在容量内并行推进所选 QA execution 与已启用质量审查职责对应的门；一项 FAIL 或
 运行错误不停止兄弟任务，每项 source/usage/guard 结算后及时 refill。门读取基线到
 最终候选完整 diff，不接收独立 QA 的用例正文或执行证据。
 
@@ -243,7 +247,7 @@ invalidated checkpoint，再完成原动作未完成部分，未执行项不得 
 execution 为 FULL，后续按持久化 ReviewScopeMode 使用 AFFECTED；普通质量门始终 FULL。
 
 所有目标终结、错误处置和逐 finding 裁决结束后，以 NEW/SAME_AS/DISMISSED 归并 canonical
-problems，只创建一个 repair。RUNTIME_ERROR/无效结果沿同 TaskKey 有限重试；
+problems，启用业务返修时只创建一个 repair；关闭返修时保留真实失败与义务，不派返修或伪造完成。RUNTIME_ERROR/无效结果沿同 TaskKey 有限重试；
 RETRY_EXHAUSTED 进入对应 Ask，授权只增加当前精确动作的一轮或一次 attempt。
 
 ## 继承判定、修复授权与 Seal

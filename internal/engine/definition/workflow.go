@@ -21,7 +21,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "26"
+const Version authoring.DefinitionVersion = "27"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -38,6 +38,7 @@ var (
 		{"engine.children.publish", authoring.RunnerEngineLocal},
 		{"engine.review.worker.v3", authoring.RunnerAgentWorker},
 		{"engine.readiness.plan.v6", authoring.RunnerAgentWorker},
+		{"engine.development.plan.v1", authoring.RunnerAgentWorker},
 
 		{"engine.development.batch.v6", authoring.RunnerAgentWorker},
 		{"engine.qa.design.v6", authoring.RunnerAgentWorker},
@@ -99,13 +100,18 @@ func Workflow() *compiler.Definition {
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: 0,
 		})
 	must("review.readiness", err)
-	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "review.readiness"), typedIO(), authoring.LocalSpec{Handler: "engine.children.prepare"})
+	plan, err := authoring.NewAgentStep(header("development.plan", "development", "review.readiness"), reviewIO(), authoring.AgentSpec{
+		Handler: "engine.development.plan.v1", Reason: authoring.ReasonCreativeImplementation,
+		Timeout: 0, Retry: &authoring.RetryPolicy{MaxAttempts: 2},
+	})
+	must("development.plan", err)
+	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "development.plan"), typedIO(), authoring.LocalSpec{Handler: "engine.children.prepare"})
 	must("children.prepare", err)
 	workspace, err := authoring.NewHostActionStep(header("children.workspace", "children", "children.prepare"), typedIO(), authoring.HostActionSpec{Handler: "engine.workspace", Boundary: authoring.BoundaryExternalCapability, Operation: "op.workspace", Schema: "schema.workspace", Timeout: 0})
 	must("children.workspace", err)
 	publish, err := authoring.NewLocalStep(header("children.publish", "children", "children.workspace"), typedIO(), authoring.LocalSpec{Handler: "engine.children.publish"})
 	must("children.publish", err)
-	steps := []authoring.Step{registered, review, readiness, prepare, workspace, publish}
+	steps := []authoring.Step{registered, review, readiness, plan, prepare, workspace, publish}
 	for _, spec := range []struct {
 		id, handler string
 		reason      authoring.NonProgrammableReason
@@ -124,19 +130,19 @@ func Workflow() *compiler.Definition {
 		if spec.reason == authoring.ReasonIndependentReview {
 			payload.ReviewSeries = authoring.ReviewSeriesUnaffiliated
 		}
-		step, err := authoring.NewAgentStep(header(spec.id, "validation", "review.readiness"), reviewIO(), payload)
+		step, err := authoring.NewAgentStep(header(spec.id, "validation", "development.plan"), reviewIO(), payload)
 		must(spec.id, err)
 		steps = append(steps, step)
 	}
-	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryExternalCapability, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: 0})
+	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "development.plan"), typedIO(), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryExternalCapability, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: 0})
 	must("candidate.materialize", err)
 	steps = append(steps, candidate)
 	for _, name := range []string{"workspace", "cleanup"} {
-		step, err := authoring.NewHostActionStep(header(name+".materialize", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: authoring.HandlerID("engine." + name), Boundary: authoring.BoundaryExternalCapability, Operation: authoring.OperationID("op." + name), Schema: authoring.SchemaID("schema." + name), Timeout: 0})
+		step, err := authoring.NewHostActionStep(header(name+".materialize", "validation", "development.plan"), typedIO(), authoring.HostActionSpec{Handler: authoring.HandlerID("engine." + name), Boundary: authoring.BoundaryExternalCapability, Operation: authoring.OperationID("op." + name), Schema: authoring.SchemaID("schema." + name), Timeout: 0})
 		must(name, err)
 		steps = append(steps, step)
 	}
-	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 0})
+	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "development.plan"), typedIO(), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 0})
 	must("check.execute", err)
 	steps = append(steps, check)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}

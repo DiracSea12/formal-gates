@@ -171,7 +171,7 @@ func sameGateSet(a, b []string) bool {
 
 // validateRouteDecision 校验路线决定的形状：候选列表不得含合并验证（合并
 // 验证只在拆分运行中自动附加）；default/full 携带显式完整候选全集且
-// Selected 为空；custom 携带非空、无重复、逐项属于候选列表的选择，可选全集。
+// Selected 为空；custom 携带可为空、无重复、逐项属于候选列表的选择，可选全集。
 // full 对内建 QA 模式的要求与 child 候选不含 QA 的约束依赖 run 形
 // 态，在 SELECT_ROUTE 接纳层判定（admitReviewDecision）。
 func validateRouteDecision(route *RouteDecision) error {
@@ -185,9 +185,6 @@ func validateRouteDecision(route *RouteDecision) error {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "full route selects the complete gate list without a subset"}
 		}
 	case routeModeCustom:
-		if len(route.Selected) == 0 {
-			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "custom route must select at least one candidate"}
-		}
 		seen := make(map[string]bool, len(route.Selected))
 		for _, gate := range route.Selected {
 			if seen[gate] {
@@ -255,9 +252,8 @@ func (s *State) effectivePass(series review.Series) bool {
 	return series.Effective.Status == reviewStatusPass && !series.FreshOwed && !s.reviewDispositionPending(series) && !s.reviewVerificationPending(series.Action) && s.confirmedRequirementRevision(series.Effective.RequirementRevision)
 }
 
-// dualReviewPass 报告双 series 的 effective 结论是否都是携带已确认
-// revision 的 PASS——进入开发的门（SELECT_ROUTE 接纳与 TOPOLOGY_AND_ROUTE
-// 推进）以它为准：任一审查重新阻塞或被重走置 PENDING 时门保持关闭。
+// dualReviewPass reports actual effective PASS for both review series, including
+// confirmed revision and freshness checks. Workflow choices are checked separately.
 func (s *State) dualReviewPass() bool {
 	return s.effectivePass(s.ReviewSeries.ProductReview) && s.effectivePass(s.ReviewSeries.StartReadiness)
 }
@@ -322,7 +318,7 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 			Detail: fmt.Sprintf("confirmed blocking finding on %s requires a changed and reconfirmed requirement revision before a fresh round", evidence.Action),
 		}
 	}
-	if evidence.Action == review.StartReadiness && !s.effectivePass(s.ReviewSeries.ProductReview) {
+	if evidence.Action == review.StartReadiness && !s.preDevelopmentReviewSatisfied(review.ProductReview) {
 		return &RejectedError{
 			Code: CodeReviewSequenceGate,
 			Detail: fmt.Sprintf("start-readiness evidence requires a carried product-review PASS at a confirmed requirement revision (current: %s bound to %q)",
@@ -373,6 +369,12 @@ func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidenc
 		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 	}
 	if pipelineEnabled(state, e.cfg.Definition) && evidence.Action == review.StartReadiness && evidence.Status == "PASS" {
+		if !state.FlowNodeEnabled("development") {
+			if evidence.GranularityReview != nil {
+				return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "a disabled development node does not prepare a development plan"}
+			}
+			return nil
+		}
 		if err := ValidateGranularity(evidence.GranularityReview); err != nil {
 			return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
@@ -519,9 +521,8 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if state.Topology != nil {
 			return reviewReject(fmt.Errorf("topology is already bound and is the binding point; it is not re-cut (change goes through requirement change, reset, or abort)"))
 		}
-		if !state.effectivePass(state.ReviewSeries.StartReadiness) {
-			return reviewReject(fmt.Errorf("topology confirmation requires a carried start-readiness PASS at a confirmed requirement revision (current: %s bound to %q)",
-				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
+		if !state.PreDevelopmentReviewsSatisfied() || !state.readinessPreparationReady() {
+			return reviewReject(fmt.Errorf("topology confirmation requires selected pre-development reviews and current development preparation"))
 		}
 		decision := payload.Topology
 		binding, err := state.topologyBinding(decision)
@@ -594,13 +595,8 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if state.Topology == nil {
 			return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))
 		}
-		// 进入开发的双审门：拓扑确认后任一审查重新阻塞（纠正升 P1、级联
-		// 上游失效、重走置 PENDING）时，路线选择保持关闭，直到双 series
-		// 重新携已确认 revision 的 effective PASS。
-		if !state.dualReviewPass() {
-			return reviewReject(fmt.Errorf("route selection requires both pre-development reviews effective PASS carried at confirmed requirement revisions (current: product %s bound to %q, start-readiness %s bound to %q)",
-				state.ReviewSeries.ProductReview.Effective.Status, state.ReviewSeries.ProductReview.Effective.RequirementRevision,
-				state.ReviewSeries.StartReadiness.Effective.Status, state.ReviewSeries.StartReadiness.Effective.RequirementRevision))
+		if !state.PreDevelopmentReviewsSatisfied() || !state.readinessPreparationReady() {
+			return reviewReject(fmt.Errorf("route selection requires selected pre-development reviews and current development preparation"))
 		}
 		route := payload.Route
 		if err := e.validatePlanConfirmation(state, route); err != nil {
@@ -652,11 +648,9 @@ func parseDecisionChoice(choice AskOptionID) (decision, findingID string, ok boo
 
 // ---- run phase 门控与账本一致性 ----
 
-// advanceReviewPhases 沿静态边表逐边推进 run phase：每个门的条件都能从
-// 持久账本重算（受理回执、携已确认 revision 的双审 effective、拓扑/路线
-// 绑定）。在会改变审查账本/拓扑/路线的同一提交事务内调用；条件不满足时
-// 静默留置（这不是错误）。START_READINESS→TOPOLOGY_AND_ROUTE 与上一边
-// 同条件连续放行（readiness 是确定性判定，无独立数据面）。
+// advanceReviewPhases follows the static phase edges using selected reviews,
+// current preparation and confirmed topology/route facts. Disabled reviews do
+// not acquire a review result; missing preparation leaves START_READINESS open.
 func (s *State) advanceReviewPhases() error {
 	for {
 		var target runtime.RunPhase
@@ -666,23 +660,21 @@ func (s *State) advanceReviewPhases() error {
 				target = runtime.PhaseProductReview
 			}
 		case runtime.PhaseProductReview:
-			if s.effectivePass(s.ReviewSeries.ProductReview) {
+			if s.preDevelopmentReviewSatisfied(review.ProductReview) {
 				target = runtime.PhaseTechnicalReview
 			}
 		case runtime.PhaseTechnicalReview:
-			if s.effectivePass(s.ReviewSeries.StartReadiness) {
+			if s.preDevelopmentReviewSatisfied(review.StartReadiness) {
 				target = runtime.PhaseStartReadiness
 			}
 		case runtime.PhaseStartReadiness:
-			if s.effectivePass(s.ReviewSeries.StartReadiness) {
+			if s.readinessPreparationReady() {
 				target = runtime.PhaseTopologyAndRoute
 			}
 		case runtime.PhaseTopologyAndRoute:
-			// 进入开发的双审门与 SELECT_ROUTE 接纳同条件：账本只能证明
-			// 双 series 携已确认 revision 的 effective PASS 时才推进
-			//（child 经继承等价满足后照常放行）。merge 路线的保留总任务
-			// 实例不进开发——停等 children，合并验证属收尾。
-			if s.Topology != nil && s.RouteMode != "" && s.RouteMode != routeModeMerge && s.dualReviewPass() {
+			// The route stays closed until selected reviews and preparation are
+			// satisfied. A retained merge master waits for its children.
+			if s.Topology != nil && s.RouteMode != "" && s.RouteMode != routeModeMerge && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady() {
 				target = runtime.PhaseDevelopmentParallel
 			}
 		}
@@ -696,7 +688,7 @@ func (s *State) advanceReviewPhases() error {
 }
 
 // phaseLedgerFloor 重算账本能证明的最远主线 phase：每个门留下的 residue
-// 都是单调的持久事实（受理回执、完成过的审查轮、拓扑/路线确认决定）。
+// 都是持久事实（受理回执、节点选择、完成过的审查/准备、拓扑/路线确认决定）。
 // effective 投影会随新的阻塞轮或需求修订重走合法回落，当前绑定会按用户
 // 勾选的重走范围解除，但不会抹掉"该阶段曾经走完"的事实，因此 residue
 // 不以当前 effective 或当前绑定为准。child 的审查阶段 residue 由继承事实
@@ -707,8 +699,14 @@ func (s *State) phaseLedgerFloor() int {
 		floor = 1
 	}
 	inherited := s.SliceChild != nil
-	if s.hasReviewRounds(review.ProductReview) || inherited {
+	if s.hasReviewRounds(review.ProductReview) || inherited || floor >= 1 && !s.FlowNodeEnabled(string(review.ProductReview)) {
 		floor = 2
+	}
+	if floor >= 2 && !s.FlowNodeEnabled(string(review.StartReadiness)) {
+		floor = 3
+		if !s.FlowNodeEnabled("development") || s.stepCompleted("development.plan") || s.readinessPreparationReady() {
+			floor = 4
+		}
 	}
 	if s.hasReviewRounds(review.StartReadiness) || inherited {
 		// start-readiness 的 TECHNICAL_REVIEW→START_READINESS→
@@ -804,6 +802,9 @@ func (s *State) verifyPhaseAgainstLedgers() error {
 // 需求 revision 账本的结构链并校验 phase 一致性：篡改的账本或越门的
 // phase 在此可区分拒绝。
 func verifyReviewIntegrity(state *State) error {
+	if err := ValidateFlowSelection(state.FlowSelection); err != nil {
+		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: err.Error()}
+	}
 	if err := review.Validate(state.RunID, state.ReviewSeries); err != nil {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: fmt.Sprintf("review ledger: %v", err)}
 	}

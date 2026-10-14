@@ -464,6 +464,7 @@ type LifecycleEventRecord struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	FlowSelection        *FlowSelection            `json:"flowSelection,omitempty"`
 	TaskMessages         map[string]TaskMessage    `json:"taskMessages,omitempty"`
 	Settings             *settings.Effective       `json:"settings,omitempty"`
 	StartedAt            string                    `json:"startedAt,omitempty"`

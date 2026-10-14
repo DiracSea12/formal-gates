@@ -45,6 +45,7 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 // WorkerInput is a projection of an issued action, not another work ledger.
 // Review and Validation carry their existing owners' exact business context.
 type WorkerInput struct {
+	DevelopmentDisabled      bool                                    `json:"developmentDisabled,omitempty"`
 	RequirementPoints        []requirement.Point                     `json:"requirementPoints"`
 	Intake                   *IntakeConfirmationReceipt              `json:"intake,omitempty"`
 	Materials                []IntakeMaterial                        `json:"materials,omitempty"`
@@ -127,6 +128,9 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 		return WorkerInput{}, false
 	}
 	input := WorkerInput{Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, Handler: string(payload.Handler), InputCodec: step.IO.InputCodec, OutputCodec: step.IO.OutputCodec, RequirementDocument: s.Validation.Document}
+	if pending.ReviewSeries == review.StartReadiness {
+		input.DevelopmentDisabled = !s.FlowNodeEnabled("development")
+	}
 	if s.SliceChild != nil {
 		input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
 	}
@@ -147,7 +151,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair.v7" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v7" || input.Handler == "engine.development.plan.v1" || input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled {
 		for _, check := range s.fullProjectChecks() {
 			if check.Command != "" {
 				input.ApprovedChecks = append(input.ApprovedChecks, check)
@@ -165,7 +169,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			}
 		}
 	}
-	if input.Handler == "engine.repair.v7" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v7" || input.Handler == "engine.development.plan.v1" || input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled {
 		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
 	}
 	input.RequirementPoints = s.workerRequirementPoints(input)

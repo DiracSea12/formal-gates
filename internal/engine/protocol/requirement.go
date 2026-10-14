@@ -245,6 +245,9 @@ func (e *Engine) bindRequirementPackage(state *State, ev Event, revision, nextRe
 	if ask.BaseRevision != state.RequirementRevision() || ask.BaseGeneration != state.requirementGeneration() {
 		return Acceptance{}, nil, false, &RejectedError{Code: CodeRequirementAskExpired, Detail: "requirement package update is based on a superseded confirmation"}
 	}
+	if err := state.validateRequirementRedoScope(*ev.Request.Package); err != nil {
+		return Acceptance{}, nil, false, err
+	}
 	if err := e.validateRequirementWork(state, ev.Request.Package.WorkDecisions, true); err != nil {
 		return Acceptance{}, nil, false, err
 	}
@@ -528,6 +531,9 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement change choice %q invalid (closed set: proceed, abort)", choice)}
 	}
 	payload := decide.Requirement
+	if err := state.validateRequirementRedoScope(payload.packageView()); err != nil {
+		return err
+	}
 	reject := func(detail string) error {
 		return &RejectedError{Code: CodeRequirementDecisionRejected, Detail: detail}
 	}
@@ -804,8 +810,19 @@ func requirementRedoScope(payload *RequirementDecisionPayload) []string {
 
 	return scope
 }
+
+func (s *State) validateRequirementRedoScope(pkg RequirementDecisionPackage) error {
+	if pkg.RedoProductReview && !s.FlowNodeEnabled(string(review.ProductReview)) {
+		return validationError("requirement redo cannot enable disabled product-review")
+	}
+	if pkg.RedoStartReadiness && !s.FlowNodeEnabled(string(review.StartReadiness)) {
+		return validationError("requirement redo cannot enable disabled start-readiness")
+	}
+	return nil
+}
 func planReconfirmation(source, classification string, scope []string) bool {
-	return source == RequirementSourceUserInitiated && classification == RequirementClassificationPreserved && len(scope) == 2 && slices.Contains(scope, string(review.StartReadiness)) && slices.Contains(scope, "route")
+	return source == RequirementSourceUserInitiated && classification == RequirementClassificationPreserved &&
+		slices.Contains(scope, "route") && (len(scope) == 1 || len(scope) == 2 && slices.Contains(scope, string(review.StartReadiness)))
 }
 
 // requirementMaterialsChanged compares the confirmed file identities, not receipt metadata.

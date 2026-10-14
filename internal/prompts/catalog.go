@@ -14,7 +14,7 @@ import (
 
 var IDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-var RequiredActionIDs = []string{"development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "start-readiness", "validation-observation"}
+var RequiredActionIDs = []string{"development-plan", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "start-readiness", "validation-observation"}
 
 var roleRuleIDs = []string{"gate", "qa", "qa-design-blackbox", "qa-design-whitebox", "qa-execution-blackbox", "qa-execution-whitebox", "qa-review-blackbox", "qa-review-whitebox"}
 

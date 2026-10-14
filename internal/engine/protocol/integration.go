@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
@@ -231,7 +232,9 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 			paths = append(paths, change.Path)
 		}
 	}
-	paths = append(paths, ".gates/results/"+s.RunID+".merge-cases.md")
+	if slices.Contains(s.validationKinds(), coverage.ReviewMerge) {
+		paths = append(paths, ".gates/results/"+s.RunID+".merge-cases.md")
+	}
 	var tasks []runtime.TaskKey
 	for _, work := range s.repairWork() {
 		if work.result == nil && len(s.repairMembers(work.wave)) == 1 && s.requirementRevisionForTask(work.task) != "" {

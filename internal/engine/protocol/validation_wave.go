@@ -41,7 +41,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 	}
 	// Accepted abort retires ordinary delivery obligations; native failure
 	// facts above remain authoritative until their effects are reconciled.
-	if s.abortRequested() || !s.dualReviewPass() {
+	if s.abortRequested() || !s.PreDevelopmentReviewsSatisfied() || !s.readinessPreparationReady() {
 		return
 	}
 	message := ""
@@ -49,6 +49,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 	// readiness 提案（无待确认提案即提示）；child 的片内计划随路线决定内
 	// 联确认（development_plan.go），选完路线即进入需求文档/波次边界。
 	developmentPlanPending := func() bool {
+		if !s.FlowNodeEnabled("development") {
+			return false
+		}
 		_, p, _ := s.confirmedDevelopmentPlan()
 		return p == nil || !s.developmentPlanCurrent(p)
 	}
@@ -65,7 +68,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 	} else if s.SliceChild == nil && (s.Topology == nil || s.RouteMode == "") {
 		message = "confirm topology and select route"
 	} else if s.SliceChild == nil && !s.mergeMaster() && developmentPlanPending() {
-		message = "confirm the current readiness development plan with the route"
+		message = "confirm the current development plan with the route"
 	} else if !s.validationRequirementCurrent() {
 		message = "submit confirmed REQUIREMENT document via OPERATOR_OBSERVATION.validation"
 	} else if w := s.currentValidationWave(); w != nil {
@@ -541,6 +544,9 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		case mergeQAGateID:
 			mode = coverage.ReviewMerge
 		}
+		if mode != "" && !s.FlowNodeEnabled("qa") || mode == "" && !s.FlowNodeEnabled("gate") {
+			continue
+		}
 		target := &ValidationTarget{Status: "PENDING", Gate: gate, Kind: "GATE"}
 		handler := "engine.gate.v3"
 		part := gate
@@ -792,6 +798,11 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 			return true, nil
 		}
 		return false, nil
+	}
+	if !s.FlowNodeEnabled("repair") {
+		changed := w.Status != "ADJUDICATING"
+		w.Status = "ADJUDICATING"
+		return changed, nil
 	}
 
 	task := pipelineTask(e.cfg.Definition, "engine.repair.v7", w.Candidate.Identity)

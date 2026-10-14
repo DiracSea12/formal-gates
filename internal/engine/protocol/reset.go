@@ -324,7 +324,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	d.Reset.Applied = true
 	s.Decisions[d.RequestID] = d
 	request := "reset-confirm:" + d.RequestID
-	pkg := &RequirementDecisionPackage{Intake: preview.Intake, Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
+	pkg := &RequirementDecisionPackage{Intake: preview.Intake, Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil && s.FlowNodeEnabled(string(review.ProductReview)), RedoStartReadiness: s.SliceChild == nil && s.FlowNodeEnabled(string(review.StartReadiness)), ResetRequestID: d.RequestID}
 	for _, work := range s.requirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkRedo
 		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v6" {

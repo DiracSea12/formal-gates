@@ -37,6 +37,7 @@ type DispatchClaim func(runID, actionID, identity, provider string) error
 // ClaimDispatch 是派发签出时的 lifecycle 绑定建立回调（与 CostSource 同一注
 // 入模式，protocol 不持 lifecycle 依赖）。
 type Config struct {
+	FlowSelection        *FlowSelection
 	Settings             *settings.Effective
 	RequirementGuarantee *GuaranteeActivation
 	VCSName              string
@@ -76,6 +77,9 @@ func New(store *persistence.Store, cfg Config) (*Engine, error) {
 	}
 	if cfg.Capacity < 0 {
 		return nil, fmt.Errorf("protocol: config Capacity %d invalid", cfg.Capacity)
+	}
+	if err := ValidateFlowSelection(cfg.FlowSelection); err != nil {
+		return nil, err
 	}
 	if err := ValidateDefinitionConditions(cfg.Definition); err != nil {
 		return nil, err
@@ -136,6 +140,9 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 		return &RejectedError{Code: CodeAlreadyInitialized, Detail: "engine state already exists"}
 	}
 	state := NewState(*view)
+	if e.cfg.FlowSelection != nil {
+		state.FlowSelection = &FlowSelection{Disabled: slices.Clone(e.cfg.FlowSelection.Disabled)}
+	}
 	state.RunProvider = provider
 	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	state.Settings = e.cfg.Settings
@@ -149,6 +156,13 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 	state.IntakeConfirmationReceipt = confirmation
 	state.RequirementGuarantee = e.cfg.RequirementGuarantee
 	if sliceStart != nil {
+		if err := ValidateFlowSelection(sliceStart.FlowSelection); err != nil {
+			return err
+		}
+		state.FlowSelection = nil
+		if sliceStart.FlowSelection != nil {
+			state.FlowSelection = &FlowSelection{Disabled: slices.Clone(sliceStart.FlowSelection.Disabled)}
+		}
 		binding := sliceStart.Binding
 		state.SliceChild = &binding
 		topology := copyTopology(sliceStart.Topology)
@@ -443,7 +457,7 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 	for _, finding := range s.pendingReviewCorrections() {
 		view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: finding.Digest, Value: "Clarify the correction for this confirmed finding and prepare its complete review delta: " + finding.Message})
 	}
-	view.Suspended = pipelineEnabled(s, compiled) && s.dualReviewPass() && !s.validationRequirementCurrent() || !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
+	view.Suspended = pipelineEnabled(s, compiled) && s.PreDevelopmentReviewsSatisfied() && !s.validationRequirementCurrent() || !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
 	for actionID, receipt := range s.SpawnReceipts {
 		if receipt.Status != SpawnStatusUnknown || !s.liveDispatch(actionID) {
 			continue
@@ -475,6 +489,9 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 		mark := review.Action(payload.ReviewSeries)
 		seriesOf[step.Header.ID] = mark
 		view.RequiredTasks[step.Header.ID] = nil
+		if !s.FlowNodeEnabled(string(mark)) {
+			continue
+		}
 		carriers[mark] = append(carriers[mark], step)
 	}
 	coveredSteps := func(mark review.Action) []authoring.StepID {
@@ -577,6 +594,7 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 			}
 		}
 	}
+	s.projectFlowSelection(&view, compiled)
 	return view
 }
 
@@ -1075,11 +1093,14 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 // redo obligation. A failed review awaits finding disposition; remaining
 // capacity or an extra authorization does not itself request another review.
 func (s *State) reviewRoundOwed(mark review.Action) bool {
+	if !s.FlowNodeEnabled(string(mark)) {
+		return false
+	}
 	series, ok := s.ReviewSeries.Series(mark)
 	if !ok || s.effectivePass(series) {
 		return false
 	}
-	if mark == review.StartReadiness && (!s.effectivePass(s.ReviewSeries.ProductReview) || series.UpstreamVoid) {
+	if mark == review.StartReadiness && (!s.preDevelopmentReviewSatisfied(review.ProductReview) || series.UpstreamVoid) {
 		return false
 	}
 	if series.Effective.RequirementRevision == s.RequirementRevision() && review.HasConfirmedBlocking(series) {
@@ -1264,6 +1285,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.Request.Control == ControlRequestRequirementChange {
 			if ev.Request.Package != nil {
+				if err := state.validateRequirementRedoScope(*ev.Request.Package); err != nil {
+					return Acceptance{}, nil, false, err
+				}
 				if err := e.validateRequirementWork(state, ev.Request.Package.WorkDecisions, true); err != nil {
 					return Acceptance{}, nil, false, err
 				}

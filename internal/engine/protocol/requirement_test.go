@@ -40,6 +40,39 @@ func requirementPackageOf(payload *RequirementDecisionPayload) RequirementDecisi
 	return payload.packageView()
 }
 
+func TestUnchangedRequirementConfirmationKeepsPlanScope(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		payload  RequirementDecisionPayload
+		accepted bool
+	}{
+		{name: "route", payload: RequirementDecisionPayload{RedoRoute: true}, accepted: true},
+		{name: "technical-review-and-route", payload: RequirementDecisionPayload{RedoStartReadiness: true, RedoRoute: true}, accepted: true},
+		{name: "no-plan-scope"},
+		{name: "technical-review-only", payload: RequirementDecisionPayload{RedoStartReadiness: true}},
+		{name: "product-review-and-route", payload: RequirementDecisionPayload{RedoProductReview: true, RedoRoute: true}},
+		{name: "topology-and-route", payload: RequirementDecisionPayload{RedoTopology: true, RedoRoute: true}},
+		{name: "changed-meaning", payload: RequirementDecisionPayload{RedoRoute: true, Classification: RequirementClassificationChanged}},
+		{name: "finding-driven", payload: RequirementDecisionPayload{RedoRoute: true, Source: RequirementSourceReviewFindingP2, FindingDigest: "confirmed-finding"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := tc.payload
+			payload.BaseRevision, payload.CandidateRevision = "same-requirement", "same-requirement"
+			payload.DeltaDigest, payload.ImpactDigest, payload.Reason = "confirmed-delta", "confirmed-impact", "confirm the unchanged requirement and displayed plan scope"
+			if payload.Source == "" {
+				payload.Source = RequirementSourceUserInitiated
+			}
+			if payload.Classification == "" {
+				payload.Classification = RequirementClassificationPreserved
+			}
+			_, err := NewRequirementDecideEvent("confirm-plan", "plan-ask", "fresh-token", "proceed", payload)
+			if (err == nil) != tc.accepted {
+				t.Fatalf("unchanged requirement confirmation accepted=%t, error=%v", tc.accepted, err)
+			}
+		})
+	}
+}
+
 // reviewEvidenceAt 构造绑定任意需求 revision 的审查证据。
 func reviewEvidenceAt(action review.Action, dispatchID, revision, status, message string, findings []review.Finding) ReviewResultEvidence {
 	return ReviewResultEvidence{

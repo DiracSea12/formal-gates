@@ -31,6 +31,9 @@ func (s *State) repairMembers(w *ValidationWave) []repairWork {
 // Executions project the same member chain, including its exact predecessor
 // source. No execution history is stored outside the result and issue owners.
 func (s *State) repairExecutions(w *ValidationWave) []repairWork {
+	if !s.FlowNodeEnabled("repair") {
+		return nil
+	}
 	task := s.replacementFold(w.Repair.Task)
 	var proposal *WorkerResult
 	for _, r := range s.Results {
@@ -95,7 +98,7 @@ func (s *State) repairRoute(work repairWork) RouteDecision {
 }
 
 func (s *State) repairGates(work repairWork) []string {
-	if work.verification || work.wave.Repair.PureP2 || work.pureP2 || work.plan == nil || len(work.plan.Batches) == 1 {
+	if !s.FlowNodeEnabled("gate") || work.verification || work.wave.Repair.PureP2 || work.pureP2 || work.plan == nil || len(work.plan.Batches) == 1 {
 		return nil
 	}
 	route := s.repairRoute(work)
@@ -418,6 +421,9 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 }
 
 func (s *State) repairCompleted(w *ValidationWave, cd *compiler.CompiledDefinition) bool {
+	if !s.FlowNodeEnabled("repair") {
+		return false
+	}
 	hasComparisonCases := false
 	for _, member := range s.repairMembers(w) {
 		result := s.developmentResultRecord(member.task)

@@ -51,7 +51,7 @@ func TestRepairRoutesPreserveCompleteAndSubsetMeaning(t *testing.T) {
 		{name: "full", route: RouteProposal{Mode: "full"}},
 		{name: "custom", route: RouteProposal{Mode: "custom", Selected: []int{2}}, selected: []string{"complexity"}},
 		{name: "full-subset", route: RouteProposal{Mode: "full", Selected: []int{1, 2}}, invalid: true},
-		{name: "custom-empty", route: RouteProposal{Mode: "custom"}, invalid: true},
+		{name: "custom-empty", route: RouteProposal{Mode: "custom"}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			batch.Route = &sample.route

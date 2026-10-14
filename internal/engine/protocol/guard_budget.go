@@ -103,7 +103,7 @@ func (e *Engine) guardEngaged(state *State) bool {
 		return false
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
-	return plan != nil || state.mergeMaster()
+	return plan != nil || state.mergeMaster() || !state.FlowNodeEnabled("development")
 }
 
 // guardBasis 是 Basis 构造单点：从权威 State 构造 guard.Basis（guard 纯核心不
@@ -134,12 +134,15 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		return guard.Basis{}, fmt.Errorf("guard budget: topology and route bindings are required before the dispatch budget applies")
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
-	if plan == nil && !state.mergeMaster() {
+	if plan == nil && !state.mergeMaster() && state.FlowNodeEnabled("development") {
 		return guard.Basis{}, fmt.Errorf("guard budget: no confirmed development plan backs the dispatch budget")
 	}
 	batchIdentity := guard.Identity{ID: "development-plan", Revision: planContractDigest(plan)}
 	if state.mergeMaster() && len(state.planTasks(e.cfg.Definition)) == 0 {
 		batchIdentity = guard.Identity{ID: "merge-topology", Revision: digestOfCanonical(state.Topology)}
+	}
+	if !state.FlowNodeEnabled("development") {
+		batchIdentity = guard.Identity{ID: "topology", Revision: digestOfCanonical(state.Topology)}
 	}
 	routeDigest := state.validationRouteDigest()
 	basis := guard.Basis{
@@ -223,6 +226,11 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		attempts := maxAttempts
 		basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: task, Provenance: provenance, MaxAttempts: &attempts})
 		return nil
+	}
+	for _, required := range state.developmentPlanTasks(e.cfg.Definition) {
+		if err := declare(required.Task); err != nil {
+			return guard.Basis{}, err
+		}
 	}
 	if input := state.validationObservationInput(); input != nil {
 		if _, registered := pipelineStep(e.cfg.Definition, "engine.validation.observation.v2"); registered {
@@ -448,6 +456,12 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		maxAttempts = attempt.MaxAttempts
 	}
 	switch role {
+	case "engine.development.plan.v1":
+		data, err := encoder.Encode(e.cfg.Definition)
+		if err != nil {
+			return guard.Provenance{}, 0, false
+		}
+		return guard.Provenance{Kind: guard.DefinitionSource, Identity: guard.Identity{ID: encoder.Digest(data), Revision: string(e.cfg.Definition.Version)}}, maxAttempts, true
 	case "engine.validation.observation.v2":
 		if input := state.validationObservationInput(); input != nil && source == observationTask(e.cfg.Definition, input) {
 			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
@@ -809,7 +823,16 @@ func (e *Engine) guardIssuanceGate(state *State) func(decision.IssuedSet) error 
 	return func(issued decision.IssuedSet) error {
 		var governed []decision.IssuedAction
 		for _, action := range issued {
-			if state.validationRole(action.Task, e.cfg.Definition) != "" {
+			role := state.validationRole(action.Task, e.cfg.Definition)
+			if role == "engine.development.plan.v1" {
+				if !slices.ContainsFunc(state.developmentPlanTasks(e.cfg.Definition), func(task decision.RequiredTask) bool { return task.Task == action.Task }) {
+					return &RejectedError{Code: CodeGuardAllowanceBlocked, Detail: "development preparation is outside the selected current obligation"}
+				}
+				if !e.guardEngaged(state) {
+					continue
+				}
+			}
+			if role != "" {
 				governed = append(governed, action)
 			}
 		}

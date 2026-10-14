@@ -726,6 +726,61 @@ func TestNodeContinuationKeepsIndependentDesignRunningDuringDeveloperStop(t *tes
 	}
 }
 
+func TestNodeContinuationCarriedReviewSurvivesReplayAndHonorsRedo(t *testing.T) {
+	for _, target := range []string{"qa-review:BLACKBOX", "qa-design:BLACKBOX", "requirement-review", "requirement-design"} {
+		t.Run(target, func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+			dev, _ := d.action("engine.development.batch.v6")
+			design, input := d.action("engine.qa.design.v6")
+			d.receipt(dev)
+			d.receipt(design)
+			continueBusinessNode(d, "development:command")
+			manifest := simpleManifest(input)
+			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: design, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "independent-design-completed", Validation: &protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest}}})
+			d.completeWorkerTerminations()
+			d.drive()
+			reviewer, reviewInput := d.action("engine.qa.review.rationale.v2")
+			d.receipt(reviewer)
+			before := driverState(t, d)
+			d.drive()
+			d.reopen()
+			d.drive()
+			replayed, replayInput := d.action("engine.qa.review.rationale.v2")
+			if replayed != reviewer || !reflect.DeepEqual(replayInput, reviewInput) || !reflect.DeepEqual(driverState(t, d).HostActionReceipts, before.HostActionReceipts) {
+				t.Fatal("replay changed the carried review or repeated its native workspace")
+			}
+			nextHandler := "engine.qa.review.rationale.v2"
+			switch target {
+			case "requirement-review":
+				confirmValidationWork(d, reviewer)
+				nextHandler = "engine.qa.design.v6"
+			case "requirement-design":
+				confirmValidationWork(d, design)
+				nextHandler = "engine.qa.design.v6"
+			default:
+				continueBusinessNode(d, target)
+				if target == "qa-design:BLACKBOX" {
+					nextHandler = "engine.qa.design.v6"
+				}
+			}
+			d.completeWorkerTerminations()
+			d.drive()
+			fresh, freshInput := d.action(nextHandler)
+			if fresh == reviewer || freshInput.Binding.Task == reviewInput.Binding.Task {
+				t.Fatal("explicit redo retained the carried review responsibility")
+			}
+			approved := approvedReview(reviewInput.Manifest)
+			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: reviewer, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: "superseded-review-completed", Validation: &protocol.ValidationResult{Binding: reviewInput.Binding, Status: "PASS", Review: &approved}}})
+			state := driverState(t, d)
+			if _, accepted := state.Results[reviewer]; accepted || state.Validation.Sets[coverage.ReviewBlackbox].Status == "FROZEN" {
+				t.Fatal("superseded carried review froze the replacement source")
+			}
+		})
+	}
+}
+
 func TestNodeContinuationEntersOriginalRepairResponsibility(t *testing.T) {
 	d, original, action := nativeRepairReady(t, "P2")
 	d.receipt(action)

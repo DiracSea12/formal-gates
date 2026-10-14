@@ -34,6 +34,42 @@ func TestValidationTargetControlsPreserveFrozenExpectedSet(t *testing.T) {
 	}
 }
 
+func TestRepairMembersUseTheSelectedQualityRole(t *testing.T) {
+	cd := compiledCanonicalWorkflow(t)
+	for _, enabled := range []bool{true, false} {
+		s := &State{RunID: "run", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
+		if !enabled {
+			s.FlowSelection = &FlowSelection{Disabled: []string{"gate"}}
+		}
+		task := pipelineTask(cd, "engine.repair.v7", "candidate")
+		s.Validation = &Validation{Generation: 1, RequirementRevision: "confirmed", Waves: []ValidationWave{{ID: "repair", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}}
+		wave := &s.Validation.Waves[0]
+		plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "parser", Checks: []DevelopmentCheck{{ID: "parse", Command: "printf parsed"}}}, {ID: "logging", Checks: []DevelopmentCheck{{ID: "log", Command: "printf logged"}}}}}
+		s.Results["proposal"] = WorkerResult{ActionID: "proposal", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: task}, Status: OutcomePass, GranularityReview: plan}}
+		for _, member := range s.repairMembers(wave) {
+			action := member.batch.ID
+			binding := WorkBinding{Task: member.task, Generation: 1, RequirementRevision: "confirmed", WaveID: wave.ID, PlanRequest: "proposal", BatchID: member.batch.ID, WorkspaceID: action + ":workspace"}
+			s.Results[action] = WorkerResult{ActionID: action, Outcome: OutcomePass, Validation: &ValidationResult{Binding: binding, Status: OutcomePass, Development: &DevelopmentEvidence{Paths: []string{action + ".go"}, Summary: "completed declared member"}}}
+			s.DispatchBindings[action] = binding
+			recordDevelopmentChecksFixture(t, s, action, *member.batch)
+		}
+		s.ensureRepairGates(cd)
+		if len(wave.Repair.Targets) != map[bool]int{true: 2, false: 0}[enabled] {
+			t.Fatal("member gate owner created the wrong obligations", enabled, wave.Repair.Targets)
+		}
+		for _, member := range s.repairWork() {
+			if s.repairGatesComplete(member) == enabled {
+				t.Fatal("member barrier disagrees with real selected gate obligations", enabled)
+			}
+		}
+		for _, target := range wave.Repair.Targets {
+			if target.Status != "PENDING" || target.ResultAction != "" {
+				t.Fatal("gate selection manufactured a member approval", target)
+			}
+		}
+	}
+}
+
 func TestCandidateChildViewsUseFinalIssuedOwner(t *testing.T) {
 	s := &State{Validation: &Validation{Generation: 1, RequirementRevision: "req", Candidate: &coverage.ValidationCandidate{Identity: "candidate", Digest: "tree"}}, PendingHostActions: map[string]HostActionIntent{}, HostActionReceipts: map[string]HostActionReceipt{}}
 	for i, stage := range []string{"REVIEW_READY", "DEVELOPMENT"} {

@@ -356,7 +356,9 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 					return candidate, e
 				}
 				candidate.DevelopmentPlan = plan
-				topology.DevelopmentPlan = &plan.Confirmation
+				if plan != nil {
+					topology.DevelopmentPlan = &plan.Confirmation
+				}
 			}
 			event.Decide.Review = &protocol.ReviewDecisionPayload{Topology: &topology}
 		case protocol.ControlSelectRoute:
@@ -370,7 +372,9 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 				return candidate, e
 			}
 			candidate.DevelopmentPlan = plan
-			route.DevelopmentPlan = &plan.Confirmation
+			if plan != nil {
+				route.DevelopmentPlan = &plan.Confirmation
+			}
 			event.Decide.Review = &protocol.ReviewDecisionPayload{Route: &route}
 		case protocol.ControlReviewRoundGrant:
 			if choice == "grant" {

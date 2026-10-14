@@ -25,7 +25,7 @@ type repairWork struct {
 }
 
 func (s *State) repairWork() []repairWork {
-	if s.Validation == nil {
+	if s.Validation == nil || !s.FlowNodeEnabled("repair") {
 		return nil
 	}
 	required := s.requiredWorkTasks()

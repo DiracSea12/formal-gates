@@ -68,6 +68,42 @@ func completeSliceGates(t *testing.T, child *validationDriver) {
 	}
 }
 
+func TestSliceDisabledQualityRoleKeepsRealRouteAndEmptyGateEvidence(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	selection := &protocol.FlowSelection{Disabled: []string{"gate", "qa"}}
+	master := nativeMasterAt(t, root, base, nil, selection)
+	passPreDevelopmentReviews(t, master, splitCommandPlan())
+	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+	f, run, err := createdSliceFacade(t, master.f, "lane-core", OwnerBinding{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
+	child.confirmSliceRoute(protocol.RouteDecision{Mode: "full", Gates: []string{"quality", "security"}}, sliceLanePlan())
+	child.drive()
+	id, input := planBatchAction(child, "command")
+	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := batchEvidence(input)
+	evidence.Paths = append(evidence.Paths, "app_test.go")
+	child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	child.drive()
+	child.reopen()
+	state := driverState(t, child)
+	if state.Phase != runtime.PhaseSliceReady || state.FlowNodeEnabled("gate") || len(state.SelectedGates) != 2 {
+		t.Fatal("child lost its inherited quality selection or real route", state.Phase, state.FlowSelection, state.SelectedGates)
+	}
+	receipt := readSliceReceipt(t, child).Receipt
+	if len(receipt.SelectedGates) != 2 || len(receipt.Validation.Results) != 0 || receipt.Validation.Status != "COMPLETE" {
+		t.Fatal("child demanded or fabricated disabled gate results", receipt.Validation)
+	}
+	if targets := state.Validation.Waves[len(state.Validation.Waves)-1].Targets; len(targets) != 0 {
+		t.Fatal("disabled child gate retained targets", targets)
+	}
+}
+
 // promotedSlice drives selected gates and binds the verified final native delivery.
 func promotedSlice(t *testing.T, mode string, owner OwnerBinding) *validationDriver {
 	t.Helper()
