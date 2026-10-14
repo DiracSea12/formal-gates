@@ -227,24 +227,3 @@ func dropDep(d *compiler.Definition, i int, dep string) bool {
 	})
 	return ok && removed
 }
-
-// dropBinding 从指定 local 步骤的 input bindings 中移除一个来源并写回；
-// 返回是否移除成功（仅 local 变体需要：dependency 类变异只作用于 local 步）。
-func dropBinding(d *compiler.Definition, i int, from string) bool {
-	s, ok := d.Steps[i].(authoring.LocalStep)
-	if !ok {
-		return false
-	}
-	out := s.IO.Inputs[:0]
-	removed := false
-	for _, b := range s.IO.Inputs {
-		if string(b.From) == from {
-			removed = true
-			continue
-		}
-		out = append(out, b)
-	}
-	s.IO.Inputs = out
-	d.Steps[i] = s
-	return removed
-}

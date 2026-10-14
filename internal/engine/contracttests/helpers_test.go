@@ -3,18 +3,17 @@
 package contracttests
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
-	"formal-gates/internal/engine/decision"
 )
 
 // ---- 夹具定义（六变体全覆盖 + 并行组 + 混合 authority） ----
@@ -55,15 +54,9 @@ func fxHeader(id, node string, deps ...string) authoring.Header {
 	}
 }
 
-// fxIO 构造合法共享 IO 段：每个依赖恰好一个 typed input binding。
-func fxIO(deps ...string) authoring.IO {
-	inputs := make([]authoring.InputBinding, 0, len(deps))
-	for _, d := range deps {
-		inputs = append(inputs, authoring.InputBinding{
-			From: authoring.StepID(d), OutputField: "out", ToField: "in",
-		})
-	}
-	return authoring.IO{InputCodec: "c.in", OutputCodec: "c.out", Inputs: inputs}
+// fxIO 构造夹具的 typed input/output codec 引用。
+func fxIO() authoring.IO {
+	return authoring.IO{InputCodec: "c.in", OutputCodec: "c.out"}
 }
 
 // mk*Step 系列是夹具用的 constructor 薄包装：失败即 Fatal（夹具步骤都应是
@@ -130,7 +123,7 @@ func fxParse(t *testing.T) authoring.LocalStep {
 
 func fxPersist(t *testing.T) authoring.DurableStep {
 	t.Helper()
-	return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO("s.parse"),
+	return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO(),
 		authoring.DurableSpec{
 			Handler: "h.s.persist", Idempotency: authoring.IdempotencyDeterministicInput,
 			Reconcile: "r.persist", Timeout: 30 * time.Second,
@@ -140,7 +133,7 @@ func fxPersist(t *testing.T) authoring.DurableStep {
 
 func fxDispatch(t *testing.T) authoring.HostActionStep {
 	t.Helper()
-	return mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
+	return mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO(),
 		authoring.HostActionSpec{
 			Handler: "h.s.dispatch", Boundary: authoring.BoundaryExternalCapability,
 			Operation: "op.x", Schema: "schema.x", Timeout: 5 * time.Second,
@@ -149,7 +142,7 @@ func fxDispatch(t *testing.T) authoring.HostActionStep {
 
 func fxReview(t *testing.T) authoring.AgentStep {
 	t.Helper()
-	io := fxIO("s.parse")
+	io := fxIO()
 	io.Postconditions = []authoring.PredicateRef{{ID: "pred.done"}}
 	return mkAgentStep(t, fxHeader("s.review", "n1", "s.parse"), io,
 		authoring.AgentSpec{
@@ -178,26 +171,26 @@ func fxFan(t *testing.T) authoring.ParallelStep {
 
 func fxLeft(t *testing.T) authoring.LocalStep {
 	t.Helper()
-	return mkLocalStep(t, fxHeader("s.left", "n2", "s.fan"), fxIO("s.fan"),
+	return mkLocalStep(t, fxHeader("s.left", "n2", "s.fan"), fxIO(),
 		authoring.LocalSpec{Handler: "h.s.left"})
 }
 
 func fxRight(t *testing.T) authoring.LocalStep {
 	t.Helper()
-	return mkLocalStep(t, fxHeader("s.right", "n2", "s.fan"), fxIO("s.fan"),
+	return mkLocalStep(t, fxHeader("s.right", "n2", "s.fan"), fxIO(),
 		authoring.LocalSpec{Handler: "h.s.right"})
 }
 
 func fxJoin(t *testing.T) authoring.LocalStep {
 	t.Helper()
 	return mkLocalStep(t, fxHeader("s.join", "n2", "s.left", "s.right"),
-		fxIO("s.left", "s.right"), authoring.LocalSpec{Handler: "h.s.join"})
+		fxIO(), authoring.LocalSpec{Handler: "h.s.join"})
 }
 
 func fxCost(t *testing.T) authoring.LocalStep {
 	t.Helper()
 	return mkLocalStep(t, fxHeader("s.cost", "n3", "s.join", "s.ask"),
-		fxIO("s.join", "s.ask"), authoring.LocalSpec{
+		fxIO(), authoring.LocalSpec{
 			Handler: "h.s.cost", Retry: &authoring.RetryPolicy{MaxAttempts: 2},
 		})
 }
@@ -231,7 +224,7 @@ func fxRegistryExtra(t *testing.T) *compiler.Registry {
 	return fxRegistryBase(t, true)
 }
 
-func fxRegistryBase(t *testing.T, extras bool) *compiler.Registry {
+func fxRegistryBase(t *testing.T, extras bool, skip ...string) *compiler.Registry {
 	t.Helper()
 	reg := compiler.NewRegistry()
 	handlers := []struct {
@@ -259,21 +252,27 @@ func fxRegistryBase(t *testing.T, extras bool) *compiler.Registry {
 			}{"h.newbiz", authoring.RunnerEngineLocal})
 	}
 	for _, h := range handlers {
+		if slices.Contains(skip, string(h.id)) {
+			continue
+		}
 		if err := reg.RegisterHandler(h.id, h.runner); err != nil {
 			t.Fatalf("fixture registry: %v", err)
 		}
 	}
-	regsitryMisc(t, reg, extras)
+	registryMisc(t, reg, extras, skip...)
 	return reg
 }
 
-func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
+func registryMisc(t *testing.T, reg *compiler.Registry, extras bool, skip ...string) {
 	t.Helper()
 	codecs := []authoring.CodecID{"c.in", "c.out"}
 	if extras {
 		codecs = append(codecs, "c.alt")
 	}
 	for _, id := range codecs {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterCodec(id); err != nil {
 			t.Fatal(err)
 		}
@@ -283,6 +282,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 		preds = append(preds, "pred.alt")
 	}
 	for _, id := range preds {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterPredicate(id); err != nil {
 			t.Fatal(err)
 		}
@@ -292,6 +294,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 		recs = append(recs, "r.alt")
 	}
 	for _, id := range recs {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterReconciler(id); err != nil {
 			t.Fatal(err)
 		}
@@ -301,6 +306,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 		schemas = append(schemas, "s.alt", "schema.alt")
 	}
 	for _, id := range schemas {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterSchema(id); err != nil {
 			t.Fatal(err)
 		}
@@ -310,6 +318,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 		ops = append(ops, "op.alt")
 	}
 	for _, id := range ops {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterOperation(id); err != nil {
 			t.Fatal(err)
 		}
@@ -319,6 +330,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 		asks = append(asks, "ask.alt")
 	}
 	for _, id := range asks {
+		if slices.Contains(skip, string(id)) {
+			continue
+		}
 		if err := reg.RegisterAskKind(id); err != nil {
 			t.Fatal(err)
 		}
@@ -328,74 +342,7 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 // fxRegistryWithout 返回缺少 skip 中列出 ID 的夹具 registry（模拟未注册）。
 func fxRegistryWithout(t *testing.T, skip ...string) *compiler.Registry {
 	t.Helper()
-	skipped := make(map[string]bool, len(skip))
-	for _, s := range skip {
-		skipped[s] = true
-	}
-	reg := compiler.NewRegistry()
-	for _, h := range []struct {
-		id     authoring.HandlerID
-		runner authoring.RunnerKind
-	}{
-		{"h.s.parse", authoring.RunnerEngineLocal},
-		{"h.s.persist", authoring.RunnerDurableActivity},
-		{"h.s.dispatch", authoring.RunnerHostAdapter},
-		{"h.s.review", authoring.RunnerAgentWorker},
-		{"h.s.left", authoring.RunnerEngineLocal},
-		{"h.s.right", authoring.RunnerEngineLocal},
-		{"h.s.join", authoring.RunnerEngineLocal},
-		{"h.s.cost", authoring.RunnerEngineLocal},
-	} {
-		if skipped[string(h.id)] {
-			continue
-		}
-		if err := reg.RegisterHandler(h.id, h.runner); err != nil {
-			t.Fatalf("fixture registry: %v", err)
-		}
-	}
-	for _, id := range []authoring.CodecID{"c.in", "c.out"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterCodec(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	for _, id := range []authoring.PredicateID{"pred.done"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterPredicate(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	for _, id := range []authoring.ReconcileID{"r.persist"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterReconciler(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	for _, id := range []authoring.SchemaID{"s.req", "s.resp", "schema.x"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterSchema(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	for _, id := range []authoring.OperationID{"op.x"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterOperation(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	for _, id := range []authoring.AskKindID{"confirm"} {
-		if !skipped[string(id)] {
-			if err := reg.RegisterAskKind(id); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	return reg
+	return fxRegistryBase(t, false, skip...)
 }
 
 func fxCompile(t *testing.T, def *compiler.Definition, reg *compiler.Registry) *compiler.CompiledDefinition {
@@ -509,29 +456,6 @@ func findStep(t *testing.T, cd *compiler.CompiledDefinition, id string) *compile
 	return nil
 }
 
-// fakeCollector 是 Observe 用例的可编程收集器。
-type fakeCollector struct {
-	src   decision.FactSource
-	facts []decision.Fact
-	err   error
-}
-
-func (c *fakeCollector) Source() decision.FactSource { return c.src }
-func (c *fakeCollector) Collect(*decision.State) ([]decision.Fact, error) {
-	return c.facts, c.err
-}
-
-// recordingStore 记录 SelectIssued 落账内容的 ActionStore 桩。
-type recordingStore struct {
-	sets []decision.IssuedSet
-	err  error
-}
-
-func (s *recordingStore) PersistIssued(set decision.IssuedSet) error {
-	s.sets = append(s.sets, set)
-	return s.err
-}
-
 // tamperArtifact 把制品字节经 map 修改后重新序列化（保持信封常量，除非用例
 // 刻意改写），用于 Decode 严格性用例。
 func tamperArtifact(t *testing.T, data []byte, mut func(m map[string]any)) []byte {
@@ -546,18 +470,4 @@ func tamperArtifact(t *testing.T, data []byte, mut func(m map[string]any)) []byt
 		t.Fatalf("tamper: marshal: %v", err)
 	}
 	return out
-}
-
-// canonicalEncode 与 encoder/decision/shadow 的 canonical 形态一致：JSON、
-// 2 空格缩进、不转义 HTML、恰一个尾随换行。
-func canonicalEncode(t *testing.T, v any) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		t.Fatalf("canonical encode: %v", err)
-	}
-	return buf.Bytes()
 }

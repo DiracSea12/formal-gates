@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
@@ -222,12 +221,14 @@ func validateRouteDecision(route *RouteDecision) error {
 
 // ---- 审查证据接纳（WORKER_RESULT 同事务） ----
 
-// confirmedRevisionGeneration finds the latest confirmation of this content.
+// confirmedRevisionGeneration finds the latest work authorization bound to
+// this confirmed content.
 // Content may recur; execution freshness is checked separately against the
 // dispatch's issuance generation, so reconfirmation cannot refresh old work.
 func (s *State) confirmedRevisionGeneration(revision string) (uint64, bool) {
-	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
-		entry := s.RequirementRevisions[i]
+	entries := s.workAuthorizations()
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
 		if (s.SliceChild == nil || i > 0) && entry.Revision == revision {
 			return entry.StateRevision, true
 		}
@@ -265,11 +266,11 @@ func (s *State) dualReviewPass() bool {
 // and redo floor before any worker content can consume an attempt. A carried
 // dispatch keeps its original confirmed revision; a redo requires fresh input.
 // The product-review sequence gate is temporary and can suspend result pairing.
-func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
+func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) error {
 	// 派发身份唯一事实：证据的 DispatchID 必须就是提交结果的 actionID
 	//（授权占用按真实派发判）。
 	if evidence.DispatchID != actionID {
-		return review.Set{}, &RejectedError{
+		return &RejectedError{
 			Code: CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("review evidence dispatch id %q does not match the dispatching action %q",
 				evidence.DispatchID, actionID),
@@ -277,25 +278,25 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 	}
 	series, _ := s.ReviewSeries.Series(evidence.Action)
 	if evidence.AuthorizationID != review.AuthorizationOfDispatch(series, actionID) && (evidence.AuthorizationID != "" || series.Completed >= series.AutomaticLimit) {
-		return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review authorization differs from its signed dispatch"}
+		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review authorization differs from its signed dispatch"}
 	}
 	if seriesInRedoStale(series) {
 		if evidence.RequirementRevision != s.RequirementRevision() {
-			return review.Set{}, &RejectedError{
+			return &RejectedError{
 				Code: CodeReviewEvidenceRejected,
 				Detail: fmt.Sprintf("%s is being redone; its fresh round must bind the current authoritative revision %q (evidence binds %q)",
 					evidence.Action, s.RequirementRevision(), evidence.RequirementRevision),
 			}
 		}
 		if issuedRevision < series.FreshFloor {
-			return review.Set{}, &RejectedError{
+			return &RejectedError{
 				Code: CodeReviewEvidenceRejected,
 				Detail: fmt.Sprintf("%s fresh round requires a dispatch issued at or after the redo decision (state revision >= %d; this dispatch was issued at %d)",
 					evidence.Action, series.FreshFloor, issuedRevision),
 			}
 		}
 	} else if generation, confirmed := s.confirmedRevisionGeneration(evidence.RequirementRevision); !confirmed {
-		return review.Set{}, &RejectedError{
+		return &RejectedError{
 			Code: CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("review evidence requirement revision %q is not a confirmed revision (current authoritative %q)",
 				evidence.RequirementRevision, s.RequirementRevision()),
@@ -304,7 +305,7 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 		// 重走系列的下界为最后一次重走确认代次；内容确认和派发签发
 		// 都不得早于它。内容 hash 的重复确认不改变历史派发的签发代次。
 		// floor 为零（从未重走）的系列两个比较恒假，carry 语义原样。
-		return review.Set{}, &RejectedError{
+		return &RejectedError{
 			Code: CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("%s was redone by the requirement decision at state revision %d; carried evidence must bind a revision confirmed at or after it and come from a dispatch issued at or after it (revision confirmed at %d, dispatch issued at %d)",
 				evidence.Action, series.FreshFloor, generation, issuedRevision),
@@ -316,23 +317,23 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 	// dismiss/降级清除阻塞，该路径不受本门槛约束）。series 的 effective
 	// 尚绑在旧 revision 时门槛自然关闭，新 revision 的新鲜轮自动放行。
 	if series.Effective.RequirementRevision == evidence.RequirementRevision && review.HasConfirmedBlocking(series) {
-		return review.Set{}, &RejectedError{
+		return &RejectedError{
 			Code:   CodeReviewEvidenceRejected,
 			Detail: fmt.Sprintf("confirmed blocking finding on %s requires a changed and reconfirmed requirement revision before a fresh round", evidence.Action),
 		}
 	}
 	if evidence.Action == review.StartReadiness && !s.effectivePass(s.ReviewSeries.ProductReview) {
-		return review.Set{}, &RejectedError{
+		return &RejectedError{
 			Code: CodeReviewSequenceGate,
 			Detail: fmt.Sprintf("start-readiness evidence requires a carried product-review PASS at a confirmed requirement revision (current: %s bound to %q)",
 				s.ReviewSeries.ProductReview.Effective.Status, s.ReviewSeries.ProductReview.Effective.RequirementRevision),
 		}
 	}
-	return s.ReviewSeries, nil
+	return nil
 }
 
 func (s *State) admitReviewEvidence(evidence *ReviewResultEvidence, actionID string, issuedRevision uint64) (review.Set, error) {
-	if _, err := s.reviewAdmission(evidence, actionID, issuedRevision); err != nil {
+	if err := s.reviewAdmission(evidence, actionID, issuedRevision); err != nil {
 		return review.Set{}, err
 	}
 	series, _ := s.ReviewSeries.Series(evidence.Action)
@@ -371,6 +372,9 @@ func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidenc
 	}
 	if pipelineEnabled(state, e.cfg.Definition) && evidence.Action == review.StartReadiness && evidence.Status == "PASS" {
 		if err := ValidateGranularity(evidence.GranularityReview); err != nil {
+			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
+		}
+		if err := state.validatePlanRequirementCoverage(evidence.GranularityReview, true); err != nil {
 			return review.Set{}, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: err.Error()}
 		}
 		if err := ValidateProjectChecks(evidence.GranularityReview); err != nil {
@@ -769,7 +773,7 @@ func phaseRank(phase runtime.RunPhase) int {
 // verifyPhaseAgainstLedgers 校验 phase 不超过持久账本证明的 floor；
 // TERMINAL、有 receipt 的 SLICE_READY 和已开始清理的 FINALIZING_CLEANUP 豁免。
 // phase 可以落后于 floor，后续提交仍按门控推进。
-func (s *State) verifyPhaseAgainstLedgers(cd *compiler.CompiledDefinition) error {
+func (s *State) verifyPhaseAgainstLedgers() error {
 	if s.Phase == runtime.PhaseTerminal {
 		return nil
 	}
@@ -791,7 +795,7 @@ func (s *State) verifyPhaseAgainstLedgers(cd *compiler.CompiledDefinition) error
 // verifyReviewIntegrity 在加载/提交边界重算审查账本的全部投影与身份链、
 // 需求 revision 账本的结构链并校验 phase 一致性：篡改的账本或越门的
 // phase 在此可区分拒绝。
-func verifyReviewIntegrity(state *State, cd *compiler.CompiledDefinition) error {
+func verifyReviewIntegrity(state *State) error {
 	if err := review.Validate(state.RunID, state.ReviewSeries); err != nil {
 		return &RejectedError{Code: CodeStateIntegrityInvalid, Detail: fmt.Sprintf("review ledger: %v", err)}
 	}
@@ -802,7 +806,7 @@ func verifyReviewIntegrity(state *State, cd *compiler.CompiledDefinition) error 
 	// 的最后一次决定的 state 代数（无覆盖为零）——手改 floor 可检出。
 	expectedFloor := func(action review.Action) uint64 {
 		var floor uint64
-		for _, entry := range state.RequirementRevisions {
+		for _, entry := range state.workAuthorizations() {
 			if reset, ok := state.resetDecision(); ok && reset.Reset.Applied && entry.StateRevision <= reset.Revision {
 				continue
 			}
@@ -842,5 +846,5 @@ func verifyReviewIntegrity(state *State, cd *compiler.CompiledDefinition) error 
 			Detail: "review series fresh-round obligations do not match the requirement confirmation ledger",
 		}
 	}
-	return state.verifyPhaseAgainstLedgers(cd)
+	return state.verifyPhaseAgainstLedgers()
 }

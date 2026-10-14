@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"os"
@@ -148,7 +149,7 @@ func newClaudeScenario(t *testing.T, identity string, readOnly bool) *claudeScen
 	script := filepath.Join(root, "peer.json")
 	binding["environment"] = map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": config, "CLAUDE_PEER_SCRIPT": script}
 	prompt := "Review the bound task for " + identity
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +260,7 @@ func TestClaudeNativeCompletionAndObservation(t *testing.T) {
 				t.Fatalf("root answer = %v", answer)
 			}
 			body, _ := json.Marshal(answer)
-			if _, err := worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil); err != nil {
+			if _, err := worker.DecodeResultWithFacts(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			before := proofsOf(t, s.directory, nativeSourceFiles)
@@ -443,7 +444,7 @@ func TestClaudeSemanticSubmissionUsageUnavailableAndRoleValidation(t *testing.T)
 		}
 		answer, _ := readJSONFile(filepath.Join(s.directory, "answer.json"))
 		body, _ := json.Marshal(answer)
-		_, err = worker.DecodeResultWithFacts(protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil)
+		_, err = worker.DecodeResultWithFacts(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Provider: "claude", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}, "result", body, "sha256:source", nil, nil)
 		if (err != nil) != invalidRole {
 			t.Fatalf("role acceptance = %v, invalid=%t", err, invalidRole)
 		}
@@ -540,5 +541,23 @@ func TestNativeCloseReturnsTheOriginalExit(t *testing.T) {
 	first := client.close()
 	if first == nil || first != client.close() || client.cmd.ProcessState.ExitCode() != 7 {
 		t.Fatalf("unique Wait result = %v", first)
+	}
+}
+
+func TestClaudeNativeStreamProvidesMeteredSourceBinding(t *testing.T) {
+	s := newClaudeScenario(t, "metered-session", true)
+	usage := map[string]any{"type": "assistant", "uuid": "native-usage-id", "session_id": "metered-session", "message": map[string]any{"usage": map[string]any{"input_tokens": 13, "cache_read_input_tokens": 4, "output_tokens": 3}}}
+	s.peer.Events = append(s.peer.Events[:1], append([]any{usage}, s.peer.Events[1:]...)...)
+	s.save(t)
+	source, err := claudeExecute(s.request, s.directory, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if textOf(source["transcript"]) != filepath.Join(s.directory, "native-events.jsonl") {
+		t.Fatalf("original metering path unbound: %#v", source)
+	}
+	got, err := cost.ParseTranscript("claude", textOf(source["transcript"]))
+	if err != nil || got != (cost.Usage{InputCacheMissTokens: 13, InputCacheHitTokens: 4, OutputTokens: 3}) {
+		t.Fatalf("original Claude stream usage=%+v err=%v", got, err)
 	}
 }

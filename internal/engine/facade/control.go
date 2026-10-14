@@ -18,6 +18,7 @@ import (
 // one-based in the current Show projection; zero owner denotes master-merge.
 // It carries no event identity, freshness token, original digest or work binding.
 type ControlInput struct {
+	Node              int                     `json:"node,omitempty"`
 	Request           protocol.ControlKind    `json:"request,omitempty"`
 	Ask               int                     `json:"ask,omitempty"`
 	Choice            string                  `json:"choice,omitempty"`
@@ -71,13 +72,15 @@ type ValidationControlInput struct {
 // neither records a decision nor authorizes a request. Submit retains the core's
 // exact replay, freshness and typed authorization checks.
 type ControlCandidate struct {
-	Root            string                           `json:"root"`
-	Input           ControlInput                     `json:"input"`
-	Event           protocol.Event                   `json:"event"`
-	Run             Run                              `json:"run"`
-	DevelopmentPlan *protocol.DevelopmentPlanPreview `json:"developmentPlan,omitempty"`
-	Intake          *IntakePreview                   `json:"intake,omitempty"`
-	Reset           *protocol.ResetPreview           `json:"reset,omitempty"`
+	ReviewDelta     []MaterialDelta                   `json:"reviewDelta,omitempty"`
+	Continuation    *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
+	Root            string                            `json:"root"`
+	Input           ControlInput                      `json:"input"`
+	Event           protocol.Event                    `json:"event"`
+	Run             Run                               `json:"run"`
+	DevelopmentPlan *protocol.DevelopmentPlanPreview  `json:"developmentPlan,omitempty"`
+	Intake          *IntakePreview                    `json:"intake,omitempty"`
+	Reset           *protocol.ResetPreview            `json:"reset,omitempty"`
 }
 
 func controlDigest(value any) string { data, _ := json.Marshal(value); return encoder.Digest(data) }
@@ -101,6 +104,9 @@ func selectStrings(values []string, positions []int, label string) ([]string, er
 }
 
 func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
+	if input.Node != 0 && input.Request == "" {
+		input.Request = protocol.ControlContinueNode
+	}
 	unlock, err := f.acquireControlReadWindow()
 	if err != nil {
 		return ControlCandidate{}, err
@@ -122,16 +128,33 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		switch input.Request {
 		case protocol.ControlAbort:
 			event.Request.Options = []protocol.AskOption{{ID: "abort", Label: "Abort the run"}, {ID: "decline", Label: "Keep the run"}}
+		case protocol.ControlContinueNode:
+			node, e := position(run.BusinessNodes, input.Node, "业务节点")
+			if e != nil {
+				return candidate, e
+			}
+			parent, e := f.nodeParentSnapshot()
+			if e != nil {
+				return candidate, e
+			}
+			preview, e := f.engine.NodeContinuationPreview(node.ID, parent)
+			if e != nil {
+				return candidate, e
+			}
+			event.Request.Continuation = &protocol.NodeContinuationRequest{Target: node.ID, StateRevision: run.Revision, PreviewDigest: preview.Digest}
+			event.Request.Options = []protocol.AskOption{{ID: "approve", Label: "从所选节点继续，确认展示的处置"}, {ID: "decline", Label: "保留当前流程"}}
+			candidate.Continuation = &preview
 		case protocol.ControlReset:
 			event.Request.Options = []protocol.AskOption{{ID: "proceed", Label: "Reset"}, {ID: "decline", Label: "Keep the run"}}
 		case protocol.ControlRequestRequirementChange:
 			event.Request.Options = []protocol.AskOption{{ID: "proceed", Label: "Confirm the complete changed requirement"}, {ID: "abort", Label: "Keep the confirmed requirement"}}
 			if input.Requirement != nil {
-				pkg, intake, e := f.prepareRequirementChange(run, *input.Requirement)
+				pkg, intake, changes, e := f.prepareRequirementChange(run, *input.Requirement)
 				if e != nil {
 					return candidate, e
 				}
 				candidate.Intake = &intake
+				candidate.ReviewDelta = changes
 				event.Request.Package = &pkg
 				if input.Ask != 0 {
 					ask, e := position(run.PendingAsks, input.Ask, "Ask")
@@ -143,6 +166,24 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 					event.Request.Options = nil
 				}
 			}
+		case protocol.ControlSelectRoute:
+			if run.Route != "regular" || run.Review.Topology == nil || run.MasterRunID == "" && run.Review.Topology.Decision == "split" {
+				return candidate, fmt.Errorf("route selection requires a regular or slice run with selectable confirmed topology")
+			}
+			if run.Review.RouteMode == "" {
+				snap, e := f.engine.Load()
+				if e != nil {
+					return candidate, e
+				}
+				if snap.State.NextWorkflowChoice(f.definition) != protocol.ControlSelectRoute {
+					return candidate, fmt.Errorf("initial route selection is not due")
+				}
+			}
+			request, e := f.routeRequestPayload(run.MasterRunID != "")
+			if e != nil {
+				return candidate, e
+			}
+			event.Request = request
 		case protocol.ControlReviewFindingDecision:
 			correction, e := correctionFromRun(run, input)
 			if e != nil {
@@ -201,6 +242,26 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		}
 		event.Decide.Request, event.Decide.Token, event.Decide.Choice = protocol.RequestID(ask.RequestID), ask.Token, choice
 		switch ask.Control {
+		case protocol.ControlContinueNode:
+			if choice == "approve" {
+				p := ask.Continuation
+				if p == nil {
+					return candidate, fmt.Errorf("节点继续缺少原影响预览")
+				}
+				work := append([]protocol.RequirementWorkDecision{}, p.Work...)
+				if input.Requirement != nil && len(input.Requirement.Work) != 0 {
+					original := make([]protocol.RequirementWork, len(work))
+					for i, w := range work {
+						original[i] = w.Work
+					}
+					work, e = bindWork(original, input.Requirement.Work)
+					if e != nil {
+						return candidate, e
+					}
+				}
+				event.Decide.Continuation = &protocol.NodeContinuationDecision{PreviewDigest: p.Digest, Reason: input.Reason, FreshnessToken: ask.Token, Work: work}
+				candidate.Continuation = p
+			}
 		case protocol.ControlConfirmTopology:
 			topology := protocol.TopologyDecision{Decision: string(choice), Note: input.Reason}
 			if choice == "split" {
@@ -287,6 +348,15 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 					return candidate, fmt.Errorf("prepared requirement bytes differ from the pending confirmation package")
 				}
 				candidate.Intake = &intake
+				base, e := f.confirmedIntake(run)
+				if e != nil {
+					return candidate, e
+				}
+				var digest string
+				candidate.ReviewDelta, digest = materialDelta(base, intake)
+				if p.Source != protocol.RequirementSourceReset && digest != p.DeltaDigest {
+					return candidate, fmt.Errorf("prepared difference differs from the pending confirmation package")
+				}
 				event.Decide.Requirement = &protocol.RequirementDecisionPayload{Intake: p.Intake, Coverage: p.Coverage, BaseRevision: face.BaseRevision, CandidateRevision: p.CandidateRevision, DeltaDigest: p.DeltaDigest, ImpactDigest: p.ImpactDigest, Source: p.Source, Classification: p.Classification, RedoProductReview: p.RedoProductReview, RedoStartReadiness: p.RedoStartReadiness, RedoTopology: p.RedoTopology, RedoRoute: p.RedoRoute, WorkDecisions: p.WorkDecisions, Children: p.Children, Impact: p.Impact, ResetRequestID: p.ResetRequestID, FindingDigest: p.FindingDigest, Reason: input.Reason}
 			}
 		case protocol.ControlReset:
@@ -324,7 +394,13 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		Revision uint64
 		Event    protocol.Event
 	}{run.RunID, run.Revision, event}))
-	if err := event.Validate(); err != nil {
+	if event.Request != nil && event.Request.Control == protocol.ControlSelectRoute {
+		var err error
+		event, err = protocol.NewRouteRequestEvent(event.ID, event.Request.RouteGates, event.Request.Options...)
+		if err != nil {
+			return candidate, err
+		}
+	} else if err := event.Validate(); err != nil {
 		return candidate, err
 	}
 	candidate.Event = event
@@ -340,14 +416,16 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 	if candidate.Event.Request == nil && candidate.Event.Decide == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation contains no program-generated control")
 	}
+	_, recorded, err := f.recordedEvent(candidate.Event)
+	if err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
 	if request := candidate.Event.Request; request != nil && request.Package != nil && request.Package.Intake != nil {
 		digest, err := IntakeDigest(*request.Package.Intake)
 		if err != nil || candidate.Intake == nil || digest != candidate.Intake.IntakeCandidate.Digest {
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement package differs from its complete material preview")
 		}
-		if _, recorded, err := f.recordedEvent(candidate.Event); err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		} else if !recorded {
+		if !recorded {
 			if err := validateArtifactBindings(f.root, candidate.Intake.IntakeCandidate); err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}
@@ -364,7 +442,7 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 		if err != nil || materialDigest != candidate.Intake.IntakeCandidate.Digest {
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation differs from its complete material package")
 		}
-		if err := validateConfirmation(candidate.Intake.IntakeCandidate, DefaultDefinitionSource); err != nil {
+		if err := validateConfirmation(candidate.Intake.IntakeCandidate); err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
 		if candidate.Run.Route == "regular" {
@@ -380,14 +458,30 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 		if err != nil || digest != candidate.Intake.IntakeCandidate.Digest {
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation intake digest differs")
 		}
-		if _, recorded, err := f.recordedEvent(candidate.Event); err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		} else if !recorded {
+		if !recorded {
 			if err := validateArtifactBindings(f.root, candidate.Intake.IntakeCandidate); err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}
 		}
 		candidate.Event = candidate.Event.WithRequirementDocument(candidate.Intake.Content)
+	}
+	var pkg *protocol.RequirementDecisionPackage
+	if candidate.Event.Request != nil {
+		pkg = candidate.Event.Request.Package
+	}
+	if decision := candidate.Event.Decide; decision != nil && decision.Requirement != nil {
+		r := decision.Requirement
+		pkg = &protocol.RequirementDecisionPackage{Source: r.Source, DeltaDigest: r.DeltaDigest}
+	}
+	if !recorded && pkg != nil && pkg.Source != protocol.RequirementSourceReset && candidate.Intake != nil {
+		base, err := f.confirmedIntake(candidate.Run)
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		changes, digest := materialDelta(base, *candidate.Intake)
+		if digest != pkg.DeltaDigest || controlDigest(changes) != controlDigest(candidate.ReviewDelta) {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation differs from its complete original difference")
+		}
 	}
 	return f.Submit(candidate.Event)
 }
@@ -424,20 +518,22 @@ func bindWork(work []protocol.RequirementWork, choices []WorkChoice) ([]protocol
 	return out, nil
 }
 
-func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput) (protocol.RequirementDecisionPackage, IntakePreview, error) {
+func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput) (protocol.RequirementDecisionPackage, IntakePreview, []MaterialDelta, error) {
 	intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, run.Route != "lightweight")
 	if e != nil {
-		return protocol.RequirementDecisionPackage{}, intake, e
+		return protocol.RequirementDecisionPackage{}, intake, nil, e
 	}
 	revision := intake.Revision
 	if strings.HasPrefix(run.Review.RequirementRevision, "sha256:") {
 		revision = "sha256:" + revision
 	}
 	p := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, CandidateRevision: revision, Classification: input.Classification, Source: protocol.RequirementSourceUserInitiated, Impact: &input.Impact}
-	p.DeltaDigest = controlDigest(struct {
-		Base, Candidate string
-		Changed         []string
-	}{run.Review.RequirementRevision, revision, input.Impact.ChangedItems})
+	base, e := f.confirmedIntake(run)
+	if e != nil {
+		return p, intake, nil, e
+	}
+	changes, digest := materialDelta(base, intake)
+	p.DeltaDigest = digest
 	p.ImpactDigest = controlDigest(input.Impact)
 	for _, name := range input.Redo {
 		switch name {
@@ -450,15 +546,15 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 		case "route":
 			p.RedoRoute = true
 		default:
-			return p, intake, fmt.Errorf("unknown requirement redo choice %q", name)
+			return p, intake, nil, fmt.Errorf("unknown requirement redo choice %q", name)
 		}
 	}
 	p.WorkDecisions, e = bindWork(run.RequirementWork, input.Work)
 	if e != nil {
-		return p, intake, e
+		return p, intake, nil, e
 	}
 	if len(run.RequirementChildren) != len(input.Children) {
-		return p, intake, fmt.Errorf("decide every current child")
+		return p, intake, nil, fmt.Errorf("decide every current child")
 	}
 	for i, original := range run.RequirementChildren {
 		choice := input.Children[i]
@@ -468,7 +564,7 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 		}
 		original.WorkDecisions, e = bindWork(work, choice.Work)
 		if e != nil {
-			return p, intake, e
+			return p, intake, nil, e
 		}
 		original.ReceiptDisposition, original.CandidateDisposition, original.RouteDisposition, original.Reason = choice.Receipt, choice.Candidate, choice.Route, choice.Reason
 		p.Children = append(p.Children, original)
@@ -476,15 +572,15 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 	if input.Finding != 0 {
 		action, e := position(run.Review.Actions, input.Review, "review")
 		if e != nil {
-			return p, intake, e
+			return p, intake, nil, e
 		}
 		cand, e := position(action.Candidates, input.Candidate, "candidate")
 		if e != nil {
-			return p, intake, e
+			return p, intake, nil, e
 		}
 		finding, e := position(cand.Findings, input.Finding, "finding")
 		if e != nil {
-			return p, intake, e
+			return p, intake, nil, e
 		}
 		p.FindingDigest = finding.Digest
 		p.Source = protocol.RequirementSourceReviewFindingP2
@@ -494,7 +590,7 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 	}
 	snap, e := f.engine.Load()
 	if e != nil {
-		return p, intake, e
+		return p, intake, nil, e
 	}
 	for id, d := range snap.State.Decisions {
 		if d.Reset != nil && d.Reset.Applied && !d.Reset.Confirmed {
@@ -503,7 +599,7 @@ func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput)
 			break
 		}
 	}
-	return p, intake, nil
+	return p, intake, changes, nil
 }
 
 func validationRequestFromRun(run Run, input *ValidationControlInput) (*protocol.ValidationRequest, error) {

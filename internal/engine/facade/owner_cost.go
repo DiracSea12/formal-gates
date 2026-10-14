@@ -190,7 +190,7 @@ func markOverlappingEnginePeers(root, runID, transcript string) error {
 		if err != nil {
 			return fmt.Errorf("engine start: open overlapping peer run %q: %w", peer, err)
 		}
-		if err := peerFacade.engine.MarkOwnerOverlapped(emptyFingerprint()); err != nil {
+		if err := peerFacade.engine.MarkOwnerOverlapped(protocol.Observation{}); err != nil {
 			if errors.Is(err, errStaleFencingToken) {
 				continue
 			}
@@ -242,7 +242,7 @@ func (f *Facade) finishOwnerCost() (ownerInterval, error) {
 		return ownerInterval{}, err
 	}
 	if entry != nil {
-		if err := f.engine.RecordOwnerCost(*entry, emptyFingerprint()); err != nil {
+		if err := f.engine.RecordOwnerCost(*entry, protocol.Observation{}); err != nil {
 			return ownerInterval{}, err
 		}
 	}
@@ -258,7 +258,7 @@ func (f *Facade) observeOwnerCost() (ownerInterval, *cost.OwnerCost, error) {
 		return ownerInterval{}, nil, nil
 	}
 	if !overlapped && ownerOverlap(f.root, f.runID, transcript, startedAt) {
-		if err := f.engine.MarkOwnerOverlapped(emptyFingerprint()); err != nil {
+		if err := f.engine.MarkOwnerOverlapped(protocol.Observation{}); err != nil {
 			return ownerInterval{}, nil, err
 		}
 		overlapped = true

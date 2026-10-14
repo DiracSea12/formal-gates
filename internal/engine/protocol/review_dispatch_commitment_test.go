@@ -107,7 +107,7 @@ func terminalizeDispatchTask(t *testing.T, engine *Engine, actionID string) {
 		if err != nil {
 			t.Fatalf("task event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(ev, Observation{}); err != nil {
 			t.Fatalf("task progress %s of %s: %v", status, actionID, err)
 		}
 	}
@@ -118,7 +118,7 @@ func terminalizeDispatchTask(t *testing.T, engine *Engine, actionID string) {
 
 func submitSpawnReceipt(t *testing.T, engine *Engine, event, actionID string) {
 	t.Helper()
-	if _, err := engine.Submit(spawnReceipt(t, EventID(event), actionID, "agent-"+event), fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, EventID(event), actionID, "agent-"+event), Observation{}); err != nil {
 		t.Fatalf("spawn receipt %s: %v", event, err)
 	}
 }
@@ -136,13 +136,13 @@ func submitLateDispatchResult(t *testing.T, engine *Engine, event, actionID stri
 	if err != nil {
 		t.Fatalf("late result event: %v", err)
 	}
-	_, err = engine.Submit(ev, fingerprintOf(t, engine))
+	_, err = engine.Submit(ev, Observation{})
 	return err
 }
 
 func submitUnknownReceipt(t *testing.T, engine *Engine, event, actionID, correlation string) {
 	t.Helper()
-	if _, err := engine.Submit(unknownSpawnReceipt(t, EventID(event), actionID, correlation), fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(unknownSpawnReceipt(t, EventID(event), actionID, correlation), Observation{}); err != nil {
 		t.Fatalf("unknown receipt %s: %v", event, err)
 	}
 }
@@ -154,11 +154,11 @@ func attachUnknownReceipt(t *testing.T, engine *Engine, actionID, correlation, i
 		if err != nil {
 			t.Fatalf("lifecycle event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(ev, Observation{}); err != nil {
 			t.Fatalf("lifecycle %s: %v", name, err)
 		}
 	}
-	plan, _, err := engine.ReconcileUnknownReceipt(actionID, fingerprintOf(t, engine))
+	plan, _, err := engine.ReconcileUnknownReceipt(actionID, Observation{})
 	if err != nil || plan.Action != RecoveryAttachReceipt {
 		t.Fatalf("reconcile %s = %+v err=%v", actionID, plan, err)
 	}
@@ -173,7 +173,7 @@ func submitFailureResult(t *testing.T, engine *Engine, event, actionID string) (
 	if err != nil {
 		t.Fatalf("failure event: %v", err)
 	}
-	acceptance, err := engine.Submit(ev, fingerprintOf(t, engine))
+	acceptance, err := engine.Submit(ev, Observation{})
 	return acceptance, err
 }
 
@@ -184,7 +184,7 @@ func TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces(t *testing.
 		if err != nil {
 			t.Fatalf("failed receipt event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(ev, Observation{}); err != nil {
 			t.Fatalf("failed receipt submit: %v", err)
 		}
 	}
@@ -446,7 +446,7 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 			if err != nil {
 				t.Fatalf("request: %v", err)
 			}
-			if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+			if _, err := engine.Submit(request, Observation{}); err != nil {
 				t.Fatalf("request submit: %v", err)
 			}
 			evidence := blockingReviewEvidence(review.ProductReview, action, "quarantined review")
@@ -457,7 +457,7 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 			if err != nil {
 				t.Fatalf("event: %v", err)
 			}
-			if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "QUARANTINED" {
+			if acceptance, err := engine.Submit(event, Observation{}); err != nil || acceptance.Status != "QUARANTINED" {
 				t.Fatalf("quarantine: %+v %v", acceptance, err)
 			}
 			assertSeriesCommitmentHeld(t, engine)
@@ -513,7 +513,7 @@ func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
 	}
-	if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(event, Observation{}); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("staging: %+v %v", acceptance, err)
 	}
 	submitUnknownReceipt(t, engine, "spawn-staged", action, "correlation-staged")
@@ -545,7 +545,7 @@ func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
 	action := issueReady(t, engine)[0]
 	submitUnknownReceipt(t, engine, "spawn-recovered", action, "correlation-recovered")
 	attachUnknownReceipt(t, engine, action, "correlation-recovered", "worker-recovered")
-	plan, _, err := engine.RecoverAttempt(action, Interruption{Class: authoring.FailureBusinessReject, CauseKnown: true}, fingerprintOf(t, engine))
+	plan, _, err := engine.RecoverAttempt(action, Interruption{Class: authoring.FailureBusinessReject, CauseKnown: true}, Observation{})
 	if err != nil || plan.Action != RecoveryFail {
 		t.Fatalf("recover: %+v %v", plan, err)
 	}
@@ -577,7 +577,7 @@ func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *te
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
 	}
-	if acceptance, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(event, Observation{}); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("staging: %+v %v", acceptance, err)
 	}
 	series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview

@@ -16,7 +16,7 @@ workflow 的当前入口以 `workflow --help` 和各子命令帮助为准：
 | `submit` | 唯一外部事件写入口，接纳用户决定、主动控制、worker 结果和原生 receipt。 |
 | `show` | 只读完整 run 投影。 |
 | `status` | 只读状态与可用操作。 |
-| `next` | 只读下一边界及 freshness。 |
+| `next` | 只读下一边界及 freshness；语义选择准备确认载荷。 |
 | `diagnose` | 原始只读诊断状态或终态摘要。 |
 | `guard-preview` | 只读、非权威的生产 guard 计算，见 [guard 合同](guard-preview.md)。 |
 | `progress` | 从原事实派生进度及原输出游标。 |
@@ -79,7 +79,7 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
 精确 revisions。预检已由程序保存完整原对象；等待用户明确确认后，使用
-`start --intake <原序号>`，只有一个载荷时可省略序号，多个时程序只展示原位置供选择。
+`start --route <用户已选择的 regular|lightweight> --intake <原序号>`，只有一个载荷时可省略序号，多个时程序只展示原位置供选择。
 精确 `--intake-receipt` 保留给人工或程序集成。代理不抽取 JSON、不抄写字段、路径、
 摘要或全文。保存候选不会启动 run；确认 receipt 是受理材料，不是模型调用记录。
 
@@ -126,7 +126,7 @@ start/show/status/next/drive/submit 默认展示当前语义问题、短选择�
 
 regular 未显式提供 `--base-snapshot` 时，由原 VCS provider Resolve 取得实际不可变基线，
 再交既有 Start 强校验；显式精确 base 仍供人工或程序集成。regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
-单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。未选 mode 时先取得用户选择，
+单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。实际 start 必须显式传入用户已选择的 regular/lightweight；未明确时先取得用户选择。预检缺省核正式需求结构，不因此选择启动路线。
 lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
 在开发中降为 lightweight。
 
@@ -138,6 +138,13 @@ Event、原 request/token、当前 revision 和展示材料。默认只展示当
 接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
+
+运行中的 `businessNodes` 按当前 run 与已建立 child 的同一顺序编号真实职责。
+`next --node <序号>` 只准备从该职责继续的原请求；提交保存的候选，或以
+`submit --node <序号>` 创建原 Ask 后，
+用户通过原 Ask 选择目标处置并给出理由。程序携带 from/to、原工作与副作用身份、
+revision 和 freshness，用户不抄 run ID 或工作清单。缺少的输入仍由原职责准备，
+终止选择仍走统一 cleanup；节点继续不会授权跳过必做门。
 
 路线的候选门全集、计划绑定、审查候选和 finding、reset 保留与清理范围、需求变更的
 原工作身份与 child 原材料、验证摘要与 revision 均由程序读取同一权威状态。模型仅
@@ -195,19 +202,23 @@ P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成�
 用户主动变化以 ImpactSet 逐项决定重走/续用，UNKNOWN 按受影响建议处理。
 
 技术审形成 `granularityReview`：Batch→Subtask、依赖、接口、状态边界、DoD、验证、
-恢复与交接。用户确认计划与精确 split 拓扑或 no-split 理由之后，选择 full/custom。
-Batch 是现有任务的分组，不新增生命周期；一个 Batch 使用一个新开发会话，Subtask
-不能独立派发。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
+恢复与交接。审查者只选择既有检查调用或提出验证目标，不填写 command/parts；缺少调用由开发者准备，程序绑定并执行。
+用户确认计划与精确 split 拓扑或 no-split 理由之后，确认 default/full/custom。
+非分片 run 的 default 选择全部普通门、不含黑盒/白盒 QA；full 选择全部普通门与双 QA
+（QA 阶段较重，适合大型任务）；custom 选择当前候选的非空子集或全集，保留 custom 身份。
+推荐不代替用户确认；每个 child 独立确认，child 候选不含普通 QA，default/full 均选全部普通门。
+Batch 是现有任务的分组，不新增生命周期；程序为每个开发 Batch 派发全新的零上下文代理，开发会话不跨批复用，Subtask 不能独立派发。
+批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
 
 ## 开发与快照
 
-开发只消费确认任务；黑盒在基线隔离区并发设计/审查，不接收实现、白盒或开发解释。
+开发只消费确认任务；选择黑盒时，在基线隔离区并发设计/审查，不接收实现、白盒或开发解释。
 设计失败沿原动作的有限 attempt/语义轮或 typed Ask 及时处理。黑盒未 PASS 不挡开发，
 但挡最终候选。批内正常返回、重试和恢复沿用原身份，替换必须有恢复失败事实和签发。
 
 开发者返回语义完成情况；程序捕获原生差异并校验范围与 postcondition，
-adapter 执行 track→commit→snapshot。白盒独立
-审查覆盖并编写/复用测试，只有测试变化推进快照。全部 FROZEN case-set 和交付文件在
+adapter 执行 track→commit→snapshot。选择白盒时，独立
+审查覆盖并编写/复用测试，只有测试变化推进快照。全部已选 QA 的 FROZEN case-set 和交付文件在
 ValidationCandidate 冻结前纳入其身份；Git 多提交压缩在最后必需验证前完成，Seal 不
 追加文件或产生新候选。详见 [VCS 边界](vcs-snapshots.md)。
 

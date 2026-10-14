@@ -48,7 +48,7 @@ func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base")
 	material.Input.VCS = "git"
 	material.Input.Validation.Workspace.Source = git("rev-parse", "HEAD")
-	material.Input.Handler = "engine.development.batch.v4"
+	material.Input.Handler = "engine.development.batch.v5"
 	material.Input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "approved", Checks: []protocol.DevelopmentCheck{{ID: "edit", Purpose: protocol.CheckEdit, Command: "printf edit; printf diagnostic >&2; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\""}, {ID: "full", Purpose: protocol.CheckFullTests, Command: "touch full-ran"}, {ID: "ordinary", Command: "touch ordinary-ran"}}}}
 	if err := os.MkdirAll(filepath.Join(workspace, ".gates", "tmp"), 0700); err != nil {
 		t.Fatal(err)
@@ -145,11 +145,11 @@ func TestNativeEditCheckResumesAnUnfinishedOriginalRequest(t *testing.T) {
 
 func TestNativeEditChecksRejectReadOnlyAndInvalidMutations(t *testing.T) {
 	tools, workspace := nativeEditCheckFixture(t)
-	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"../outside","content":"wrong"}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"../outside","content":"wrong"}`)); err == nil {
 		t.Fatal("invalid mutation accepted")
 	}
 	tools.readOnly = true
-	if _, err := tools.call(json.RawMessage(`{"action":"mkdir","name":"readonly"}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"mkdir","name":"readonly"}`)); err == nil {
 		t.Fatal("readonly mutation accepted")
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".gates", "tmp", "check-count")); !os.IsNotExist(err) {
@@ -285,7 +285,10 @@ func TestNativeEditCheckObservesInterruptedOriginalProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished := make(chan error, 1)
-	go func() { _, err := resumed.call(json.RawMessage(`{"action":"list"}`)); finished <- err }()
+	go func() {
+		_, err := resumed.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"list"}`))
+		finished <- err
+	}()
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +320,8 @@ func TestNativeEditCheckEvidenceBindsSemanticSubmission(t *testing.T) {
 	}
 	path := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
 	material := *tools.material
+	material.Input.InputCodec = protocol.WorkerInputCodec
+	material.Input.OutputCodec = worker.OutputCodec
 	material.Input.Provider = "dsh"
 	material.ResultSchema, err = worker.ResultSchema(material.Input)
 	if err != nil {
@@ -453,7 +458,7 @@ func TestNativeWorkspaceAuthorsExecutableFiles(t *testing.T) {
 	tools, workspace := nativeEditCheckFixture(t)
 	original := []byte("#!/bin/sh\nprintf 'hello\\n'\n")
 	args, _ := json.Marshal(map[string]any{"action": "create", "name": "hello.sh", "content": string(original), "executable": true})
-	if _, err := tools.call(args); err != nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, args); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(workspace, "hello.sh")
@@ -492,11 +497,11 @@ func TestNativeWorkspaceAuthorsExecutableFiles(t *testing.T) {
 	if info.Mode().Perm() != 0755 {
 		t.Fatal("replace lost execution bits")
 	}
-	if _, err := tools.call(json.RawMessage(`{"action":"executable","listing":1,"entry":1}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"executable","listing":1,"entry":1}`)); err == nil {
 		t.Fatal("missing semantic executable value accepted")
 	}
 	tools.readOnly = true
-	if _, err := tools.call(json.RawMessage(`{"action":"executable","listing":1,"entry":1,"executable":false}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"executable","listing":1,"entry":1,"executable":false}`)); err == nil {
 		t.Fatal("readonly mode mutation accepted")
 	}
 }

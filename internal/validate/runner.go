@@ -174,7 +174,7 @@ func ValidateStandaloneGateResult(raw []byte, context StandaloneGateContext) (St
 	} else if wire.Findings == nil {
 		return StandaloneGateResult{}, fmt.Errorf("completed review requires findings")
 	}
-	status, _, err := validateSemanticResult(interruption, result.Findings)
+	status, err := validateSemanticResult(interruption, result.Findings)
 	if err != nil {
 		return StandaloneGateResult{}, err
 	}

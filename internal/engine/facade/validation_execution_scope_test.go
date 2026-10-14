@@ -26,7 +26,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				prior := qi.Binding.Candidate
 				report := executionFor(qi)
 				d.business(qa, nativeExecutionResult(qi, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report}))
-				gate, gi := d.action("engine.gate.v2")
+				gate, gi := d.action("engine.gate.v3")
 				d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "invalid input prints wrong diagnostic"}}})
 				wave := d.run.Validation.Waves[0]
 				var finding string
@@ -36,7 +36,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 				resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run invalid", Module: "input", RootCause: "diagnostic formatter", Consequence: "wrong diagnostic", Severity: "P2", SeverityRationale: "normal command usable", Verification: review.FindingVerification{Scope: "confirmed input behavior", Severity: "limited output", Causality: "formatter", Reproduction: "app run invalid", Classification: "implementation"}, Reason: "observed actual output"}
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 				d.drive()
-				repair, ri := d.action("engine.repair.v5")
+				repair, ri := d.action("engine.repair.v6")
 				edit := protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "correct diagnostic", AffectedCases: []string{"invalid"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "invalid", Result: coverage.ExecutedPass, Procedure: "app run invalid", Observation: "correct diagnostic", Comparison: "matches specified error"}}}}
 				d.business(repair, edit)
 				d.verifyRepair(edit)
@@ -198,7 +198,7 @@ func repairedExecutionDriver(t *testing.T, drivers ...*validationDriver) *valida
 	t.Helper()
 	d, finding, wave := validationWithGateFinding(t, drivers...)
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v5")
+	id, in := d.action("engine.repair.v6")
 	if !d.mockNative {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte("package main\nfunc main() { println(\"ordered\") }\n"), 0600); err != nil {
 			t.Fatal(err)
@@ -352,7 +352,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 				}
 			}
 			d.drive()
-			id, in := d.action("engine.repair.v5")
+			id, in := d.action("engine.repair.v6")
 			edit := gateRepairResult(in)
 			d.business(id, edit)
 			if edit.Binding.PureP2 {
@@ -375,7 +375,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 			d.business(id, nativeExecutionResult(in, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Execution: &report}))
 			d.drive()
 			for _, in := range d.run.ValidationInputs {
-				if in.Handler == "engine.gate.v2" {
+				if in.Handler == "engine.gate.v3" {
 					id, gi = d.gateAction("quality")
 					d.business(id, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 					break
@@ -518,7 +518,7 @@ func TestQAExecutionWaitsForAllRequirementAsksAndKeepsOriginalReceipts(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, _, err := d.f.engine.Drive(emptyFingerprint())
+			plan, _, err := d.f.engine.Drive(protocol.Observation{})
 			if err != nil || plan.Next.Ask == nil || plan.Next.Ready != nil || plan.Next.HostAction != nil {
 				t.Fatalf("pending requirement ask allowed dispatch instead of returning the user boundary: %+v %v", plan, err)
 			}

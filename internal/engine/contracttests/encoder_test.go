@@ -14,7 +14,7 @@ import (
 )
 
 // 编码"<" "&"字样的单步夹具：HTML 不转义是 canonical 形态的一部分。
-func weirdFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registry) {
+func weirdFixture(t *testing.T) *compiler.CompiledDefinition {
 	t.Helper()
 	step := mkLocalStep(t, fxHeader("s.1", "n0"),
 		authoring.IO{InputCodec: "c.<in>", OutputCodec: "c.out"},
@@ -29,13 +29,13 @@ func weirdFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Registr
 	if err := reg.RegisterCodec("c.out"); err != nil {
 		t.Fatal(err)
 	}
-	return fxCompile(t, fxDefinition(t, step), reg), reg
+	return fxCompile(t, fxDefinition(t, step), reg)
 }
 
 // 用例：canonical 编码形态——JSON、2 空格缩进、不转义 HTML、恰一个尾随
 // 换行；重复编码逐字节一致；Digest 是制品字节的 SHA-256（sha256: 前缀）。
 func TestEncodeCanonicalFormIsStableJSON(t *testing.T) {
-	cd, _ := weirdFixture(t)
+	cd := weirdFixture(t)
 	b1, err := encoder.Encode(cd)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -91,9 +91,6 @@ func TestEncodeDecodeRoundTripPreservesIR(t *testing.T) {
 	}
 	if !bytes.Equal(reencoded, data) {
 		t.Fatalf("round-trip bytes differ:\n got %s\nwant %s", reencoded, data)
-	}
-	if encoder.Digest(reencoded) != encoder.Digest(data) {
-		t.Fatal("round-trip digest must be identical")
 	}
 }
 

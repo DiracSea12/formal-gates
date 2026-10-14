@@ -54,7 +54,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: compiled, Registry: registry, Capacity: 1}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: compiled, Registry: registry, Capacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,20 +62,20 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp := fingerprintOf(t, engine)
-	if err := engine.Init(view, testProvider, fp); err != nil {
+	observedInput := Observation{}
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fp)
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, observedInput)
 	if err != nil || len(issued) != 1 {
 		t.Fatalf("issue = %+v err=%v", issued, err)
 	}
 	action := issued[0].ActionID
-	if _, err := engine.Submit(spawnReceipt(t, "retry-spawn", action, "retry-agent"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "retry-spawn", action, "retry-agent"), observedInput); err != nil {
 		t.Fatal(err)
 	}
 	original := issued[0].Task
@@ -84,7 +84,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		accepted, err := engine.Submit(event, fp)
+		accepted, err := engine.Submit(event, observedInput)
 		if err != nil || accepted.Status != OutcomeRuntimeError {
 			t.Fatalf("invalid result: %+v %v", accepted, err)
 		}
@@ -102,7 +102,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 				}
 				action = id
 			}
-			if _, err := engine.Submit(spawnReceipt(t, EventID(fmt.Sprintf("retry-spawn-%d", i)), action, "retry-agent"), fp); err != nil {
+			if _, err := engine.Submit(spawnReceipt(t, EventID(fmt.Sprintf("retry-spawn-%d", i)), action, "retry-agent"), observedInput); err != nil {
 				t.Fatal(err)
 			}
 		} else {
@@ -132,11 +132,11 @@ func workerResult(t *testing.T, id EventID, actionID, digest string) Event {
 // 任务台账不动（进度观察是独立事件），持久可重读。
 func TestSpawnReceiptAdmitsAndRecords(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	acceptance, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), fp)
+	acceptance, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), observedInput)
 	if err != nil {
 		t.Fatalf("submit receipt: %v", err)
 	}
@@ -161,17 +161,17 @@ func TestSpawnReceiptAdmitsAndRecords(t *testing.T) {
 // receipt 效果；换新事件 ID 时只占用新的事件台账键。
 func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), observedInput); err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
 
 	// 同事件 ID 重放：1b 台账路径。
-	same, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), fp)
+	same, err := engine.Submit(spawnReceipt(t, "evt-receipt-1", reviewAction, "agent-review-1"), observedInput)
 	if err != nil {
 		t.Fatalf("same-id replay: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
 		t.Fatalf("same-id replay status = %q", same.Status)
 	}
 	// 换事件 ID、同回执字节：payload 级 duplicate 路径。
-	dup, err := engine.Submit(spawnReceipt(t, "evt-receipt-1bis", reviewAction, "agent-review-1"), fp)
+	dup, err := engine.Submit(spawnReceipt(t, "evt-receipt-1bis", reviewAction, "agent-review-1"), observedInput)
 	if err != nil {
 		t.Fatalf("cross-id replay: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("conflicting event: %v", err)
 	}
-	if _, err := engine.Submit(conflicting, fp); err == nil {
+	if _, err := engine.Submit(conflicting, observedInput); err == nil {
 		t.Fatal("conflicting receipt accepted")
 	} else if code := rejectionCode(t, err); code != CodeReceiptConflict {
 		t.Fatalf("conflicting code = %q", code)
@@ -213,15 +213,15 @@ func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
 // TestSpawnReceiptNegatives：未知 action、provider mismatch（不同与空）。
 func TestSpawnReceiptNegatives(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	unknown, err := NewSpawnReceiptEvent("evt-u", "act:ghost/task", testProvider, "agent-x", SpawnStatusSpawned)
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(unknown, fp); err == nil {
+	if _, err := engine.Submit(unknown, observedInput); err == nil {
 		t.Fatal("unknown action accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownAction {
 		t.Fatalf("unknown action code = %q", code)
@@ -230,7 +230,7 @@ func TestSpawnReceiptNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(mismatch, fp); err == nil {
+	if _, err := engine.Submit(mismatch, observedInput); err == nil {
 		t.Fatal("provider mismatch accepted")
 	} else if code := rejectionCode(t, err); code != CodeProviderMismatch {
 		t.Fatalf("provider mismatch code = %q", code)
@@ -247,11 +247,11 @@ func TestSpawnReceiptNegatives(t *testing.T) {
 // 键也必须可编码；对账完成后重复调用只返回已提交的 ATTACHED 事实。
 func TestUnknownSpawnReceiptRecoveryIsDurable(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	acceptance, err := engine.Submit(unknownSpawnReceipt(t, "evt-unknown-spawn", reviewAction, "agent-review-1"), fp)
+	acceptance, err := engine.Submit(unknownSpawnReceipt(t, "evt-unknown-spawn", reviewAction, "agent-review-1"), observedInput)
 	if err != nil {
 		t.Fatalf("unknown receipt: %v", err)
 	}
@@ -266,18 +266,22 @@ func TestUnknownSpawnReceiptRecoveryIsDurable(t *testing.T) {
 		if eventErr != nil {
 			t.Fatalf("lifecycle event: %v", eventErr)
 		}
-		if _, eventErr = engine.Submit(ev, fp); eventErr != nil {
+		if _, eventErr = engine.Submit(ev, observedInput); eventErr != nil {
 			t.Fatalf("submit lifecycle event: %v", eventErr)
 		}
 	}
-	first, revision, err := engine.ReconcileUnknownReceipt(reviewAction, fp)
+	attached := engine.LoadMustSucceed(t)
+	if receipt := attached.State.SpawnReceipts[reviewAction]; receipt.Status != SpawnStatusAttached || receipt.LifecycleIdentity != "agent-review-1" {
+		t.Fatalf("lifecycle submission did not attach the receipt: %+v", receipt)
+	}
+	first, revision, err := engine.ReconcileUnknownReceipt(reviewAction, observedInput)
 	if err != nil {
 		t.Fatalf("reconcile unknown receipt: %v", err)
 	}
-	if first.Action != RecoveryAttachReceipt || revision != 6 {
+	if first.Action != RecoveryAttachReceipt || revision != attached.Revision {
 		t.Fatalf("reconcile plan=%+v revision=%d", first, revision)
 	}
-	second, replayRevision, err := engine.ReconcileUnknownReceipt(reviewAction, fp)
+	second, replayRevision, err := engine.ReconcileUnknownReceipt(reviewAction, observedInput)
 	if err != nil {
 		t.Fatalf("reconcile replay: %v", err)
 	}
@@ -302,7 +306,7 @@ func twoAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Regi
 	must(reg.RegisterHandler("engine.test.beta", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -310,23 +314,17 @@ func twoAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Regi
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "n", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
-	}
-	parse, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.test.parse"})
+	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
+	parse, err := authoring.NewLocalStep(header("prep.parse"), io, authoring.LocalSpec{Handler: "engine.test.parse"})
 	must(err)
-	alphaIO := io("prep.parse")
-	alphaIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+	alphaIO := io
+	alphaIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 	alpha, err := authoring.NewAgentStep(header("alpha.worker", "prep.parse"), alphaIO, authoring.AgentSpec{
 		Handler: "engine.test.alpha", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute,
 	})
 	must(err)
-	betaIO := io("prep.parse")
-	betaIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+	betaIO := io
+	betaIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 	beta, err := authoring.NewAgentStep(header("beta.worker", "prep.parse"), betaIO, authoring.AgentSpec{
 		Handler: "engine.test.beta", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute,
 	})
@@ -346,7 +344,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 	dir := t.TempDir()
 	cd, reg := twoAgentFixture(t)
 	store := mustStore(t, dir)
-	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1})
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
@@ -357,15 +355,15 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	fp := fingerprintOf(t, engine)
-	if err := engine.Init(view, testProvider, fp); err != nil {
+	observedInput := Observation{}
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fp)
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, observedInput)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -380,11 +378,11 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 // beta（复用 SelectIssued 语义）；回执在先是正常路径。
 func TestWorkerResultCompletesAndRefills(t *testing.T) {
 	engine, dir, alphaAction := refillEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), observedInput); err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
-	acceptance, err := engine.Submit(workerResult(t, "evt-res-alpha", alphaAction, "sha256:alpha-out"), fp)
+	acceptance, err := engine.Submit(workerResult(t, "evt-res-alpha", alphaAction, "sha256:alpha-out"), observedInput)
 	if err != nil {
 		t.Fatalf("result: %v", err)
 	}
@@ -430,9 +428,9 @@ func containsStep(steps []authoring.StepID, id string) bool {
 // 暂存（不丢弃、不推进、STAGED 状态），回执到达后配对接纳并补位签发。
 func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
 	engine, _, alphaAction := refillEngine(t)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 
-	staged, err := engine.Submit(workerResult(t, "evt-res-early", alphaAction, "sha256:alpha-out"), fp)
+	staged, err := engine.Submit(workerResult(t, "evt-res-early", alphaAction, "sha256:alpha-out"), observedInput)
 	if err != nil {
 		t.Fatalf("early result: %v", err)
 	}
@@ -450,7 +448,7 @@ func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
 	}
 
 	// 回执到达：配对接纳（同事务完成 + 补位）。
-	acceptance, err := engine.Submit(spawnReceipt(t, "evt-r-late", alphaAction, "agent-alpha"), fp)
+	acceptance, err := engine.Submit(spawnReceipt(t, "evt-r-late", alphaAction, "agent-alpha"), observedInput)
 	if err != nil {
 		t.Fatalf("late receipt: %v", err)
 	}
@@ -469,12 +467,122 @@ func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
 	}
 }
 
+func TestSpawnReceiptAfterTerminalPairsStagedResultAndRefills(t *testing.T) {
+	engine, dir, action := refillEngine(t)
+	claims := 0
+	engine.cfg.ClaimDispatch = func(_, dispatch, identity, provider string) error {
+		if dispatch != action || identity != "agent-alpha" || provider != testProvider {
+			t.Fatalf("claim binding = %q / %q / %q", dispatch, identity, provider)
+		}
+		claims++
+		return nil
+	}
+	observedInput := Observation{}
+	pending := engine.LoadMustSucceed(t).State.PendingActions[action]
+	result := workerResult(t, "result-before-terminal", action, "sha256:alpha-out")
+	if acceptance, err := engine.Submit(result, observedInput); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("stage = %+v err=%v", acceptance, err)
+	}
+	terminalizeDispatchTask(t, engine, action)
+	retained := engine.LoadMustSucceed(t).State.EndedAttempts[pending.Task]
+	if retained.ID != pending.AttemptID || !retained.AwaitingResult {
+		t.Fatalf("retained execution = %+v", retained)
+	}
+	engine, err := New(mustStore(t, dir), engine.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := spawnReceipt(t, "receipt-after-terminal", action, "agent-alpha")
+	accepted, err := engine.Submit(receipt, observedInput)
+	if err != nil || accepted.Status != "ACCEPTED" || !reflect.DeepEqual(accepted.Refill, []string{"act:n/beta.worker"}) {
+		t.Fatalf("late receipt = %+v err=%v", accepted, err)
+	}
+	settled := engine.LoadMustSucceed(t).State
+	if got := settled.Results[action]; got.Outcome != OutcomePass || got.PayloadDigest != "sha256:alpha-out" {
+		t.Fatalf("paired result = %+v", got)
+	}
+	if settled.SpawnReceipts[action].Task != pending.Task || settled.TaskStatusOf(pending.Task) != runtime.TaskTerminal || !containsStep(settled.Completed, string(pending.Task.Step)) {
+		t.Fatal("receipt lost the signed task or did not complete its step")
+	}
+	if len(settled.StagedResults) != 0 || len(settled.EndedAttempts) != 0 || len(settled.PendingActions) != 1 || claims != 1 {
+		t.Fatalf("settlement bookkeeping: staged=%v ended=%v pending=%v claims=%d", settled.StagedResults, settled.EndedAttempts, settled.PendingActions, claims)
+	}
+	if replay, err := engine.Submit(receipt, observedInput); err != nil || !reflect.DeepEqual(replay, accepted) {
+		t.Fatalf("same-event replay = %+v err=%v", replay, err)
+	}
+	if replay, err := engine.Submit(spawnReceipt(t, "receipt-replayed", action, "agent-alpha"), observedInput); err != nil || replay.Status != "DUPLICATE" || len(replay.Refill) != 0 {
+		t.Fatalf("same-payload replay = %+v err=%v", replay, err)
+	}
+	if claims != 1 || !reflect.DeepEqual(engine.LoadMustSucceed(t).State.PendingActions, settled.PendingActions) {
+		t.Fatal("receipt replay repeated a claim or refill")
+	}
+	before := stateBytesOf(t, dir)
+	if _, err := engine.Submit(spawnReceipt(t, "receipt-conflict", action, "other-agent"), observedInput); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
+		t.Fatalf("receipt conflict = %v", err)
+	}
+	if !reflect.DeepEqual(before, stateBytesOf(t, dir)) {
+		t.Fatal("conflicting receipt changed durable state")
+	}
+}
+
+func TestUnknownSpawnReceiptAfterTerminalPreservesReviewPairing(t *testing.T) {
+	cd, reg := productReviewDAGFixture(t, dagStep{name: "review.primary", deps: []string{"prep.parse"}})
+	engine, _ := reviewEngine(t, cd, reg)
+	action := issueReady(t, engine)[0]
+	observedInput := Observation{}
+	pending := engine.LoadMustSucceed(t).State.PendingActions[action]
+	evidence := blockingReviewEvidence(review.ProductReview, action, "review completed before receipt")
+	result, err := NewReviewWorkerResultEvent("review-before-terminal", action, testProvider, "sha256:review-result", evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acceptance, err := engine.Submit(result, observedInput); err != nil || acceptance.Status != "STAGED" {
+		t.Fatalf("stage = %+v err=%v", acceptance, err)
+	}
+	terminalizeDispatchTask(t, engine, action)
+	submitUnknownReceipt(t, engine, "unknown-after-terminal", action, "review-correlation")
+	staged := engine.LoadMustSucceed(t).State
+	if staged.SpawnReceipts[action].Task != pending.Task || staged.Results[action].ActionID != "" || staged.StagedResults[action].Review == nil {
+		t.Fatal("UNKNOWN receipt lost task identity or settled unwitnessed evidence")
+	}
+	attachUnknownReceipt(t, engine, action, "review-correlation", "review-worker")
+	settled := engine.LoadMustSucceed(t).State
+	if got := settled.Results[action]; got.Review == nil || got.Review.DispatchID != action || got.PayloadDigest != "sha256:review-result" {
+		t.Fatalf("paired review = %+v", got)
+	}
+	if len(settled.StagedResults) != 0 || len(settled.EndedAttempts) != 0 || settled.ReviewSeries.ProductReview.Completed != 1 || len(settled.ReviewSeries.ProductReview.RawCandidates) != 1 {
+		t.Fatalf("review settlement = %+v", settled.ReviewSeries.ProductReview)
+	}
+}
+
+func TestFailedSpawnReceiptAfterTerminalRecordsOnlyFailureObservation(t *testing.T) {
+	engine, _, action := refillEngine(t)
+	engine.cfg.ClaimDispatch = func(_, _, _, _ string) error {
+		t.Fatal("FAILED receipt must not claim a worker identity")
+		return nil
+	}
+	terminalizeDispatchTask(t, engine, action)
+	before := engine.LoadMustSucceed(t).State
+	failed, err := NewSpawnReceiptWithFailureClass("failed-after-terminal", action, testProvider, "agent-alpha", SpawnStatusFailed, authoring.FailureBusinessReject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := engine.Submit(failed, Observation{})
+	if err != nil || accepted.Status != "ACCEPTED" || accepted.RecoveryAction != string(RecoveryFail) || len(accepted.Refill) != 0 {
+		t.Fatalf("FAILED receipt = %+v err=%v", accepted, err)
+	}
+	after := engine.LoadMustSucceed(t).State
+	if len(after.SpawnFailures[action]) != 1 || len(after.SpawnReceipts) != 0 || len(after.Results) != 0 || !reflect.DeepEqual(before.EndedAttempts, after.EndedAttempts) || !reflect.DeepEqual(before.Completed, after.Completed) {
+		t.Fatal("FAILED observation changed terminal settlement or recorded a result")
+	}
+}
+
 // TestWorkerResultNegatives：未知 action、provider mismatch、同 action
 // 异字节结果冲突、FAIL 结果只终结当前任务而不推进完成 frontier。
 func TestWorkerResultNegatives(t *testing.T) {
 	engine, _, alphaAction := refillEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), observedInput); err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
@@ -483,7 +591,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(unknown, fp); err == nil {
+	if _, err := engine.Submit(unknown, observedInput); err == nil {
 		t.Fatal("unknown action accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownAction {
 		t.Fatalf("unknown code = %q", code)
@@ -492,7 +600,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(mismatch, fp); err == nil {
+	if _, err := engine.Submit(mismatch, observedInput); err == nil {
 		t.Fatal("provider mismatch accepted")
 	} else if code := rejectionCode(t, err); code != CodeProviderMismatch {
 		t.Fatalf("mismatch code = %q", code)
@@ -507,7 +615,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	acceptance, err := engine.Submit(fail, fp)
+	acceptance, err := engine.Submit(fail, observedInput)
 	if err != nil {
 		t.Fatalf("fail result: %v", err)
 	}
@@ -531,7 +639,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	dup, err := engine.Submit(sameBytes, fp)
+	dup, err := engine.Submit(sameBytes, observedInput)
 	if err != nil || dup.Status != "DUPLICATE" {
 		t.Fatalf("result duplicate = %+v err = %v", dup, err)
 	}
@@ -541,7 +649,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(different, fp); err == nil {
+	if _, err := engine.Submit(different, observedInput); err == nil {
 		t.Fatal("conflicting result accepted")
 	} else if code := rejectionCode(t, err); code != CodeReceiptConflict {
 		t.Fatalf("conflict code = %q", code)
@@ -557,11 +665,11 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 	} {
 		t.Run(string(class), func(t *testing.T) {
 			engine, _, plan, _ := preparedEngine(t)
-			fp := fingerprintOf(t, engine)
-			if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+			observedInput := Observation{}
+			if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 				t.Fatalf("issue: %v", err)
 			}
-			if _, err := engine.Submit(spawnReceipt(t, EventID("evt-def-receipt-"+strings.ToLower(string(class))), reviewAction, "agent-review-1"), fp); err != nil {
+			if _, err := engine.Submit(spawnReceipt(t, EventID("evt-def-receipt-"+strings.ToLower(string(class))), reviewAction, "agent-review-1"), observedInput); err != nil {
 				t.Fatalf("receipt: %v", err)
 			}
 			result, err := NewWorkerResultEvent(
@@ -571,7 +679,7 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("result event: %v", err)
 			}
-			acceptance, err := engine.Submit(result, fp)
+			acceptance, err := engine.Submit(result, observedInput)
 			if err != nil {
 				t.Fatalf("result: %v", err)
 			}
@@ -629,7 +737,7 @@ func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
 	original := engine.LoadMustSucceed(t).State.PendingActions[action]
 	submitSpawnReceipt(t, engine, "transient-spawn", action)
 	ev, _ := NewWorkerResultEvent("transient-result", action, testProvider, OutcomeRuntimeError, "sha256:temporary", authoring.FailureTransientEngine)
-	accepted, err := engine.Submit(ev, fingerprintOf(t, engine))
+	accepted, err := engine.Submit(ev, Observation{})
 	if err != nil || accepted.Status != OutcomeRuntimeError {
 		t.Fatalf("invalid result %+v %v", accepted, err)
 	}
@@ -639,7 +747,7 @@ func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
 		t.Fatal("retry did not preserve logical task and rejection evidence")
 	}
 	late, _ := NewWorkerResultEvent("transient-late", action, testProvider, OutcomePass, "sha256:late", "")
-	a, err := engine.Submit(late, fingerprintOf(t, engine))
+	a, err := engine.Submit(late, Observation{})
 	if err != nil || a.Status != "OBSOLETE_RESULT" {
 		t.Fatalf("late result %+v %v", a, err)
 	}
@@ -655,8 +763,8 @@ func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
 // same durable Attempt.
 func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	failed, err := NewSpawnReceiptWithFailureClass(
@@ -666,7 +774,7 @@ func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed spawn event: %v", err)
 	}
-	acceptance, err := engine.Submit(failed, fp)
+	acceptance, err := engine.Submit(failed, observedInput)
 	if err != nil || acceptance.RecoveryAction != string(RecoveryResumeAttempt) {
 		t.Fatalf("failed spawn acceptance = %+v err=%v", acceptance, err)
 	}
@@ -680,29 +788,29 @@ func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
 	if _, pending := afterFailure.State.PendingActions[reviewAction]; !pending {
 		t.Fatal("retryable spawn failure retired current Attempt")
 	}
-	if retried, err := engine.Submit(spawnReceipt(t, "evt-spawn-retried", reviewAction, "agent-review-1"), fp); err != nil || retried.Status != "ACCEPTED" {
+	if retried, err := engine.Submit(spawnReceipt(t, "evt-spawn-retried", reviewAction, "agent-review-1"), observedInput); err != nil || retried.Status != "ACCEPTED" {
 		t.Fatalf("SPAWNED retry = %+v err=%v", retried, err)
 	}
 }
 
 func TestFailedSpawnReceiptClearsResultStagedBeforeReceipt(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	staged, err := NewWorkerResultEvent("evt-staged-before-failed-spawn", reviewAction, testProvider, OutcomeFail, "sha256:failed", authoring.FailureBusinessReject)
 	if err != nil {
 		t.Fatalf("staged result event: %v", err)
 	}
-	if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(staged, observedInput); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("staged result = %+v err=%v", acceptance, err)
 	}
 	failed, err := NewSpawnReceiptWithFailureClass("evt-failed-spawn-after-result", reviewAction, testProvider, "agent-review-1", SpawnStatusFailed, authoring.FailureBusinessReject)
 	if err != nil {
 		t.Fatalf("failed spawn event: %v", err)
 	}
-	if _, err := engine.Submit(failed, fp); err != nil {
+	if _, err := engine.Submit(failed, observedInput); err != nil {
 		t.Fatalf("failed spawn: %v", err)
 	}
 	snapshot := engine.LoadMustSucceed(t)
@@ -716,18 +824,18 @@ func TestFailedSpawnReceiptClearsResultStagedBeforeReceipt(t *testing.T) {
 
 func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "evt-transient-spawn-for-replacement", reviewAction, "agent-review-1"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "evt-transient-spawn-for-replacement", reviewAction, "agent-review-1"), observedInput); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
 	transient, err := NewWorkerResultEvent("evt-transient-result-for-replacement", reviewAction, testProvider, OutcomeRuntimeError, "sha256:temporary", authoring.FailureTransientEngine)
 	if err != nil {
 		t.Fatalf("transient result event: %v", err)
 	}
-	if _, err := engine.Submit(transient, fp); err != nil {
+	if _, err := engine.Submit(transient, observedInput); err != nil {
 		t.Fatalf("transient result: %v", err)
 	}
 	if snap := engine.LoadMustSucceed(t); snap.State.ObsoleteActions[reviewAction].ReplacedBy == "" {
@@ -738,7 +846,7 @@ func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("late result event: %v", err)
 	}
-	acceptance, err := engine.Submit(late, fp)
+	acceptance, err := engine.Submit(late, observedInput)
 	if err != nil || acceptance.Status != "OBSOLETE_RESULT" {
 		t.Fatalf("late result = %+v err=%v", acceptance, err)
 	}
@@ -750,15 +858,15 @@ func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
 
 func TestFailedUnknownSpawnReceiptIsReconcileable(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	failed, err := NewSpawnReceiptWithFailureClass("evt-failed-unknown-spawn", reviewAction, testProvider, "agent-review-unknown", SpawnStatusFailed, authoring.FailureSideEffectUnknown)
 	if err != nil {
 		t.Fatalf("failed unknown spawn event: %v", err)
 	}
-	acceptance, err := engine.Submit(failed, fp)
+	acceptance, err := engine.Submit(failed, observedInput)
 	if err != nil || acceptance.RecoveryAction != string(RecoveryReconcile) {
 		t.Fatalf("failed unknown spawn = %+v err=%v", acceptance, err)
 	}
@@ -766,7 +874,7 @@ func TestFailedUnknownSpawnReceiptIsReconcileable(t *testing.T) {
 	if receipt := snapshot.State.SpawnReceipts[reviewAction]; receipt.Status != SpawnStatusUnknown {
 		t.Fatalf("reconcileable receipt = %+v", receipt)
 	}
-	planResult, _, err := engine.ReconcileUnknownReceipt(reviewAction, fp)
+	planResult, _, err := engine.ReconcileUnknownReceipt(reviewAction, observedInput)
 	if err != nil || planResult.Action != RecoveryOperator {
 		t.Fatalf("reconcile failed unknown spawn = %+v err=%v", planResult, err)
 	}
@@ -774,15 +882,15 @@ func TestFailedUnknownSpawnReceiptIsReconcileable(t *testing.T) {
 
 func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := NewSpawnReceiptWithFailureClass("unknown-sequence-failed", reviewAction, testProvider, "old-agent", SpawnStatusFailed, authoring.FailureSideEffectUnknown)
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := engine.Submit(failed, fp)
+	accepted, err := engine.Submit(failed, observedInput)
 	if err != nil || accepted.RecoveryAction != string(RecoveryReconcile) {
 		t.Fatalf("failed UNKNOWN route = %+v err=%v", accepted, err)
 	}
@@ -790,7 +898,7 @@ func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
 		t.Fatalf("failed side-effect receipt = %+v", receipt)
 	}
 	observedStoppedWorker(t, engine, reviewAction)
-	recovery, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine, CauseKnown: true}, fp)
+	recovery, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine, CauseKnown: true}, observedInput)
 	if err != nil || recovery.Action != RecoveryNewAttempt {
 		t.Fatalf("retry replacement = %+v err=%v", recovery, err)
 	}
@@ -809,7 +917,7 @@ func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
 		mustLifecycleEvent(t, "unknown-sequence-start", correlation, correlation, LifecycleStart),
 		mustLifecycleEvent(t, "unknown-sequence-stop", correlation, correlation, LifecycleStop),
 	} {
-		if _, err := engine.Submit(event, fp); err != nil {
+		if _, err := engine.Submit(event, observedInput); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -817,10 +925,10 @@ func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(unknown, fp); err != nil {
+	if _, err := engine.Submit(unknown, observedInput); err != nil {
 		t.Fatal(err)
 	}
-	planResult, _, err := engine.ReconcileUnknownReceipt(replacement, fp)
+	planResult, _, err := engine.ReconcileUnknownReceipt(replacement, observedInput)
 	if err != nil || planResult.Action != RecoveryAttachReceipt || planResult.LifecycleMatches != 1 {
 		t.Fatalf("unique lifecycle reconciliation = %+v err=%v", planResult, err)
 	}
@@ -844,8 +952,8 @@ func mustLifecycleEvent(t *testing.T, id, correlation, identity, event string) E
 // 决定（1b 两阶段）在统一接纳面上照常关账生效。
 func TestOperatorObservationAdmits(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	forged, err := NewOperatorObservationEvent("evt-obs-forged", "forged-not-pending",
@@ -855,7 +963,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 		t.Fatalf("forged observation event: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
-	if _, err := engine.Submit(forged, fp); err == nil {
+	if _, err := engine.Submit(forged, observedInput); err == nil {
 		t.Fatal("forged observation subject was accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownAction {
 		t.Fatalf("forged observation code = %q, want %q", code, CodeUnknownAction)
@@ -870,7 +978,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(unknownSpawn, fp); err != nil {
+	if _, err := engine.Submit(unknownSpawn, observedInput); err != nil {
 		t.Fatalf("unknown spawn: %v", err)
 	}
 	observation, err := NewOperatorObservationEvent("evt-obs-1", reviewAction,
@@ -880,7 +988,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("observation event: %v", err)
 	}
-	acceptance, err := engine.Submit(observation, fp)
+	acceptance, err := engine.Submit(observation, observedInput)
 	if err != nil {
 		t.Fatalf("submit observation: %v", err)
 	}
@@ -900,7 +1008,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 	}
 
 	// Ask 决定关账生效（衔接 1b）。
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-9"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-9"), observedInput); err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	token, err := engine.Freshness("req-abort-9")
@@ -911,7 +1019,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(decide, fp); err != nil {
+	if _, err := engine.Submit(decide, observedInput); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	final := engine.LoadMustSucceed(t)
@@ -939,13 +1047,13 @@ func TestOperatorObservationAdmits(t *testing.T) {
 // 接纳面上拒绝且零状态变化（衔接 1b 封闭 kind）。
 func TestFreeUserEventRejectedThroughSubmit(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	before := stateBytesOf(t, dir)
 	rogue := Event{ID: "evt-rogue", Kind: EventKind("USER_FORCE_SEAL")}
-	if _, err := engine.Submit(rogue, fp); err == nil {
+	if _, err := engine.Submit(rogue, observedInput); err == nil {
 		t.Fatal("free USER_* event accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownEventKind {
 		t.Fatalf("rogue code = %q", code)
@@ -953,7 +1061,7 @@ func TestFreeUserEventRejectedThroughSubmit(t *testing.T) {
 	if after := stateBytesOf(t, dir); !reflect.DeepEqual(before, after) {
 		t.Fatal("rogue event changed state bytes")
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "evt-recv-after-rogue", reviewAction, "agent-1"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "evt-recv-after-rogue", reviewAction, "agent-1"), observedInput); err != nil {
 		t.Fatalf("engine unusable after rogue event: %v", err)
 	}
 }
@@ -963,7 +1071,7 @@ func TestFreeUserEventRejectedThroughSubmit(t *testing.T) {
 func reopenEngineWith(t *testing.T, dir string) *Engine {
 	t.Helper()
 	cd, reg := twoAgentFixture(t)
-	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1})
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)
 	}
@@ -985,7 +1093,7 @@ func parallelTailsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler
 	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -993,21 +1101,18 @@ func parallelTailsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(from string) authoring.IO {
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-			Inputs:         []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}},
-			Postconditions: []authoring.PredicateRef{{ID: "pred.test.post"}}}
-	}
+	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+		Postconditions: []authoring.PredicateRef{{ID: reviewResultPredicate}}}
 	prep, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.test.prep"})
 	must(err)
-	product, err := authoring.NewAgentStep(header("product.review", "prep.parse"), io("prep.parse"), authoring.AgentSpec{
+	product, err := authoring.NewAgentStep(header("product.review", "prep.parse"), io, authoring.AgentSpec{
 		Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
 		ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 	})
 	must(err)
 	steps := []authoring.Step{prep, product}
 	for _, name := range []string{"tail.a", "tail.b", "tail.c"} {
-		step, err := authoring.NewAgentStep(header(name, "product.review"), io("product.review"), authoring.AgentSpec{
+		step, err := authoring.NewAgentStep(header(name, "product.review"), io, authoring.AgentSpec{
 			Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute,
 		})
 		must(err)
@@ -1024,7 +1129,7 @@ func parallelTailsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler
 func TestFailedBranchRefillsTheFreedCapacityImmediately(t *testing.T) {
 	cd, reg := parallelTailsFixture(t)
 	engine, _ := reviewEngineCapacity(t, cd, reg, 2)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 
 	first := issueReady(t, engine)[0]
 	submitReviewResult(t, engine, "result-refill-product", first, reviewEvidence(review.ProductReview, first, "", "PASS", "clean", nil))
@@ -1042,7 +1147,7 @@ func TestFailedBranchRefillsTheFreedCapacityImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed receipt event: %v", err)
 	}
-	acceptance, err := engine.Submit(failed, fp)
+	acceptance, err := engine.Submit(failed, observedInput)
 	if err != nil || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("failed receipt = %v %+v", err, acceptance)
 	}

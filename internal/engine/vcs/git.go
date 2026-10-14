@@ -264,22 +264,6 @@ func (p *Provider) SquashToBase(base, message string) error {
 	return nil
 }
 
-// TrackAll 把工作区当前变更全部纳入暂存（git add --all）：候选 freeze 的收口
-// 动作，语义＝把工作区当前变更全部纳入候选提交。
-func (p *Provider) TrackAll() error {
-	if p.name != "git" {
-		paths, err := p.ChangedPaths()
-		if err != nil {
-			return err
-		}
-		return p.Track(paths)
-	}
-	if _, err := p.runner.Run(p.root, "git", "add", "--all"); err != nil {
-		return fmt.Errorf("cannot stage working tree changes: %w", err)
-	}
-	return nil
-}
-
 // Commit records the exact staged tree with its bound operation message.
 func (p *Provider) Commit(message string) error {
 	if p.name != "git" {
@@ -289,23 +273,6 @@ func (p *Provider) Commit(message string) error {
 		return fmt.Errorf("cannot commit: %w", err)
 	}
 	return nil
-}
-
-// DiffNames returns the original changed paths between base and head in native order.
-func (p *Provider) DiffNames(base, head string) ([]string, error) {
-	if p.name != "git" {
-		changes, err := p.Changes(base, head)
-		var paths []string
-		for _, c := range changes {
-			paths = append(paths, c.Path)
-		}
-		return paths, err
-	}
-	output, err := p.runner.RunRaw(p.root, "git", nil, "diff", "--name-only", "-z", base+".."+head)
-	if err != nil {
-		return nil, fmt.Errorf("cannot list changed paths %s..%s: %w", base, head, err)
-	}
-	return nulPaths(string(output)), nil
 }
 
 func (p *Provider) verifyRoot() error {

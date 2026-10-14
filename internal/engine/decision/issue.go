@@ -22,27 +22,16 @@ type IssuedAction struct {
 }
 
 // IssuedSet 是一次签发的完整集合：容量 C、可签发 N 时恰好 min(C,N) 个，
-// 顺序与 Plan 固定顺序一致。主代理必须原样整批搬运，不得挑子集
-// 。
+// 顺序与 Plan 固定顺序一致。程序必须原样整批消费，主代理不得选择子集。
 type IssuedSet []IssuedAction
-
-// ActionStore 是签发持久化接口：SelectIssued 分配 actionID 后、返回前
-// 必须落账（state.json 的 pendingActions 与 revision/CAS；实现方自行
-// 保证持久化语义）。
-type ActionStore interface {
-	PersistIssued(IssuedSet) error
-}
 
 // SelectIssued 按 admission 机械裁剪 Ready 计划（master-requirements
 // §8.2.2）：可签发 N、容量 C 时签发恰好 min(C,N) 个，不留空容量、不
 // 选择性忽略、不把并行组退化为主代理决定的串行。只有 Kind=Ready 的
-// 计划可签发；签发顺序固定为 Plan 顺序，actionID 派生后经 store 持久化。
-func SelectIssued(plan *Plan, adm Admission, store ActionStore) (IssuedSet, error) {
+// 计划可签发；签发顺序固定为 Plan 顺序，确定性派生基础 actionID。
+func SelectIssued(plan *Plan, adm Admission) (IssuedSet, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("decision: select issued: nil plan")
-	}
-	if store == nil {
-		return nil, fmt.Errorf("decision: select issued: nil action store")
 	}
 	if plan.Next.Kind != KindReady || plan.Next.Ready == nil {
 		return nil, fmt.Errorf("decision: select issued: plan kind %s is not READY", plan.Next.Kind)
@@ -62,9 +51,6 @@ func SelectIssued(plan *Plan, adm Admission, store ActionStore) (IssuedSet, erro
 			Task:     t.Task,
 			Step:     t.Step,
 		})
-	}
-	if err := store.PersistIssued(issued); err != nil {
-		return nil, fmt.Errorf("decision: select issued: persist: %w", err)
 	}
 	return issued, nil
 }

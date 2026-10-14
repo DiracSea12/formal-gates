@@ -73,34 +73,36 @@ type RepairCaseEvidence struct {
 	Result      coverage.ExecutionStatus `json:"result"`
 }
 type DevelopmentEvidence struct {
-	Commands      []string               `json:"commands,omitempty"`
-	RemainingWork string                 `json:"remainingWork,omitempty"`
-	Completion    *DevelopmentCompletion `json:"completion,omitempty"`
-	CaseRuns      []RepairCaseEvidence   `json:"caseRuns,omitempty"`
-	Paths         []string               `json:"paths"`
-	Summary       string                 `json:"summary"`
-	AffectedCases []string               `json:"affectedCases,omitempty"`
+	RequirementResults []requirement.PointResult `json:"requirementResults,omitempty"`
+	Commands           []string                  `json:"commands,omitempty"`
+	RemainingWork      string                    `json:"remainingWork,omitempty"`
+	Completion         *DevelopmentCompletion    `json:"completion,omitempty"`
+	CaseRuns           []RepairCaseEvidence      `json:"caseRuns,omitempty"`
+	Paths              []string                  `json:"paths"`
+	Summary            string                    `json:"summary"`
+	AffectedCases      []string                  `json:"affectedCases,omitempty"`
 }
 
 // ValidationResult is attached to WORKER_RESULT. Outcome describes the worker
 // transport; Status and per-item results describe the business verdict.
 type ValidationResult struct {
-	QACommands        []QACaseOperations           `json:"qaCommands,omitempty"`
-	DesignChange      *QADesignChange              `json:"designChange,omitempty"`
-	Observations      []OperatorObservationPayload `json:"observations,omitempty"`
-	GranularityReview *GranularityReview           `json:"granularityReview,omitempty"`
-	Resolution        *ConflictResolution          `json:"resolution,omitempty"`
-	Binding           WorkBinding                  `json:"binding"`
-	Status            string                       `json:"status"`
-	Development       *DevelopmentEvidence         `json:"development,omitempty"`
-	Manifest          *coverage.AcceptanceManifest `json:"manifest,omitempty"`
-	Review            *coverage.ReviewResult       `json:"review,omitempty"`
-	Suggestions       []QASuggestion               `json:"suggestions,omitempty"`
-	Execution         *coverage.ExecutionReport    `json:"execution,omitempty"`
-	Tool              string                       `json:"tool,omitempty"`
-	Environment       string                       `json:"environment,omitempty"`
-	Checkpoint        bool                         `json:"checkpoint,omitempty"`
-	Findings          []review.Finding             `json:"findings,omitempty"`
+	RequirementResults []RequirementDecision        `json:"requirementResults,omitempty"`
+	QACommands         []QACaseOperations           `json:"qaCommands,omitempty"`
+	DesignChange       *QADesignChange              `json:"designChange,omitempty"`
+	Observations       []OperatorObservationPayload `json:"observations,omitempty"`
+	GranularityReview  *GranularityReview           `json:"granularityReview,omitempty"`
+	Resolution         *ConflictResolution          `json:"resolution,omitempty"`
+	Binding            WorkBinding                  `json:"binding"`
+	Status             string                       `json:"status"`
+	Development        *DevelopmentEvidence         `json:"development,omitempty"`
+	Manifest           *coverage.AcceptanceManifest `json:"manifest,omitempty"`
+	Review             *coverage.ReviewResult       `json:"review,omitempty"`
+	Suggestions        []QASuggestion               `json:"suggestions,omitempty"`
+	Execution          *coverage.ExecutionReport    `json:"execution,omitempty"`
+	Tool               string                       `json:"tool,omitempty"`
+	Environment        string                       `json:"environment,omitempty"`
+	Checkpoint         bool                         `json:"checkpoint,omitempty"`
+	Findings           []review.Finding             `json:"findings,omitempty"`
 }
 
 // WorkBinding accompanies every issued business task and its result. Revision
@@ -353,7 +355,7 @@ func validationHandler(step compiler.CompiledStep) string {
 		return ""
 	}
 	switch p.Handler {
-	case "engine.development.batch.v4", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.gate.v2", "engine.repair.v5", "engine.repair.verify.v2":
+	case "engine.development.batch.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.gate.v3", "engine.repair.v6", "engine.repair.verify.v2":
 		return string(p.Handler)
 	}
 	return ""
@@ -367,7 +369,7 @@ func pipelineStep(cd *compiler.CompiledDefinition, handler string) (compiler.Com
 	return compiler.CompiledStep{}, false
 }
 func pipelineEnabled(s *State, cd *compiler.CompiledDefinition) bool {
-	_, ok := pipelineStep(cd, "engine.development.batch.v4")
+	_, ok := pipelineStep(cd, "engine.development.batch.v5")
 	return ok && s.Route != "lightweight"
 }
 func pipelineTask(cd *compiler.CompiledDefinition, handler, scope string) runtime.TaskKey {
@@ -493,6 +495,11 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 		}
 	}
 	role := s.validationRole(key, cd)
+	if role == "engine.qa.review.rationale.v2" && s.prewaveCarryAuthorized(key, cd) {
+		if source, carried := s.carriedReviewSource(s.validationMode(key)); carried {
+			b.Generation, b.RequirementRevision = source.Generation, source.RequirementRevision
+		}
+	}
 	if role == "engine.validation.observation.v2" {
 		if input := s.validationObservationInput(); input != nil && s.sourceValidationTask(key) == observationTask(cd, input) {
 			b.WaveID, b.Candidate = input.WaveID, input.Candidate.Identity
@@ -512,7 +519,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			b.Candidate, b.CaseVersion = params.Base, params.Integration.StartAction
 		}
 	}
-	if role == "engine.development.batch.v4" {
+	if role == "engine.development.batch.v5" {
 		if request, _, batch, ok := s.developmentBatch(key, cd); ok {
 			b.PlanRequest, b.BatchID = request, batch.ID
 			_, _, revision := s.confirmedDevelopmentPlan()
@@ -526,7 +533,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if set := v.Sets[mode]; set != nil {
 		b.CaseVersion = set.Version
 	}
-	if role != "engine.development.batch.v4" && role != "engine.merge.resolve.v3" && !(role == "engine.qa.design.v5" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
+	if role != "engine.development.batch.v5" && role != "engine.merge.resolve.v3" && !(role == "engine.qa.design.v5" && (mode == coverage.ReviewBlackbox || mode == coverage.ReviewMerge)) {
 		b.Candidate = v.DevelopmentSnapshot
 		if v.Candidate != nil {
 			b.Candidate = v.Candidate.Identity
@@ -537,7 +544,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			b.Candidate = set.Candidate
 		}
 	}
-	if role == "engine.repair.v5" {
+	if role == "engine.repair.v6" {
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				b.PureP2 = work.wave.Repair.PureP2 || work.pureP2
@@ -558,7 +565,7 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 			}
 		}
 	}
-	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution.v3" || role == "engine.gate.v2") {
+	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution.v3" || role == "engine.gate.v3") {
 		b.WaveID = wave.ID
 		b.Candidate = wave.Candidate.Identity
 	}
@@ -645,7 +652,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 	if wave.Status == "COLLECTING" && s.validateCoverageRelations() == nil {
 		for _, target := range wave.Targets {
 			if target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED" {
-				handler := "engine.gate.v2"
+				handler := "engine.gate.v3"
 				if target.Kind == "QA" {
 					handler = "engine.qa.execution.v3"
 				}

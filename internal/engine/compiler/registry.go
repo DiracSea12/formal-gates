@@ -39,7 +39,7 @@ type entry struct {
 	runner authoring.RunnerKind
 }
 
-// Registry 是封闭 registry：NewRegistry 后逐条注册，注册完成即不可变。
+// Registry 是封闭 registry：NewRegistry 后逐条注册，重复 ID 在注册期拒绝。
 // "executable definition 只有在同一候选包 registry 能完整、唯一解析其全部
 // ID 时才能激活"（锁步激活）由 Compile 对每条引用逐一解析实现。
 type Registry struct {
@@ -140,40 +140,4 @@ func (r *Registry) RegisterAskKind(id authoring.AskKindID) error {
 // ResolveHandler 解析 handler ID，返回注册时声明的 runner。
 func (r *Registry) ResolveHandler(id authoring.HandlerID) (authoring.RunnerKind, error) {
 	return r.resolve(string(id), KindHandler)
-}
-
-// ResolvePredicate 解析 predicate ID。
-func (r *Registry) ResolvePredicate(id authoring.PredicateID) error {
-	_, err := r.resolve(string(id), KindPredicate)
-	return err
-}
-
-// ResolveCodec 解析 codec ID。
-func (r *Registry) ResolveCodec(id authoring.CodecID) error {
-	_, err := r.resolve(string(id), KindCodec)
-	return err
-}
-
-// ResolveReconciler 解析 reconciler ID。
-func (r *Registry) ResolveReconciler(id authoring.ReconcileID) error {
-	_, err := r.resolve(string(id), KindReconciler)
-	return err
-}
-
-// ResolveSchema 解析 schema ID。
-func (r *Registry) ResolveSchema(id authoring.SchemaID) error {
-	_, err := r.resolve(string(id), KindSchema)
-	return err
-}
-
-// ResolveOperation 解析 operation ID。
-func (r *Registry) ResolveOperation(id authoring.OperationID) error {
-	_, err := r.resolve(string(id), KindOperation)
-	return err
-}
-
-// ResolveAskKind 解析 ask 类型 ID。
-func (r *Registry) ResolveAskKind(id authoring.AskKindID) error {
-	_, err := r.resolve(string(id), KindAskKind)
-	return err
 }

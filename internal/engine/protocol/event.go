@@ -33,10 +33,11 @@ type (
 type ControlKind string
 
 const (
-	ControlValidation ControlKind = "VALIDATION"
-	ControlReset      ControlKind = "RESET"
-	ControlAbort      ControlKind = "ABORT"
-	ControlRecovery   ControlKind = "RECOVER_ATTEMPT"
+	ControlValidation   ControlKind = "VALIDATION"
+	ControlReset        ControlKind = "RESET"
+	ControlAbort        ControlKind = "ABORT"
+	ControlRecovery     ControlKind = "RECOVER_ATTEMPT"
+	ControlContinueNode ControlKind = "CONTINUE_NODE"
 	// 四个开发前审查/拓扑/路线业务控制（总需求 §6.2、§7.3.5、§8.1.1）：
 	// Ask 创建方给出选项集，DECIDE 携带与控制一一对应的 typed Review
 	// 载荷分支（REVIEW_ROUND_GRANT 的 decline 选项除外）。
@@ -54,7 +55,7 @@ const (
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
 	switch k {
-	case ControlValidation, ControlReset, ControlAbort, ControlRecovery,
+	case ControlValidation, ControlReset, ControlAbort, ControlRecovery, ControlContinueNode,
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 		ControlRequestRequirementChange:
 		return true
@@ -127,7 +128,9 @@ func (k EventKind) Valid() bool {
 // without a package to freeze work during clarification. A later update binds
 // the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
-	Validation *ValidationRequest
+	Continuation *NodeContinuationRequest
+	Handoff      *DevelopmentHandoffRequest
+	Validation   *ValidationRequest
 	// Request and Token bind a package update to an existing requirement Ask.
 	// Empty Request starts a new control request, including a package-free barrier.
 	Request RequestID
@@ -141,19 +144,26 @@ type RequestPayload struct {
 	RouteGates []string
 }
 
+// DevelopmentHandoffRequest binds a same-host transfer to its current developer.
+type DevelopmentHandoffRequest struct {
+	ActionID string `json:"actionId"`
+	Reason   string `json:"reason"`
+}
+
 // DecidePayload 是 DECIDE 的 payload：目标 request、freshness token 与
 // 选中选项（选项合法性对 pending Ask 的落账选项集校验，属接纳层）。审查
 // 类业务控制额外携带 typed Review 载荷（分支与控制一一对应）；需求变化
 // 控制携带 typed Requirement 载荷（或作为 decline 两者皆空）。两个变体
 // 指针同时只允许一个非空。
 type DecidePayload struct {
-	Validation  *ValidationDecision
-	Request     RequestID
-	Token       string
-	Choice      AskOptionID
-	Review      *ReviewDecisionPayload
-	Requirement *RequirementDecisionPayload
-	Reset       *ResetDecision
+	Continuation *NodeContinuationDecision
+	Validation   *ValidationDecision
+	Request      RequestID
+	Token        string
+	Choice       AskOptionID
+	Review       *ReviewDecisionPayload
+	Requirement  *RequirementDecisionPayload
+	Reset        *ResetDecision
 }
 
 // TaskPayload 是 TASK_PROGRESS 的 payload：目标任务、期望的当前
@@ -405,6 +415,7 @@ const (
 // Event 是提交事件的 tagged union：除本 kind 对应的一个 payload 外其余
 // 必须为 nil（Validate 强制，形态与 decision.NextResult 一致）。
 type Event struct {
+	nodeParent          *Snapshot
 	resetPreview        *ResetPreview
 	requirementDocument string
 	ID                  EventID
@@ -501,7 +512,7 @@ func NewSpawnReceiptWithFailureClass(id EventID, actionID, provider, correlation
 	return ev, ev.Validate()
 }
 
-// NewWorkerResultEvent 是唯一的 typed worker-result 构造入口。失败结果
+// NewWorkerResultEvent 构造不携语义证据的普通 worker result。失败结果
 // 必须显式携带封闭 failure class；PASS 结果必须传空 class。
 func NewWorkerResultEvent(id EventID, actionID, provider, outcome, payloadDigest string, class authoring.FailureClass) (Event, error) {
 	ev := Event{ID: id, Kind: KindWorkerResult, Result: &WorkerResultPayload{
@@ -538,12 +549,6 @@ func NewOperatorObservationEvent(id EventID, subject string, facts ...decision.F
 		Subject: subject, Facts: append([]decision.Fact(nil), facts...),
 	}}
 	return ev, ev.Validate()
-}
-
-// NewHostActionReceiptEvent 构造 HostAction 回执事件：公共字段非空、
-// operation 引用非空、status 属封闭集合。
-func NewHostActionReceiptEvent(id EventID, actionID string, operation authoring.OperationID, provider, correlation, payloadDigest, status string) (Event, error) {
-	return NewAdapterHostActionReceiptEvent(id, actionID, operation, provider, correlation, payloadDigest, status, "", map[string]any{})
 }
 
 // NewAdapterHostActionReceiptEvent constructs the adapter branch of the
@@ -628,7 +633,10 @@ func (e Event) Validate() error {
 				ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 				ControlRequestRequirementChange)}
 		}
-		if len(e.Request.Options) == 0 && e.Request.Request == "" {
+		if e.Request.Handoff != nil && (e.Request.Control != ControlRecovery || len(e.Request.Options) != 0) {
+			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "development handoff uses a recovery request with engine-owned options"}
+		}
+		if len(e.Request.Options) == 0 && e.Request.Request == "" && e.Request.Handoff == nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "request options are empty"}
 		}
 		seen := make(map[AskOptionID]bool, len(e.Request.Options))
@@ -660,6 +668,13 @@ func (e Event) Validate() error {
 		} else if e.Request.Package != nil || e.Request.Request != "" || e.Request.Token != "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not carry a requirement package update", e.Request.Control)}
 		}
+		if e.Request.Control == ControlContinueNode {
+			if e.Request.Continuation == nil || e.Request.Continuation.Target == "" || e.Request.Continuation.PreviewDigest == "" {
+				return validationError("节点继续请求缺少原目标预览")
+			}
+		} else if e.Request.Continuation != nil {
+			return validationError("该请求不接受节点继续载荷")
+		}
 	case KindDecide:
 		if strings.TrimSpace(string(e.Decide.Request)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide request id is empty"}
@@ -672,6 +687,14 @@ func (e Event) Validate() error {
 		}
 		if e.Decide.Review != nil && e.Decide.Requirement != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide payload must carry at most one typed variant (review or requirement)"}
+		}
+		if e.Decide.Continuation != nil {
+			if e.Decide.Review != nil || e.Decide.Requirement != nil || e.Decide.Reset != nil || e.Decide.Validation != nil {
+				return validationError("节点继续决定只接受其 typed 载荷")
+			}
+			if err := validateWorkDecisionShape(e.Decide.Continuation.Work); err != nil {
+				return err
+			}
 		}
 		if e.Decide.Review != nil {
 			if err := validateReviewDecisionPayload(e.Decide.Review); err != nil {
@@ -860,23 +883,26 @@ type eventWire struct {
 }
 
 type requestWire struct {
-	Validation *ValidationRequest          `json:"validation,omitempty"`
-	Request    string                      `json:"request,omitempty"`
-	Token      string                      `json:"token,omitempty"`
-	Control    string                      `json:"control"`
-	Options    []AskOption                 `json:"options"`
-	Package    *RequirementDecisionPackage `json:"package,omitempty"`
-	RouteGates []string                    `json:"routeGates,omitempty"`
+	Continuation *NodeContinuationRequest    `json:"continuation,omitempty"`
+	Handoff      *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
+	Validation   *ValidationRequest          `json:"validation,omitempty"`
+	Request      string                      `json:"request,omitempty"`
+	Token        string                      `json:"token,omitempty"`
+	Control      string                      `json:"control"`
+	Options      []AskOption                 `json:"options"`
+	Package      *RequirementDecisionPackage `json:"package,omitempty"`
+	RouteGates   []string                    `json:"routeGates,omitempty"`
 }
 
 type decideEventWire struct {
-	Reset       *ResetDecision              `json:"reset,omitempty"`
-	Validation  *ValidationDecision         `json:"validation,omitempty"`
-	Request     string                      `json:"request"`
-	Token       string                      `json:"token"`
-	Choice      AskOptionID                 `json:"choice"`
-	Review      *ReviewDecisionPayload      `json:"review,omitempty"`
-	Requirement *RequirementDecisionPayload `json:"requirement,omitempty"`
+	Continuation *NodeContinuationDecision   `json:"continuation,omitempty"`
+	Reset        *ResetDecision              `json:"reset,omitempty"`
+	Validation   *ValidationDecision         `json:"validation,omitempty"`
+	Request      string                      `json:"request"`
+	Token        string                      `json:"token"`
+	Choice       AskOptionID                 `json:"choice"`
+	Review       *ReviewDecisionPayload      `json:"review,omitempty"`
+	Requirement  *RequirementDecisionPayload `json:"requirement,omitempty"`
 }
 
 type taskEventWire struct {
@@ -949,10 +975,12 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)
-		w.Request = &requestWire{Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
+		w.Request = &requestWire{Handoff: e.Request.Handoff, Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
+		w.Request.Continuation = e.Request.Continuation
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Reset: e.Decide.Reset, Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
+		w.Decide.Continuation = e.Decide.Continuation
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}
@@ -1055,9 +1083,6 @@ func (e Event) WithRequirementDocument(document string) Event {
 	return e
 }
 
-// MarshalJSON uses the same worker wire as Event.CanonicalBytes. The worker
-// material template therefore names the actual submit fields rather than Go
-// struct field names; it does not perform business admission.
-func (p WorkerResultPayload) MarshalJSON() ([]byte, error) {
-	return canonicalJSON(workerResultEventWire{SourceResult: p.SourceResult, InterruptionReason: p.InterruptionReason, InvalidReason: p.InvalidReason, Validation: p.Validation, ActionID: p.ActionID, Provider: p.Provider, Outcome: p.Outcome, PayloadDigest: p.PayloadDigest, FailureClass: string(p.FailureClass), Review: p.Review})
-}
+// WithNodeParent carries the original observed master inside the existing
+// parent-to-child native window; it is not an external user payload.
+func (e Event) WithNodeParent(parent Snapshot) Event { e.nodeParent = &parent; return e }

@@ -26,7 +26,7 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native operations"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
-	development, di := d.action("engine.development.batch.v4")
+	development, di := d.action("engine.development.batch.v5")
 	design, qi := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(qi)
 	original := []coverage.Operation{
@@ -45,7 +45,7 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	rejected.SetStatus = coverage.StatusFail
 	d.business(review, protocol.ValidationResult{Binding: ri.Binding, Status: "FAIL", Review: &rejected})
 	design, qi = d.action("engine.qa.design.v5")
-	workerInput := protocol.WorkerInput{Handler: qi.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &qi}
+	workerInput := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: qi.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &qi}
 	raw := []byte(`{"cases":[{"case":1,"operations":[{"reuse":1,"stdin":" changed input\n"},{"reuse":2},{"kind":"SHELL","command":"printf new-observation; printf c >> qa-executions"}]}],"coverage":[null]}`)
 	event, err := worker.DecodeResultWithPaths(workerInput, d.eventID(), raw, "original-revision-output", []string{})
 	if err != nil {

@@ -1,10 +1,7 @@
 package prompts
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"hash"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,17 +31,15 @@ const (
 )
 
 type PromptDefinition struct {
-	ID      string `json:"id"`
-	Content string `json:"-"`
+	ID      string
+	Content string
 }
 
 type PromptCatalog struct {
-	Base            string             `json:"-"`
-	BaseRevision    string             `json:"baseRevision"`
-	CatalogRevision string             `json:"catalogRevision"`
-	Gates           []PromptDefinition `json:"gates"`
-	Actions         []PromptDefinition `json:"actions"`
-	RoleRules       []PromptDefinition `json:"-"`
+	Base      string
+	Gates     []PromptDefinition
+	Actions   []PromptDefinition
+	RoleRules []PromptDefinition
 }
 
 func LoadPromptCatalog(root string) (PromptCatalog, error) {
@@ -77,25 +72,11 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 		return PromptCatalog{}, fmt.Errorf("role rules: %w", err)
 	}
 
-	baseHash := sha256.Sum256([]byte(base))
-	h := sha256.New()
-	hashPart(h, "base", base)
-	for _, action := range actions {
-		hashPart(h, "action:"+action.ID, action.Content)
-	}
-	for _, gate := range gates {
-		hashPart(h, "gate:"+gate.ID, gate.Content)
-	}
-	for _, rules := range roleRules {
-		hashPart(h, "role:"+rules.ID, rules.Content)
-	}
 	return PromptCatalog{
-		Base:            base,
-		BaseRevision:    hex.EncodeToString(baseHash[:]),
-		CatalogRevision: hex.EncodeToString(h.Sum(nil)),
-		Gates:           gates,
-		Actions:         actions,
-		RoleRules:       roleRules,
+		Base:      base,
+		Gates:     gates,
+		Actions:   actions,
+		RoleRules: roleRules,
 	}, nil
 }
 
@@ -148,14 +129,6 @@ func (catalog PromptCatalog) RoleRule(id string) (PromptDefinition, bool) {
 		}
 	}
 	return PromptDefinition{}, false
-}
-
-func (catalog PromptCatalog) GateIDs() []string {
-	ids := make([]string, 0, len(catalog.Gates))
-	for _, gate := range catalog.Gates {
-		ids = append(ids, gate.ID)
-	}
-	return ids
 }
 
 // RouteCandidates 返回正常路线的候选项：黑盒 QA、白盒 QA 与除合并门外的全部已
@@ -216,8 +189,4 @@ func readPromptFile(path string) (string, error) {
 		return "", fmt.Errorf("content is empty")
 	}
 	return content, nil
-}
-
-func hashPart(h hash.Hash, name, content string) {
-	fmt.Fprintf(h, "%d:%s\n%d:%s\n", len(name), name, len(content), content)
 }

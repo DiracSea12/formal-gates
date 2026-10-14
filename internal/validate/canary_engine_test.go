@@ -11,8 +11,10 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/prompts"
+	"formal-gates/internal/requirement"
 )
 
 func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
@@ -54,9 +56,9 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 	if run.Status != "COMPLETE" || run.Unverified || run.PromotedSnapshot == "" {
 		t.Fatalf("missing verified engine terminal: %+v", run)
 	}
-	for _, pair := range []struct{ path, content string }{{"delivery.txt", canaryDeliveryContents}, {"whitebox_delivered_test.go", canaryWhiteboxMarker}} {
+	for _, pair := range []struct{ path, content string }{{"delivery.txt", canaryDeliveryContents}, {"whitebox_delivered_test.go", whiteboxDeliveredTestCode}} {
 		b, err := os.ReadFile(filepath.Join(project, pair.path))
-		if err != nil || !strings.Contains(string(b), pair.content) {
+		if err != nil || string(b) != pair.content {
 			t.Fatalf("promoted artifact %s missing content: %s %v", pair.path, b, err)
 		}
 	}
@@ -140,13 +142,13 @@ func portablePackageFixture(t *testing.T) string {
 }
 
 func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
-	plan := portableDevelopmentPlan()
-	command := ""
-	for _, check := range plan.Batches[0].Checks {
-		if check.Purpose == protocol.CheckFullTests {
-			command = check.Command
-		}
+	input := protocol.WorkerInput{Handler: "engine.development.batch.v5", Validation: &protocol.ValidationInput{Handler: "engine.development.batch.v5", Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", Checks: []protocol.DevelopmentCheck{{Purpose: protocol.CheckFullTests, Goal: "Compare built-delivery.txt with delivery newline"}}}}}}
+	var facts []worker.LocationFact
+	payload, err := portableWorkerResult(input, map[string]bool{}, &facts)
+	if err != nil {
+		t.Fatal(err)
 	}
+	command := payload.(map[string]any)["commands"].([]string)[0]
 	for _, contents := range []string{"delivery\n", "delivery", "delivery\n\n"} {
 		t.Run(fmt.Sprintf("bytes-%d", len(contents)), func(t *testing.T) {
 			root := t.TempDir()
@@ -158,6 +160,64 @@ func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
 			output, err := cmd.CombinedOutput()
 			if (err == nil) != (contents == canaryDeliveryContents) {
 				t.Fatalf("complete tests for %q output=%q err=%v", contents, output, err)
+			}
+		})
+	}
+}
+
+func TestPortableWorkerResultsCoverIssuedRequirementPoints(t *testing.T) {
+	points := []requirement.Point{{ID: "AC-001", Text: "Committed marker contains delivery newline", Oracle: "delivery.txt bytes"}, {ID: "AC-002", Text: "Missing committed marker is rejected", Oracle: "git show exits nonzero"}}
+	for _, handler := range []string{"engine.readiness.plan.v5", "engine.development.batch.v5", "engine.gate.v3"} {
+		t.Run(handler, func(t *testing.T) {
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "engine", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementPoints: points}
+			switch handler {
+			case "engine.readiness.plan.v5":
+				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
+			case "engine.development.batch.v5":
+				input.Validation = &protocol.ValidationInput{Handler: handler, Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", RequirementPoints: requirement.PointIDs(points), DoD: []protocol.DevelopmentCriterion{{ID: "marker", Description: "Exact delivery marker content"}}}}}
+			case "engine.gate.v3":
+				input.Validation = &protocol.ValidationInput{Handler: handler, Gate: &protocol.GateInput{Gate: "quality"}}
+			}
+			var facts []worker.LocationFact
+			payload, err := portableWorkerResult(input, map[string]bool{}, &facts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{}
+			if input.Validation != nil && input.Validation.Workspace != nil {
+				entries, err := os.ReadDir(input.Validation.Workspace.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						paths = append(paths, entry.Name())
+					}
+				}
+			}
+			event, err := worker.DecodeResultWithFacts(input, "result", raw, "fixture-output", paths, facts)
+			if err != nil {
+				t.Fatalf("portable semantic fixture rejected for issued points: %v; payload=%s", err, raw)
+			}
+			switch handler {
+			case "engine.readiness.plan.v5":
+				if got := event.Result.Review.GranularityReview.Batches[0].RequirementPoints; len(got) != 2 || got[0] != points[0].ID || got[1] != points[1].ID {
+					t.Fatal("portable plan lost issued points", got)
+				}
+			case "engine.development.batch.v5":
+				got := event.Result.Validation.Development.Completion.RequirementResults
+				if len(got) != 2 || got[0].PointID != points[0].ID || got[1].PointID != points[1].ID || got[0].Evidence == got[1].Evidence {
+					t.Fatal("portable completion lost distinct original evidence", got)
+				}
+			case "engine.gate.v3":
+				got := event.Result.Validation.RequirementResults
+				if len(got) != 2 || got[0].PointID != points[0].ID || got[1].PointID != points[1].ID || got[0].Evidence == got[1].Evidence {
+					t.Fatal("portable gate lost distinct independent judgments", got)
+				}
 			}
 		})
 	}

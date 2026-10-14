@@ -57,7 +57,7 @@ func TestConfirmedRequirementDocumentAssembly(t *testing.T) {
 	d.reopen()
 	lostReceipt := false
 	for i := 0; i < 12; i++ {
-		if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+		if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -163,7 +163,7 @@ func TestConfirmedRequirementDocumentAssembly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.f.engine.Submit(event, emptyFingerprint()); err != nil {
+	if _, err = d.f.engine.Submit(event, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	d.reopen()

@@ -30,12 +30,21 @@ func TestRecoveryBudgetRetryPreservesOriginalEffectAndReplay(t *testing.T) {
 			}
 			d.submit(started)
 			if cap {
-				if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
-					t.Fatal("missing token boundary")
+				if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
+					t.Fatal(err)
 				}
 				d.run, err = d.f.Show()
 				if err != nil {
 					t.Fatal(err)
+				}
+				blocked, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, intent := range blocked.State.PendingHostActions {
+					if intent.Operation == protocol.HostActionResumeAgent {
+						t.Fatalf("budget boundary signed a resume: %+v", intent)
+					}
 				}
 				initialAsk := budgetAsk(d)
 				for _, option := range initialAsk.Options {
@@ -50,7 +59,7 @@ func TestRecoveryBudgetRetryPreservesOriginalEffectAndReplay(t *testing.T) {
 			if err := resumeAndComplete(d, id); err != nil {
 				t.Fatal(err)
 			}
-			plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED", InterruptionReason: "invalid native result"}, emptyFingerprint())
+			plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED", InterruptionReason: "invalid native result"}, protocol.Observation{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,12 +159,21 @@ func TestRecoveryBudgetRetryPreservesOriginalEffectAndReplay(t *testing.T) {
 			if raw, _ := json.Marshal(done.State.PendingHostActions); string(raw) != "{}" {
 				t.Fatalf("completed resume retained active intent: %s", raw)
 			}
-			if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
-				t.Fatal("public ResumeAgent bypassed the finite boundary after authorized execution")
+			if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
+				t.Fatal(err)
 			}
 			d.run, err = d.f.Show()
 			if err != nil {
 				t.Fatal(err)
+			}
+			blocked, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, intent := range blocked.State.PendingHostActions {
+				if intent.Operation == protocol.HostActionResumeAgent {
+					t.Fatalf("budget boundary signed a resume: %+v", intent)
+				}
 			}
 			for _, option := range budgetAsk(d).Options {
 				if option.ID == "continue" || option.ID == "retry" {

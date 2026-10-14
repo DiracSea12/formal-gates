@@ -198,7 +198,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 						t.Skip("node is not available; script execution requires the host's Node runtime")
 					}
 					store := filepath.Join(t.TempDir(), "credentials.json")
-					if err := os.WriteFile(store, []byte(`{"account-provider:coding-plan:alpha:account:local:api-key":"credential-alpha","account-provider:coding-plan:beta:account:local:api-key":"credential-beta"}`), 0o600); err != nil {
+					if err := os.WriteFile(store, []byte(`{"account-provider:alpha:identity":"local","account-provider:beta:identity":"local","account-provider:coding-plan:alpha:account:local:api-key":"credential-alpha","account-provider:coding-plan:beta:account:local:api-key":"credential-beta"}`), 0o600); err != nil {
 						t.Fatal(err)
 					}
 					for _, provider := range []string{"alpha", "beta", "absent"} {

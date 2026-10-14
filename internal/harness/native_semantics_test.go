@@ -16,7 +16,7 @@ import (
 
 func TestNativeSemanticSubmissionPreservesOriginalToolEvidence(t *testing.T) {
 	workspace, directory := t.TempDir(), t.TempDir()
-	input := protocol.WorkerInput{Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)

@@ -21,6 +21,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 )
 
@@ -343,8 +344,9 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	started := false
+	services := harness.ExecutionServices{ReceiptMessage: facade.RecordNativeMessage}
 	for {
-		source, sourceErr := harness.NativeJobSource(provider, directory)
+		source, sourceErr := harness.NativeJobSource(provider, directory, services)
 		if sourceErr == nil {
 			return acceptWorkflowWorker(f, ref, resume, directory, source)
 		}
@@ -361,7 +363,7 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 		var receipt map[string]any
 		if err := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt); err == nil {
 			// The source may have landed between the first observation and exit.
-			source, sourceErr = harness.NativeJobSource(provider, directory)
+			source, sourceErr = harness.NativeJobSource(provider, directory, services)
 			if sourceErr == nil {
 				return acceptWorkflowWorker(f, ref, resume, directory, source)
 			}
@@ -392,15 +394,19 @@ func executeWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Wor
 }
 
 func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent, directory string, source map[string]any) error {
-	_, _, identity, err := harness.NativeResultEvidence(source["provider"].(string), directory, source)
-	if err != nil {
-		return err
-	}
 	var original worker.Material
 	if err := readJSONFileInto(ref.Path, &original); err != nil {
 		return err
 	}
 	provider := original.Input.Provider
+	nativeProvider := provider
+	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
+		nativeProvider = descriptor.InstallName
+	}
+	_, _, identity, err := harness.NativeResultEvidence(nativeProvider, directory, source)
+	if err != nil {
+		return err
+	}
 	key := ref.Digest + ":" + resume.ActionID
 	spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+ref.ActionID), ref.ActionID, provider, identity, protocol.SpawnStatusSpawned)
 	if err != nil {
@@ -409,7 +415,7 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 	if _, _, err := f.Submit(spawn); err != nil {
 		return err
 	}
-	if err := f.ObserveWorkerSource(ref, directory, source, harness.NativeResultEvidence); err != nil {
+	if err := f.ObserveWorkerTerminal(ref, identity); err != nil {
 		return err
 	}
 	for _, observed := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
@@ -573,7 +579,7 @@ func writeInvocationFile(path string, value any) error {
 	return os.WriteFile(path, append(body, '\n'), 0600)
 }
 
-func printWorkflowConsumption(streams IO, value workflowConsumption, executionErr error) (int, error) {
+func printWorkflowConsumption(streams IO, value any, executionErr error) (int, error) {
 	if code, err := printJSON(streams.Stdout, value); err != nil {
 		return code, err
 	}

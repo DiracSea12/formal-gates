@@ -63,22 +63,6 @@ func VerifyProcess(directory string, process, receipt, request map[string]any, p
 	return "", ""
 }
 
-// VerifyFiles checks an ordered set of named files against recorded proofs. The
-// names are used as given - they may be absolute - and the label prefixes the
-// refusal the way the evidence families in this harness already word it.
-func VerifyFiles(files []Proof, label string) (string, string) {
-	for _, file := range files {
-		refusal, matched := proofMatches(file.Name, file.Expected)
-		if refusal != "" {
-			return KindMissing, refusal
-		}
-		if !matched {
-			return KindChanged, "EVIDENCE_CHANGED: " + label + file.Name
-		}
-	}
-	return "", ""
-}
-
 // proofMatches reports either a refusal to propagate (the file cannot be read)
 // or whether the recorded proof matches. A content mismatch is not a read
 // failure, and the two produce different refusals.

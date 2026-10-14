@@ -117,11 +117,10 @@ func TestWriteGeneratedAtomic(t *testing.T) {
 			b, err := os.ReadFile(path)
 			if err != nil {
 				select {
-				case <-stop:
-					return
+				case torn <- fmt.Sprintf("read generated artifact: %v", err):
 				default:
-					continue // 目标文件尚未首次落位；rename 原子性下不存在 ENOENT 窗口
 				}
+				return
 			}
 			if !bytes.Equal(b, stale) && !bytes.Equal(b, fresh) {
 				select {
@@ -206,11 +205,6 @@ func TestArtifactIndependentOfAssemblyAndRegistrationOrder(t *testing.T) {
 
 	// 反向注册：同一批 registry 条目逆序注册（内部测试可见包内注册表）。
 	reg := compiler.NewRegistry()
-	for i := len(workflowAskKinds) - 1; i >= 0; i-- {
-		if err := reg.RegisterAskKind(workflowAskKinds[i]); err != nil {
-			t.Fatalf("register ask kind: %v", err)
-		}
-	}
 	for i := len(workflowOperations) - 1; i >= 0; i-- {
 		if err := reg.RegisterOperation(workflowOperations[i]); err != nil {
 			t.Fatalf("register operation: %v", err)
@@ -219,11 +213,6 @@ func TestArtifactIndependentOfAssemblyAndRegistrationOrder(t *testing.T) {
 	for i := len(workflowSchemas) - 1; i >= 0; i-- {
 		if err := reg.RegisterSchema(workflowSchemas[i]); err != nil {
 			t.Fatalf("register schema: %v", err)
-		}
-	}
-	for i := len(workflowReconciles) - 1; i >= 0; i-- {
-		if err := reg.RegisterReconciler(workflowReconciles[i]); err != nil {
-			t.Fatalf("register reconciler: %v", err)
 		}
 	}
 	for i := len(workflowPredicates) - 1; i >= 0; i-- {

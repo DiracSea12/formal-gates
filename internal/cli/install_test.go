@@ -123,14 +123,13 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 		host      string
 		configRel string
 		preEvent  string
-		provider  string
 		hookArgs  string
 		start     string
 		stop      string
 	}{
-		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", provider: "claude-code", hookArgs: "hook decide", start: "SubagentStart", stop: "SubagentStop"},
-		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", provider: "codex", hookArgs: "hook decide --provider codex", start: "SubagentStart", stop: "SubagentStop"},
-		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", provider: "cursor", hookArgs: "hook decide", start: "subagentStart", stop: "subagentStop"},
+		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", hookArgs: "hook decide", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", hookArgs: "hook decide --provider codex", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", hookArgs: "hook decide", start: "subagentStart", stop: "subagentStop"},
 	} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(tc.name+"/"+scope, func(t *testing.T) {
@@ -444,7 +443,7 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t *testing.T) {
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
-	target := testInstallTargetPath(project, "codex", "project")
+	target := testInstallTargetPath(project, "codex")
 	config := testHookConfigPath(project, "codex", "project")
 	legacyCommand := testNativeHookCommand(target, "hook", "decide")
 	oldCurrentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
@@ -507,7 +506,7 @@ func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
-	target := testInstallTargetPath(project, "codex", "project")
+	target := testInstallTargetPath(project, "codex")
 	config := testHookConfigPath(project, "codex", "project")
 	var setupOut, setupErr bytes.Buffer
 	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks"}, IO{Stdout: &setupOut, Stderr: &setupErr}); code != 0 {
@@ -771,7 +770,7 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 					t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
 
-				target := testInstallTargetPath(root, host, scope)
+				target := testInstallTargetPath(root, host)
 				if _, err := os.Stat(target); !os.IsNotExist(err) {
 					t.Fatalf("formal-gates runtime remains at %s, err=%v", target, err)
 				}
@@ -803,7 +802,7 @@ func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
 	if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks"}, IO{Stdout: &setupOut, Stderr: &setupErr}); code != 0 {
 		t.Fatal(setupErr.String())
 	}
-	if err := os.RemoveAll(testInstallTargetPath(project, "codex", "project")); err != nil {
+	if err := os.RemoveAll(testInstallTargetPath(project, "codex")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(source); err != nil {
@@ -824,32 +823,19 @@ func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
 	}
 }
 
-func testInstallTargetPath(root, host, scope string) string {
+func testInstallTargetPath(root, host string) string {
 	if host == "dsh" {
 		return filepath.Join(root, ".dsh", "skills", "formal-gates")
 	}
-	base := root
-	if scope == "global" {
-		switch host {
-		case "claude":
-			return filepath.Join(base, ".claude", "skills", "formal-gates")
-		case "codex":
-			return filepath.Join(base, ".codex", "skills", "formal-gates")
-		case "cursor":
-			return filepath.Join(base, ".cursor", "formal-gates")
-		case "zcode":
-			return filepath.Join(base, ".zcode", "skills", "formal-gates")
-		}
-	}
 	switch host {
 	case "claude":
-		return filepath.Join(base, ".claude", "skills", "formal-gates")
+		return filepath.Join(root, ".claude", "skills", "formal-gates")
 	case "codex":
-		return filepath.Join(base, ".codex", "skills", "formal-gates")
+		return filepath.Join(root, ".codex", "skills", "formal-gates")
 	case "zcode":
-		return filepath.Join(base, ".zcode", "skills", "formal-gates")
+		return filepath.Join(root, ".zcode", "skills", "formal-gates")
 	default:
-		return filepath.Join(base, ".cursor", "formal-gates")
+		return filepath.Join(root, ".cursor", "formal-gates")
 	}
 }
 
@@ -897,24 +883,13 @@ func testHookConfigPath(root, host, scope string) string {
 		}
 		return ""
 	}
-	base := root
-	if scope == "global" {
-		switch host {
-		case "claude":
-			return filepath.Join(base, ".claude", "settings.json")
-		case "codex":
-			return filepath.Join(base, ".codex", "hooks.json")
-		default:
-			return filepath.Join(base, ".cursor", "hooks.json")
-		}
-	}
 	switch host {
 	case "claude":
-		return filepath.Join(base, ".claude", "settings.json")
+		return filepath.Join(root, ".claude", "settings.json")
 	case "codex":
-		return filepath.Join(base, ".codex", "hooks.json")
+		return filepath.Join(root, ".codex", "hooks.json")
 	default:
-		return filepath.Join(base, ".cursor", "hooks.json")
+		return filepath.Join(root, ".cursor", "hooks.json")
 	}
 }
 

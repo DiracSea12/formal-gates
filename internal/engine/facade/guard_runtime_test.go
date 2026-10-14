@@ -71,22 +71,24 @@ func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.submit(start)
-	resume := func(executed bool) error {
-		intent, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint())
+	// blockedResume 触发瞬态恢复并断言边界零签发（扫描全部宿主 intent，
+	// 错误 correlation 的越权 resume 也会暴露）。
+	blockedResume := func() error {
+		if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
+			return err
+		}
+		snap, err := d.f.engine.Load()
 		if err != nil {
 			return err
 		}
-		if !executed {
-			return nil
+		for _, intent := range snap.State.PendingHostActions {
+			if intent.Operation == protocol.HostActionResumeAgent {
+				t.Fatalf("finite budget signed an extra resume: %+v", intent)
+			}
 		}
-		ev, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, protocol.HostActionResumeAgent, DefaultProvider, "resume-"+intent.ActionID, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.submit(ev)
 		return nil
 	}
-	if err := resume(true); err != nil {
+	if err := resumeAndComplete(d, id); err != nil {
 		t.Fatalf("first resume within budget blocked: %v", err)
 	}
 	snap, err := d.f.engine.Load()
@@ -98,8 +100,8 @@ func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
 			t.Fatalf("resume execution counted %d times, want 1", attempt.Attempts)
 		}
 	}
-	if err := resume(false); err == nil {
-		t.Fatal("second resume exceeded the finite budget and was allowed")
+	if err := blockedResume(); err != nil {
+		t.Fatal(err)
 	}
 	if r, err := d.f.Show(); err != nil {
 		t.Fatal(err)
@@ -126,12 +128,17 @@ func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
 		Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "retry",
 		Validation: &protocol.ValidationDecision{Reason: "one more resume for the interrupted agent", Digest: ask.Validation.Digest, StateRevision: d.run.Revision},
 	}})
-	if err := resume(true); err != nil {
+	if err := resumeAndComplete(d, id); err != nil {
 		t.Fatalf("authorized retry resume blocked: %v", err)
 	}
-	if err := resume(false); err == nil {
-		t.Fatal("one-time retry authorization unlocked more than one resume")
+	if err := blockedResume(); err != nil {
+		t.Fatal(err)
 	}
+	d.run, err = d.f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetAsk(d)
 }
 
 func writeTranscript(t *testing.T, path string, lines []string) {
@@ -264,37 +271,16 @@ func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 	}
 }
 
-// TestOwnerIntervalUnavailableOnOverlapAndMissingBaseline：同 transcript 的其
-// 他活动 run 重叠、缺基线来源＝UNAVAILABLE 零数字，不写估算。
-func TestOwnerIntervalUnavailableOnOverlapAndMissingBaseline(t *testing.T) {
+// TestOwnerMissingBaselineMarksUnavailable：基线来源缺失（owner transcript
+// 不存在）＝UNAVAILABLE 零数字，不写估算；同 transcript 重叠的双边事实由
+// dispatch_budget_boundary_test 的 TestOwnerOverlapMarksBothRunsUnavailable 覆盖。
+func TestOwnerMissingBaselineMarksUnavailable(t *testing.T) {
 	root := t.TempDir()
-	transcript := filepath.Join(root, "shared.jsonl")
-	writeTranscript(t, transcript, []string{
-		`{"type":"assistant","uuid":"base-1","message":{"usage":{"input_tokens":9,"output_tokens":4,"cache_read_input_tokens":1}}}`,
-	})
-	startOwnerRun := func(runID string) (*Facade, Run, error) {
-		return Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: "claude-code"}, Request: StartRequest{RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
-	}
-	if _, _, err := startOwnerRun("owner-active"); err != nil {
-		t.Fatal(err)
-	}
-	f, _, err := startOwnerRun("owner-overlapped")
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, Request: StartRequest{RunID: "owner-missing", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	run, err := f.Drive()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Cost.Owner == nil || run.Cost.Owner.Source != "unavailable" || run.Cost.Owner.TotalInputTokens != 0 {
-		t.Fatalf("overlapped owner interval = %+v, want UNAVAILABLE with zero numbers", run.Cost.Owner)
-	}
-
-	f2, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, Request: StartRequest{RunID: "owner-missing", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err = f2.Drive()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,15 +293,6 @@ func TestOwnerIntervalUnavailableOnOverlapAndMissingBaseline(t *testing.T) {
 // 有配置且达到＝治理派发零签发＋DISPATCH_BUDGET_DISPOSITION Ask，
 // 「continue」一次授权解锁一个 Ready batch 后重新拦截（不累积）。
 func TestTokenCapConfigurationStates(t *testing.T) {
-	writeCap := func(root string, value string) {
-		if err := os.MkdirAll(filepath.Join(root, ".gates"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, ".gates", "token-cap.json"), []byte(value), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	t.Run("unavailable without config", func(t *testing.T) {
 		d := plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, nil, commandPlan(), "blackbox")
 		if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {
@@ -325,7 +302,7 @@ func TestTokenCapConfigurationStates(t *testing.T) {
 
 	t.Run("invalid config is a clear start error", func(t *testing.T) {
 		root := t.TempDir()
-		writeCap(root, `{"engineDispatchMaxTotalTokens":-3}`)
+		writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":-3}`)
 		_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "bad-cap", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 		if err == nil || !strings.Contains(err.Error(), "token-cap.json") {
 			t.Fatalf("invalid cap config error = %v", err)
@@ -338,7 +315,7 @@ func TestTokenCapConfigurationStates(t *testing.T) {
 		// cap=0 被已知总量真实达到。不可计量来源（存在未知用量）下 cap 状态是
 		// UNAVAILABLE、闸不拦截，由 dispatch_budget_boundary_test 的未知用量
 		// 对照组覆盖。
-		writeCap(root, `{"engineDispatchMaxTotalTokens":0}`)
+		writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":0}`)
 		d := plannedValidationDriverAt(t, root, meteredProvider, nil, commandPlan(), "blackbox")
 		if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapExceeded {
 			t.Fatalf("reached cap status = %+v", d.run.GuardBudget)

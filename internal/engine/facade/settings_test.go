@@ -11,6 +11,12 @@ import (
 
 func TestEffectiveSettingsSurviveReopenAndTerminalWithoutReload(t *testing.T) {
 	root := t.TempDir()
+	// The admission fixture builds the CLI binary once per process; keep that
+	// build on the real module cache before HOME is isolated for the overlay.
+	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	config := filepath.Join(root, ".gates", "config.json")
 	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
 		t.Fatal(err)
@@ -19,7 +25,7 @@ func TestEffectiveSettingsSurviveReopenAndTerminalWithoutReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := StartRequest{RunID: "configured-run", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}
-	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
+	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: admission})
 	if err != nil {
 		t.Fatal(err)
 	}

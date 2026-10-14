@@ -40,11 +40,10 @@ func checkRefs(steps []CompiledStep, index map[authoring.StepID]int) error {
 // 制品的关键。无法收敛即存在依赖循环，报出卡住的步骤集合。
 func computeOrdinals(steps []CompiledStep) (map[authoring.StepID]int, error) {
 	assigned := make(map[authoring.StepID]int, len(steps))
-	done := make([]bool, len(steps))
 	for len(assigned) < len(steps) {
 		pick := -1
 		for i := range steps {
-			if done[i] {
+			if _, ok := assigned[steps[i].Header.ID]; ok {
 				continue
 			}
 			ready := true
@@ -64,7 +63,7 @@ func computeOrdinals(steps []CompiledStep) (map[authoring.StepID]int, error) {
 		if pick < 0 {
 			var stuck []string
 			for i := range steps {
-				if !done[i] {
+				if _, ok := assigned[steps[i].Header.ID]; !ok {
 					stuck = append(stuck, string(steps[i].Header.ID))
 				}
 			}
@@ -72,12 +71,11 @@ func computeOrdinals(steps []CompiledStep) (map[authoring.StepID]int, error) {
 			return nil, invariantError("dependency cycle among steps %v", stuck)
 		}
 		assigned[steps[pick].Header.ID] = len(assigned)
-		done[pick] = true
 	}
 	return assigned, nil
 }
 
-// stepKeyLess 是 ready 集合与输出排序共用的字典序键：(nodeID, stepID)。
+// stepKeyLess 是 ready 候选选择的字典序键：(nodeID, stepID)。
 func stepKeyLess(a, b CompiledHeader) bool {
 	if a.NodeID != b.NodeID {
 		return a.NodeID < b.NodeID

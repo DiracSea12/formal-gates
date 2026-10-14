@@ -115,10 +115,10 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 		action   review.Action
 		readOnly bool
 	}{
-		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v4", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v4", "", false}, {"engine.qa.execution.v3", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v5", "", false},
+		{"engine.review.worker.v2", review.ProductReview, true}, {"engine.readiness.plan.v5", review.StartReadiness, true}, {"engine.qa.review.rationale.v2", "", true}, {"engine.development.batch.v5", "", false}, {"engine.qa.execution.v3", "", true}, {"engine.repair.verify.v2", "", true}, {"engine.qa.design.v5", "", false},
 	}
 	for _, role := range roles {
-		input := protocol.WorkerInput{RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "contract", Provider: "codex", VCS: "git", Handler: role.handler, Pending: protocol.PendingAction{ActionID: "contract:" + role.handler, AttemptID: "attempt"}}
 		input.RequirementDocument.Content = "Confirmed requirement"
 		if role.action != "" {
 			input.Review = &protocol.WorkerReviewInput{Action: role.action, RequirementRevision: "revision"}

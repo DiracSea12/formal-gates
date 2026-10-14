@@ -104,7 +104,7 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 				continue
 			}
 			directory := filepath.Join(workerActionDirectory(f.stateDir, id), job.Name())
-			process, exists, e := progressProcess(directory, "native-process.json")
+			_, exists, e := progressProcess(directory, "native-process.json")
 			if e != nil {
 				return Progress{}, e
 			}
@@ -113,6 +113,10 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 			}
 			calls++
 			p.NativeCalls++
+			process, _, e := progressProcess(directory, "process.json")
+			if e != nil {
+				return Progress{}, e
+			}
 			view := OperationProgress{ActionID: id, Stage: "native waiting", Status: "BLOCKED", Evidence: directory, TimeSource: "unavailable: native timing source missing"}
 			stopped, finished, e := progressProcess(directory, "exit.json")
 			if e != nil {
@@ -167,7 +171,7 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 			p.Current = append(p.Current, *current)
 		default:
 			p.NotStarted++
-			if receipt, ok := state.SpawnReceipts[id]; ok && receipt.Status != protocol.SpawnStatusSpawned {
+			if receipt, ok := state.SpawnReceipts[id]; ok && receipt.Status != protocol.SpawnStatusSpawned && receipt.Status != protocol.SpawnStatusAttached {
 				p.Blocked[id] = receipt.Status + ": native start not established"
 			}
 		}
@@ -186,17 +190,29 @@ func (f *Facade) ProgressSince(after uint64, observe func(string) bool) (Progres
 		}
 	}
 	sort.Slice(p.NewResults, func(i, j int) bool { return p.NewResults[i].Revision < p.NewResults[j].Revision })
-	for _, receipt := range state.HostActionReceipts {
-		if receipt.AdapterEvidence == nil {
+	for id, receipt := range state.HostActionReceipts {
+		if receipt.Status != protocol.HostActionStatusExecuted || receipt.AdapterOperation != "op.check" || receipt.AdapterEvidence == nil {
 			continue
 		}
-		values := receipt.AdapterEvidence.Values
-		if input, _ := values["preparationInput"].(string); input != "" {
-			if source, _ := values["preparationSourceAction"].(string); source != "" {
-				p.PreparationReused++
-			} else {
-				p.PreparationExecuted++
+		intent, pending := state.PendingHostActions[id]
+		if !pending {
+			effect := state.ReconciledEffects[id]
+			if effect.Intent == nil {
+				continue
 			}
+			intent = *effect.Intent
+		}
+		var params protocol.CheckParameters
+		if err := decodeNativeParams(intent, &params); err != nil {
+			return Progress{}, err
+		}
+		if params.QA == nil || params.QA.Preparation == nil {
+			continue
+		}
+		if source, _ := receipt.AdapterEvidence.Values["preparationSourceAction"].(string); source != "" {
+			p.PreparationReused++
+		} else {
+			p.PreparationExecuted++
 		}
 	}
 	for id, intent := range state.ExecutableHostActions(f.definition) {
@@ -261,7 +277,7 @@ func progressProcess(directory, name string) (map[string]any, bool, error) {
 	return values, true, nil
 }
 func progressDirectoryStart(directory string) float64 {
-	value, _, _ := progressProcess(directory, "native-process.json")
+	value, _, _ := progressProcess(directory, "process.json")
 	return progressEpoch(value["started_at"])
 }
 func progressDuration(process, exit map[string]any, now time.Time) (*int64, string) {

@@ -44,6 +44,36 @@ type zcodeScenario struct {
 	inputID   string
 }
 
+// zcodeTestNodePeer executes credential JavaScript with Node and keeps the
+// scripted app-server for native protocol requests.
+func zcodeTestNodePeer(t *testing.T, scenario *zcodeScenario, data string) map[string]any {
+	t.Helper()
+	client := zcodeTestAccountClient(t, data)
+	launch := objectOrEmpty(scenario.request["binding"].(map[string]any)["launch"])
+	peer, script := textOf(launch["executable"]), textOf(launch["script"])
+	helper, err := zcodeCredentialHelperPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	wrapper := filepath.Join(filepath.Dir(peer), "node")
+	body := "#!/bin/sh\ncase \"$1\" in\n" + quote(helper) + ")\n" +
+		"[ \"$#\" -eq 4 ] || exit 91\nexec " + quote(client.executable) + " \"$@\"\n;;\n" +
+		quote(script) + ")\nexec " + quote(peer) + " \"$@\"\n;;\n*) exit 91 ;;\nesac\n"
+	if err := os.WriteFile(wrapper, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := buildCaptureBinding("zcode", map[string]any{"executable": wrapper, "script": script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding["environment"] = map[string]any{}
+	for key, value := range client.environment {
+		binding["environment"].(map[string]any)[key] = value
+	}
+	return binding
+}
+
 // The customize hook mutates the request map before it is serialised.
 func newZcodeScenario(t *testing.T, steps func(inputID string) []peerStep, customize func(request map[string]any)) *zcodeScenario {
 	t.Helper()
@@ -686,7 +716,7 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(data, ".zcode", "v2", "credentials.json"),
-		[]byte(`{"account-provider:coding-plan:p1:account:u1:api-key": "cipher"}`), 0o644); err != nil {
+		[]byte(`{"account-provider:p1:identity":"u1","account-provider:coding-plan:p1:account:u1:api-key": "cipher"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	catalogue := filepath.Join(t.TempDir(), "zcode-builtin.json")
@@ -717,10 +747,22 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 	pin := func(request map[string]any) {
 		request["read_only"] = false
 		binding := objectOrEmpty(request["binding"])
-		binding["environment"] = map[string]any{zcodeBuiltinCatalogueEnv: catalogue}
+		binding["cataloguePinned"] = true
+		binding["environment"] = map[string]any{zcodeBuiltinCatalogueEnv: catalogue, "ZCODE_DATA_BASE_DIR": data, zcodeCredentialHelperEnv: filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)}
+	}
+	accountScenario := func(steps func(string) []peerStep) *zcodeScenario {
+		scenario := newZcodeScenario(t, steps, pin)
+		binding := zcodeTestNodePeer(t, scenario, data)
+		binding["cataloguePinned"] = true
+		binding["environment"].(map[string]any)[zcodeBuiltinCatalogueEnv] = catalogue
+		scenario.request["binding"] = binding
+		if err := writeAtomicJSON(filepath.Join(scenario.directory, "native-request.json"), scenario.request); err != nil {
+			t.Fatal(err)
+		}
+		return scenario
 	}
 
-	scenario := newZcodeScenario(t, baseSteps(`{"id": "@ID@", "result": {"status": "received", "providerCount": 1}}`), pin)
+	scenario := accountScenario(baseSteps(`{"id": "@ID@", "result": {"status": "received", "providerCount": 1}}`))
 	var errout strings.Builder
 	code := 0
 	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
@@ -754,7 +796,7 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 		t.Fatalf("the delivery must carry the revision:\n%s", echo)
 	}
 
-	scenario = newZcodeScenario(t, baseSteps(`{"id": "@ID@", "result": {"status": "received", "providerCount": 2}}`), pin)
+	scenario = accountScenario(baseSteps(`{"id": "@ID@", "result": {"status": "received", "providerCount": 2}}`))
 	errout.Reset()
 	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
 	if code != 1 {
@@ -765,9 +807,9 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 		t.Fatalf("error = %q", got)
 	}
 
-	scenario = newZcodeScenario(t, func(string) []peerStep {
+	scenario = accountScenario(func(string) []peerStep {
 		return []peerStep{{On: `"method":"runtime/capabilities"`, Send: `{"id":"@ID@","error":{"code":-32603,"message":"native bootstrap unavailable"}}`}}
-	}, pin)
+	})
 	errout.Reset()
 	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
 	if code != 1 || !strings.Contains(nativeRecordError(t, scenario.directory), "native bootstrap unavailable") {
@@ -863,7 +905,8 @@ func TestZcodeExecuteInteractionHeldAndInvalidated(t *testing.T) {
 // interaction through a real peer: the credential reaches the protocol reply
 // and no evidence file. Skipped when node is absent.
 func TestZcodeExecuteRuntimeHeadersCredential(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
+	node, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("node is not available")
 	}
 	steps := func(string) []peerStep {
@@ -894,6 +937,29 @@ func TestZcodeExecuteRuntimeHeadersCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(zcodeCredentialHelperEnv, store)
+	launch := objectOrEmpty(getOf(scenario.request["binding"], "launch"))
+	peer, script := textOf(launch["executable"]), textOf(launch["script"])
+	wrapper := filepath.Join(filepath.Dir(peer), "node")
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	helper := filepath.Join(packageDir, zcodeCredentialHelper)
+	wrapperBody := "#!/bin/sh\ncase \"$1\" in\n" + quote(helper) + ")\n" +
+		"[ \"$#\" -eq 4 ] && [ \"$2\" = p1 ] && [ \"$3\" = " + quote(store) + " ] || exit 91\n" +
+		"exec " + quote(resolveNativePath(node)) + " \"$@\"\n;;\n" + quote(script) + ")\n" +
+		"[ \"$#\" -eq 4 ] && [ \"$2\" = --cwd ] && [ \"$3\" = " + quote(scenario.workspace) + " ] && [ \"$4\" = app-server ] || exit 91\n" +
+		"exec " + quote(peer) + " \"$@\"\n;;\n*) exit 91 ;;\nesac\n"
+	if err := os.WriteFile(wrapper, []byte(wrapperBody), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := buildCaptureBinding("zcode", map[string]any{"executable": wrapper, "script": script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding["cataloguePinned"] = false
+	binding["environment"] = map[string]any{zcodeCredentialHelperEnv: store}
+	scenario.request["binding"] = binding
+	if err := writeAtomicJSON(filepath.Join(scenario.directory, "native-request.json"), scenario.request); err != nil {
+		t.Fatal(err)
+	}
 	var errout strings.Builder
 	code := 0
 	stdout := captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
@@ -1095,5 +1161,97 @@ func TestZcodeExecuteLongStreamTurn(t *testing.T) {
 		if decoded := decodeTestJSON(t, line); !valuesEqual(objectOrEmpty(decoded)["sessionId"], "s-1") {
 			t.Fatalf("foreign event recorded: %s", line)
 		}
+	}
+}
+
+func TestZcodeExecuteInheritedCatalogueSkipsAccountOverlay(t *testing.T) {
+	scenario := newZcodeScenario(t, func(string) []peerStep {
+		return []peerStep{
+			{On: `"method":"session/create"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
+			{On: `"method":"session/close"`, Send: `{"id":"@ID@","result":{}}`},
+		}
+	}, func(request map[string]any) {
+		request["probe"] = true
+		binding := objectOrEmpty(request["binding"])
+		binding["cataloguePinned"] = false
+		binding["environment"] = map[string]any{zcodeBuiltinCatalogueEnv: "host-catalogue.json", zcodePersonalConfigEnv: "host-personal.json", "ZCODE_DATA_BASE_DIR": t.TempDir()}
+	})
+	var errout strings.Builder
+	code := 0
+	captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+	if code != 0 {
+		t.Fatalf("host-owned catalogue changed original probe sequence: %d %s", code, errout.String())
+	}
+	echo := readTestFile(t, scenario.echoPath)
+	if strings.Contains(echo, `"method":"runtime/capabilities"`) || strings.Contains(echo, `"method":"provider/updateAccountConfig"`) {
+		t.Fatal("inherited host catalogue triggered launcher account initialization", echo)
+	}
+	if _, err := os.Stat(filepath.Join(scenario.directory, "account-provider.json")); !os.IsNotExist(err) {
+		t.Fatal("inherited host catalogue produced launcher account evidence", err)
+	}
+}
+
+func TestZcodeProbeAccountOverlayMatchesNativeLoginState(t *testing.T) {
+	data := t.TempDir()
+	store := filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)
+	if err := os.MkdirAll(filepath.Dir(store), 0700); err != nil {
+		t.Fatal(err)
+	}
+	catalogue := zcodeTestCatalogue(t, "7")
+	for _, tc := range []struct {
+		name, document, previous string
+		entitled                 bool
+	}{
+		{"login", `{"account-provider:p1:identity":"old","account-provider:coding-plan:p1:account:old:api-key":"old-credential"}`, "", true},
+		{"account-switch", `{"account-provider:p1:identity":"current","account-provider:coding-plan:p1:account:old:api-key":"old-credential","account-provider:coding-plan:p1:account:current:api-key":"current-credential"}`, "s-1", true},
+		{"logout", `{"account-provider:coding-plan:p1:account:old:api-key":"old-credential"}`, "s-1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(store, []byte(tc.document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			scenario := newZcodeScenario(t, func(string) []peerStep {
+				method := "session/create"
+				if tc.previous != "" {
+					method = "session/resume"
+				}
+				return []peerStep{
+					{On: `"method":"runtime/capabilities"`, Send: `{"id":"@ID@","result":{}}`},
+					{On: `"method":"provider/updateAccountConfig"`, Send: `{"id":"@ID@","result":{"status":"received","providerCount":1}}`},
+					{On: `"method":"` + method + `"`, Send: zcodeSnapshotFrame("s-1", zcodeSettings)},
+					{On: `"method":"session/close"`, Send: `{"id":"@ID@","result":{}}`},
+				}
+			}, func(request map[string]any) {
+				request["probe"], request["identity"] = true, tc.previous
+			})
+			binding := zcodeTestNodePeer(t, scenario, data)
+			binding["cataloguePinned"] = true
+			binding["environment"].(map[string]any)[zcodeBuiltinCatalogueEnv] = catalogue
+			scenario.request["binding"] = binding
+			if err := writeAtomicJSON(filepath.Join(scenario.directory, "native-request.json"), scenario.request); err != nil {
+				t.Fatal(err)
+			}
+			var errout strings.Builder
+			code := 0
+			stdout := captureNativeStdout(t, func() { code = RunNative(scenario.directory, &errout) })
+			if code != 0 {
+				t.Fatalf("native probe exit=%d stderr=%s", code, errout.String())
+			}
+			if getOf(decodeTestJSON(t, stdout), "model_calls") != jsonNumber("0") {
+				t.Fatal("protocol probe claimed model execution", stdout)
+			}
+			wire := readTestFile(t, scenario.echoPath)
+			if got := strings.Contains(wire, `"method":"provider/updateAccountConfig"`); got != tc.entitled {
+				t.Fatalf("native login entitlement=%t, overlay delivery=%t: %s", tc.entitled, got, wire)
+			}
+			if tc.entitled {
+				record, err := readJSONFile(filepath.Join(scenario.directory, "account-provider.json"))
+				if err != nil || !valuesEqual(getOf(record, "providers"), []any{"p1"}) || !strings.Contains(wire, `"providers":{"p1":{"access":{"entitled":true,"type":"zhipu-account"}}}`) {
+					t.Fatalf("actual overlay provider/entitlement differs: %v %v wire=%s", record, err, wire)
+				}
+			} else if _, err := os.Stat(filepath.Join(scenario.directory, "account-provider.json")); !os.IsNotExist(err) {
+				t.Fatal("logged-out account produced availability evidence", err)
+			}
+		})
 	}
 }

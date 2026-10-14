@@ -2,8 +2,6 @@ package cost
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,26 +61,5 @@ func TestCodexUpgradeAndLegacyCounters(t *testing.T) {
 	}
 	if _, err := parseTranscript("codex", strings.NewReader("{\"type\":\"session_meta\",\"payload\":{}}\n")); err == nil {
 		t.Fatal("no native usage was treated as measured zero")
-	}
-}
-
-func TestCodexNativeTaskTiming(t *testing.T) {
-	event := func(stamp, kind, id string) string {
-		return `{"timestamp":"` + stamp + `","type":"event_msg","payload":{"type":"` + kind + `","turn_id":"` + id + `"}}` + "\n"
-	}
-	source := event("2026-09-01T00:00:00Z", "task_started", "a") + event("2026-09-01T00:00:01Z", "task_started", "a") + event("2026-09-01T00:00:04Z", "task_complete", "a") + event("2026-09-01T00:00:05Z", "task_complete", "a") + event("2026-09-01T00:00:20Z", "task_started", "b") + event("2026-09-01T00:00:26Z", "turn_aborted", "b")
-	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
-		t.Fatal(err)
-	}
-	timing, err := CodexTaskTiming(path)
-	if err != nil || timing.StartedAt != "2026-09-01T00:00:00Z" || timing.CompletedAt != "2026-09-01T00:00:26Z" || timing.WallTimeMillis != 10000 {
-		t.Fatalf("active task timing counted idle/duplicates or lost abort boundary: %+v %v", timing, err)
-	}
-	if err := os.WriteFile(path, []byte(source+event("2026-09-01T00:00:30Z", "task_started", "c")), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := CodexTaskTiming(path); err == nil {
-		t.Fatal("unfinished task produced complete timing")
 	}
 }

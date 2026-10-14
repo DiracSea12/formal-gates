@@ -171,54 +171,6 @@ func TestSubmitResponseLossIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestHostActionUnknownReconcileDoesNotExecuteAgain(t *testing.T) {
-	fixture, _ := fixtureWithAction(t)
-	fixture.Faults.Arm(persistence.FaultHostCommitBefore)
-	if _, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "blocked"}); !errors.Is(err, ErrInjected) {
-		t.Fatalf("host commit-before error = %v", err)
-	}
-	fixture.Faults.Arm(persistence.FaultHostCommitAfter)
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fan.slice"})
-	if !errors.Is(err, ErrInjected) || intent.ActionID == "" {
-		t.Fatalf("host action response loss intent=%+v err=%v", intent, err)
-	}
-	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("side effect count = %d, want 1", fixture.Host.ActionCalls(intent.ActionID))
-	}
-	acceptance, err := fixture.Host.Receipt(intent, protocol.HostActionStatusUnknown)
-	if err != nil || acceptance.RecoveryAction != string(protocol.RecoveryReconcile) {
-		t.Fatalf("unknown receipt acceptance=%+v err=%v", acceptance, err)
-	}
-	plan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:observed", true, false)
-	if err != nil || plan.Action != protocol.RecoveryReconcile {
-		t.Fatalf("reconcile plan=%+v err=%v", plan, err)
-	}
-	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("reconcile re-executed side effect: %d", fixture.Host.ActionCalls(intent.ActionID))
-	}
-	fixture.Faults.Arm(persistence.FaultHostObserveBefore)
-	if _, err := fixture.Host.Observe(intent.ActionID, "sha256:observed"); !errors.Is(err, ErrInjected) {
-		t.Fatalf("host observe-before error = %v", err)
-	}
-	second, err := fixture.Host.Reconcile(intent.ActionID, "sha256:observed", true, false)
-	if err != nil || second.Action != protocol.RecoveryReconcile {
-		t.Fatalf("reconcile replay plan=%+v err=%v", second, err)
-	}
-
-	fixture2, _ := fixtureWithAction(t)
-	intent2, err := fixture2.Host.Execute("op.fan.transport", map[string]any{"stage": "fan.slice"})
-	if err != nil {
-		t.Fatalf("duplicate receipt intent: %v", err)
-	}
-	if _, err := fixture2.Host.ReceiptWithCorrelation(intent2, protocol.HostActionStatusExecuted, "same-correlation"); err != nil {
-		t.Fatalf("first executed receipt: %v", err)
-	}
-	duplicate, err := fixture2.Host.ReceiptWithCorrelation(intent2, protocol.HostActionStatusExecuted, "same-correlation")
-	if err != nil || duplicate.Status != "DUPLICATE" {
-		t.Fatalf("duplicate receipt = %+v err=%v", duplicate, err)
-	}
-}
-
 func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 	fixture, _ := fixtureWithAction(t)
 	requestA, err := protocol.NewRequestEvent("request-a", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
@@ -233,22 +185,22 @@ func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 	var mu sync.Mutex
 	results := SubmitConcurrently(
 		func() (protocol.Acceptance, error) {
-			fp, err := fixture.Engine.ObserveFingerprint()
+			observedInput, err := fixture.VCS.Observe()
 			if err != nil {
 				return protocol.Acceptance{}, err
 			}
-			acceptance, err := fixture.Engine.Submit(requestA, fp)
+			acceptance, err := fixture.Engine.Submit(requestA, observedInput)
 			mu.Lock()
 			acceptances[0] = acceptance
 			mu.Unlock()
 			return acceptance, err
 		},
 		func() (protocol.Acceptance, error) {
-			fp, err := fixture.Engine.ObserveFingerprint()
+			observedInput, err := fixture.VCS.Observe()
 			if err != nil {
 				return protocol.Acceptance{}, err
 			}
-			acceptance, err := fixture.Engine.Submit(requestB, fp)
+			acceptance, err := fixture.Engine.Submit(requestB, observedInput)
 			mu.Lock()
 			acceptances[1] = acceptance
 			mu.Unlock()
@@ -266,11 +218,11 @@ func TestConcurrentSubmitLeavesOneCanonicalState(t *testing.T) {
 		if i == 1 {
 			request = requestB
 		}
-		fp, fingerprintErr := fixture.Engine.ObserveFingerprint()
+		observedInput, fingerprintErr := fixture.VCS.Observe()
 		if fingerprintErr != nil {
 			t.Fatalf("retry fingerprint %d: %v", i, fingerprintErr)
 		}
-		acceptance, retryErr := fixture.Engine.Submit(request, fp)
+		acceptance, retryErr := fixture.Engine.Submit(request, observedInput)
 		if retryErr != nil {
 			t.Fatalf("retry concurrent submit %d: %v", i, retryErr)
 		}
@@ -299,23 +251,23 @@ func TestLateAttemptResultIsRecordedObsolete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := submit(fixture.Engine, started); err != nil {
+	if _, err := submit(fixture, started); err != nil {
 		t.Fatal(err)
 	}
 	stopped, err := protocol.NewLifecycleEventEvent("interrupted-stop", "fake-host", "interrupted-agent", protocol.LifecycleStop)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := submit(fixture.Engine, stopped); err != nil {
+	if _, err := submit(fixture, stopped); err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
 	plan, _, err := fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{
 		Class: authoring.FailureTransientEngine, CauseKnown: true,
-	}, fingerprint)
+	}, observedInput)
 	if err != nil {
 		t.Fatalf("recover attempt: %v", err)
 	}
@@ -326,11 +278,11 @@ func TestLateAttemptResultIsRecordedObsolete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("late result: %v", err)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
 		t.Fatalf("fingerprint for late result: %v", err)
 	}
-	acceptance, err := fixture.Engine.Submit(late, fingerprint)
+	acceptance, err := fixture.Engine.Submit(late, observedInput)
 	if err != nil {
 		t.Fatalf("submit late result: %v", err)
 	}
@@ -347,8 +299,8 @@ func TestLateAttemptResultIsRecordedObsolete(t *testing.T) {
 }
 
 func TestExternalFingerprintRecheckBeforeAndAfterWrite(t *testing.T) {
-	fixture, _ := fixtureWithAction(t)
-	old, err := fixture.Engine.ObserveFingerprint()
+	fixture, actionID := fixtureWithAction(t)
+	old, err := fixture.VCS.Observe()
 	if err != nil {
 		t.Fatalf("observe original fingerprint: %v", err)
 	}
@@ -359,7 +311,11 @@ func TestExternalFingerprintRecheckBeforeAndAfterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load before fingerprint rejection: %v", err)
 	}
-	if _, _, err := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"stage": "fan.slice"}, old); err == nil {
+	event, err := protocol.NewSpawnReceiptEvent("changed-before-spawn-receipt", actionID, fixture.Host.Provider, "agent-1", protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatalf("spawn receipt: %v", err)
+	}
+	if _, err := fixture.Engine.Submit(event, old); err == nil {
 		t.Fatal("changed-before fingerprint was accepted")
 	} else {
 		var changed *persistence.FingerprintChangedError
@@ -447,7 +403,7 @@ func TestFakeVCSTracksAndSnapshotsOnlyExplicitProjectPaths(t *testing.T) {
 	if first != second {
 		t.Fatalf("same snapshot commit is not deterministic: first=%+v second=%+v", first, second)
 	}
-	if _, err := vcs.Fingerprint(); err != nil {
+	if _, err := vcs.Observe(); err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
 }

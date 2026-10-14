@@ -355,7 +355,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			verification[0] = " "
 			domain = map[string]any{"findings": []any{}, "verification": verification}
 		}
-		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v4" {
+		if peer.Mode == "workflow-held" && input.Handler == "engine.development.batch.v5" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if err := os.WriteFile(filepath.Join(cwd, "app.go"), []byte("package main\nfunc main() { println(\"completed\") }\n"), 0600); err != nil {
@@ -368,7 +368,7 @@ func TestCodexRPCPeer(t *testing.T) {
 			domain = map[string]any{"summary": "Delivered held original task", "completion": map[string]any{"dod": dod, "handoff": "Ready for approved checks"}}
 		}
 
-		if input.Handler == "engine.development.batch.v4" && peer.Mode == "workflow-progress" {
+		if input.Handler == "engine.development.batch.v5" && peer.Mode == "workflow-progress" {
 			check(input.Pending.ActionID, peer.WorkerAction)
 			check(input.Pending.AttemptID, peer.WorkerAttempt)
 			if len(history) > 1 && (input.Validation.Development.Result == nil || input.Validation.Development.Result.Validation == nil || input.Validation.Development.Result.Validation.Development == nil || input.Validation.Development.Result.Validation.Development.RemainingWork == "") {
@@ -630,7 +630,7 @@ func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 	s := newCodexScenario(t)
 	s.request["prompt"] = "Read the complete native execution evidence:\n" + strings.Repeat("command output: \"value\" ✓\n", 4096)
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +694,7 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 
 func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T) {
 	s := newCodexScenario(t)
-	input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -1463,7 +1463,7 @@ func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutc
 			scenario.peer.MessageText = "Correct current detail"
 			scenario.request["read_only"] = true
 			materialPath := filepath.Join(scenario.directory, "material.json")
-			input := protocol.WorkerInput{Handler: "engine.gate.v2", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "issued-attempt"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "issued-attempt"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)

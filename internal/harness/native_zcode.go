@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -99,11 +100,18 @@ const zcodePersonalConfig = "provider_config.json"
 // account secrets, read only by zcode_credential.mjs and never recorded.
 const zcodeCredentialsFile = "credentials.json"
 
-const zcodeAccountCredentialPrefix = "account-provider:coding-plan:"
+const zcodeAccountIdentityPrefix = "account-provider:"
 
-const zcodeAccountCredentialSuffix = ":api-key"
+const zcodeAccountIdentitySuffix = ":identity"
 
-const zcodeAccountIdentitySeparator = ":account:"
+// The host's retained per-account credential key form. The family segment is
+// the bundle's own literal; the account identity segment is URL-encoded, so it
+// carries no separator, while the provider id itself may contain colons.
+const zcodeAccountKeyPrefix = "account-provider:coding-plan:"
+
+const zcodeAccountKeyInfix = ":account:"
+
+const zcodeAccountKeySuffix = ":api-key"
 
 // Reading one credential out of that store. The host's cipher is local, so
 // this needs neither keychain access nor a user decision.
@@ -162,20 +170,9 @@ func zcodeContainsString(values []string, want string) bool {
 
 // --- the provider catalogue ---------------------------------------------------
 
-// zcodeBundledProviderCatalogue names the app-server's bundled provider
-// catalogue when the host cannot (bundled_provider_catalogue).
-//
-// The app-server resolves that catalogue from the script's own directory:
-// `<script dir>/provider/zcode-builtin.json`, then a source-tree-relative
-// `../../../../../config/provider/zcode-builtin.json`. The 3.12.3 bundle ships
-// it at `<Resources>/config/provider/zcode-builtin.json`, which neither
-// candidate reaches, so the app-server exits 1 before emitting any protocol.
-//
-// The host defines ZCODE_BUILTIN_PROVIDER_CONFIG_FILE so a launcher can name
-// that file; the host still computes the *active* catalogue it maintains and
-// refreshes itself, and takes ours as the bundled seed. It is returned only
-// when the host's own candidates are absent, so a host whose lookup already
-// works keeps its current behaviour unchanged. Nothing is written anywhere.
+// zcodeBundledProviderCatalogue names the launcher's bundled seed only when
+// neither script-relative host catalogue candidate exists. The host owns its
+// active catalogue and refreshes it itself; this lookup writes no files.
 func zcodeBundledProviderCatalogue(script string) string {
 	directory := filepath.Dir(script)
 	for _, candidate := range []string{
@@ -211,12 +208,12 @@ func zcodeHostDataDirectory(configured ...string) string {
 // zcodeProviderEnvironment names the provider configuration variables a
 // launcher must name together (provider_environment). Returns nil when the
 // host resolves its own catalogue, so such a host keeps its current behaviour.
-func zcodeProviderEnvironment(script string) map[string]string {
+func zcodeProviderEnvironment(script string, data ...string) map[string]string {
 	catalogue := zcodeBundledProviderCatalogue(script)
 	if catalogue == "" {
 		return nil
 	}
-	personal := filepath.Join(zcodeHostDataDirectory(), ".zcode", "v2", zcodePersonalConfig)
+	personal := filepath.Join(zcodeHostDataDirectory(data...), ".zcode", "v2", zcodePersonalConfig)
 	return map[string]string{
 		zcodeBuiltinCatalogueEnv: catalogue,
 		zcodePersonalConfigEnv:   personal,
@@ -224,8 +221,12 @@ func zcodeProviderEnvironment(script string) map[string]string {
 }
 
 // zcodePinnedCatalogue is the catalogue a launcher pinned this binding to, or
-// "" for a host's own (pinned_catalogue).
+// "" for a host's own (pinned_catalogue). Only a launcher-selected catalogue
+// receives the account overlay; inherited host environment paths do not.
 func zcodePinnedCatalogue(binding map[string]any) string {
+	if getOf(binding, "cataloguePinned") != true {
+		return ""
+	}
 	environment := objectOrEmpty(getOf(binding, "environment"))
 	catalogue, _ := getOrOf(environment, zcodeBuiltinCatalogueEnv, "").(string)
 	return catalogue
@@ -237,43 +238,127 @@ func zcodePinnedCatalogue(binding map[string]any) string {
 // it will execute (capture_binding). The catalogue is host configuration the
 // host refreshes on its own, so it is named in the launch environment but not
 // proofed like an executed binary.
-func zcodeCaptureBinding() (map[string]any, error) { return zcodeConfiguredBinding(settings.Values{}) }
+func zcodeCaptureBinding() (map[string]any, error) {
+	native, sources := map[string]string{}, map[string]string{}
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return zcodeConfiguredBinding(settings.Values{Native: native})
+}
 
-func zcodeConfiguredBinding(config settings.Values) (map[string]any, error) {
-	node, lookErr := exec.LookPath(config.NativeString("zcodeExecutable"))
+func zcodeResolvePaths(native, sources map[string]string) error {
+	config := settings.Values{Native: native}
+	executable := config.NativeString("zcodeExecutable")
+	node, err := exec.LookPath(executable)
+	if err != nil {
+		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
+	}
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
 	script, hasScript := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT")
+	scriptSource := "FORMAL_GATES_ZCODE_SCRIPT"
 	if configured := config.NativeString("zcodeScript"); configured != "" {
-		script, hasScript = configured, true
+		script, hasScript, scriptSource = configured, true, "configured"
 	}
 	if !hasScript {
-		script = zcodeDefaultScript
+		script, scriptSource = zcodeDefaultScript, "platform default"
 	}
 	script = resolveNativePath(zcodeExpandUser(script))
-	if lookErr != nil || !zcodeIsRegularFile(script) {
-		return nil, &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
+	if !zcodeIsRegularFile(script) {
+		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
 	}
-	launch := map[string]any{"executable": resolveNativePath(node), "script": script}
+	home := config.NativeString("zcodeHome")
+	homeSource := "configured"
+	explicitHome := home != ""
+	if !explicitHome {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		homeSource = "HOME"
+		if runtime.GOOS == "windows" {
+			homeSource = "USERPROFILE"
+		}
+	}
+	home = resolveNativePath(home)
+	data := home
+	dataSource := "zcodeHome"
+	if !explicitHome {
+		if configured := strings.TrimSpace(os.Getenv("ZCODE_DATA_BASE_DIR")); configured != "" {
+			data, dataSource = resolveNativePath(configured), "ZCODE_DATA_BASE_DIR"
+		}
+	}
+	catalogue := strings.TrimSpace(os.Getenv(zcodeBuiltinCatalogueEnv))
+	personal := strings.TrimSpace(os.Getenv(zcodePersonalConfigEnv))
+	catalogueSource, personalSource := "host resolves catalogue", "host resolves catalogue"
+	pinned := "false"
+	if catalogue != "" {
+		catalogueSource = zcodeBuiltinCatalogueEnv
+	}
+	if personal != "" {
+		personalSource = zcodePersonalConfigEnv
+	}
+	if environment := zcodeProviderEnvironment(script, data); environment != nil {
+		catalogue = resolveNativePath(environment[zcodeBuiltinCatalogueEnv])
+		personal = environment[zcodePersonalConfigEnv]
+		catalogueSource, personalSource = "zcodeScript", "zcodeDataBaseDir"
+		pinned = "true"
+	}
+	credentials := strings.TrimSpace(os.Getenv(zcodeCredentialHelperEnv))
+	credentialSource := zcodeCredentialHelperEnv
+	if credentials == "" {
+		credentials, credentialSource = filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile), "zcodeDataBaseDir"
+	}
+	for name, value := range map[string]string{
+		"zcodeExecutable": resolveNativePath(node), "zcodeScript": script, "zcodeHome": home,
+		"zcodeDataBaseDir": data, "zcodeBuiltinCatalogue": catalogue,
+		"zcodePersonalConfig": personal, "zcodeCredentialStore": resolveNativePath(credentials), "zcodeCataloguePinned": pinned,
+	} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{
+		"zcodeExecutable": executableSource, "zcodeScript": scriptSource, "zcodeHome": homeSource,
+		"zcodeDataBaseDir": dataSource, "zcodeBuiltinCatalogue": catalogueSource,
+		"zcodePersonalConfig": personalSource, "zcodeCredentialStore": credentialSource, "zcodeCataloguePinned": "zcodeScript",
+	} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
+}
+
+func zcodeConfiguredBinding(config settings.Values) (map[string]any, error) {
+	for _, name := range []string{"zcodeExecutable", "zcodeScript", "zcodeHome", "zcodeDataBaseDir", "zcodeCredentialStore"} {
+		if config.Native[name] == "" {
+			return nil, &blockedError{message: "ZCODE_CONFIG: frozen native paths required"}
+		}
+	}
+	for _, name := range []string{"zcodeBuiltinCatalogue", "zcodePersonalConfig"} {
+		if _, exists := config.Native[name]; !exists {
+			return nil, &blockedError{message: "ZCODE_CONFIG: frozen catalogue paths required"}
+		}
+	}
+	pinned := config.Native["zcodeCataloguePinned"]
+	if pinned != "true" && pinned != "false" {
+		return nil, &blockedError{message: "ZCODE_CONFIG: frozen catalogue selection required"}
+	}
+	launch := map[string]any{"executable": config.Native["zcodeExecutable"], "script": config.Native["zcodeScript"]}
 	binding, err := buildCaptureBinding("zcode", launch)
 	if err != nil {
 		return nil, err
 	}
-	if environment := zcodeProviderEnvironment(script); environment != nil {
-		bound := map[string]any{}
-		for key, value := range environment {
-			bound[key] = value
-		}
-		if home := config.NativeString("zcodeHome"); home != "" {
-			bound["HOME"] = resolveNativePath(home)
-			bound["ZCODE_DATA_BASE_DIR"] = resolveNativePath(home)
-			bound[zcodePersonalConfigEnv] = filepath.Join(resolveNativePath(home), ".zcode", "v2", zcodePersonalConfig)
-		}
-		binding["environment"] = bound
+	binding["cataloguePinned"] = pinned == "true"
+	binding["environment"] = map[string]any{
+		"HOME": config.Native["zcodeHome"], "ZCODE_DATA_BASE_DIR": config.Native["zcodeDataBaseDir"],
+		zcodeBuiltinCatalogueEnv: config.Native["zcodeBuiltinCatalogue"],
+		zcodePersonalConfigEnv:   config.Native["zcodePersonalConfig"],
+		zcodeCredentialHelperEnv: config.Native["zcodeCredentialStore"],
 	}
-	if home := config.NativeString("zcodeHome"); home != "" {
-		env := objectOrEmpty(binding["environment"])
-		env["HOME"] = resolveNativePath(home)
-		env["ZCODE_DATA_BASE_DIR"] = resolveNativePath(home)
-		binding["environment"] = env
+	if runtime.GOOS == "windows" {
+		binding["environment"].(map[string]any)["USERPROFILE"] = config.Native["zcodeHome"]
 	}
 	return binding, nil
 }
@@ -288,15 +373,6 @@ func zcodeLaunchEnvironment(binding map[string]any) map[string]string {
 		}
 	}
 	return environment
-}
-
-// zcodeCredentialStore is the host's own account credential store, as the host
-// resolves it (credential_store).
-func zcodeCredentialStore(home ...string) string {
-	if override := strings.TrimSpace(os.Getenv(zcodeCredentialHelperEnv)); override != "" {
-		return override
-	}
-	return filepath.Join(zcodeHostDataDirectory(home...), ".zcode", "v2", zcodeCredentialsFile)
 }
 
 // zcodeCredentialHelperPath resolves the package-owned host credential helper.
@@ -319,13 +395,18 @@ func zcodeCredentialHelperPath() (string, error) {
 // client, so supplying the credential the host itself provisioned is part of
 // starting it, not a substitution of its choice.
 //
-// Only this account's own provisioned value is read, through the host's
-// cipher, which is local (see zcode_credential.mjs): no keychain access and no
-// user decision are involved. The value is never returned into evidence --
-// answers go through the reply loop, which records the method and the status
-// only -- and is never logged, written or reported by this transport.
-func zcodeRequestAuth(node, provider string, environment map[string]string) string {
-	if provider == "" {
+// The account is the host's own current one: the identity entry a login
+// wrote, or, when no identity entry exists, the desktop OAuth login's current
+// family and user_info id, for which accountType -- the provider's
+// access.accountType, or the request's own accountAccess value -- has to be
+// carried. Only this account's own provisioned value is read, through the
+// host's cipher, which is local (see zcode_credential.mjs): no keychain access
+// and no user decision are involved. The value is never returned into
+// evidence -- answers go through the reply loop, which records the method and
+// the status only -- and is never logged, written or reported by this
+// transport.
+func zcodeRequestAuth(node, provider, accountType string, environment map[string]string) string {
+	if provider == "" || environment[zcodeCredentialHelperEnv] == "" {
 		return ""
 	}
 	helper, helperErr := zcodeCredentialHelperPath()
@@ -333,7 +414,7 @@ func zcodeRequestAuth(node, provider string, environment map[string]string) stri
 		return ""
 	}
 	var stdout bytes.Buffer
-	cmd := exec.Command(node, helper, provider, zcodeCredentialStore(environment["ZCODE_DATA_BASE_DIR"]))
+	cmd := exec.Command(node, helper, provider, environment[zcodeCredentialHelperEnv], accountType)
 	cmd.Env = nativeChildEnvironment(environment)
 	cmd.Stdout = &stdout
 	// Credential helper stderr is discarded and never recorded.
@@ -644,7 +725,11 @@ func (z *zcodeClient) respond(method string, params any) (*nativeReply, error) {
 		// credential the reply says so and the host reports the failure itself,
 		// so a missing credential is never laundered into a denied turn.
 		provider, _ := getOf(params, "providerId").(string)
-		secret := zcodeRequestAuth(z.executable, provider, z.environment)
+		// accountAccess carries the provider's family the same way the
+		// catalogue's access rules do; without it only an identity entry names
+		// the account.
+		accountType, _ := getOf(getOf(params, "accountAccess"), "accountType").(string)
+		secret := zcodeRequestAuth(z.executable, provider, accountType, z.environment)
 		if secret == "" {
 			return &nativeReply{
 				payload: map[string]any{"result": map[string]any{
@@ -796,19 +881,9 @@ func zcodeAdvertisedModels(snapshot any) []string {
 }
 
 // zcodeAdvertisedReasoning is the reasoning levels the host itself advertises
-// for one exact reference (advertised_reasoning). session/setModel takes an
-// object and refuses one without options.reasoningLevel, and the level has to
-// be one of this model's own values (probed 2026-09-19 against the host that
-// updated that morning: an object without options is refused with "Reasoning
-// level is required for <provider>/<model>", a level the model does not
-// advertise with `Reasoning effort "<level>" is not supported by ...`, and a
-// string "providerId/modelId" never reaches that far -- the method's params
-// schema rejects it as "expected object, received string", so the object with
-// an advertised options.reasoningLevel is the only accepted shape). The host
-// already reports the levels, so they are read from it: a level this transport
-// picked itself would either be refused or silently describe a capability the
-// model does not have. The fallback to the first advertised value mirrors the
-// host's own default when it reports no default at all.
+// for one exact reference (advertised_reasoning). session/setModel requires an
+// object with options.reasoningLevel and refuses unadvertised levels. When the
+// host names no default, it selects the first advertised level.
 func zcodeAdvertisedReasoning(snapshot any, ref map[string]any) map[string]any {
 	settings := objectOrEmpty(getOf(snapshot, "settings"))
 	available := listOf(getOrOf(objectOrEmpty(getOf(settings, "model")), "available", []any{}))
@@ -949,20 +1024,6 @@ func zcodeCatalogueAccountRules(catalogue string) (map[string]any, error) {
 	return declared, nil
 }
 
-// zcodeCatalogueAccountProviders is every account provider the named catalogue
-// declares, in its own order (catalogue_account_providers).
-func zcodeCatalogueAccountProviders(catalogue string) ([]string, error) {
-	declared, err := zcodeCatalogueAccountRules(catalogue)
-	if err != nil {
-		return nil, err
-	}
-	providers := make([]string, 0, len(declared))
-	for provider := range declared {
-		providers = append(providers, provider)
-	}
-	return providers, nil
-}
-
 // zcodeHostSelectedAccountProvider is the provisioned account provider the
 // host itself has selected, or "" (host_selected_account_provider).
 //
@@ -1048,16 +1109,35 @@ func zcodeStoreKeyOrder(path string) ([]string, bool, error) {
 	return keys, false, nil
 }
 
+// zcodeStoreAccountProvider is the account provider a credential-store key
+// names, or "": the current identity a login recorded, or a retained
+// per-account credential. The store's own key forms are the host's index, so
+// a provider is never synthesized from an id's spelling.
+func zcodeStoreAccountProvider(key string) string {
+	if strings.HasPrefix(key, zcodeAccountIdentityPrefix) && strings.HasSuffix(key, zcodeAccountIdentitySuffix) {
+		return strings.TrimSuffix(strings.TrimPrefix(key, zcodeAccountIdentityPrefix), zcodeAccountIdentitySuffix)
+	}
+	if !strings.HasPrefix(key, zcodeAccountKeyPrefix) || !strings.HasSuffix(key, zcodeAccountKeySuffix) {
+		return ""
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(key, zcodeAccountKeyPrefix), zcodeAccountKeySuffix)
+	if at := strings.LastIndex(body, zcodeAccountKeyInfix); at >= 0 {
+		return body[:at]
+	}
+	return ""
+}
+
 // zcodeProvisionedAccountProviders is the account providers the host's own
 // credential store says are provisioned (provisioned_account_providers).
 //
-// The store's key names are the host's provisioning index and are plaintext
-// (`account-provider:coding-plan:<provider>:account:<identity>:api-key`); its
-// values are encrypted account secrets, which are never read. Only providers
-// the named catalogue also declares are reported, so the overlay cannot name a
-// provider the agent has no configuration for.
-func zcodeProvisionedAccountProviders(catalogue string, home ...string) ([]string, error) {
-	store := filepath.Join(zcodeHostDataDirectory(home...), ".zcode", "v2", zcodeCredentialsFile)
+// The store's key names are the host's provisioning index: the identity a
+// login recorded and every retained per-account credential both name their
+// provider, and the first mention in document order is the provider's place.
+// The bound request credential reader confirms that the current account has
+// its exact secret; retained secrets for other accounts do not grant provider
+// availability.
+func zcodeProvisionedAccountProviders(catalogue string, client *zcodeClient) ([]string, error) {
+	store := client.environment[zcodeCredentialHelperEnv]
 	if !zcodeIsRegularFile(store) {
 		return []string{}, nil
 	}
@@ -1068,28 +1148,27 @@ func zcodeProvisionedAccountProviders(catalogue string, home ...string) ([]strin
 	if notAnIndex {
 		return nil, &blockedError{message: "ZCODE_ACCOUNT_CONFIG: the host credential store is not an index: " + store}
 	}
-	entries := []string{}
+	candidates := []string{}
 	for _, key := range keys {
-		if strings.HasPrefix(key, zcodeAccountCredentialPrefix) && strings.HasSuffix(key, zcodeAccountCredentialSuffix) {
-			entries = append(entries, key)
+		if provider := zcodeStoreAccountProvider(key); provider != "" && !zcodeContainsString(candidates, provider) {
+			candidates = append(candidates, provider)
 		}
 	}
-	if len(entries) == 0 {
+	if len(candidates) == 0 {
 		return []string{}, nil
 	}
-	known, err := zcodeCatalogueAccountProviders(catalogue)
+	known, err := zcodeCatalogueAccountRules(catalogue)
 	if err != nil {
 		return nil, err
 	}
-	knownSet := map[string]bool{}
-	for _, provider := range known {
-		knownSet[provider] = true
-	}
 	provisioned := []string{}
-	for _, key := range entries {
-		body := strings.TrimSuffix(strings.TrimPrefix(key, zcodeAccountCredentialPrefix), zcodeAccountCredentialSuffix)
-		provider := strings.Split(body, zcodeAccountIdentitySeparator)[0]
-		if knownSet[provider] && !zcodeContainsString(provisioned, provider) {
+	for _, provider := range candidates {
+		access, declared := known[provider]
+		if !declared {
+			continue
+		}
+		family, _ := objectOrEmpty(access)[zcodeAccessFamilyKey].(string)
+		if zcodeRequestAuth(client.executable, provider, family, client.environment) != "" {
 			provisioned = append(provisioned, provider)
 		}
 	}
@@ -1104,8 +1183,8 @@ func zcodeProvisionedAccountProviders(catalogue string, home ...string) ([]strin
 // host already holds -- its own provisioning index -- and never grants an
 // entitlement the host does not have, so a host with no provisioned account
 // provider stays empty and the transport reports that as it is.
-func zcodeAccountProviderConfiguration(catalogue string, wanted map[string]any, home ...string) (map[string]any, error) {
-	providers, err := zcodeProvisionedAccountProviders(catalogue, home...)
+func zcodeAccountProviderConfiguration(catalogue string, wanted map[string]any, client *zcodeClient) (map[string]any, error) {
+	providers, err := zcodeProvisionedAccountProviders(catalogue, client)
 	if err != nil {
 		return nil, err
 	}
@@ -1120,7 +1199,7 @@ func zcodeAccountProviderConfiguration(catalogue string, wanted map[string]any, 
 	named, _ := getOf(wanted, "providerId").(string)
 	if zcodeContainsString(providers, named) {
 		current, chosen = named, "requested"
-	} else if selected, err := zcodeHostSelectedAccountProvider(catalogue, providers, home...); err != nil {
+	} else if selected, err := zcodeHostSelectedAccountProvider(catalogue, providers, client.hostData); err != nil {
 		return nil, err
 	} else if selected != "" {
 		current, chosen = selected, "host-selected-plan"
@@ -1165,7 +1244,7 @@ func zcodeAccountProviderConfiguration(catalogue string, wanted map[string]any, 
 // launcher that cannot fill the registry has to be visible as that and not as
 // a missing model later on.
 func zcodeDeliverAccountProviders(client *zcodeClient, catalogue string, wanted map[string]any, directory string) (map[string]any, error) {
-	delivered, err := zcodeAccountProviderConfiguration(catalogue, wanted, client.hostData)
+	delivered, err := zcodeAccountProviderConfiguration(catalogue, wanted, client)
 	if err != nil {
 		return nil, err
 	}
@@ -1385,7 +1464,7 @@ func zcodeMaterializeSource(directory string) (map[string]any, error) {
 	})
 }
 
-func zcodeReconcile(directory string, process any) (map[string]any, error) {
+func zcodeReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	return recoverNativeSource(directory, process, "ZCODE", func() (map[string]any, error) { return zcodeMaterializeSource(directory) })
 }
 
@@ -1414,7 +1493,7 @@ func zcodeExecute(request any, directory string, probe bool, services ...Executi
 	if err := session.prepareTurn(req); err != nil {
 		return nil, err
 	}
-	if err := session.sendTurn(request); err != nil {
+	if err := session.sendTurn(request, services...); err != nil {
 		return nil, err
 	}
 	if err := session.awaitTurn(); err != nil {
@@ -1695,7 +1774,7 @@ func (s *zcodeSession) prepareTurn(req zcodeRequest) error {
 }
 
 // sendTurn builds the prompt and sends it as this turn's input.
-func (s *zcodeSession) sendTurn(request any) error {
+func (s *zcodeSession) sendTurn(request any, services ...ExecutionServices) error {
 	promptValue, err := mustEntry(request, "prompt")
 	if err != nil {
 		return err
@@ -1717,7 +1796,7 @@ func (s *zcodeSession) sendTurn(request any) error {
 	if !valuesEqual(getOf(ack, "sessionId"), s.identity) || !accepted {
 		return &blockedError{message: "ZCODE_BINDING: input not accepted"}
 	}
-	return nil
+	return settleQueuedMessages(s.directory, request, nil, services)
 }
 
 // awaitTurn consumes events until this input's terminal event or a transport

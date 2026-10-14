@@ -39,7 +39,6 @@ type CompiledHeader struct {
 }
 
 // Payload 是封闭的 compiled 变体 payload 接口：外部包不能伪造变体 IR。
-// 变体判别只存在于 compiler 的 payload switch。
 type Payload interface{ payloadSeal() }
 
 // CompiledLocalStep 是 local 变体 payload：handler 必填；timeout 可选

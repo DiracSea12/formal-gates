@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -20,8 +21,21 @@ import (
 )
 
 // 本文件是真 git 仓上的快照公开链：regular Start 的 base 校验、终态多 commit
-// 拒绝与晋升（含 squash）、QA 隔离工作区登记与清空转换。全部走生产 exec
+// 拒绝与晋升（含 squash）、QA 原生工作区投影与清空转换。全部走生产 exec
 // runner，无模型调用。
+
+// PrepareCandidate exercises the signed promotion handler within its native window.
+func (f *Facade) PrepareCandidate(_ string) (string, error) {
+	if f.vcs == nil {
+		return "", fmt.Errorf("candidate promotion requires a regular run with a native VCS provider")
+	}
+	unlock, err := f.acquireWriteWindow()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	return f.prepareCandidate()
+}
 
 // snapshotRepoCommits 在 root 建立真 git 仓并按序提交（首提交即 base，内容含
 // requirements.md），返回逐次提交身份（[0]=base）。
@@ -185,7 +199,7 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -318,7 +332,7 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -362,7 +376,7 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -391,78 +405,83 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 	}
 }
 
-// TestRegisterQAWorktreeValidatesIdentityAndArtifacts：登记制——工作区原生身份
-// 必须等于 BaseSnapshot、隔离区内需求产物哈希必须等于登记修订；登记事实进入
-// 公开投影。
-func TestRegisterQAWorktreeValidatesIdentityAndArtifacts(t *testing.T) {
+// A native blackbox workspace receipt owns the active QA projection and source.
+func TestBlackboxWorkspaceReceiptProjectsOriginalSource(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
-	runner := vcs.ExecRunner{}
-	worktree := filepath.Join(t.TempDir(), "qa-worktree")
-	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", worktree, base); err != nil {
-		t.Fatal(err)
-	}
-	d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
-	if err := d.f.RegisterQAWorktree(worktree); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	run, err := d.f.Status()
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
+	_, input := d.action("engine.qa.design.v5")
+	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.QAWorktree != worktree {
-		t.Fatalf("registered worktree = %q, want %q", run.QAWorktree, worktree)
+	resource := snap.State.NativeResources[input.Binding.WorkspaceID]
+	if resource.ID != input.Binding.WorkspaceID || resource.Owner != d.run.RunID || resource.Role != "blackbox-design" || resource.Status != "READY" || resource.Path == "" || resource.Path == root || resource.Source != base || resource.Identity != base || resource.Ref == "" {
+		t.Fatalf("blackbox resource: %+v", resource)
 	}
-	// 快照不符：工作区检出到另一提交（新增提交后 HEAD≠base）。
-	snapshotCommitOne(t, root, "move on")
-	drifted := filepath.Join(t.TempDir(), "drifted-worktree")
-	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", drifted, "HEAD"); err != nil {
-		t.Fatal(err)
+	var receipt protocol.HostActionReceipt
+	var intent protocol.HostActionIntent
+	for id, effect := range snap.State.ReconciledEffects {
+		if effect.Intent == nil || effect.Intent.Adapter == nil || effect.Intent.Adapter.Operation != "op.workspace" {
+			continue
+		}
+		var params protocol.WorkspaceParameters
+		if err := decodeNativeParams(*effect.Intent, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.Resource.ID == resource.ID {
+			intent, receipt = *effect.Intent, snap.State.HostActionReceipts[id]
+			expected := params.Resource
+			expected.Identity, expected.Status = expected.Source, "READY"
+			if params.Task == nil || params.RequirementRevision != snap.State.RequirementRevision() || params.Generation != snap.State.Validation.Generation || params.RouteScope == "" || params.Manifest != nil || expected != resource {
+				t.Fatalf("signed blackbox parameters: %+v", params)
+			}
+		}
 	}
-	if err := d.f.RegisterQAWorktree(drifted); err == nil || !strings.Contains(err.Error(), "does not match the base snapshot") {
-		t.Fatalf("drifted worktree registration: %v", err)
+	if intent.ActionID == "" || receipt.ActionID != intent.ActionID || receipt.AdapterOperation != "op.workspace" || receipt.Status != protocol.HostActionStatusExecuted || receipt.Provider != snap.State.RunProvider || receipt.Correlation != intent.Correlation || receipt.PayloadDigest != intent.PayloadDigest || receipt.AdapterEvidence == nil {
+		t.Fatalf("workspace receipt: %+v", receipt)
 	}
-	// 产物修订不符：工作区在 base 上但需求文档被改写（工作树状态）。
-	if err := os.WriteFile(filepath.Join(worktree, "requirements.md"), []byte("# rewritten\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.f.RegisterQAWorktree(worktree); err == nil || !strings.Contains(err.Error(), "does not match the run revision") {
-		t.Fatalf("artifact drift registration: %v", err)
-	}
-	// 空路径拒绝。
-	if err := d.f.RegisterQAWorktree("  "); err == nil || !strings.Contains(err.Error(), "path is required") {
-		t.Fatalf("empty worktree registration: %v", err)
-	}
-}
-
-// TestQAWorktreeClearsWhenRouteDropsBlackbox：最终路线不含黑盒时，
-// 路线确认清空已登记的隔离工作区。
-func TestQAWorktreeClearsWhenRouteDropsBlackbox(t *testing.T) {
-	root := t.TempDir()
-	base := snapshotRepoCommits(t, root)[0]
-	runner := vcs.ExecRunner{}
-	worktree := filepath.Join(t.TempDir(), "qa-worktree")
-	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", worktree, base); err != nil {
-		t.Fatal(err)
-	}
-	d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
-	d.reviewPass(commandPlan())
-	if err := d.f.RegisterQAWorktree(worktree); err != nil {
-		t.Fatal(err)
-	}
-	run, err := d.f.Status()
-	if err != nil || run.QAWorktree != worktree {
-		t.Fatalf("worktree registration = %q, %v", run.QAWorktree, err)
-	}
-	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
-	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))
-	d.drive()
-	run, err = d.f.Status()
+	var evidence protocol.WorkspaceEvidence
+	raw, err := json.Marshal(receipt.AdapterEvidence.Values)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.QAWorktree != "" {
-		t.Fatalf("worktree registration survived a route without blackbox: %q", run.QAWorktree)
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := d.f.vcs.TreeDigest(resource.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.ParametersDigest != intent.PayloadDigest || evidence.Resource != resource || evidence.Digest != tree || evidence.SourceDigest != tree {
+		t.Fatalf("workspace proof: %+v", evidence)
+	}
+	if head, err := d.f.vcs.At(resource.Path, resource.Handle).Resolve(); err != nil || head != resource.Source {
+		t.Fatalf("workspace source: %s %v", head, err)
+	}
+	if ref, err := d.f.vcs.Ref(resource.Ref); err != nil || ref != resource.Source {
+		t.Fatalf("workspace ref: %s %v", ref, err)
+	}
+	for _, projection := range []func() (Run, error){d.f.Status, d.f.Show} {
+		run, err := projection()
+		if err != nil || run.QAWorktree != resource.Path {
+			t.Fatalf("QA projection: %q %v", run.QAWorktree, err)
+		}
+	}
+	drifted := snapshotCommitOne(t, root, "another source")
+	if _, err := (vcs.ExecRunner{}).Run(resource.Path, "git", "checkout", "--detach", drifted); err != nil {
+		t.Fatal(err)
+	}
+	before := installationFiles(t, d.f.stateDir)
+	nativeBefore := installationFiles(t, resource.Path)
+	if exists, err := d.f.observeWorktree(resource.Path, resource.Source, resource.Handle); exists || err == nil || !strings.Contains(err.Error(), "identity differs from original source") {
+		t.Fatalf("source conflict observation: %t %v", exists, err)
+	}
+	if !reflect.DeepEqual(before, installationFiles(t, d.f.stateDir)) || !reflect.DeepEqual(nativeBefore, installationFiles(t, resource.Path)) {
+		t.Fatal("source observation changed engine or native bytes")
+	}
+	if head, err := d.f.vcs.At(resource.Path, resource.Handle).Resolve(); err != nil || head != drifted {
+		t.Fatalf("source observation moved HEAD: %s %v", head, err)
 	}
 }
 
@@ -483,6 +502,11 @@ func (d *validationDriver) reviewPass(plan *protocol.GranularityReview) {
 		d.receipt(id)
 		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, d.host(), string(d.eventID()), protocol.ReviewResultEvidence{GranularityReview: func() *protocol.GranularityReview {
 			if action == review.StartReadiness {
+				input, ok := driverState(d.t, d).WorkerInput(id, d.f.definition)
+				if !ok {
+					d.t.Fatal("review fixture lacks signed input")
+				}
+				fixturePlanRequirements(plan, input.RequirementPoints)
 				return plan
 			}
 			return nil
@@ -495,27 +519,77 @@ func (d *validationDriver) reviewPass(plan *protocol.GranularityReview) {
 	}
 }
 
-// TestQAWorktreeClearsWhenBlackboxSetFreezes：黑盒用例集审过冻结时，
-// 清空隔离工作区登记。
+// A frozen blackbox set retires its projection while retaining native ownership.
 func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
-	runner := vcs.ExecRunner{}
-	worktree := filepath.Join(t.TempDir(), "qa-worktree")
-	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", worktree, base); err != nil {
-		t.Fatal(err)
-	}
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-	if err := d.f.RegisterQAWorktree(worktree); err != nil {
-		t.Fatal(err)
-	}
-	d.reviewReady()
-	run, err := d.f.Status()
+	_, input := d.action("engine.qa.design.v5")
+	snap, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.QAWorktree != "" {
-		t.Fatalf("worktree registration survived blackbox set freeze: %q", run.QAWorktree)
+	resource := snap.State.NativeResources[input.Binding.WorkspaceID]
+	if resource.ID != input.Binding.WorkspaceID || resource.Role != "blackbox-design" || resource.Owner != d.run.RunID || resource.Path == "" || resource.Source != base || resource.Identity != base || resource.Status != "READY" || snap.State.QAWorktree != resource.Path {
+		t.Fatalf("active design resource: %+v", resource)
+	}
+	if set := snap.State.Validation.Sets[coverage.ReviewBlackbox]; set != nil && set.Status == "FROZEN" {
+		t.Fatal("design fixture already has a frozen case set before its result")
+	}
+	proved := false
+	for id, effect := range snap.State.ReconciledEffects {
+		if effect.Intent == nil || effect.Intent.Adapter == nil || effect.Intent.Adapter.Operation != "op.workspace" {
+			continue
+		}
+		var params protocol.WorkspaceParameters
+		if err := decodeNativeParams(*effect.Intent, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.Resource.ID != resource.ID {
+			continue
+		}
+		receipt := snap.State.HostActionReceipts[id]
+		if receipt.ActionID != effect.Intent.ActionID || receipt.AdapterOperation != "op.workspace" || receipt.Status != protocol.HostActionStatusExecuted || receipt.PayloadDigest != effect.Intent.PayloadDigest || receipt.AdapterEvidence == nil {
+			t.Fatalf("design receipt: %+v", receipt)
+		}
+		var evidence protocol.WorkspaceEvidence
+		raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &evidence); err != nil {
+			t.Fatal(err)
+		}
+		if evidence.ParametersDigest != effect.Intent.PayloadDigest || evidence.Resource != resource || evidence.Digest == "" || evidence.SourceDigest != evidence.Digest {
+			t.Fatalf("design proof: %+v", evidence)
+		}
+		proved = true
+	}
+	if !proved {
+		t.Fatal("active design workspace lacks its executed native receipt")
+	}
+	d.reviewReady()
+	snap, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := snap.State.Validation.Sets[coverage.ReviewBlackbox]
+	if set == nil || set.Status != "FROZEN" {
+		t.Fatalf("blackbox set did not freeze: %+v", set)
+	}
+	expected := resource
+	expected.MirrorDigest = protocol.BlackboxCasesDigest(snap.State.RunID, set.Manifest)
+	if actual := snap.State.NativeResources[resource.ID]; actual != expected {
+		t.Fatalf("freeze changed native ownership or lost its case mirror: actual=%+v expected=%+v", actual, expected)
+	}
+	for _, projection := range []func() (Run, error){d.f.Status, d.f.Show} {
+		run, err := projection()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.QAWorktree != "" {
+			t.Fatalf("QA projection survived blackbox set freeze: %q", run.QAWorktree)
+		}
 	}
 }
 
@@ -557,7 +631,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -592,7 +666,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.f.PrepareCandidate("re-organized candidate"); err == nil || !strings.Contains(err.Error(), "does not match the verified final candidate") {
+	if _, err := d.f.PrepareCandidate("re-organized candidate"); err == nil || !strings.Contains(err.Error(), "does not match the promoted snapshot") {
 		t.Fatalf("content-drifted re-organization: %v", err)
 	}
 	if after, err := vcs.New(root, nil).Resolve(); err != nil || after != drifted {
@@ -609,7 +683,7 @@ func completePromotionPipeline(t *testing.T, runner vcs.Runner, root, base strin
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, runner, base, nil, commandPlan(), "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	report := executionFor(qi)
 	tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 	d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -626,7 +700,7 @@ func prepareApprovedPromotionPrefix(t *testing.T, d *validationDriver, message s
 	t.Helper()
 	candidate := d.run.Validation.Candidate
 	params := promotionInputForTest(t, d, candidate.Identity, message)
-	if err := d.f.engine.OpenPromotion(params, emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(params, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.f.admission.write(func() error { return d.f.vcs.FastForward(candidate.Identity) }); err != nil {
@@ -654,7 +728,7 @@ func TestPromotionFrozenByRequirementChangeBarrierLeavesHistoryUntouched(t *test
 		t.Fatalf("premise lost: interval count = %d, %v", count, err)
 	}
 	// 屏障到达前存在未完成意图：REQUEST 落账撤销写资格，保留原观察债务。
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
@@ -780,10 +854,10 @@ func TestPromotionIntentSurvivesExecuteCrashAndReentryConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 意图幂等：同 target 重开不报错、不产生第二意图。
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatalf("intent reopen: %v", err)
 	}
 	snap, err := d.f.engine.Load()
@@ -844,7 +918,7 @@ func TestTerminalCheckpointDriftRejectsPublicationUntilContentRestored(t *testin
 	}
 	err = func() error {
 		defer unlock()
-		if err := d.f.engine.BeginCleanup(emptyFingerprint()); err != nil {
+		if err := d.f.engine.BeginCleanup(protocol.Observation{}); err != nil {
 			return err
 		}
 		snapshot, err := d.f.engine.Load()
@@ -1232,7 +1306,7 @@ func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
 	}
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(request.ID), Token: token, Choice: "abort"}})
 	d.completeWorkerTerminations()
-	if err := d.f.engine.BeginCleanup(emptyFingerprint()); err != nil {
+	if err := d.f.engine.BeginCleanup(protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	settleAbortForPublication(t, d)
@@ -1270,7 +1344,7 @@ func TestPromotionResumeAfterResetInterruptionBindsOrganizedHead(t *testing.T) {
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
 	d := completePromotionPipeline(t, nil, root, base)
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	// squash 第一步（reset --soft base）已执行、commit 未执行——组织中断的
@@ -1484,7 +1558,7 @@ func TestPromotionBindsParkedOrganizationAfterBarrierRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	// 窗口中断已越过组织：reset --soft＋commit 已完成、Record 未执行。
@@ -1548,7 +1622,7 @@ func TestPromotionContentDriftWithLiveIntentRejectsBeforeGitWrites(t *testing.T)
 	base := identities[0]
 	d := completePromotionPipeline(t, nil, root, base)
 	source := d.run.Validation.Candidate.Identity
-	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "organized final candidate"), protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	// 内容漂移：区间累积改写内容的新提交（工作区干净）。
@@ -1604,16 +1678,116 @@ func promotionInputForTest(t *testing.T, d *validationDriver, sourceIdentity, me
 	return protocol.PromotionParameters{SourceWorkspace: workspace, Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: snap.State.BaseSnapshot, TargetStart: observed, Message: message}
 }
 
-// Signed native debt survives new source qualification until the current
-// writer completes. Lost responses and late original receipts share admission.
-func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T) {
+// Completed native effects retain their original receipts across new source
+// qualification. Late and repeated receipts cannot change the current mapping.
+func TestPromotionReceiptsRetainEvidenceAfterSourceReplacement(t *testing.T) {
+	d, first, originalProof := completedPromotionAwaitingReceipt(t)
+	if err := d.f.engine.RecordCandidatePromotion(first.ActionID, originalProof, protocol.Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	requalifyPromotionSource(t, d, "replacement", 2)
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := *snapshot.State.Validation.Candidate
+	if !snapshot.State.FinalValidationComplete(d.f.definition) {
+		t.Fatal("replacement source is not fully qualified")
+	}
+	path := snapshot.State.RequirementArtifactPath()
+	document, err := os.ReadFile(filepath.Join(d.f.root, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateDocument, err := (vcs.ExecRunner{}).RunRaw(d.f.root, "git", nil, "show", source.Identity+":"+path)
+	if err != nil || requirementContentRevision(candidateDocument) != strings.TrimPrefix(snapshot.State.Validation.RequirementRevision, "sha256:") || string(candidateDocument) != string(document) {
+		t.Fatalf("current candidate %s requirement revision=%s bytes=%q, confirmed revision=%s bytes=%q: %v", source.Identity, requirementContentRevision(candidateDocument), candidateDocument, snapshot.State.Validation.RequirementRevision, document, err)
+	}
+	originalApplication, err := os.ReadFile(filepath.Join(d.f.root, "app.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"unconfirmed document", "other dirty path"} {
+		t.Run(invalid, func(t *testing.T) {
+			if invalid == "unconfirmed document" {
+				if err := os.WriteFile(filepath.Join(d.f.root, path), append(append([]byte(nil), document...), '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(d.f.root, "app.go"), []byte("package main // user input\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := d.f.observePromotion()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.f.Drive(); err == nil {
+				t.Fatal("unapproved target input was delivered")
+			}
+			after, err := d.f.observePromotion()
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("rejected target input changed native values: %+v %v", after, err)
+			}
+			state, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, pending := state.State.PromotionIntent(); pending {
+				t.Fatal("unapproved target input opened a writer")
+			}
+			if err := os.WriteFile(filepath.Join(d.f.root, path), document, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d.f.root, "app.go"), originalApplication, 0600); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	run, err := d.f.Drive()
+	if err != nil || run.Status != "COMPLETE" || run.Termination == nil || run.Termination.CandidatePromotion == nil {
+		t.Fatalf("public delivery after confirmed development redo: %s %v", run.Status, err)
+	}
+	currentProof := *run.Termination.CandidatePromotion
+	if currentProof.Source != source.Identity || currentProof.SourceDigest != source.Digest || currentProof.FinalDigest != source.Digest {
+		t.Fatal("replacement delivery lost its complete validated source")
+	}
+	if count, err := d.f.vcs.CommitCount(currentProof.TargetBase, currentProof.Final); err != nil || count != 1 {
+		t.Fatalf("final organization range: %d %v", count, err)
+	}
+	if err := d.f.vcs.VerifyReady(); err != nil {
+		t.Fatal(err)
+	}
+	effect := run.Termination.ReconciledEffects[first.ActionID]
+	if effect.Status != "FULFILLED" || effect.Intent == nil || !reflect.DeepEqual(*effect.Intent, first) || effect.UnknownReceipt == nil || effect.UnknownReceipt.Status != protocol.HostActionStatusUnknown {
+		t.Fatal("replacement lost its original completion or UNKNOWN history")
+	}
+	evidence := protocol.CandidateEvidence{ParametersDigest: first.PayloadDigest, WorkspaceID: originalProof.SourceWorkspace, Identity: originalProof.Final, Digest: originalProof.FinalDigest, Promotion: &originalProof}
+	data, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(data, &values); err != nil {
+		t.Fatal(err)
+	}
+	event, err := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:"+first.ActionID), first.ActionID, "op.candidate", d.host(), first.Correlation, first.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		_, replay, err := d.f.Submit(event)
+		if err != nil || replay.Termination == nil || !reflect.DeepEqual(*replay.Termination.CandidatePromotion, currentProof) || replay.PromotedSnapshot != currentProof.Final {
+			t.Fatalf("late original receipt changed the delivered mapping: %v", err)
+		}
+	}
+}
+
+func completedPromotionAwaitingReceipt(t *testing.T) (*validationDriver, protocol.HostActionIntent, protocol.CandidatePromotionReceipt) {
+	t.Helper()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "development", "review")
 	base := identities[0]
-	runner := &commitFailureRunner{inner: vcs.ExecRunner{}, message: "delivery one"}
 	d := completePromotionPipeline(t, nil, root, base)
-	prepareApprovedPromotionPrefix(t, d, runner.message)
-	d.f.vcs = vcs.New(root, runner)
+	prepareApprovedPromotionPrefix(t, d, "lost delivery")
 	if _, err := (vcs.ExecRunner{}).Run(root, "git", "reset", "--soft", base); err != nil {
 		t.Fatal(err)
 	}
@@ -1655,138 +1829,13 @@ func TestPromotionReplacementChainRetainsAndSettlesOriginalEvidence(t *testing.T
 		t.Fatalf("observe completed original delivery: %t %v", complete, err)
 	}
 	originalProof := *firstResult.Candidate.Promotion
-	requalifyPromotionSource(t, d, "replacement", 2)
-	secondParams := promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "delivery two")
-	secondParams.SupersedesActionID = first.ActionID
-	if err := d.f.engine.OpenPromotion(secondParams, emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	snap, err = d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, ok := snap.State.PromotionIntent()
-	if !ok {
-		t.Fatal("replacement has no current writer")
-	}
-	runner.message, runner.failed = "delivery two", false
-	if _, _, err := d.f.promotionEvidence(snap.State, second, true, new(bool)); err == nil {
-		t.Fatal("replacement commit interruption was not observed")
-	}
-	snap, err = d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondResult, complete, err := d.f.promotionEvidence(snap.State, second, true, new(bool))
-	if err != nil || !complete {
-		t.Fatalf("observe completed middle delivery: %t %v", complete, err)
-	}
-	middleProof := *secondResult.Candidate.Promotion
-	requalifyPromotionSource(t, d, "current", 3)
-	thirdParams := promotionInputForTest(t, d, d.run.Validation.Candidate.Identity, "delivery three")
-	thirdParams.SupersedesActionID = second.ActionID
-	if err := d.f.engine.OpenPromotion(thirdParams, emptyFingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	snap, err = d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	third, ok := snap.State.PromotionIntent()
-	if !ok {
-		t.Fatal("current delivery has no signed writer")
-	}
-	paths, err := vcs.New(root, nil).DiffNames("HEAD", thirdParams.Source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := vcs.New(root, nil).ApplyArtifact(thirdParams.Source, paths); err != nil {
-		t.Fatal(err)
-	}
-	before, err := d.f.observePromotion()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before.Clean || !before.StagedOnly || before.IndexTree != thirdParams.SourceDigest {
-		t.Fatalf("current native prefix: %+v", before)
-	}
-	for _, original := range []protocol.HostActionIntent{first, second, third} {
-		if !reflect.DeepEqual(snap.State.PendingHostActions[original.ActionID], original) {
-			t.Fatal("original debt was retired before the current receipt")
-		}
-		if snap.State.NativeActionCurrent(original, d.f.definition) != (original.ActionID == third.ActionID) {
-			t.Fatal("more than one current writer")
-		}
-	}
-	if snap.State.ResourcesCleaned() && snap.State.CleanupEligible(d.f.definition) {
-		t.Fatal("cleanup ignored unresolved promotion debt")
-	}
-	if snap.State.DeliveryComplete(d.f.definition) {
-		t.Fatal("partial delivery was qualified")
-	}
-	final, err := d.f.PrepareCandidate("delivery three")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap, err = d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap.State.PendingHostActions) != 0 || !snap.State.DeliveryComplete(d.f.definition) || snap.State.CandidatePromotion.OperationID != third.ActionID {
-		t.Fatal("completed current receipt did not settle its original chain")
-	}
-	currentProof := *snap.State.CandidatePromotion
-	if count, err := vcs.New(root, nil).CommitCount(base, final); err != nil || count != 1 {
-		t.Fatalf("final native range %d %v", count, err)
-	}
-	for _, original := range []protocol.HostActionIntent{first, second} {
-		effect := snap.State.ReconciledEffects[original.ActionID]
-		if effect.Status != "SUPERSEDED" || effect.Intent == nil || !reflect.DeepEqual(*effect.Intent, original) || effect.ObservationDigest != snap.State.HostActionReceipts[third.ActionID].Digest {
-			t.Fatalf("settled original evidence %+v", effect)
-		}
-	}
-	if snap.State.HostActionReceipts[first.ActionID].Status != protocol.HostActionStatusUnknown || snap.State.ReconciledEffects[first.ActionID].UnknownReceipt == nil {
-		t.Fatal("replacement invented original execution or discarded UNKNOWN")
-	}
-	if _, exists := snap.State.HostActionReceipts[second.ActionID]; exists {
-		t.Fatal("replacement invented a middle wire receipt")
-	}
-	for i, proof := range []protocol.CandidatePromotionReceipt{originalProof, middleProof} {
-		original := []protocol.HostActionIntent{first, second}[i]
-		if err := d.f.engine.RecordCandidatePromotion(original.ActionID, proof, emptyFingerprint()); err != nil {
-			t.Fatal(err)
-		}
-		if err := d.f.engine.RecordCandidatePromotion(original.ActionID, proof, emptyFingerprint()); err != nil {
-			t.Fatal(err)
-		}
-		late, err := d.f.engine.Load()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(*late.State.CandidatePromotion, currentProof) || late.State.PromotedSnapshot != final || late.State.ReconciledEffects[original.ActionID].Status != "SUPERSEDED" || len(late.State.PendingHostActions) != 0 {
-			t.Fatal("late or duplicate original receipt changed the current mapping")
-		}
-		var evidence protocol.CandidateEvidence
-		raw, err := json.Marshal(late.State.HostActionReceipts[original.ActionID].AdapterEvidence.Values)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(raw, &evidence); err != nil {
-			t.Fatal(err)
-		}
-		if evidence.Promotion == nil || !reflect.DeepEqual(*evidence.Promotion, proof) {
-			t.Fatal("late original proof contents changed")
-		}
-	}
-	if _, _, err := d.f.Submit(unknown); err != nil {
-		t.Fatal(err)
-	}
+	return d, first, originalProof
 }
 
 func requalifyPromotionSource(t *testing.T, d *validationDriver, message string, revision int) {
 	t.Helper()
-	// Hold the original promotion response while qualification consumes its
-	// actual source/check responsibilities through the original receipt owner.
+	// Qualify the new source through its signed workspace, candidate and check
+	// responsibilities before promotion.
 	advance := func() {
 		for {
 			progress, checking := func() (progress, checking bool) {
@@ -1795,7 +1844,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 					t.Fatal(err)
 				}
 				defer unlock()
-				if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+				if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				snapshot, err := d.f.engine.Load()
@@ -1864,7 +1913,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 	}
 	confirmValidationDocument(d, development, nil, validationDocument+strings.Repeat("\n", revision))
 	advance()
-	id, input := d.action("engine.development.batch.v4")
+	id, input := d.action("engine.development.batch.v5")
 	snapshot, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -1884,7 +1933,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 			report := executionFor(input)
 			tool, environment := protocol.ExecutionIdentities(input.ExecutionFacts)
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
-		case "engine.gate.v2":
+		case "engine.gate.v3":
 			d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		}
 	}
@@ -1957,6 +2006,31 @@ func TestUnknownPromotionPartialPrefixDoesNotExecuteOnReentry(t *testing.T) {
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(current.State.PendingHostActions[intent.ActionID], intent) || !reflect.DeepEqual(current.State.HostActionReceipts[intent.ActionID], original.State.HostActionReceipts[intent.ActionID]) || current.State.DeliveryComplete(d.f.definition) {
 		t.Fatal("UNKNOWN reentry changed native bytes, the original responsibility, receipt or delivery qualification")
 	}
+
+	confirmValidationDocument(d, "", nil, validationDocument+"\n\n")
+	pendingInput, err := d.f.observePromotion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pendingInput.Head != before.Head || pendingInput.Tree != before.Tree || pendingInput.IndexTree != before.IndexTree || pendingInput.Clean || pendingInput.StagedOnly {
+		t.Fatalf("confirmed input did not preserve the incomplete native prefix: %+v", pendingInput)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := d.f.Drive(); err == nil {
+			t.Fatal("incomplete UNKNOWN advanced after requirement confirmation")
+		}
+	}
+	after, err = d.f.observePromotion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, pendingInput) || !reflect.DeepEqual(current.State.PendingHostActions[intent.ActionID], intent) || !reflect.DeepEqual(current.State.HostActionReceipts[intent.ActionID], original.State.HostActionReceipts[intent.ActionID]) || current.State.CandidatePromotion != nil {
+		t.Fatal("incomplete UNKNOWN became an execution or overwrote the confirmed input")
+	}
 }
 
 func (r *publicationDriftRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
@@ -1969,4 +2043,72 @@ func (r *promotionWindowObserver) RunRaw(dir, command string, input []byte, args
 
 func (r *commitFailureRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
 	return r.inner.RunRaw(dir, command, input, args...)
+}
+
+// An immutable delivery is reconciled through public Drive without replacing
+// either form of the newly confirmed document with the historical value.
+func TestCompletedPromotionReconcilesAfterRequirementConfirmation(t *testing.T) {
+	for _, stage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("staged=%t", stage), func(t *testing.T) {
+			d, first, originalProof := completedPromotionAwaitingReceipt(t)
+			var development string
+			for _, work := range d.run.RequirementWork {
+				for _, wave := range d.run.Validation.Waves {
+					for _, source := range wave.SourceTasks {
+						if source == work.Task {
+							development = work.ActionID
+						}
+					}
+				}
+			}
+			if development == "" {
+				t.Fatal("no original development duty")
+			}
+			confirmValidationDocument(d, development, nil, validationDocument+"\n\n")
+			if stage {
+				if err := d.f.vcs.Track([]string{"requirements.md"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := d.f.observePromotion()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.Clean || before.StagedOnly != stage || before.Head != originalProof.Final {
+				t.Fatalf("missing normal dirty requirement premise: %+v", before)
+			}
+			_, err = d.f.Drive()
+			if err != nil {
+				t.Fatalf("public drive after confirmed requirement: %v", err)
+			}
+			after, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, pending := after.State.PendingHostActions[first.ActionID]; pending {
+				t.Fatal("completed original promotion still unresolved")
+			}
+			if after.State.ReconciledEffects[first.ActionID].Status != "FULFILLED" || after.State.ReconciledEffects[first.ActionID].UnknownReceipt == nil {
+				t.Fatal("original completion or UNKNOWN evidence lost")
+			}
+			if !reflect.DeepEqual(*after.State.CandidatePromotion, originalProof) {
+				t.Fatal("original receipt differs from immutable completion")
+			}
+			if current, err := d.f.observePromotion(); err != nil || !reflect.DeepEqual(current, before) {
+				t.Fatalf("observation wrote the user's next input: %+v %v", current, err)
+			}
+			for i := 0; i < 2; i++ {
+				if err := d.f.engine.RecordCandidatePromotion(first.ActionID, originalProof, protocol.Observation{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := d.f.Drive(); err != nil {
+				t.Fatal(err)
+			}
+			if current, err := d.f.observePromotion(); err != nil || !reflect.DeepEqual(current, before) {
+				t.Fatalf("replay wrote the user's next input: %+v %v", current, err)
+			}
+
+		})
+	}
 }

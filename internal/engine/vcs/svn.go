@@ -4,12 +4,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 type svnInfo struct {
@@ -18,7 +21,6 @@ type svnInfo struct {
 		Kind       string `xml:"kind,attr"`
 		Revision   string `xml:"revision,attr"`
 		URL        string `xml:"url"`
-		Relative   string `xml:"relative-url"`
 		Repository struct {
 			Root string `xml:"root"`
 			UUID string `xml:"uuid"`
@@ -41,7 +43,6 @@ type svnStatus struct {
 				Props        string `xml:"props,attr"`
 				Switched     bool   `xml:"switched,attr"`
 				TreeConflict bool   `xml:"tree-conflicted,attr"`
-				Revision     int    `xml:"revision,attr"`
 			} `xml:"wc-status"`
 		} `xml:"entry"`
 	} `xml:"target"`
@@ -77,11 +78,106 @@ func (p *Provider) svnXML(target any, args ...string) error {
 	return xml.Unmarshal(body, target)
 }
 func svnURL(id nativeIdentity) string { return id.Scope + "@" + strconv.Itoa(id.Revision) }
+
+func svnLiteral(path string) string { return path + "@" }
+func svnLiterals(paths []string) []string {
+	targets := make([]string, len(paths))
+	for i, path := range paths {
+		targets[i] = svnLiteral(path)
+	}
+	return targets
+}
+
+// Repository paths in XML are decoded; native snapshot identities retain URLs.
+func svnURLPath(root, target string) (string, error) {
+	base, err := url.Parse(root)
+	if err != nil {
+		return "", err
+	}
+	node, err := url.Parse(target)
+	if err != nil {
+		return "", err
+	}
+	if base.Scheme != node.Scheme || base.Host != node.Host || base.User.String() != node.User.String() ||
+		node.Path != base.Path && !strings.HasPrefix(node.Path, strings.TrimSuffix(base.Path, "/")+"/") {
+		return "", fmt.Errorf("SVN URL is outside its bound root")
+	}
+	return strings.TrimPrefix(node.Path, strings.TrimSuffix(base.Path, "/")), nil
+}
+func svnRepositoryURL(root, path string) (string, error) {
+	node, err := url.Parse(root)
+	if err != nil {
+		return "", err
+	}
+	node.Path = strings.TrimSuffix(node.Path, "/") + path
+	node.RawPath = ""
+	return node.String(), nil
+}
+func svnEntryKind(value nativeEntry) string {
+	if value.Properties["svn:special"] != nil {
+		return "link"
+	}
+	return value.Kind
+}
+func svnWorkingEntry(path string) (nativeEntry, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, syscall.ENOTDIR) {
+		err = &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist}
+	}
+	if err != nil {
+		return nativeEntry{}, err
+	}
+	if info.IsDir() {
+		return nativeEntry{Kind: "dir"}, nil
+	}
+	body, err := workingBytes(path)
+	if err != nil {
+		return nativeEntry{}, err
+	}
+	value := nativeEntry{Kind: "file", Content: body}
+	if info.Mode()&os.ModeSymlink != 0 {
+		value.Content = append([]byte("link "), body...)
+		value.Properties = map[string][]byte{"svn:special": []byte("*")}
+	}
+	return value, nil
+}
+
+// Replacement scheduling keeps the worker's material until its declared nodes
+// are added. A lost delete response resumes from the native delete schedule.
+func (p *Provider) svnReplaceKind(key string, want nativeEntry) error {
+	var info svnInfo
+	if err := p.svnXML(&info, "info", "--xml", "--", svnLiteral(materialPath(p.root, key))); err != nil {
+		return err
+	}
+	if len(info.Entries) != 1 {
+		return fmt.Errorf("SVN replacement node is not unique")
+	}
+	if info.Entries[0].WC.Schedule == "delete" {
+		return nil
+	}
+	old := nativeEntry{Kind: info.Entries[0].Kind}
+	var properties svnProperties
+	if err := p.svnXML(&properties, "proplist", "--xml", "--verbose", "--", svnLiteral(materialPath(p.root, key))); err != nil {
+		return err
+	}
+	for _, target := range properties.Targets {
+		for _, property := range target.Properties {
+			if property.Name == "svn:special" {
+				old.Properties = map[string][]byte{"svn:special": []byte(property.Value)}
+			}
+		}
+	}
+	if svnEntryKind(old) == svnEntryKind(want) {
+		return nil
+	}
+	_, err := p.runner.Run(p.root, "svn", "delete", "--force", "--keep-local", "--", svnLiteral(key))
+	return err
+}
 func (p *Provider) svnResolve(revision string) (string, error) {
 	var info svnInfo
-	args := []string{"info", "--xml", p.root}
+	args := []string{"info", "--xml", svnLiteral(p.root)}
 	if revision != "" {
-		args = []string{"info", "--xml", "-r", revision, p.root}
+		args = []string{"info", "--xml", "-r", revision, svnLiteral(p.root)}
 	}
 	if err := p.svnXML(&info, args...); err != nil {
 		return "", err
@@ -107,7 +203,7 @@ func (p *Provider) svnResolve(revision string) (string, error) {
 }
 func (p *Provider) svnStatuses() (svnStatus, error) {
 	var status svnStatus
-	err := p.svnXML(&status, "status", "--xml", "--no-ignore", p.root)
+	err := p.svnXML(&status, "status", "--xml", "--no-ignore", svnLiteral(p.root))
 	return status, err
 }
 func (p *Provider) svnPath(native string) string {
@@ -140,7 +236,21 @@ func (p *Provider) svnChangedPaths() ([]string, error) {
 					}
 					paths = append(paths, leaves...)
 				} else {
-					paths = append(paths, p.svnPath(entry.Path))
+					key := p.svnPath(entry.Path)
+					paths = append(paths, key)
+					if state.Item == "obstructed" {
+						material, err := os.Lstat(materialPath(p.root, key))
+						if err != nil {
+							return nil, err
+						}
+						if material.IsDir() {
+							leaves, err := p.untrackedPaths(key)
+							if err != nil {
+								return nil, err
+							}
+							paths = append(paths, leaves...)
+						}
+					}
 				}
 			}
 		}
@@ -153,9 +263,19 @@ func (p *Provider) svnStatus() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var info svnInfo
-	if err = p.svnXML(&info, "info", "--xml", "-R", p.root); err != nil {
+	revisions, err := p.svnWorkingRevisions()
+	if err != nil {
 		return "", err
+	}
+	if len(revisions) > 1 {
+		paths = append(paths, "mixed-revision working copy")
+	}
+	return strings.Join(paths, "\n"), nil
+}
+func (p *Provider) svnWorkingRevisions() (map[int]bool, error) {
+	var info svnInfo
+	if err := p.svnXML(&info, "info", "--xml", "-R", svnLiteral(p.root)); err != nil {
+		return nil, err
 	}
 	revisions := map[int]bool{}
 	for _, entry := range info.Entries {
@@ -164,16 +284,13 @@ func (p *Provider) svnStatus() (string, error) {
 		}
 		revision, err := strconv.Atoi(entry.Revision)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if revision > 0 {
 			revisions[revision] = true
 		}
 	}
-	if len(revisions) > 1 {
-		paths = append(paths, "mixed-revision working copy")
-	}
-	return strings.Join(paths, "\n"), nil
+	return revisions, nil
 }
 func (p *Provider) svnEntries(id nativeIdentity) (map[string]string, error) {
 	var listing struct {
@@ -192,7 +309,11 @@ func (p *Provider) svnEntries(id nativeIdentity) (map[string]string, error) {
 		for _, entry := range list.Entries {
 			value := nativeEntry{Kind: entry.Kind}
 			if entry.Kind == "file" {
-				body, err := p.runner.RunRaw(p.root, "svn", nil, "cat", id.Scope+"/"+entry.Name+"@"+strconv.Itoa(id.Revision), "-r", strconv.Itoa(id.Revision))
+				address, err := svnRepositoryURL(id.Scope, "/"+entry.Name)
+				if err != nil {
+					return nil, err
+				}
+				body, err := p.runner.RunRaw(p.root, "svn", nil, "cat", address+"@"+strconv.Itoa(id.Revision), "-r", strconv.Itoa(id.Revision))
 				if err != nil {
 					return nil, err
 				}
@@ -206,7 +327,10 @@ func (p *Provider) svnEntries(id nativeIdentity) (map[string]string, error) {
 		return nil, err
 	}
 	for _, target := range properties.Targets {
-		key := strings.TrimPrefix(target.Path, id.Scope)
+		key, err := svnURLPath(id.Scope, target.Path)
+		if err != nil {
+			return nil, err
+		}
 		key = strings.TrimPrefix(key, "/")
 		if key == "" {
 			key = "."
@@ -243,18 +367,57 @@ func (p *Provider) svnTrack(paths []string) error {
 	for _, target := range status.Targets {
 		for _, entry := range target.Entries {
 			key := p.svnPath(entry.Path)
+			if !slices.Contains(paths, key) {
+				continue
+			}
+			if entry.Status.Item == "modified" || entry.Status.Item == "obstructed" || entry.Status.Item == "deleted" {
+				value, err := svnWorkingEntry(materialPath(p.root, key))
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if err = p.svnReplaceKind(key, value); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	status, err = p.svnStatuses()
+	if err != nil {
+		return err
+	}
+	for _, target := range status.Targets {
+		for _, entry := range target.Entries {
+			key := p.svnPath(entry.Path)
 			switch entry.Status.Item {
-			case "unversioned", "ignored":
+			case "unversioned", "ignored", "deleted":
 				for _, declared := range paths {
-					if declared == key || strings.HasPrefix(declared, key+"/") {
-						if _, err = p.runner.Run(p.root, "svn", "add", "--parents", "--force", "--", declared); err != nil {
-							return err
-						}
+					if declared != key && !strings.HasPrefix(declared, key+"/") {
+						continue
+					}
+					if _, err := svnWorkingEntry(materialPath(p.root, declared)); os.IsNotExist(err) {
+						continue
+					} else if err != nil {
+						return err
+					}
+					if _, err = p.runner.Run(p.root, "svn", "add", "--parents", "--force", "--depth", "empty", "--", svnLiteral(declared)); err != nil {
+						return err
 					}
 				}
 			case "missing":
+				if entry.Status.TreeConflict {
+					var info svnInfo
+					if err = p.svnXML(&info, "info", "--xml", "--", svnLiteral(materialPath(p.root, key))); err != nil {
+						return err
+					}
+					if len(info.Entries) == 1 && info.Entries[0].Kind == "none" {
+						continue
+					}
+				}
 				if slices.Contains(paths, key) {
-					if _, err = p.runner.Run(p.root, "svn", "delete", "--force", "--", key); err != nil {
+					if _, err = p.runner.Run(p.root, "svn", "delete", "--force", "--", svnLiteral(key)); err != nil {
 						return err
 					}
 				}
@@ -264,7 +427,7 @@ func (p *Provider) svnTrack(paths []string) error {
 	return nil
 }
 func (p *Provider) svnCommit(message string) error {
-	if _, err := p.runner.Run(p.root, "svn", "commit", "-m", message, p.root); err != nil {
+	if _, err := p.runner.Run(p.root, "svn", "commit", "-m", message, svnLiteral(p.root)); err != nil {
 		return err
 	}
 	// Commit does not advance unchanged WC nodes. Update to the exact observed
@@ -275,7 +438,7 @@ func (p *Provider) svnCommit(message string) error {
 	}
 	bound, _ := decodeNative(id)
 	var log svnLog
-	if err = p.svnXML(&log, "log", "--xml", "-l", "1", bound.Scope); err != nil {
+	if err = p.svnXML(&log, "log", "--xml", "-l", "1", svnLiteral(bound.Scope)); err != nil {
 		return err
 	}
 	if len(log.Entries) != 1 || log.Entries[0].Message != message {
@@ -302,7 +465,10 @@ func (p *Provider) svnAncestor(a, b nativeIdentity) error {
 	if err := p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", svnURL(b)); err != nil {
 		return err
 	}
-	relative := strings.TrimPrefix(b.Scope, b.Address)
+	relative, err := svnURLPath(b.Address, b.Scope)
+	if err != nil {
+		return err
+	}
 	for _, entry := range log.Entries {
 		if a.Scope == b.Scope && entry.Revision <= a.Revision {
 			return nil
@@ -310,7 +476,10 @@ func (p *Provider) svnAncestor(a, b nativeIdentity) error {
 		for _, change := range entry.Paths {
 			if change.Path == relative && change.From != "" {
 				copy := b
-				copy.Scope = b.Address + change.From
+				copy.Scope, err = svnRepositoryURL(b.Address, change.From)
+				if err != nil {
+					return err
+				}
 				copy.Revision = change.FromRev
 				if err := p.svnAncestor(a, copy); err == nil {
 					return nil
@@ -353,14 +522,23 @@ func (p *Provider) svnWorkspaceExists(workspace string, h WorkspaceHandle) (bool
 		return false, err
 	}
 	id, _ := decodeNative(identity)
-	if id.Scope != h.URL {
+	relative, err := svnURLPath(h.URL, id.Scope)
+	if err != nil || relative != "" {
 		return false, fmt.Errorf("SVN workspace URL differs from its registered scope")
 	}
 	return true, nil
 }
 func (p *Provider) svnCreatedRevision(id nativeIdentity, h WorkspaceHandle, message string) (int, error) {
+	source, err := svnURLPath(id.Address, id.Scope)
+	if err != nil {
+		return 0, err
+	}
+	target, err := svnURLPath(id.Address, h.URL)
+	if err != nil {
+		return 0, err
+	}
 	var log svnLog
-	if err := p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", h.URL); err != nil {
+	if err := p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", svnLiteral(h.URL)); err != nil {
 		return 0, err
 	}
 	for _, entry := range log.Entries {
@@ -368,7 +546,7 @@ func (p *Provider) svnCreatedRevision(id nativeIdentity, h WorkspaceHandle, mess
 			continue
 		}
 		for _, change := range entry.Paths {
-			if id.Address+change.Path == h.URL && id.Address+change.From == id.Scope && change.FromRev == id.Revision {
+			if change.Path == target && change.From == source && change.FromRev == id.Revision {
 				return entry.Revision, nil
 			}
 		}
@@ -379,7 +557,7 @@ func (p *Provider) svnCreatedRevision(id nativeIdentity, h WorkspaceHandle, mess
 // URL absence is an observed native result; other command failures remain I/O.
 func (p *Provider) svnURLExists(url string) (bool, error) {
 	var info svnInfo
-	err := p.svnXML(&info, "info", "--xml", url)
+	err := p.svnXML(&info, "info", "--xml", svnLiteral(url))
 	if err == nil {
 		return len(info.Entries) == 1, nil
 	}
@@ -394,7 +572,7 @@ func (p *Provider) svnCreateWorkspace(workspace string, id nativeIdentity, messa
 		return err
 	}
 	if !exists {
-		if _, err := p.runner.Run(p.root, "svn", "copy", svnURL(id), h.URL, "-m", message); err != nil {
+		if _, err := p.runner.Run(p.root, "svn", "copy", svnURL(id), svnLiteral(h.URL), "-m", message); err != nil {
 			return err
 		}
 	}
@@ -432,19 +610,27 @@ func (p *Provider) svnCleanupWorkspace(workspace, message string, h WorkspaceHan
 	}
 	if exists {
 		var log svnLog
-		if err = p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", h.URL); err != nil {
+		if err = p.svnXML(&log, "log", "--xml", "-v", "--stop-on-copy", svnLiteral(h.URL)); err != nil {
+			return err
+		}
+		sourcePath, err := svnURLPath(source.Address, source.Scope)
+		if err != nil {
+			return err
+		}
+		targetPath, err := svnURLPath(source.Address, h.URL)
+		if err != nil {
 			return err
 		}
 		owned := false
 		for _, entry := range log.Entries {
 			for _, change := range entry.Paths {
-				owned = owned || source.Address+change.Path == h.URL && source.Address+change.From == source.Scope && change.FromRev == source.Revision
+				owned = owned || change.Path == targetPath && change.From == sourcePath && change.FromRev == source.Revision
 			}
 		}
 		if !owned {
 			return fmt.Errorf("SVN cleanup URL has no registered copy lineage")
 		}
-		if _, err = p.runner.Run(p.root, "svn", "delete", h.URL, "-m", message); err != nil {
+		if _, err = p.runner.Run(p.root, "svn", "delete", svnLiteral(h.URL), "-m", message); err != nil {
 			return err
 		}
 	}
@@ -456,15 +642,33 @@ func (p *Provider) svnApply(id nativeIdentity, paths []string) error {
 		return err
 	}
 	paths = slices.Clone(paths)
-	slices.SortFunc(paths, func(a, b string) int { return strings.Count(a, "/") - strings.Count(b, "/") })
+	slices.SortFunc(paths, func(a, b string) int {
+		if (entries[a] == "") != (entries[b] == "") {
+			if entries[a] == "" {
+				return -1
+			}
+			return 1
+		}
+		if entries[a] == "" {
+			return strings.Count(b, "/") - strings.Count(a, "/")
+		}
+		return strings.Count(a, "/") - strings.Count(b, "/")
+	})
 	for _, key := range paths {
 		target := materialPath(p.root, key)
 		encoded := entries[key]
 		if encoded == "" {
+			replacedParent := false
+			for parent := filepath.ToSlash(filepath.Dir(key)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
+				replacedParent = replacedParent || entries[parent] != "" && entryMode(entries[parent]) != "040000"
+			}
+			if replacedParent {
+				continue
+			}
 			if _, err := os.Lstat(target); os.IsNotExist(err) {
 				continue
 			}
-			if _, err = p.runner.Run(p.root, "svn", "delete", "--force", "--", key); err != nil {
+			if _, err = p.runner.Run(p.root, "svn", "delete", "--force", "--", svnLiteral(key)); err != nil {
 				return err
 			}
 			continue
@@ -472,6 +676,29 @@ func (p *Provider) svnApply(id nativeIdentity, paths []string) error {
 		var value nativeEntry
 		if err = json.Unmarshal([]byte(encoded), &value); err != nil {
 			return err
+		}
+		actual, inspect := svnWorkingEntry(target)
+		if inspect != nil && !os.IsNotExist(inspect) {
+			return inspect
+		}
+		if inspect == nil && svnEntryKind(actual) != svnEntryKind(value) {
+			if err = p.svnReplaceKind(key, value); err != nil {
+				return err
+			}
+			if actual.Kind == "dir" {
+				removed := slices.Clone(paths)
+				slices.SortFunc(removed, func(a, b string) int { return strings.Count(b, "/") - strings.Count(a, "/") })
+				for _, path := range removed {
+					if strings.HasPrefix(path, key+"/") && entries[path] == "" {
+						if err = os.Remove(materialPath(p.root, path)); err != nil && !os.IsNotExist(err) {
+							return err
+						}
+					}
+				}
+			}
+			if err = os.Remove(target); err != nil {
+				return err
+			}
 		}
 		if value.Kind == "dir" {
 			if err = os.MkdirAll(target, 0755); err != nil {
@@ -481,23 +708,36 @@ func (p *Provider) svnApply(id nativeIdentity, paths []string) error {
 			if err = os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			if _, err = p.runner.Run(p.root, "svn", "export", "--force", "-r", strconv.Itoa(id.Revision), id.Scope+"/"+key+"@"+strconv.Itoa(id.Revision), target); err != nil {
+			if svnEntryKind(value) == "link" {
+				actual, inspect := svnWorkingEntry(target)
+				if inspect != nil && !os.IsNotExist(inspect) {
+					return inspect
+				}
+				if inspect != nil || svnEntryKind(actual) != "link" || string(actual.Content) != string(value.Content) {
+					if err = os.Remove(target); err != nil && !os.IsNotExist(err) {
+						return err
+					}
+					if err = os.Symlink(strings.TrimPrefix(string(value.Content), "link "), target); err != nil {
+						return err
+					}
+				}
+			} else if err = os.WriteFile(target, value.Content, 0644); err != nil {
 				return err
 			}
 		}
 		if key != "." {
-			if _, err = p.runner.Run(p.root, "svn", "add", "--parents", "--force", "--depth", "empty", "--", key); err != nil {
+			if _, err = p.runner.Run(p.root, "svn", "add", "--parents", "--force", "--depth", "empty", "--", svnLiteral(key)); err != nil {
 				return err
 			}
 		}
 		var properties svnProperties
-		if err = p.svnXML(&properties, "proplist", "--xml", "--verbose", target); err != nil {
+		if err = p.svnXML(&properties, "proplist", "--xml", "--verbose", svnLiteral(target)); err != nil {
 			return err
 		}
 		for _, node := range properties.Targets {
 			for _, property := range node.Properties {
 				if _, ok := value.Properties[property.Name]; !ok {
-					if _, err = p.runner.Run(p.root, "svn", "propdel", property.Name, "--", key); err != nil {
+					if _, err = p.runner.Run(p.root, "svn", "propdel", property.Name, "--", svnLiteral(key)); err != nil {
 						return err
 					}
 				}
@@ -515,7 +755,7 @@ func (p *Provider) svnApply(id nativeIdentity, paths []string) error {
 				writeErr = closeErr
 			}
 			if writeErr == nil {
-				_, writeErr = p.runner.Run(p.root, "svn", "propset", name, "-F", filename, "--", key)
+				_, writeErr = p.runner.Run(p.root, "svn", "propset", name, "-F", filename, "--", svnLiteral(key))
 			}
 			_ = os.Remove(filename)
 			if writeErr != nil {
@@ -543,6 +783,10 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 		for _, entry := range target.Entries {
 			if entry.Status.Item == "unversioned" || entry.Status.Item == "ignored" || entry.Status.Item == "missing" {
 				if p.isRuntimeStatusPath(p.svnPath(entry.Path)) {
+					continue
+				}
+				if entry.Status.Item == "missing" {
+					result.Tracked = false
 					continue
 				}
 				leaves, err := p.untrackedPaths(p.svnPath(entry.Path))
@@ -582,7 +826,7 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 		if err != nil {
 			return result, err
 		}
-		body, err := p.runner.RunRaw(p.root, "svn", nil, "diff", "--force", "--old", svnURL(id), "--new", p.root)
+		body, err := p.runner.RunRaw(p.root, "svn", nil, "diff", "--force", "--old", svnURL(id), "--new", svnLiteral(p.root))
 		if err != nil {
 			return result, err
 		}
@@ -592,6 +836,26 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 			return result, err
 		}
 		changes := entryChanges(baseEntries, want)
+		replacement := false
+		for _, change := range changes {
+			var a, b nativeEntry
+			if change.BaseMetadata != "" && change.Metadata != "" {
+				if err := json.Unmarshal([]byte(change.BaseMetadata), &a); err != nil {
+					return result, err
+				}
+				if err := json.Unmarshal([]byte(change.Metadata), &b); err != nil {
+					return result, err
+				}
+				replacement = replacement || svnEntryKind(a) != svnEntryKind(b)
+			}
+		}
+		if replacement {
+			current, err := p.workingTreeEntries()
+			if err != nil {
+				return result, err
+			}
+			result.Equal = hashValue(current) == hashValue(want)
+		}
 		result.Prefix = true
 		for _, key := range paths {
 			position := slices.IndexFunc(changes, func(c Change) bool { return c.Path == key })
@@ -600,15 +864,31 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 				continue
 			}
 			if changes[position].Mode == "000000" {
-				_, err := os.Lstat(materialPath(p.root, key))
+				_, err := svnWorkingEntry(materialPath(p.root, key))
 				result.Prefix = result.Prefix && os.IsNotExist(err)
+				continue
+			}
+			var before, after nativeEntry
+			if changes[position].BaseMetadata != "" {
+				if err := json.Unmarshal([]byte(changes[position].BaseMetadata), &before); err != nil {
+					return result, err
+				}
+			}
+			if err := json.Unmarshal([]byte(changes[position].Metadata), &after); err != nil {
+				return result, err
+			}
+			if changes[position].BaseMetadata != "" && svnEntryKind(before) != svnEntryKind(after) {
+				result.Prefix = result.Prefix && (working[key] == want[key] || working[key] == "")
 				continue
 			}
 			old := id.Scope
 			if key != "." {
-				old += "/" + key
+				old, err = svnRepositoryURL(id.Scope, "/"+key)
+				if err != nil {
+					return result, err
+				}
 			}
-			diff, err := p.runner.RunRaw(p.root, "svn", nil, "diff", "--force", "--old", old+"@"+strconv.Itoa(id.Revision), "--new", materialPath(p.root, key))
+			diff, err := p.runner.RunRaw(p.root, "svn", nil, "diff", "--force", "--depth", "empty", "--old", old+"@"+strconv.Itoa(id.Revision), "--new", svnLiteral(materialPath(p.root, key)))
 			if err != nil {
 				return result, err
 			}
@@ -620,23 +900,19 @@ func (p *Provider) svnPending(base, expected string) (Pending, error) {
 }
 func (p *Provider) svnIndex() ([]IndexEntry, error) {
 	var info svnInfo
-	if err := p.svnXML(&info, "info", "--xml", "-R", p.root); err != nil {
+	if err := p.svnXML(&info, "info", "--xml", "-R", svnLiteral(p.root)); err != nil {
 		return nil, err
 	}
 	values := map[string]nativeEntry{}
 	conflicts := map[string]string{}
 	for _, node := range info.Entries {
 		key := p.svnPath(node.Path)
-		value := nativeEntry{Kind: node.Kind}
-		if node.Kind == "file" {
-			body, err := workingBytes(materialPath(p.root, key))
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			value.Content = body
+		value, err := svnWorkingEntry(materialPath(p.root, key))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		values[key] = value
 		for _, conflict := range node.Conflict {
@@ -644,7 +920,7 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 		}
 	}
 	var properties svnProperties
-	if err := p.svnXML(&properties, "proplist", "--xml", "--verbose", "-R", p.root); err != nil {
+	if err := p.svnXML(&properties, "proplist", "--xml", "--verbose", "-R", svnLiteral(p.root)); err != nil {
 		return nil, err
 	}
 	for _, node := range properties.Targets {
@@ -653,7 +929,10 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 		if !ok {
 			continue
 		}
-		value.Properties = map[string][]byte{}
+		// Keep actual link metadata; native properties describe its registered node.
+		if value.Properties == nil {
+			value.Properties = map[string][]byte{}
+		}
 		for _, property := range node.Properties {
 			body := []byte(property.Value)
 			if property.Encoding == "base64" {
@@ -684,6 +963,19 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 			if node.Status.Item == "conflicted" || node.Status.Props == "conflicted" || node.Status.TreeConflict {
 				conflicts[key] = node.Status.Item + ":" + node.Status.Props
 			}
+			if node.Status.Item == "obstructed" {
+				leaves, err := p.untrackedPaths(key)
+				if err != nil {
+					return nil, err
+				}
+				for _, path := range leaves {
+					value, err := svnWorkingEntry(materialPath(p.root, path))
+					if err != nil {
+						return nil, err
+					}
+					values[path] = value
+				}
+			}
 			if (node.Status.Item == "unversioned" || node.Status.Item == "ignored") && !p.isRuntimeStatusPath(key) {
 				body, err := workingBytes(materialPath(p.root, key))
 				if err == nil {
@@ -693,6 +985,11 @@ func (p *Provider) svnIndex() ([]IndexEntry, error) {
 		}
 	}
 	var entries []IndexEntry
+	for key, conflict := range conflicts {
+		if _, exists := values[key]; !exists {
+			entries = append(entries, IndexEntry{Path: key, Mode: "000000", Stage: 1, Conflict: conflict})
+		}
+	}
 	for key, value := range values {
 		encoded := entryValue(value)
 		stage := 0
@@ -717,7 +1014,7 @@ func (p *Provider) svnMerge(incoming nativeIdentity) error {
 	}
 	return nil
 }
-func (p *Provider) svnObserveIntegration(base, incoming string) (IntegrationObservation, error) {
+func (p *Provider) svnObserveIntegration(incoming string) (IntegrationObservation, error) {
 	id, err := decodeNative(incoming)
 	if err != nil {
 		return IntegrationObservation{}, err
@@ -726,7 +1023,7 @@ func (p *Provider) svnObserveIntegration(base, incoming string) (IntegrationObse
 	if err != nil {
 		return IntegrationObservation{}, err
 	}
-	out, err := p.runner.Run(p.root, "svn", "mergeinfo", "--show-revs", "merged", svnURL(id), p.root)
+	out, err := p.runner.Run(p.root, "svn", "mergeinfo", "--show-revs", "merged", svnURL(id), svnLiteral(p.root))
 	if err != nil {
 		return IntegrationObservation{}, err
 	}

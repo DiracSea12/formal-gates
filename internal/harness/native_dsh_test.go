@@ -189,7 +189,7 @@ func TestObserveNative(t *testing.T) {
 	if got := mustCanonical(t, usage); got != want {
 		t.Fatalf("usage_evidence:\n got %s\nwant %s", got, want)
 	}
-	if transcript := textOf(receipt["transcript"]); transcript != "/t/root.jsonl" {
+	if transcript := textOf(receipt["transcript"]); transcript != filepath.Join(directory, "native-events.jsonl") {
 		t.Fatalf("transcript = %v", transcript)
 	}
 	if turn := textOf(receipt["native_turn"]); turn != "1" {
@@ -320,6 +320,9 @@ func TestDSHReconcile(t *testing.T) {
 	source, err := dshReconcile(directory, map[string]any{"exit_code": 0, "error": ""})
 	if err != nil || source["identity"] != "s-1" || !valuesEqual(source["selection"], map[string]any{"model": "test-model", "reasoning_effort": "high"}) {
 		t.Fatalf("successful original process: %v %v", source, err)
+	}
+	if source["transcript"] != filepath.Join(directory, "native-events.jsonl") {
+		t.Fatalf("recovered metering source = %v", source["transcript"])
 	}
 	if !valuesEqual(originalProofs, proofsOf(t, directory, names)) || string(readTestFileBytes(t, filepath.Join(directory, "answer.json"))) != `{"status":"PASS","summary":"ok"}` {
 		t.Fatal("recovery changed original native or semantic evidence")

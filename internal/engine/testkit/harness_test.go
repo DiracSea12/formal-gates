@@ -17,7 +17,65 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 )
+
+func TestHarnessReviewResultsAcceptedAndPreservedAfterRestart(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		options HarnessOptions
+		wantErr error
+	}{
+		{name: "smoke", options: HarnessOptions{Scenario: "smoke"}},
+		{name: "semantic-recovery", options: HarnessOptions{Scenario: "failure-routing", FailureClass: string(authoring.FailureAgentRecoverable), Declared: "true"}},
+		{name: "response-loss", options: HarnessOptions{Scenario: "fault", Fault: string(persistence.FaultSubmitResponseLost)}, wantErr: ErrInjected},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			test.options.ProjectRoot = root
+			report, err := RunHarness(test.options)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("scenario error = %v, want %v", err, test.wantErr)
+			}
+			wantStatus := "PASS"
+			if test.wantErr != nil {
+				wantStatus = "ERROR"
+			}
+			if report.Status != wantStatus || len(report.Actions) != 1 || report.Snapshot == nil || report.Summary.Results != 1 {
+				t.Fatalf("scenario report = %+v", report)
+			}
+			actionID := report.Actions[0].ActionID
+			accepted := false
+			for _, acceptance := range report.Acceptances {
+				if acceptance.Kind == "WORKER_RESULT" {
+					if acceptance.ActionID != actionID || acceptance.Status != "ACCEPTED" {
+						t.Fatalf("result acceptance = %+v", acceptance)
+					}
+					accepted = true
+				}
+			}
+			if !accepted {
+				t.Fatal("no accepted worker result in report")
+			}
+			state := report.Snapshot.State
+			result := state.Results[actionID]
+			if result.ActionID != actionID || result.Outcome != protocol.OutcomePass || result.Review == nil || result.Review.Action != review.ProductReview || result.Review.DispatchID != actionID || result.Review.RequirementRevision != state.RequirementRevision() {
+				t.Fatalf("persisted result = %+v", result)
+			}
+			series := state.ReviewSeries.ProductReview
+			if series.Completed != 1 || series.Effective.Status != "PASS" || len(series.RawCandidates) != 1 || series.RawCandidates[0].DispatchID != actionID {
+				t.Fatalf("persisted review series = %+v", series)
+			}
+			restarted, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "recover"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restarted.Snapshot == nil || restarted.Summary.Results != 1 || !reflect.DeepEqual(restarted.Snapshot.State.Results[actionID], result) || !reflect.DeepEqual(restarted.Snapshot.State.ReviewSeries.ProductReview, series) {
+				t.Fatalf("restart lost accepted review evidence: %+v", restarted)
+			}
+		})
+	}
+}
 
 func TestHarnessEnvelopeBarrierDoesNotCreateTarget(t *testing.T) {
 	for _, field := range []string{"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionDigest", "packageDigest"} {
@@ -77,7 +135,7 @@ func TestHarnessEnvelopeWriteReportsBarrierBytesAndValidWrite(t *testing.T) {
 	}
 }
 
-func TestHarnessRegisteredUnknownReceiptAndHostReconcileAliases(t *testing.T) {
+func TestHarnessUnknownReceiptUsesLifecycleMatches(t *testing.T) {
 	for _, matches := range []string{"0", "2"} {
 		report, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "unknown-receipt", LifecycleMatches: matches})
 		if err != nil {
@@ -86,14 +144,6 @@ func TestHarnessRegisteredUnknownReceiptAndHostReconcileAliases(t *testing.T) {
 		if len(report.RecoveryPlan) != 1 || report.RecoveryPlan[0].Action != protocol.RecoveryOperator || report.RecoveryPlan[0].LifecycleMatches != atoiTest(t, matches) {
 			t.Fatalf("unknown receipt matches=%s report=%+v", matches, report)
 		}
-	}
-	fulfilled, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "reconcile-host-action", Fact: "sha256:observed", Expected: "sha256:observed"})
-	if err != nil || len(fulfilled.RecoveryPlan) == 0 || fulfilled.RecoveryPlan[0].Action != protocol.RecoveryReconcile {
-		t.Fatalf("fulfilled host reconcile = %+v err=%v", fulfilled, err)
-	}
-	conflict, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "reconcile-host-action", Conflict: "true"})
-	if err != nil || len(conflict.RecoveryPlan) == 0 || conflict.RecoveryPlan[0].Action != protocol.RecoveryOperator || len(conflict.Next) != 1 || conflict.Next[0].Kind != decision.KindOperator {
-		t.Fatalf("conflict host reconcile = %+v err=%v", conflict, err)
 	}
 }
 
@@ -265,21 +315,6 @@ func TestHarnessTerminalSummaryRequiresVersionEnvelope(t *testing.T) {
 	}
 }
 
-func TestHarnessHostUnknownReconcilesAtMostOnce(t *testing.T) {
-	report, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "host-action", Status: protocol.HostActionStatusUnknown, Choice: "fulfilled"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.SideEffects) != 1 || len(report.RecoveryPlan) != 2 {
-		t.Fatalf("host action report = %+v", report)
-	}
-	for _, calls := range report.SideEffects {
-		if calls != 1 {
-			t.Fatalf("host action was re-executed %d times", calls)
-		}
-	}
-}
-
 func TestHarnessReplaceAfterRecoveryPreservesFakeVCSCount(t *testing.T) {
 	root := t.TempDir()
 	crashed, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "fault", Fault: string(persistence.FaultReplaceAfter)})
@@ -309,25 +344,6 @@ func TestHarnessReplaceAfterRecoveryPreservesFakeVCSCount(t *testing.T) {
 		if filepath.Ext(path) == ".tmp" || path == "engine-state/state.json.intent" {
 			t.Fatalf("recovery left protocol artifact %q", path)
 		}
-	}
-}
-
-func TestHarnessFingerprintRetryDoesNotRepeatStaleOperation(t *testing.T) {
-	report, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "fingerprint"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count, ok := report.SideEffects["stale-operation"]; !ok || count != 0 {
-		t.Fatalf("stale operation side effects = %v (present=%v), want 0", count, ok)
-	}
-	if count := report.SideEffects["retry-operation"]; count != 1 {
-		t.Fatalf("retry operation side effects = %d, want 1", count)
-	}
-	if len(report.Acceptances) != 1 || report.Acceptances[0].Status != "ACCEPTED" {
-		t.Fatalf("fingerprint retry receipt = %+v, want one ACCEPTED receipt", report.Acceptances)
-	}
-	if report.Snapshot == nil || len(report.Snapshot.State.PendingHostActions) != 0 {
-		t.Fatalf("fingerprint retry left pending host action: %+v", report.Snapshot)
 	}
 }
 
@@ -403,7 +419,7 @@ func TestHarnessFailureRoutingTransientExhaustionOffersDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, _, err := fixture.Engine.Plan()
+	plan, _, err := fixture.Engine.Plan(protocol.Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,8 +449,8 @@ func TestHarnessFailureRoutingTransientExhaustionOffersDecision(t *testing.T) {
 func TestHarnessRegisteredScenarioCensus(t *testing.T) {
 	for _, scenario := range []string{
 		"revision-sequence", "idempotency", "freshness", "concurrent-submit", "cas",
-		"fingerprint", "lock-recovery", "host-action", "lifecycle", "invalid-events",
-		"result-before-receipt", "next-sequence", "failure-routing", "full",
+		"lock-recovery", "lifecycle", "invalid-events",
+		"result-before-receipt", "next-sequence", "failure-routing",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			report, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: scenario})
@@ -502,43 +518,12 @@ func TestHarnessNamedFaultCensus(t *testing.T) {
 	}
 	for _, point := range []persistence.FaultPoint{
 		persistence.FaultSpawnAfterAttach, persistence.FaultResultBeforeReceipt,
-		persistence.FaultSubmitResponseLost, persistence.FaultHostObserveBefore,
-		persistence.FaultHostReconcileBefore, persistence.FaultHostCommitBefore,
-		persistence.FaultHostCommitAfter,
+		persistence.FaultSubmitResponseLost,
 	} {
 		t.Run(string(point), func(t *testing.T) {
 			if _, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "fault", Fault: string(point)}); !errors.Is(err, ErrInjected) {
 				t.Fatalf("fault %s error = %v", point, err)
 			}
 		})
-	}
-}
-
-func TestHarnessFullIsDeterministic(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "project")
-	first, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "full"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstSummary, err := os.ReadFile(first.SummaryPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.RemoveAll(root); err != nil {
-		t.Fatal(err)
-	}
-	second, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "full"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondSummary, err := os.ReadFile(second.SummaryPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(first, second) {
-		t.Fatalf("full reports differ:\nfirst=%+v\nsecond=%+v", first, second)
-	}
-	if !bytes.Equal(firstSummary, secondSummary) {
-		t.Fatal("full terminal summary bytes are not deterministic")
 	}
 }

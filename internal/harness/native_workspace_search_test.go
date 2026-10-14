@@ -120,7 +120,7 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 	if after, err := os.Getwd(); err != nil || after != cwd {
 		t.Fatal("search changed cwd", after, err)
 	}
-	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"changed.go","content":"changed"}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"changed.go","content":"changed"}`)); err == nil {
 		t.Fatal("search bypassed read-only policy")
 	}
 	if err := verifyNativeToolEvidence(directory); err != nil {

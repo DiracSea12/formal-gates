@@ -24,6 +24,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
@@ -55,11 +56,14 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}
-	confirmValidationDocument(master, "", current, document)
+	confirmValidationDocument(master, "", current, document, true)
 	master.revision = driverState(t, master).RequirementRevision()
+	master.drive()
+	passPreDevelopmentReviews(t, master, splitCommandPlan(), review.StartReadiness)
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
 	master.drive()
 	parent := driverState(t, master)
+	confirmed := parent.CurrentIntakeConfirmation()
 	if len(parent.SliceChildren) != 2 || parent.ChildCreation.RequirementRevision != master.revision || !reflect.DeepEqual(parent.ChildCreation.Coverage, current) {
 		t.Fatal("creation did not freeze the confirmed baseline")
 	}
@@ -78,6 +82,9 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 			t.Fatal(err)
 		}
 		state := snap.State
+		if !reflect.DeepEqual(parent.ChildCreation.Intake, confirmed) || !reflect.DeepEqual(state.SliceChild.InheritedIntake, confirmed) || !reflect.DeepEqual(state.CurrentIntakeConfirmation(), confirmed) || state.RequirementGuarantee.RequirementRevision != master.revision || state.RequirementGuarantee.SolutionRevision != confirmed.SolutionRevision {
+			t.Fatal("child creation, material and activation do not share the complete confirmation")
+		}
 		if state.RequirementRevision() != master.revision || state.SliceChild.RequirementRevision != master.revision || !reflect.DeepEqual(state.SliceChild.Coverage, current) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, intake) || len(state.RequirementRevisions) != 1 || state.RequirementRevisions[0].Revision != intake.RequirementRevision || state.RequirementRevisions[0].StateRevision != state.IntakeReceipt.Revision || state.InitialSnapshot != parent.ChildCreation.Source {
 			t.Fatalf("child lost its inherited baseline, original intake or local ledger: %+v", state)
 		}
@@ -353,7 +360,7 @@ func createdSliceFacade(t *testing.T, master *Facade, sliceID string, owner Owne
 		var digest string
 		digest, err = master.vcs.TreeDigest(snap.State.AcceptedNativeSnapshot())
 		if err == nil {
-			err = master.engine.PrepareChildren(digest, emptyFingerprint())
+			err = master.engine.PrepareChildren(digest, protocol.Observation{})
 		}
 		if err == nil {
 			snap, err = master.engine.Load()
@@ -744,7 +751,7 @@ func TestChildReleaseReopenUsesCommittedMapAfterLostResponse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			eng, err := protocol.New(store, protocol.Config{NativeRoot: d.f.root, Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(d.f.root, d.f.runID), ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)}, nil)
+			eng, err := protocol.New(store, protocol.Config{NativeRoot: d.f.root, Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(d.f.root, d.f.runID), ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -978,7 +985,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 						t.Fatal("master removed an active child workspace", err)
 					}
 				}
-				if err := master.f.engine.BeginCleanup(emptyFingerprint()); err == nil {
+				if err := master.f.engine.BeginCleanup(protocol.Observation{}); err == nil {
 					t.Fatal("master cleanup accepted without actual child terminal facts")
 				}
 				for _, child := range children {
@@ -1108,4 +1115,138 @@ func retainNativeEvidence(t *testing.T, f *Facade) {
 			}
 		}
 	})
+}
+
+// The producer's selected requirement, solution and reference stay together
+// through creation, recovery and a subsequent parent confirmation.
+func TestChildCreationPreservesPreparedMaterialConfirmation(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed=%t", changed), func(t *testing.T) {
+			root := t.TempDir()
+			snapshotRepoCommits(t, root)
+			solution, reference := "# Solution\nUse the supported command.\n", "# Reference\nSupported outcome contract.\n"
+			for path, body := range map[string]string{"design.md": solution, "reference.md": reference} {
+				if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := vcs.ExecRunner{}
+			for _, args := range [][]string{{"add", "design.md", "reference.md"}, {"commit", "-m", "Selected material"}} {
+				if _, err := runner.Run(root, "git", args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			base, err := vcs.New(root, nil).Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			preview, err := PrepareIntake(root, "requirements.md", "design.md", []string{"reference.md"}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			master := &validationDriver{t: t, f: f, run: run, revision: preview.Revision, provider: f.admission.Provider, git: f.vcs}
+			retainNativeEvidence(t, f)
+			master.drive()
+			passPreDevelopmentReviews(t, master, splitCommandPlan())
+			document := validationDocument
+			if changed {
+				document += "\n"
+				solution += "\n"
+				reference += "\n"
+				for path, body := range map[string]string{"design.md": solution, "reference.md": reference} {
+					if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				confirmValidationDocument(master, "", nil, document)
+				master.revision = driverState(t, master).RequirementRevision()
+			}
+			current, err := PrepareIntake(root, "requirements.md", "design.md", []string{"reference.md"}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})})
+			master.drive()
+			parent := driverState(t, master)
+			confirmation := parent.CurrentIntakeConfirmation()
+			if !reflect.DeepEqual(confirmation, &current.IntakeCandidate) || !reflect.DeepEqual(parent.ChildCreation.Intake, confirmation) {
+				t.Fatal("creation changed the prepared confirmation")
+			}
+			master.reopen()
+			master.drive()
+			if !reflect.DeepEqual(driverState(t, master).ChildCreation, parent.ChildCreation) {
+				t.Fatal("repeated parent preparation changed the material confirmation")
+			}
+			var children []*validationDriver
+			for _, plan := range parent.ChildCreation.Children {
+				childFacade, err := Open(root, plan.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				childRun, err := childFacade.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				child := &validationDriver{t: t, f: childFacade, run: childRun, revision: master.revision, git: childFacade.vcs}
+				children = append(children, child)
+				state := driverState(t, child)
+				metadata, err := childFacade.request()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantActivation := protocol.NewGuaranteeActivation(master.revision, confirmation.SolutionRevision, *current.RequirementDocument)
+				if !reflect.DeepEqual(state.IntakeConfirmationReceipt, &preview.IntakeCandidate) || !reflect.DeepEqual(metadata.IntakeConfirmationReceipt, preview.IntakeCandidate) || len(state.RequirementRevisions) != 1 || state.RequirementRevisions[0].Revision != preview.Revision || state.RequirementRevisions[0].StateRevision != state.IntakeReceipt.Revision || !reflect.DeepEqual(state.SliceChild.InheritedIntake, confirmation) || !reflect.DeepEqual(state.CurrentIntakeConfirmation(), confirmation) || !reflect.DeepEqual(state.RequirementGuarantee, wantActivation) {
+					t.Fatal("child changed the initial receipt, ledger, inherited confirmation or activation")
+				}
+				child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+				child.drive()
+				id, input := planBatchAction(child, "command")
+				if input.Binding.Generation != 0 || input.Manifest.Binding.SolutionRevision != confirmation.SolutionRevision {
+					t.Fatal("initial child work lost its creation epoch or solution")
+				}
+				assertConfirmedMaterial(t, child, input, document)
+				material, err := readWorkerMaterial(child.run.WorkerMaterials[id])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(material.Input.Intake, confirmation) || !reflect.DeepEqual(material.Input.Materials, current.Materials) {
+					t.Fatal("child worker material changed the selected identity or complete source bytes")
+				}
+			}
+			solution += "\n"
+			reference += "\n"
+			for path, body := range map[string]string{"design.md": solution, "reference.md": reference} {
+				if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			master.run, err = master.f.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmValidationDocument(master, "", nil, document+"\n")
+			master.drive()
+			latest := driverState(t, master).CurrentIntakeConfirmation()
+			if reflect.DeepEqual(latest, confirmation) {
+				t.Fatal("cascade fixture did not create a distinct complete confirmation")
+			}
+			for _, child := range children {
+				child.reopen()
+				child.drive()
+				state := driverState(t, child)
+				if !reflect.DeepEqual(state.CurrentIntakeConfirmation(), latest) || !reflect.DeepEqual(state.RequirementRevisions[len(state.RequirementRevisions)-1].Intake, latest) || !reflect.DeepEqual(state.SliceChild.InheritedIntake, confirmation) || !reflect.DeepEqual(state.IntakeConfirmationReceipt, &preview.IntakeCandidate) || state.SliceChild.RequirementRevision != parent.ChildCreation.RequirementRevision || state.SliceChild.ParentChange == nil {
+					t.Fatal("parent cascade replaced the creation epoch or failed to select its local confirmation")
+				}
+				child.reopen()
+				child.drive()
+				if !reflect.DeepEqual(driverState(t, child).SliceChild.InheritedIntake, confirmation) {
+					t.Fatal("repeated recovery changed inherited material")
+				}
+			}
+		})
+	}
 }

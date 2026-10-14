@@ -59,7 +59,16 @@ func TestSkillDelegatesAdvancementToCurrentCLI(t *testing.T) {
 	assertHasText(t, skill, "程序独占下一步、派发、顺序、轮次、恢复、机械绑定与结果接纳")
 	assertHasText(t, skill, "workflow next")
 	assertHasText(t, skill, "workflow drive")
-	assertHasText(t, skill, "lightweight 使用同一预检加 `--route lightweight`，记录 unverified")
+	for _, rule := range []string{
+		"唯一载荷可自动选取，多个时按原位置选择",
+		"不抄取或重拼已知路径、身份、摘要、全文和收据",
+		"lightweight 使用同一预检加 `--route lightweight`",
+		"`--document` 复用 `--precheck --materials` 发布的普通材料序号",
+		"记录 unverified",
+		"不把它当验证通过",
+	} {
+		assertHasText(t, skill, rule)
+	}
 }
 func TestSkillManagedRuleBlockDeclaresIntake(t *testing.T) {
 	rule, err := LoadManagedRule(repoRootValidateTest(t))

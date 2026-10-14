@@ -3,7 +3,6 @@ package facade
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,43 +10,13 @@ import (
 
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/host"
+	"formal-gates/internal/lifecycle"
 )
 
 func digestOf(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-// writeLifecycleSidecar 在 lifecycle sidecar 里落一条派发绑定与若干事件记录
-// （与 internal/lifecycle 的 journal 文件布局一致）。
-func writeLifecycleSidecar(t *testing.T, root, runID, action, provider, identity string, events []string) {
-	t.Helper()
-	lc := filepath.Join(root, ".gates", "tmp", runID, "lifecycle")
-	if err := os.MkdirAll(lc, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	binding, err := json.Marshal(map[string]string{"runId": runID, "dispatchId": action, "provider": provider, "identity": identity})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(lc, digestOf(action)+".json"), append(binding, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	evDir := filepath.Join(lc, "events", digestOf(action))
-	if len(events) > 0 {
-		if err := os.MkdirAll(evDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, event := range events {
-		record, err := json.Marshal(map[string]string{"provider": provider, "event": event, "identity": identity})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(evDir, event+".json"), append(record, '\n'), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 // TestCostSourceBridgeReportsUnsupportedHostUnavailable：宿主不暴露可用
@@ -56,7 +25,12 @@ func writeLifecycleSidecar(t *testing.T, root, runID, action, provider, identity
 func TestCostSourceBridgeReportsUnsupportedHostUnavailable(t *testing.T) {
 	root := t.TempDir()
 	runID, action := "cost-run", "act:cost-1"
-	writeLifecycleSidecar(t, root, runID, action, "default", "agent-1", []string{"subagent_start"})
+	if err := lifecycle.BindDispatchWithProvider(root, runID, action, "agent-1", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeStart(root, runID, action, "default", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
 	resolved := CostSourceBridge(root, runID)(protocol.CostSourceRef{RunID: runID, ActionID: action, Provider: "default"})
 	if resolved.State != protocol.CostSourceUnavailable || resolved.Reason != "host lifecycle evidence is unavailable" {
 		t.Fatalf("lenient host resolution = %v, want UNAVAILABLE", resolved.State)
@@ -68,8 +42,13 @@ func TestCostSourceBridgeReportsUnsupportedHostUnavailable(t *testing.T) {
 func TestCostSourceBridgeHoldsObservableHostPending(t *testing.T) {
 	root := t.TempDir()
 	runID, action := "cost-run", "act:cost-2"
-	writeLifecycleSidecar(t, root, runID, action, "claude", "agent-2", []string{"subagent_start"})
-	resolved := CostSourceBridge(root, runID)(protocol.CostSourceRef{RunID: runID, ActionID: action, Provider: "claude"})
+	if err := lifecycle.BindDispatchWithProvider(root, runID, action, "agent-2", host.Claude); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeStart(root, runID, action, host.Claude, "agent-2"); err != nil {
+		t.Fatal(err)
+	}
+	resolved := CostSourceBridge(root, runID)(protocol.CostSourceRef{RunID: runID, ActionID: action, Provider: host.Claude})
 	if resolved.State != protocol.CostSourcePending {
 		t.Fatalf("observable host without stop = %v, want PENDING", resolved.State)
 	}
@@ -99,7 +78,12 @@ func TestCostSourceBridgeResolvesBoundNativeUsage(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.content+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			writeLifecycleSidecar(t, root, "run", "action", tc.provider, "identity", []string{"subagent_start", "subagent_stop"})
+			if err := lifecycle.BindDispatchWithProvider(root, "run", "action", "identity", tc.provider); err != nil {
+				t.Fatal(err)
+			}
+			if err := lifecycle.ObserveNativeCompletion(root, "run", "action", tc.provider, "identity"); err != nil {
+				t.Fatal(err)
+			}
 			writeManagedCostSource(t, root, "run", "action", tc.provider, "identity", path)
 			bridge := CostSourceBridge(root, "run")
 			ref := protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: tc.provider}
@@ -118,13 +102,18 @@ func TestCostSourceBridgeRetainsMissingSourceReasons(t *testing.T) {
 		name, provider, refProvider, content, reason string
 		withPath                                     bool
 	}{
-		{"provider mismatch", "claude", "zcode", "", "cost source provider does not match dispatch provider", false},
-		{"path missing", "claude", "claude", "", "native dispatch has no completed metering source", false},
+		{"provider mismatch", host.Claude, "zcode", "", "cost source provider does not match dispatch provider", false},
+		{"path missing", host.Claude, host.Claude, "", "native dispatch has no completed metering source", false},
 		{"usage missing", "zcode", "zcode", `{"sessionId":"session","turnId":"turn","type":"turn.completed","payload":{}}`, "ZCode terminal provider usage is unavailable (including no-backend zero fallback)", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeLifecycleSidecar(t, root, "run", "action", tc.provider, "identity", []string{"subagent_start", "subagent_stop"})
+			if err := lifecycle.BindDispatchWithProvider(root, "run", "action", "identity", tc.provider); err != nil {
+				t.Fatal(err)
+			}
+			if err := lifecycle.ObserveNativeCompletion(root, "run", "action", tc.provider, "identity"); err != nil {
+				t.Fatal(err)
+			}
 			if tc.withPath {
 				path := filepath.Join(root, "native-events.jsonl")
 				if err := os.WriteFile(path, []byte(tc.content+"\n"), 0o600); err != nil {

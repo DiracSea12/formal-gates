@@ -125,6 +125,20 @@ func (s *State) SliceEnteredMainline(childID string) bool {
 	return false
 }
 
+// SliceIntegrationClaims identifies the exact signed child input still owned
+// by a native integration responsibility, including UNKNOWN completion.
+func (s *State) SliceIntegrationClaims(childID string) []string {
+	var claims []string
+	for id, intent := range s.PendingHostActions {
+		parameters, err := candidateParameters(intent)
+		if err == nil && parameters.Integration != nil && parameters.Integration.ChildRunID == childID {
+			claims = append(claims, id)
+		}
+	}
+	slices.Sort(claims)
+	return claims
+}
+
 func (s *State) integrationReceipt(stage, sliceID string) (HostActionIntent, CandidateEvidence, bool) {
 	var found HostActionIntent
 	var proof CandidateEvidence

@@ -1,7 +1,7 @@
 package encoder_test
 
-// 外部测试包：本文件需要 definition 包的定义表作为真实编译输入，而
-// definition import encoder——包内测试会构成导入环，外部测试包不会。
+// 外部测试包：本文件以 testkit/workflow 的独立六变体协议测试图作为编译输入；
+// 该测试图 import encoder，包内测试会构成导入环，外部测试包不会。
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
-// compileWorkflow 编译 definition 表（覆盖全部六变体的真实定义）。
+// compileWorkflow 编译 testkit/workflow 的独立六变体协议测试图。
 func compileWorkflow(t *testing.T) *compiler.CompiledDefinition {
 	t.Helper()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
@@ -312,8 +312,7 @@ func TestDigestSeparationBasis(t *testing.T) {
 		t.Error("digest of the same definition changed between runs")
 	}
 
-	// 语义变化：给 report.cost 增加一条依赖（同时补 typed input binding，
-	// 保持 "inputs == dependencies" 不变量）——digest 必变。
+	// 语义变化：给 report.cost 增加一条依赖——digest 必变。
 	altered, err := compiler.Compile(alteredWorkflow(), definition.Registry())
 	if err != nil {
 		t.Fatalf("compile altered workflow: %v", err)
@@ -327,8 +326,7 @@ func TestDigestSeparationBasis(t *testing.T) {
 	}
 }
 
-// alteredWorkflow 复制定义表并给 report.cost 增加 review.worker 依赖与
-// 对应 typed input binding（其余内容不变）。
+// alteredWorkflow 复制定义表并给 report.cost 增加 review.worker 依赖。
 func alteredWorkflow() *compiler.Definition {
 	def := definition.Workflow()
 	steps := make([]authoring.Step, len(def.Steps))
@@ -339,9 +337,6 @@ func alteredWorkflow() *compiler.Definition {
 			continue
 		}
 		cost.Dependencies = append(cost.Dependencies, "review.worker")
-		cost.Inputs = append(cost.Inputs, authoring.InputBinding{
-			From: "review.worker", OutputField: "out", ToField: "reviewIn",
-		})
 		steps[i] = cost
 	}
 	return &compiler.Definition{Version: def.Version, EntryNode: def.EntryNode, Steps: steps}

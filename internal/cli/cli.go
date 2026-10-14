@@ -93,7 +93,7 @@ func run(program string, args []string, streams IO) (int, error) {
 	case "uninstall":
 		return runUninstall(args[1:], streams)
 	case "requirement":
-		return runCurrentRequirement(args[1:], streams)
+		return runRequirement(args[1:], streams)
 	case "native":
 		return runNativeInteraction(args[1:], streams)
 	case "settings":
@@ -340,19 +340,6 @@ var workflowSubcommands = map[string]func([]string, IO) (int, error){
 	"replan": runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
 }
 
-func workflowFlag(args []string, name, fallback string) string {
-	prefix := "--" + name + "="
-	for index, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix)
-		}
-		if arg == "--"+name && index+1 < len(args) {
-			return args[index+1]
-		}
-	}
-	return fallback
-}
-
 func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow start", streams)
 	machine := fs.Bool("machine", false, "print the complete program projection for machine consumers")
@@ -401,12 +388,15 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		if *saveCandidate != "" {
 			err = saveWorkflowCandidate(*saveCandidate, preview.IntakeCandidate)
 		} else {
-			position, err = saveOriginalCandidate(workflowPayloadDirectory(*root, "", "intake"), preview.IntakeCandidate)
+			position, err = facade.SaveOriginalCandidate(workflowPayloadDirectory(*root, "", "intake"), preview.IntakeCandidate)
 		}
 		if err != nil {
 			return 1, err
 		}
 		return printPayloadValue(streams.Stdout, preview, "intake", position)
+	}
+	if routeName == "" {
+		return 1, fmt.Errorf("workflow start requires --route regular or lightweight")
 	}
 	if *requirementPath != "" || *solutionPath != "" || len(artifacts) != 0 || *saveCandidate != "" || *document != 0 || *solutionDocument != 0 || len(artifactDocuments) != 0 || *listMaterials {
 		return 1, fmt.Errorf("--requirement, --solution and --artifact are only available with --precheck; start requires the confirmed intake receipt")
@@ -431,10 +421,12 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if strings.TrimSpace(*runID) == "" {
 		return 1, fmt.Errorf("workflow start requires --run-id")
 	}
-	packageRoot := *pkg
-	if strings.TrimSpace(workflowFlag(args, "package-root", "")) == "" {
-		packageRoot = ""
-	}
+	packageRoot := ""
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "package-root" {
+			packageRoot = *pkg
+		}
+	})
 	admission, err := validate.ResolveEngineAdmission(*root, packageRoot)
 	if err != nil {
 		return 1, err
@@ -449,12 +441,12 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 			}
 		}
 	}
-	transcript, session, ownerProvider := validate.ConsumeStartOwner(*root)
+	transcript, session, ownerProvider := validate.ConsumeStartOwner(*root, *runID)
 	owner := facade.OwnerBinding{Session: session}
 	if transcript != "" && ownerProvider != "" {
 		owner.Transcript, owner.Provider = transcript, ownerProvider
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, PackageRoot: *pkg, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -569,7 +561,7 @@ func runWorkflowNext(args []string, streams IO) (int, error) {
 	if *saveCandidate != "" {
 		err = saveWorkflowCandidate(*saveCandidate, candidate)
 	} else {
-		position, err = saveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "control"), candidate)
+		position, err = facade.SaveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "control"), candidate)
 	}
 	if err != nil {
 		return 1, err
@@ -753,15 +745,19 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		if candidate.Run.RunID != *runID {
+			f, _, err = openEngineIfPresent(candidate.Root, candidate.Run.RunID)
+			if err != nil {
+				return 1, err
+			}
+		}
+		*root, *runID = candidate.Root, candidate.Run.RunID
+		saved = &candidate
 		event = candidate.Event
 	}
 	var acceptance protocol.Acceptance
 	var run facade.Run
-	if saved != nil {
-		acceptance, run, err = f.SubmitControl(*saved)
-	} else {
-		acceptance, run, err = f.Submit(event)
-	}
+	acceptance, run, err = f.SubmitControl(*saved)
 	if err != nil {
 		return 1, err
 	}
@@ -785,10 +781,38 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	statePath := strings.TrimSpace(*path)
-	if statePath == "" {
-		if strings.TrimSpace(*runID) == "" {
-			return 1, fmt.Errorf("workflow diagnose requires --path or --run-id")
+	if statePath == "" && strings.TrimSpace(*runID) == "" {
+		reports := []facade.DiagnosticReport{}
+		for _, namespace := range []string{facade.EngineNamespace, filepath.Join(".gates", "tmp")} {
+			directory := filepath.Join(*root, namespace)
+			entries, err := os.ReadDir(directory)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return 1, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				path := filepath.Join(directory, entry.Name(), "state.json")
+				report, err := facade.Diagnose(path, "", "")
+				if os.IsNotExist(err) {
+					continue
+				}
+				reports = append(reports, report)
+				if err != nil {
+					if _, printErr := printJSON(streams.Stdout, reports); printErr != nil {
+						return 1, printErr
+					}
+					return 1, err
+				}
+			}
 		}
+		return printJSON(streams.Stdout, reports)
+	}
+	if statePath == "" {
 		statePath = filepath.Join(*root, facade.EngineNamespace, *runID, "state.json")
 		if _, err := os.Stat(statePath); os.IsNotExist(err) {
 			summary := filepath.Join(*root, facade.EngineNamespace, *runID, "terminal-summary.json")
@@ -1202,7 +1226,7 @@ func saveWorkflowCandidate(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return writeWorkflowPayload(path, append(data, '\n'), false)
+	return facade.WriteOriginalPayload(path, append(data, '\n'), false)
 }
 
 func readEngineIntakeReceipt(input string) (facade.IntakeConfirmationReceipt, error) {
@@ -1491,7 +1515,7 @@ func runWorkflowProgress(args []string, streams IO) (int, error) {
 	}
 	position := 0
 	if *saveProgress {
-		position, err = saveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "progress"), progress)
+		position, err = facade.SaveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "progress"), progress)
 		if err != nil {
 			return 1, err
 		}
@@ -1546,7 +1570,7 @@ func runWorkflowMessage(args []string, streams IO) (int, error) {
 			if err != nil {
 				return 1, err
 			}
-			_, position, err := saveOriginalPayload(directory, body)
+			_, position, err := facade.SaveOriginalPayload(directory, body)
 			return printValue(streams.Stdout, map[string]any{"textPayload": position, "text": string(body)}, err)
 		}
 		if *listText {
@@ -1643,40 +1667,10 @@ func runWorkflowReplan(args []string, streams IO) (int, error) {
 	if *save != "" {
 		err = saveWorkflowCandidate(*save, candidate)
 	} else {
-		position, err = saveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "control"), candidate)
+		position, err = facade.SaveOriginalCandidate(workflowPayloadDirectory(*root, *runID, "control"), candidate)
 	}
 	if err != nil {
 		return 1, err
 	}
 	return printPayloadValue(streams.Stdout, workflowConfirmationView(candidate), "confirmationCandidate", position)
-}
-
-func runCurrentRequirement(args []string, streams IO) (int, error) {
-	if workflowFlag(args, "file", "") != "" {
-		return runRequirement(args, streams)
-	}
-	root := workflowFlag(args, "root", ".")
-	id := workflowFlag(args, "run-id", "")
-	position, err := strconv.Atoi(workflowFlag(args, "run", "0"))
-	if err != nil {
-		return 1, err
-	}
-	f, selected, err := selectWorkflowRun(root, &id, position, streams.Stdout)
-	if err != nil {
-		return 1, err
-	}
-	if !selected {
-		return 0, nil
-	}
-	source := ""
-	if f != nil {
-		run, err := f.Show()
-		if err != nil {
-			return 1, err
-		}
-		if run.IntakeConfirmationReceipt != nil {
-			source = run.IntakeConfirmationReceipt.RequirementSource
-		}
-	}
-	return runRequirementWithSource(args, streams, source)
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
@@ -26,8 +25,7 @@ import (
 func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
 
-	// 产品审：entry 两步完成后 Ready 前沿只含 review.worker（ask.decide 属
-	// Ask 边界、fan.* 属引擎内部，都不进 Ready 派发集）。
+	// 产品审：entry 注册事实完成后 Ready 前沿只含 review.worker。
 	actions := issueReady(t, engine)
 	if len(actions) != 1 || actions[0] != "act:review/review.worker" {
 		t.Fatalf("issued = %v, want the canonical product review action only", actions)
@@ -91,13 +89,13 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 }
 
 // canonicalReviewEngine 构造绑定 canonical 编译定义的已受理引擎：entry
-// 两步在视图内完成、受理回执落账，run 处于 PRODUCT_REVIEW。
+// 注册事实在视图内完成、受理回执落账，run 处于 PRODUCT_REVIEW。
 func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
 	engine, err := New(mustStore(t, dir), Config{
 		Definition: compiledCanonicalWorkflow(t), Registry: definition.Registry(), Capacity: 4,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -106,17 +104,15 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}
-	for _, step := range []authoring.StepID{"entry.parse", "entry.persist"} {
-		if err := view.CompleteStep(step, cd); err != nil {
-			t.Fatalf("complete %s: %v", step, err)
-		}
+	if err := view.CompleteStep("entry.registered", cd); err != nil {
+		t.Fatalf("complete entry.registered: %v", err)
 	}
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-canonical", "", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-canonical", "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
+	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {
 		t.Fatalf("intake receipt: %v", err)
 	}
 	return engine, dir
@@ -148,7 +144,7 @@ func TestCanonicalProductFailAwaitsDisposition(t *testing.T) {
 
 func assertReviewIssuanceHeld(t *testing.T, engine *Engine) {
 	t.Helper()
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}

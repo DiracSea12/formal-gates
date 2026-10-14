@@ -74,7 +74,7 @@ if (!continued) throw new Error('normal start was not continued')
 	if _, err := Hook(payload, argv[3]); err != nil {
 		t.Fatal(err)
 	}
-	gotTranscript, gotSession, gotProvider := ConsumeStartOwner(root)
+	gotTranscript, gotSession, gotProvider := ConsumeStartOwner(root, "regular")
 	if gotTranscript != transcript || gotSession != "dsh-owner" || gotProvider != host.DeepSeek {
 		t.Fatalf("original start owner lost: %q %q %q", gotTranscript, gotSession, gotProvider)
 	}

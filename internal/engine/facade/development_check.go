@@ -219,7 +219,7 @@ func (f *Facade) checkEvidence(s *protocol.State, intent protocol.HostActionInte
 		}
 	}
 	if p.QA != nil && p.QA.GoTestRef != "" {
-		if _, err := coverage.ResolveCaseOperations(workspace.Path, coverage.AcceptanceCase{CaseID: p.QA.CaseID, TestRef: p.QA.GoTestRef}); err != nil {
+		if err := coverage.ValidateGoTestReference(workspace.Path, p.QA.GoTestRef); err != nil {
 			*invoked = true
 			return nativeResult{}, false, err
 		}

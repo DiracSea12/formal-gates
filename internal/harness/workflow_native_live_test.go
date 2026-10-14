@@ -818,7 +818,7 @@ func (f *automaticNativeFlow) assertNativeSources() {
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.development.batch.v4", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v5"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.development.batch.v5", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v6"} {
 		if !handlers[handler] {
 			f.t.Fatal("default consumer did not preserve a required actual native model responsibility", handler)
 		}

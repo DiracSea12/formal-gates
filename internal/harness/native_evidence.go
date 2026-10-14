@@ -18,9 +18,6 @@ func NativeResultEvidence(provider, directory string, source map[string]any) ([]
 	if err := impl.verifySource(directory, source); err != nil {
 		return nil, "", "", err
 	}
-	if textOf(source["provider"]) != provider || textOf(source["identity"]) == "" {
-		return nil, "", "", fmt.Errorf("native result provider/session is missing or different")
-	}
 	proof := getOf(getOf(source["files"], nativeToolCallsFile), "sha256")
 	digest, ok := proof.(string)
 	if !ok || digest == "" {

@@ -13,13 +13,13 @@ import (
 	"strings"
 )
 
-// DeepSeek Harness (DSH) 没有内置的 hooks.json 协议。安装器改用一个最小 Cordis
+// DeepSeek Harness (DSH) 没有内置的 hooks.json 协议。安装器使用最小 Cordis
 // 插件：插件在 tools/pre-execute 上调用原生 `formal-gates hook decide`。
 // 插件文件写在已安装的 skill 目录内，home 级 `cordis.patch.yml` 用相对 specifier
 // 引用它。DSH 将插入项的相对路径锚定在 patch 文件所在目录，所以 home patch
 // 写 `./skills/...`：任何机器、任何 profile 都会解析回 `$DSH_HOME/skills/...`，
-// 不携带用户名或盘符。插件不从 skillRoot 派生执行器，而是
-// 按宿主平台解析用户级固定 stable launcher；patch 文件不落任何绝对路径。
+// 不携带用户名或盘符。插件按宿主平台解析用户级固定 stable launcher；
+// patch 文件不落任何绝对路径。
 //
 // DSH 的 cordis.patch.yml 是机器级（home 级）补丁层，项目目录下的
 // cordis.patch.yml 不会被 DSH 自动加载。因此 `--host dsh --scope project`
@@ -78,19 +78,19 @@ func dshHookPackageFiles() []PackageEntry {
 	return []PackageEntry{{Path: dshPluginFileRel, Mode: mode, Size: int64(len(dshPluginSource)), SHA256: fmt.Sprintf("%x", sum)}}
 }
 
-func configureDshHook(target installTarget) error {
+func configureDshHook(target installTarget) (bool, error) {
 	if strings.TrimSpace(target.hookConfig) == "" {
-		return nil
+		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dshPluginPath(target)), 0o700); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.WriteFile(dshPluginPath(target), []byte(dshPluginSource), dshPluginFileMode); err != nil {
-		return err
+		return false, err
 	}
 	doc, err := readDshPatch(target.hookConfig)
 	if err != nil {
-		return err
+		return false, err
 	}
 	seq := doc.Content[0]
 	// DSH 的 home cordis.patch.yml 是 PatchOptions 列表：插件行必须包在
@@ -107,7 +107,7 @@ func configureDshHook(target installTarget) error {
 		if insert := dshMappingNode(item, "insert"); insert != nil && insert.Kind == yaml.SequenceNode {
 			rows := make([]*yaml.Node, 0, len(insert.Content)+1)
 			for _, row := range insert.Content {
-				if id, _ := dshPluginRowIdentity(row); id == dshPluginEntryID {
+				if dshMappingValue(row, "id") == dshPluginEntryID {
 					if wrote {
 						continue
 					}
@@ -125,7 +125,7 @@ func configureDshHook(target installTarget) error {
 			continue
 		}
 		// 将裸插件行装配为 insert patch。
-		if id, _ := dshPluginRowIdentity(item); id == dshPluginEntryID {
+		if dshMappingValue(item, "id") == dshPluginEntryID {
 			if wrote {
 				continue
 			}
@@ -164,7 +164,7 @@ func removeDshHook(target installTarget) error {
 		if insert := dshMappingNode(item, "insert"); insert != nil && insert.Kind == yaml.SequenceNode {
 			rows := make([]*yaml.Node, 0, len(insert.Content))
 			for _, row := range insert.Content {
-				if id, _ := dshPluginRowIdentity(row); id == dshPluginEntryID {
+				if dshMappingValue(row, "id") == dshPluginEntryID {
 					removed = true
 					continue
 				}
@@ -177,7 +177,7 @@ func removeDshHook(target installTarget) error {
 			kept = append(kept, item)
 			continue
 		}
-		if id, _ := dshPluginRowIdentity(item); id == dshPluginEntryID {
+		if dshMappingValue(item, "id") == dshPluginEntryID {
 			removed = true
 			continue
 		}
@@ -187,7 +187,8 @@ func removeDshHook(target installTarget) error {
 		return nil
 	}
 	seq.Content = kept
-	return writeDshPatch(target.hookConfig, doc)
+	_, err = writeDshPatch(target.hookConfig, doc)
+	return err
 }
 
 func readDshPatch(path string) (*yaml.Node, error) {
@@ -218,28 +219,41 @@ func readDshPatch(path string) (*yaml.Node, error) {
 	return &doc, nil
 }
 
-func writeDshPatch(path string, doc *yaml.Node) error {
+func writeDshPatch(path string, doc *yaml.Node) (bool, error) {
 	seq := doc.Content[0]
 	if len(seq.Content) == 0 {
 		// DSH 把空文件/纯注释文件视为解析失败；不存在才是合法的"无补丁"状态。
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, err
 		}
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return true, nil
 	}
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(doc); err != nil {
-		return err
+		return false, err
 	}
 	if err := encoder.Close(); err != nil {
-		return err
+		return false, err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	before, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err == nil && bytes.Equal(before, buf.Bytes()) {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func dshMappingValue(mapping *yaml.Node, key string) string {
@@ -266,22 +280,11 @@ func dshMappingNode(mapping *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-func dshPluginRowIdentity(row *yaml.Node) (id, name string) {
-	if row == nil || row.Kind != yaml.MappingNode {
-		return "", ""
-	}
-	return dshMappingValue(row, "id"), dshMappingValue(row, "name")
-}
-
 func newDshPluginEntry() *yaml.Node {
 	config := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	config.Content = append(config.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skillRoot"},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath('skills', 'formal-gates')"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "dshHome"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath()"},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "launcher"},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "registry-admitted-stable"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "deepseek-harness"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "timeoutMs"},

@@ -35,7 +35,7 @@ func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
 	if s.CleanupEligible(cd) || s.NativeActionCurrent(intent, cd) {
 		t.Fatal("unresolved requirement Ask authorized a new cleanup write")
 	}
-	if !s.cleanupStarted(false) || !s.nativeEffectApplicable(intent, cd) || s.verifyPhaseAgainstLedgers(cd) != nil {
+	if !s.cleanupStarted(false) || !s.nativeEffectApplicable(intent, cd) || s.verifyPhaseAgainstLedgers() != nil {
 		t.Fatal("requirement Ask discarded original cleanup authority")
 	}
 	resource.Status = "CLEANED"
@@ -51,14 +51,14 @@ func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
 	delete(s.PendingHostActions, intent.ActionID)
 	s.HostActionReceipts = map[string]HostActionReceipt{intent.ActionID: receipt}
 	s.ReconciledEffects = map[string]ReconciledEffect{intent.ActionID: {Intent: &intent, Status: "FULFILLED"}}
-	if !s.cleanupStarted(false) || !s.ResourcesCleaned() || s.verifyPhaseAgainstLedgers(cd) != nil {
+	if !s.cleanupStarted(false) || !s.ResourcesCleaned() || s.verifyPhaseAgainstLedgers() != nil {
 		t.Fatal("accepted receipt discarded original cleanup authority")
 	}
 	if err := engine.applyResourceReceipt(s, intent, receipt); err != nil || s.NativeResources[resource.ID] != resource {
 		t.Fatal("replayed cleanup receipt changed the registered resource")
 	}
 	delete(s.ReconciledEffects, intent.ActionID)
-	if s.cleanupStarted(false) || s.verifyPhaseAgainstLedgers(cd) == nil {
+	if s.cleanupStarted(false) || s.verifyPhaseAgainstLedgers() == nil {
 		t.Fatal("cleanup phase passed without its original intent")
 	}
 }
@@ -359,5 +359,169 @@ func TestWhiteboxAuthoringReusesOnlyCurrentDevelopmentSource(t *testing.T) {
 	actual := s.taskResource(revised, cd)
 	if actual.ID == resource.ID || actual.Source != "changed-development" || actual.Role != "whitebox-authoring" {
 		t.Fatal("changed implementation reused obsolete production source", actual)
+	}
+}
+
+// Workspace qualification uses the Controller's required task frontier and
+// exact resource/material inputs; route context does not create another effect.
+func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, withTask := range []bool{false, true} {
+		t.Run(fmt.Sprintf("task-bound=%t", withTask), func(t *testing.T) {
+			key := pipelineTask(cd, "engine.development.batch.v5", "plan:command")
+			resource := NativeResource{ID: "implementation", Owner: "run", Role: "development", Path: "/work/implementation", Ref: "refs/implementation", Source: "source", Status: "PLANNED"}
+			s := &State{RunID: "run", NativeRoot: "/work", RouteMode: "custom", SelectedGates: []string{"quality"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"developer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}
+			required := map[authoring.StepID][]decision.RequiredTask{key.Step: {{Task: key}}}
+			p := WorkspaceParameters{Resource: resource, RequirementRevision: "confirmed", Generation: 1, RouteScope: s.validationRouteDigest()}
+			if withTask {
+				p.Task = &key
+			}
+			s.SelectedGates = []string{"quality", "security"}
+			if p.RouteScope == s.validationRouteDigest() || !s.workspaceParametersCurrent(p, cd, required) {
+				t.Fatal("unchanged physical preparation lost qualification after route selection")
+			}
+			for _, change := range []string{"source", "path", "requirement", "generation", "task", "manifest", "removed-task", "cleanup"} {
+				t.Run(change, func(t *testing.T) {
+					changed := p
+					frontier := required
+					switch change {
+					case "source":
+						changed.Resource.Source = "other-source"
+					case "path":
+						changed.Resource.Path = "/work/other"
+					case "requirement":
+						changed.RequirementRevision = "other-requirement"
+					case "generation":
+						changed.Generation++
+					case "task":
+						other := key
+						other.Scope = "other-work"
+						changed.Task = &other
+					case "manifest":
+						changed.Manifest = &coverage.AcceptanceManifest{}
+					case "removed-task":
+						frontier = map[authoring.StepID][]decision.RequiredTask{}
+					case "cleanup":
+						values, err := normalizeHostActionParams(CleanupParameters{Resources: []NativeResource{resource}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						s.PendingHostActions = map[string]HostActionIntent{"cleanup": {Adapter: &AdapterHostAction{Operation: "op.cleanup", Params: values}}}
+						defer func() { s.PendingHostActions = nil }()
+					}
+					if s.workspaceParametersCurrent(changed, cd, frontier) {
+						t.Fatal("route context admitted different or unavailable workspace inputs")
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("blackbox mirror", func(t *testing.T) {
+		key := pipelineTask(cd, "engine.qa.design.v5", "1:BLACKBOX")
+		manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{RouteScope: "issued-route"}, Cases: []coverage.AcceptanceCase{{CaseID: "normal", Oracle: "accepted"}}}
+		resource := NativeResource{ID: "design", Owner: "run", Role: "blackbox-design", Path: "/work/design", Source: "source", Status: "PLANNED"}
+		s := &State{RunID: "run", NativeRoot: "/work", Validation: &Validation{RequirementRevision: "confirmed", Generation: 1, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Manifest: manifest}}}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"designer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}
+		required := map[authoring.StepID][]decision.RequiredTask{key.Step: {{Task: key}}}
+		p := WorkspaceParameters{Task: &key, Resource: resource, RequirementRevision: "confirmed", Generation: 1, Manifest: &manifest, RouteScope: "issued-route"}
+		if !s.workspaceParametersCurrent(p, cd, required) {
+			t.Fatal("exact blackbox manifest lost qualification")
+		}
+		for _, change := range []string{"case-content", "route-binding", "missing-manifest"} {
+			copy := manifest
+			copy.Cases = append([]coverage.AcceptanceCase(nil), manifest.Cases...)
+			changed := p
+			changed.Manifest = &copy
+			switch change {
+			case "case-content":
+				copy.Cases[0].Oracle = "different outcome"
+			case "route-binding":
+				copy.Binding.RouteScope = "different-route"
+			case "missing-manifest":
+				changed.Manifest = nil
+			}
+			if s.workspaceParametersCurrent(changed, cd, required) {
+				t.Fatal("different blackbox mirror received execution authority", change)
+			}
+		}
+	})
+
+	t.Run("child target", func(t *testing.T) {
+		topology := TopologyBinding{Decision: "split"}
+		resource := NativeResource{ID: "child", Owner: "master", Role: "child-target", Path: "/targets/child", Source: "source", Status: "PLANNED"}
+		s := &State{RunID: "master", Topology: &topology, ChildCreation: &ChildCreation{Topology: topology, RequirementRevision: "confirmed", Source: "source", Children: []ChildPreparation{{ResourceID: resource.ID}}}, NativeResources: map[string]NativeResource{resource.ID: resource}}
+		p := WorkspaceParameters{Resource: resource, RequirementRevision: "confirmed"}
+		if !s.workspaceParametersCurrent(p, cd) {
+			t.Fatal("exact child preparation lost qualification")
+		}
+		for _, change := range []string{"source", "generation", "requirement", "route"} {
+			changed := p
+			switch change {
+			case "source":
+				changed.Resource.Source = "other-source"
+			case "generation":
+				changed.Generation = 1
+			case "requirement":
+				changed.RequirementRevision = "other-requirement"
+			case "route":
+				changed.RouteScope = "nonempty-route"
+			}
+			if s.workspaceParametersCurrent(changed, cd) {
+				t.Fatal("different child preparation received execution authority", change)
+			}
+		}
+	})
+
+	t.Run("merge workspace", func(t *testing.T) {
+		s := &State{RunID: "master", NativeRoot: "/work", RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: "split"}, ChildCreation: &ChildCreation{Source: "source"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{}}
+		r := s.integrationResource()
+		s.NativeResources[r.ID] = r
+		p := WorkspaceParameters{Resource: r, RequirementRevision: "confirmed", Generation: 1, RouteScope: "signed-context"}
+		if !s.workspaceParametersCurrent(p, cd) {
+			t.Fatal("exact merge preparation lost qualification through route context")
+		}
+		p.Generation++
+		if s.workspaceParametersCurrent(p, cd) {
+			t.Fatal("different merge generation received execution authority")
+		}
+	})
+}
+
+// Workspace receipts initialize creation facts without replacing a later
+// candidate identity or an already materialized exact manifest.
+func TestWorkspaceReceiptPreservesCurrentResourceFacts(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource := NativeResource{ID: "design", Owner: "run", Role: "blackbox-design", Path: "/work/design", Ref: "refs/design", Source: "source", Status: "PLANNED"}
+	currentManifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{RouteScope: "current"}}
+	registered := resource
+	registered.Identity, registered.Status, registered.MirrorDigest = "candidate", "READY", BlackboxCasesDigest(resource.Owner, currentManifest)
+	s := &State{RunID: resource.Owner, NativeResources: map[string]NativeResource{resource.ID: registered}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1, Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Manifest: currentManifest}}}}
+	engine := &Engine{cfg: Config{Definition: cd}}
+	for _, manifest := range []*coverage.AcceptanceManifest{nil, {Binding: coverage.ManifestBinding{RouteScope: "obsolete"}}} {
+		p := WorkspaceParameters{Resource: resource, RequirementRevision: "confirmed", Generation: 1, Manifest: manifest}
+		params, err := normalizeHostActionParams(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent := HostActionIntent{Adapter: &AdapterHostAction{Operation: "op.workspace", Params: params}, PayloadDigest: "original-input"}
+		proof := resource
+		proof.Identity, proof.Status = resource.Source, "READY"
+		if manifest != nil {
+			proof.MirrorDigest = BlackboxCasesDigest(resource.Owner, *manifest)
+		}
+		values, err := normalizeHostActionParams(WorkspaceEvidence{ParametersDigest: intent.PayloadDigest, Resource: proof, Digest: "source-values", SourceDigest: "source-values"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt := HostActionReceipt{Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+		if err := engine.applyResourceReceipt(s, intent, receipt); err != nil || s.NativeResources[resource.ID] != registered {
+			t.Fatal("original creation or obsolete mirror replaced later accepted native facts", err)
+		}
 	}
 }

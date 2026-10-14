@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/cost"
 )
 
 const dshTestPrompt = "Review the requirement."
@@ -442,12 +444,31 @@ func TestDSHExecuteMissingPromptKey(t *testing.T) {
 
 // Continuation keeps the explicit native session, model and current prompt.
 func TestDSHNativeContinuation(t *testing.T) {
-	first := newDSHScenario(t, successSteps(), func(request map[string]any) {
+	meteredMessage := func(seq, turn, input, cache, output int) string {
+		return mustCanonical(t, map[string]any{"sessionId": "s-1", "event": map[string]any{
+			"seq": seq, "type": "assistant/message", "data": map[string]any{
+				"turn": turn, "step": 1, "usage": map[string]any{"inputTokens": input, "cacheReadTokens": cache, "outputTokens": output},
+			}}})
+	}
+	firstSteps := successSteps()
+	message := meteredMessage(1, 1, 12, 4, 3)
+	compaction := mustCanonical(t, map[string]any{"sessionId": "s-1", "event": map[string]any{
+		"seq": 2, "type": "compaction/summary", "data": map[string]any{
+			"llmStreamCall": true, "usage": map[string]any{"inputTokens": 3, "cacheReadTokens": 2, "outputTokens": 1},
+		}}})
+	firstSteps[3].Params = map[string]any{"sessionId": "s-1", "prompt": []any{map[string]any{"type": "text", "text": dshTestPrompt}}}
+	firstSteps[3].Files[1].Body = message + "\n" + message + "\n" + compaction + "\n" + compaction + "\n" +
+		peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}}) + "\n"
+	first := newDSHScenario(t, firstSteps, func(request map[string]any) {
 		request["model"], request["reasoning_effort"] = "test-model", "high"
 	})
 	original, err := runNativeJob(first.directory)
 	if err != nil {
 		t.Fatal(err)
+	}
+	usage, err := cost.ParseTranscript("deepseek-harness", textOf(original["transcript"]))
+	if want := (cost.Usage{InputCacheMissTokens: 15, InputCacheHitTokens: 6, OutputTokens: 4}); err != nil || usage != want {
+		t.Fatalf("original invocation message/compaction usage = %+v, %v; want %+v", usage, err, want)
 	}
 	before := readTestFileBytes(t, filepath.Join(first.directory, "source.json"))
 	steps := successSteps()
@@ -455,8 +476,9 @@ func TestDSHNativeContinuation(t *testing.T) {
 	steps[1].Send = `{"id":"@ID@","result":{"sessionId":"s-1","configOptions":[{"id":"model","currentValue":"test-model"},{"id":"reasoning_effort","currentValue":"high"}]}}`
 	steps = append(steps[:2], steps[3:]...)
 	steps[2].Semantics = map[string]any{"status": "PASS", "summary": "continued exact task", "findings": []any{}, "check_reviews": map[string]any{}}
+	steps[2].Params = map[string]any{"sessionId": "s-1", "prompt": []any{map[string]any{"type": "text", "text": "Continue the exact second task."}}}
 	steps[2].Files[0].Body = `{"sessionId":"s-1","inputId":"in-2","turn":2}`
-	steps[2].Files[1].Body = peerEvent("s-1", "assistant/message", map[string]any{"turn": 2, "step": 0, "usage": map[string]any{"inputTokens": 23, "outputTokens": 5}, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"status":"PASS","summary":"continued exact task","findings":[],"check_reviews":{}}`}}}}) + "\n" + peerEvent("s-1", "turn/end", map[string]any{"turn": 2, "reason": map[string]any{"kind": "completed"}}) + "\n"
+	steps[2].Files[1].Body = meteredMessage(3, 2, 23, 6, 5) + "\n" + peerEvent("s-1", "turn/end", map[string]any{"turn": 2, "reason": map[string]any{"kind": "completed"}}) + "\n"
 	continued := newDSHScenario(t, steps, func(request map[string]any) {
 		request["workspace"], request["identity"], request["prompt"] = first.workspace, original["identity"], "Continue the exact second task."
 		request["model"], request["reasoning_effort"] = "test-model", "high"
@@ -479,5 +501,9 @@ func TestDSHNativeContinuation(t *testing.T) {
 	}
 	if err := dshVerifySource(continued.directory, source); err != nil {
 		t.Fatal(err)
+	}
+	usage, err = cost.ParseTranscript("deepseek-harness", textOf(source["transcript"]))
+	if want := (cost.Usage{InputCacheMissTokens: 23, InputCacheHitTokens: 6, OutputTokens: 5}); err != nil || usage != want {
+		t.Fatalf("continued invocation usage = %+v, %v; want %+v", usage, err, want)
 	}
 }

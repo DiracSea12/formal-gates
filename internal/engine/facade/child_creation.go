@@ -44,9 +44,6 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		req.VCS = parent.NativeVCS()
 		req.RunID, req.MasterRunID, req.SliceID = plan.RunID, parent.RunID, plan.SliceID
 		options := StartOptions{Root: f.root, Request: req, Admission: &f.admission, Settings: stateSettings(parent), VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}
-		if parent.Settings == nil {
-			options.Capacity = f.capacity
-		}
 		child, _, err = startRun(options, parent.ChildStart(plan), parent.NativeResources[plan.ResourceID].Path)
 		if err != nil {
 			return nil, err
@@ -76,7 +73,7 @@ func (f *Facade) finishChildBootstrap(child *Facade) error {
 			return err
 		}
 		tokenCap := parent.State.TokenCapMaxTokens
-		if err := child.engine.BindCostSources(protocol.OwnerCostBinding{}, tokenCap, emptyFingerprint()); err != nil {
+		if err := child.engine.BindCostSources(protocol.OwnerCostBinding{}, tokenCap, protocol.Observation{}); err != nil {
 			return err
 		}
 	}
@@ -109,7 +106,7 @@ func (f *Facade) driveChildren() error {
 		if err != nil {
 			return err
 		}
-		if err = f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+		if err = f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
 			return err
 		}
 		snap, err = f.engine.Load()
@@ -141,7 +138,7 @@ func (f *Facade) driveChildren() error {
 		if err != nil {
 			return err
 		}
-		if err := f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+		if err := f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
 			return err
 		}
 		snap, err = f.engine.Load()
@@ -185,11 +182,11 @@ func (f *Facade) driveChildren() error {
 		}
 		children[i], states[i] = child, actual
 	}
-	if err := f.engine.RecordPreparedChildren(states, emptyFingerprint()); err != nil {
+	if err := f.engine.RecordPreparedChildren(states, protocol.Observation{}); err != nil {
 		return err
 	}
 	for {
-		made, err := f.engine.SignChildWorkspace(emptyFingerprint())
+		made, err := f.engine.SignChildWorkspace(protocol.Observation{})
 		if err != nil {
 			return err
 		}
@@ -276,7 +273,7 @@ func (f *Facade) driveChildren() error {
 		if digest != proof.Digest {
 			return fmt.Errorf("child join native identity/content differs from its receipt")
 		}
-		if err := child.engine.AcceptPreparedSnapshot(snap.State, emptyFingerprint()); err != nil {
+		if err := child.engine.AcceptPreparedSnapshot(snap.State, protocol.Observation{}); err != nil {
 			return err
 		}
 		actual, err = child.engine.Load()
@@ -285,7 +282,7 @@ func (f *Facade) driveChildren() error {
 		}
 		states[i] = actual.State
 	}
-	if err := f.engine.ReleaseChildren(states, emptyFingerprint()); err != nil {
+	if err := f.engine.ReleaseChildren(states, protocol.Observation{}); err != nil {
 		return err
 	}
 	released, err := f.engine.Load()
@@ -293,7 +290,7 @@ func (f *Facade) driveChildren() error {
 		return err
 	}
 	for _, child := range children {
-		if err := child.engine.ActivateChild(released.State, emptyFingerprint()); err != nil {
+		if err := child.engine.ActivateChild(released.State, protocol.Observation{}); err != nil {
 			return err
 		}
 	}
@@ -329,7 +326,7 @@ func (f *Facade) activateReleasedChildren(parent *protocol.State) error {
 			if err != nil {
 				return err
 			}
-			return child.engine.ActivateChild(current.State, emptyFingerprint())
+			return child.engine.ActivateChild(current.State, protocol.Observation{})
 		}()
 		if err != nil {
 			return err
@@ -373,7 +370,7 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 			if err != nil {
 				return err
 			}
-			if err := child.engine.CancelChild(current.State, emptyFingerprint()); err != nil {
+			if err := child.engine.CancelChild(current.State, protocol.Observation{}); err != nil {
 				return err
 			}
 			run, err = child.driveInWindow()
@@ -404,7 +401,7 @@ func (f *Facade) cancelChildren(parent *protocol.State) error {
 		return err
 	}
 	if current.State.CleanupEligible(f.definition) && !current.State.ResourcesCleaned() {
-		return f.engine.BeginCleanup(emptyFingerprint(), states...)
+		return f.engine.BeginCleanup(protocol.Observation{}, states...)
 	}
 	return nil
 }
@@ -424,7 +421,7 @@ func (f *Facade) cleanupChildren(parent *protocol.State) error {
 		}
 		err = func() error {
 			defer unlock()
-			if err := child.engine.BeginCleanup(emptyFingerprint(), parent); err != nil {
+			if err := child.engine.BeginCleanup(protocol.Observation{}, parent); err != nil {
 				return err
 			}
 			for {
@@ -449,7 +446,7 @@ func (f *Facade) cleanupChildren(parent *protocol.State) error {
 			return nil
 		}
 	}
-	return f.engine.BeginCleanup(emptyFingerprint(), states...)
+	return f.engine.BeginCleanup(protocol.Observation{}, states...)
 }
 
 func (f *Facade) driveChildWorkspace(intent protocol.HostActionIntent, execute bool) (bool, error) {
@@ -516,7 +513,7 @@ func (f *Facade) cancelReplacedChildren(parent *protocol.State) (bool, error) {
 				actual.State = summary.Termination
 			}
 			if err == nil && actual.State.Phase != runtime.PhaseTerminal {
-				err = child.engine.CancelReplacedChild(parent, emptyFingerprint())
+				err = child.engine.CancelReplacedChild(parent, protocol.Observation{})
 				if err == nil {
 					run, e := child.driveInWindow()
 					err = e
@@ -542,7 +539,7 @@ func (f *Facade) retireReplacedChildren(parent *protocol.State) (bool, error) {
 	if err != nil || !settled {
 		return false, err
 	}
-	if err := f.engine.CleanupReplacedTargets(emptyFingerprint()); err != nil {
+	if err := f.engine.CleanupReplacedTargets(protocol.Observation{}); err != nil {
 		return false, err
 	}
 	current, err := f.engine.Load()

@@ -3,9 +3,10 @@
 // 状态派生。
 //
 // 本包只含数据与静态表，不做 I/O、不持可变全局状态：state 投影与
-// Observe/Decide/SelectIssued 属 internal/engine/decision，真实外部事实
-// 收集器与可靠写协议不在此处。Go 静态迁移表是唯一流程权威；迁移表只
-// 管理 run-level phase，动态任务由 TaskKey/TaskTransitionTable 管理。
+// observation/Decide/SelectIssued 属 internal/engine/decision，真实外部事实
+// 收集与可靠写协议由原生来源与 protocol/persistence 持有。Go 静态迁移表
+// 是唯一流程权威；迁移表只管理 run-level phase，动态任务由
+// TaskKey/TaskTransitionTable 管理。
 package runtime
 
 import (
@@ -13,8 +14,7 @@ import (
 	"sort"
 )
 
-// RunPhase 是 run-level 阶段枚举，名称原样采用 final-implementation-draft
-// §3.1 的建议图（编码期不微调）。零值与任何其他字符串一律非法。
+// RunPhase 是 run-level 阶段枚举。零值与任何其他字符串一律非法。
 type RunPhase string
 
 const (
@@ -48,7 +48,7 @@ const (
 	PhaseMainlineIntegration RunPhase = "MAINLINE_INTEGRATION"
 	// PhaseMergeValidation：合并 QA 与合并门并行执行段。
 	PhaseMergeValidation RunPhase = "MERGE_VALIDATION"
-	// PhaseTerminal：终态（SEALED/ABORTED 后经统一 cleanup 进入；无出边）。
+	// PhaseTerminal：统一 cleanup 完成后的终态（SEALED/ABORTED；无出边）。
 	PhaseTerminal          RunPhase = "TERMINAL"
 	PhaseFinalizingCleanup RunPhase = "FINALIZING_CLEANUP"
 )
@@ -117,6 +117,7 @@ var pipelineEdges = []PhaseEdge{
 	{PhasePostReview, PhaseSliceReady},
 	{PhasePostReview, PhaseTerminal},
 	{PhaseSliceReady, PhaseTerminal},
+	{PhaseSliceReady, PhaseDevelopmentParallel},
 	{PhaseDevelopmentParallel, PhaseMainlineIntegration},
 	{PhaseMainlineIntegration, PhaseMergeValidation},
 	{PhaseMergeValidation, PhaseRepair},
@@ -127,9 +128,9 @@ var pipelineEdges = []PhaseEdge{
 // phaseTransitionTable 是合法迁移边全表：流水线边 ∪ 终止闭包。终止闭包
 // 来自总需求 §6.3.10–11——任意 ACTIVE 非终态阶段都可经用户授权的
 // reset/abort/破坏性级联进入统一 cleanup 终结路径；因此每个非 TERMINAL
-// phase 都有指向 TERMINAL 的边。用户授权的业务节点跳转（§6.3.11）经
-// suspend/quarantine/reconcile 机制由 Controller 承载，不在
-// 本表展开为任意点对点边。
+// phase 都有指向 TERMINAL 的边。用户授权的业务节点继续（§6.3.12）
+// 由 typed CONTINUE_NODE 请求与各业务 owner 的工作处置、对账和 frontier
+// 接纳，不在本表展开为无条件点对点边。
 var phaseTransitionTable = buildPhaseTransitionTable()
 
 // buildPhaseTransitionTable 组装全表并按 (From, To) 排序，使边表本身即
@@ -189,7 +190,7 @@ func PhaseCanTransition(from, to RunPhase) bool {
 	return phaseAllowed[PhaseEdge{From: from, To: to}]
 }
 
-// PhaseTransition 校验并返回目标 phase；非法边返回错误。调用方在成功后
+// PhaseTransition 校验迁移边；非法边返回错误。调用方在成功后
 // 才可把 to 写入 state 投影。
 func PhaseTransition(from, to RunPhase) error {
 	if PhaseCanTransition(from, to) {

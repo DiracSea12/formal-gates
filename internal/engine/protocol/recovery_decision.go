@@ -81,7 +81,7 @@ func (e *Engine) advanceRecoveries(s *State, revision uint64) error {
 }
 
 // accountResumeExecution 把一次恢复执行计入目标任务的 Attempt 账本：resumed
-// execution 的唯一计数点（公开 ResumeAgent 与恢复决定共用），Attempts 达到
+// execution 的唯一计数点，Attempts 达到
 // MaxAttempts 时置耗尽标记——与瞬态结果/FAILED spawn 的计数同一形状。目标身
 // 份用与恢复准入同一个解析（workerActionTarget）；计数写进承载该条目的账本
 // （当前账或已终待果账，按条目身份定位，TASK_PROGRESS TERMINAL 清理后的执行
@@ -109,8 +109,8 @@ func (s *State) accountResumeExecution(workerActionID string) {
 }
 
 func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt Attempt, action RecoveryAction, correlation string, revision uint64) error {
-	// 显式换新决定走 terminate 路线（用户指定的路线，不是预算边界）；resume
-	// 类动作的 retry 边界由统一预算判定拦截并落 typed Ask，不再静默转 terminate。
+	// 显式 fresh 用户决定选择 terminate；resume 的 retry 预算边界
+	// 由统一预算判定拦截并产生 typed Ask。
 	operation := HostActionResumeAgent
 	if action == RecoveryNewAttempt {
 		operation = HostActionTerminateAgent
@@ -165,11 +165,11 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 	}
 	record, _ := s.recoveryRequest(correlation)
 	handoff := record.Handoff
+	e.dispatchCostHeld(s, pending.ActionID)
 	// Fresh execution follows observed termination and retains the original
 	// finite policy and binding when the normal retry owner signs a replacement.
-	// 一次宿主效果执行的统一预算判定（retry 余量＋token cap 两维，与公开
-	// ResumeAgent 同一函数）；治理任务的换新仍经派发 guard（与 issueInto 漏斗
-	// 同一单任务判定）。
+	// 一次宿主效果执行的统一预算判定（retry 余量＋token cap 两维）；治理
+	// 任务的换新仍经派发 guard（与 issueInto 漏斗同一单任务判定）。
 	if handoff {
 		if e.guardTokenBudget(s, pending.Task.String(), revision) != nil {
 			return nil

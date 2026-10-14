@@ -33,11 +33,11 @@ func TestCLIWorkflowCandidateRejectsSubmitAlias(t *testing.T) {
 
 func TestCLIWorkflowDiagnoseReportsCandidateEngineIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	packageDigest, err := validate.PackageDigest(".")
+	packageReceipt, err := validate.PackageReceipt(".")
 	if err != nil {
 		t.Fatalf("package digest: %v", err)
 	}
-	request, err := json.Marshal(facade.StartRequest{PackageDigest: packageDigest, InstalledTargetIdentity: "diagnostic-target"})
+	request, err := json.Marshal(facade.StartRequest{PackageDigest: packageReceipt.Digest, InstalledTargetIdentity: "diagnostic-target"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestCLIWorkflowDiagnoseReportsCandidateEngineIdentity(t *testing.T) {
 	if report.Supported.StateSchemaVersion != encoder.StateSchemaVersion ||
 		report.Supported.WorkflowDefinitionVersion != definition.WorkflowDefinitionVersion ||
 		report.Supported.DefinitionDigest != definition.WorkflowDefinitionDigest ||
-		report.Supported.PackageDigest != packageDigest {
+		report.Supported.PackageDigest != packageReceipt.Digest {
 		t.Fatalf("supported identity = %+v", report.Supported)
 	}
 	if !strings.Contains(report.Recommendation, persistence.UnsupportedRunVersionCode) || !strings.Contains(report.Recommendation, "rebuild") {
@@ -115,27 +115,14 @@ func runCLI(t *testing.T, args ...string) string {
 
 func cliWorkflowFixture(t *testing.T) (string, string) {
 	t.Helper()
-	t.Setenv("FORMAL_GATES_TEST_BUILD_HOME", os.Getenv("HOME"))
-	t.Setenv("FORMAL_GATES_TEST_BUILD_USERPROFILE", os.Getenv("USERPROFILE"))
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	root := t.TempDir()
-	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Requirement."))
-	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
-	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
-	// 引用（<文件>::<函数>）的定位目标。与 internal/validate 的 whiteboxDeliveredTestCode
-	// 同源。
-	mustWriteCLI(t, filepath.Join(root, "whitebox_delivered_test.go"), "package whiteboxfixture\n\nimport \"testing\"\n\nfunc TestWhiteboxDirectRules(t *testing.T) {}\n\nfunc TestWhiteboxStructure(t *testing.T) {}\n\nfunc TestWhiteboxDirectBehavior(t *testing.T) {}\n")
-	// 与 internal/validate fixture 一致地忽略运行期临时状态，使快照就绪脏检查
-	// （检测未跟踪且未忽略文件）不把 .gates/tmp/ 运行状态、.gates/run-locks/
-	// 持久锁文件与 .gates/results seal 产物误判为未提交变更。
-	mustWriteCLI(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/run-locks/\n.gates/results\n")
 	cliGit(t, root, "init")
 	cliGit(t, root, "config", "user.email", "tests@example.invalid")
 	cliGit(t, root, "config", "user.name", "Formal Gates CLI Tests")
-	cliGit(t, root, "add", "--all")
-	cliGit(t, root, "commit", "-m", "base")
+	cliGit(t, root, "commit", "--allow-empty", "-m", "base")
 	pkg := t.TempDir()
 	mustWriteCLI(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "shared contract\n")
 	for _, id := range prompts.RequiredActionIDs {

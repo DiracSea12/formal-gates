@@ -2,8 +2,8 @@
 // exclusive cross-process lock adjudicated by the kernel on each opener's own
 // descriptor (flock on POSIX, a one-byte LockFile range on Windows). A holder
 // that dies has its lock released by the kernel, and a leftover lock file
-// never blocks a new acquirer. Lock files are never deleted or rewritten
-// when an existing lock is acquired.
+// never blocks a new acquirer. Acquisition verifies the descriptor still names
+// the canonical path; owners can retire that path after their business ends.
 package coordination
 
 import (
@@ -31,7 +31,7 @@ func AcquireRunWaiting(root, runID string) (func(), error) {
 // AcquirePath acquires an exclusive, cross-process lock at path and returns
 // the release function. Releasing closes the descriptor, which is what frees
 // the lock; a holder that exits without releasing is freed by the kernel, so
-// recovery needs no staleness rules and the lock file can stay forever.
+// recovery needs no staleness rules. Ordinary release preserves the lock file.
 func AcquirePath(path, description string) (func(), error) {
 	return acquirePathLock(path, description, false, true)
 }
@@ -62,39 +62,52 @@ func AcquireExistingPathWaiting(path, description string) (func(), error) {
 	return acquirePathLock(path, description, true, false)
 }
 
+// RetirePath removes a lock path while its caller still holds that canonical
+// lock and has finished all protected business. Ordinary release only closes
+// the descriptor; waiting openers recheck the path before entering business.
+func RetirePath(path string) error {
+	return retirePath(filepath.Clean(path))
+}
+
 // acquirePathLock shares acquisition and release across creation and existing
 // callers. File contents participate in no locking decision.
 func acquirePathLock(path, description string, waiting, create bool) (func(), error) {
 	path = filepath.Clean(path)
-	flags := os.O_RDWR
 	if create {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, err
 		}
-		flags |= os.O_CREATE
 	}
-	f, err := os.OpenFile(path, flags, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if create {
-		if err := initializeLockFile(f); err != nil {
+	for {
+		f, err := openLockFile(path, create)
+		if err != nil {
+			return nil, err
+		}
+		var lockErr error
+		if waiting {
+			lockErr = lockFileBlocking(f)
+		} else {
+			lockErr = lockFile(f)
+		}
+		if lockErr != nil {
+			_ = f.Close()
+			if !waiting && isLockHeld(lockErr) {
+				return nil, &LockHeldError{Operation: description, Path: path}
+			}
+			return nil, lockErr
+		}
+		opened, err := f.Stat()
+		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
-	}
-	var lockErr error
-	if waiting {
-		lockErr = lockFileBlocking(f)
-	} else {
-		lockErr = lockFile(f)
-	}
-	if lockErr != nil {
-		_ = f.Close()
-		if !waiting && isLockHeld(lockErr) {
-			return nil, &LockHeldError{Operation: description, Path: path}
+		current, err := os.Stat(path)
+		if err == nil && os.SameFile(opened, current) {
+			return func() { _ = f.Close() }, nil
 		}
-		return nil, lockErr
+		_ = f.Close()
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
-	return func() { _ = f.Close() }, nil
 }

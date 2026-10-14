@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +17,9 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/host"
+	"formal-gates/internal/lifecycle"
 )
 
 func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
@@ -95,19 +101,81 @@ func TestWorkflowPublicViewKeepsMachineOutputAndSavedCandidate(t *testing.T) {
 	}
 }
 
+func TestWorkflowNodeSelectionSavesOriginalPreviewWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	f := startAdmittedEngineRun(t, root)
+	run, err := f.Show()
+	if err != nil || len(run.BusinessNodes) == 0 {
+		t.Fatal("current business targets unavailable", err)
+	}
+	statePath := filepath.Join(root, facade.EngineNamespace, run.RunID, "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	saved := filepath.Join(t.TempDir(), "node-choice.json")
+	args := []string{"workflow", "next", "--root", root, "--run-id", run.RunID, "--node", "1", "--save-candidate", saved}
+	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	body, err := os.ReadFile(saved)
+	var candidate facade.ControlCandidate
+	if err != nil || json.Unmarshal(body, &candidate) != nil || candidate.Continuation == nil || candidate.Continuation.To.ID != run.BusinessNodes[0].ID || candidate.Event.Request.Control != protocol.ControlContinueNode {
+		t.Fatal("selected number lost its exact program-generated preview", err)
+	}
+	if !strings.Contains(out.String(), "businessNodes") || strings.Contains(out.String(), candidate.Continuation.Digest) {
+		t.Fatal("default view did not present semantic choices", out.String())
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("node preview authorized or changed current", err)
+	}
+}
+
 func TestWorkflowViewPreservesExecutionExitAndMachineConsumption(t *testing.T) {
-	value := workflowConsumption{Run: facade.Run{Status: "ACTIVE", WorkerMaterials: map[string]facade.WorkerMaterial{"action": {Path: "worker-source"}}}, Boundary: "BLOCKED", Blocked: map[string]string{"action": "original execution failure"}}
+	root := t.TempDir()
+	f := startAdmittedEngineRun(t, root)
+	run, err := f.Drive()
+	if err != nil || len(run.WorkerMaterials) != 1 {
+		t.Fatal("original issued material is unavailable", err)
+	}
+	value := workflowConsumption{Run: run, Boundary: "BLOCKED", Blocked: map[string]string{"action": "original execution failure"}}
+	before, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshotEngineRunTree(t, root, run.RunID)
 	for _, machine := range []bool{false, true} {
-		for _, failure := range []error{nil, context.Canceled} {
+		for _, failure := range []error{nil, context.Canceled, errors.New("original execution error")} {
 			var out, stderr bytes.Buffer
-			code, err := printWorkflowView(IO{Stdout: &out, Stderr: &stderr}, value, machine, failure, []facade.Run{value.Run})
-			if err != nil || failure == nil && code != 0 || failure != nil && code != 130 || !strings.Contains(out.String(), "original execution failure") {
+			code, err := printCurrentWorkflowConsumption(IO{Stdout: &out, Stderr: &stderr}, f, value, machine, failure)
+			want := 0
+			if failure == context.Canceled {
+				want = 130
+			} else if failure != nil {
+				want = 1
+			}
+			if err != nil || code != want || !strings.Contains(out.String(), "original execution failure") {
 				t.Fatalf("presentation changed the execution boundary: %d %v %s", code, err, out.String())
 			}
-			if strings.Contains(out.String(), "worker-source") != machine {
+			if strings.Contains(out.String(), "workerMaterials") != machine {
 				t.Fatal("machine and default execution views have wrong visibility")
 			}
+			if failure == nil && stderr.Len() != 0 || failure != nil && stderr.String() != failure.Error()+"\n" {
+				t.Fatal("presentation changed original execution error output", stderr.String())
+			}
+			if machine {
+				var actual bytes.Buffer
+				if err := json.Compact(&actual, out.Bytes()); err != nil || !bytes.Equal(actual.Bytes(), before) {
+					t.Fatal("machine consumption changed the complete original projection", err)
+				}
+			}
 		}
+	}
+	after, err := json.Marshal(value)
+	if err != nil || !bytes.Equal(before, after) || !reflect.DeepEqual(state, snapshotEngineRunTree(t, root, run.RunID)) {
+		t.Fatal("execution presentation changed the original value or authoritative files", err)
 	}
 }
 
@@ -238,4 +306,187 @@ func TestWorkflowOperatorViewLeavesInternalFactsToDrive(t *testing.T) {
 	if !bytes.Equal(original, after) {
 		t.Fatal("display changed authoritative operator facts")
 	}
+}
+
+// An actual install, Git baseline and ordinary split producer supply both run
+// identities. The CLI receives only the displayed node and Ask numbers.
+func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	mustWriteCLI(t, filepath.Join(root, "README.md"), "two independent command components\n")
+	for _, args := range [][]string{{"init"}, {"add", "README.md"}, {"-c", "user.name=Node Test", "-c", "user.email=node@example.invalid", "commit", "-m", "initial components"}} {
+		if _, err := runner.Run(root, "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := runner.Run(root, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := startAdmittedEngineRun(t, root, strings.TrimSpace(base))
+	var requestBinding facade.StartRequest
+	if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"), &requestBinding); err != nil {
+		t.Fatal(err)
+	}
+	provider := requestBinding.Provider
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit := func(event protocol.Event) {
+		t.Helper()
+		_, run, err = f.Submit(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := &protocol.GranularityReview{Reason: "two independent components and their mainline integration", VerificationTier: "FINAL"}
+	for _, owner := range []string{"core", "tooling", "master-merge"} {
+		plan.Batches = append(plan.Batches, protocol.DevelopmentBatch{ID: owner, Owner: owner, Subtasks: []protocol.DevelopmentSubtask{{ID: owner + "-entry", Description: "implement the public " + owner + " responsibility"}}, Deliverable: owner + " public command behavior", PublicEntry: owner + " command", Artifacts: []string{owner + ".go"}, Interfaces: "documented command arguments", StateBoundary: "no persistent command state", Risk: "incorrect command output", DoD: []protocol.DevelopmentCriterion{{ID: owner + "-contract", Description: "public valid and invalid inputs have documented outcomes"}}, Checks: []protocol.DevelopmentCheck{{ID: owner + "-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: owner + "-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "revert this component", Recovery: "retry from the confirmed source", Handoff: "document the component interface and checks", ContextCost: "one independent command component"})
+	}
+	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
+		id := ""
+		for key, pending := range run.PendingActions {
+			if pending.ReviewSeries == action {
+				id = key
+			}
+		}
+		if id == "" {
+			t.Fatal("ordinary review was not issued", action)
+		}
+		material := run.WorkerMaterials[id]
+		identity := "review-session:" + id
+		event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("spawn:"+id), id, provider, identity, protocol.SpawnStatusSpawned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(event)
+		transcript := filepath.Join(t.TempDir(), "usage.jsonl")
+		usage := []byte(`{"type":"assistant","uuid":"zero-usage","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}` + "\n")
+		mustWriteCLI(t, transcript, string(usage))
+		directory := facade.WorkerExecutionDirectory(material, "")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		descriptor, err := host.Lookup(provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]any{"native-request.json": map[string]any{"provider": descriptor.InstallName, "engine": map[string]any{"root": root, "runId": run.RunID, "workerMaterial": material, "resumeActionId": ""}}, "source.json": map[string]any{"provider": descriptor.InstallName, "identity": identity, "transcript": transcript, "sha256": fmt.Sprintf("%x", sha256.Sum256(usage))}} {
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteCLI(t, filepath.Join(directory, name), string(raw))
+		}
+		if err := lifecycle.ObserveNativeCompletion(root, run.RunID, id, provider, identity); err != nil {
+			t.Fatal(err)
+		}
+		evidence := protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: run.IntakeConfirmationReceipt.RequirementRevision, Status: "PASS", Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "compared the confirmed command requirement and independent component interfaces"}}
+		if action == review.StartReadiness {
+			evidence.GranularityReview = plan
+		}
+		event, err = protocol.NewReviewWorkerResultEvent(protocol.EventID("review:"+id), id, provider, "review-output:"+id, evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(event)
+		run, err = f.Drive()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	request, err := protocol.NewRequestEvent("split-request", protocol.ControlConfirmTopology, protocol.AskOption{ID: "split", Label: "two components"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(request)
+	ask := run.PendingAsks[0]
+	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, SplitCount: 2, Parallel: "two independent components", ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}}
+	confirmedPlan, err := f.DevelopmentPlan(protocol.RouteDecision{}, *topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology.DevelopmentPlan = &confirmedPlan.Confirmation
+	decision, err := protocol.NewReviewDecideEvent("split-confirmation", protocol.RequestID(ask.RequestID), ask.Token, "split", protocol.ReviewDecisionPayload{Topology: topology})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(decision)
+	run, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := f.ControlRuns()
+	if err != nil || len(runs) < 2 {
+		t.Fatal("real child was not created", err)
+	}
+	childRun := runs[1]
+	node := len(runs[0].BusinessNodes) + 1
+	for i, n := range childRun.BusinessNodes {
+		if n.Kind == "route" {
+			node = len(runs[0].BusinessNodes) + i + 1
+			break
+		}
+	}
+	child, err := facade.Open(root, childRun.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"workflow", "submit", "--root", root, "--node", fmt.Sprint(node), "--single-step"}
+	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	current, err := child.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nodeAsk facade.PendingAskFace
+	for _, a := range current.PendingAsks {
+		if a.Control == protocol.ControlContinueNode {
+			nodeAsk = a
+		}
+	}
+	if nodeAsk.RequestID == "" || nodeAsk.Continuation.To.Kind != "route" {
+		t.Fatal("direct parent request was not bound to actual child")
+	}
+	runs, err = f.ControlRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := 0
+	found := false
+	for _, r := range runs {
+		for _, a := range r.PendingAsks {
+			question++
+			if a.RequestID == nodeAsk.RequestID {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	saved := filepath.Join(t.TempDir(), "child-confirmation.json")
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--ask", fmt.Sprint(question), "--choice", "approve", "--reason", "continue the child route responsibility", "--save-candidate", saved}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var candidate facade.ControlCandidate
+	if err := readJSONFileInto(saved, &candidate); err != nil || candidate.Run.RunID != childRun.RunID {
+		t.Fatal("confirmation lost actual child identity", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "submit", "--confirmation", saved, "--single-step"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	current, err = child.Show()
+	if err != nil || current.NodeContinuation == nil || current.NodeContinuation.Receipt.RequestID != nodeAsk.RequestID || current.NodeContinuation.Status != "APPLIED" {
+		t.Fatal("original child authority was not applied", err)
+	}
+	t.Logf("actual parent global node %d -> original child Ask -> saved confirmation owner %s", node, childRun.RunID)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/requirement"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,9 @@ func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 func batchEvidence(input protocol.ValidationInput) *protocol.DevelopmentEvidence {
 	b := input.Development.Batch
 	c := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Handoff: b.ID + ": completed implementation and verification, ready for its dependent batches"}
+	for _, point := range b.RequirementPoints {
+		c.RequirementResults = append(c.RequirementResults, requirement.PointResult{PointID: point, Status: "PASS", Evidence: b.ID + ": " + b.Deliverable + " implements " + point})
+	}
 	for _, d := range b.DoD {
 		c.DoD[d.ID] = b.ID + ": " + d.Description + " verified"
 	}
@@ -219,7 +223,7 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			}
 			d.submit(ev)
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.development.batch.v4" {
+				if input.Handler == "engine.development.batch.v5" {
 					t.Fatal("new contract executed before plan confirmation")
 				}
 			}
@@ -301,13 +305,13 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 				t.Fatal("repair allowance detached from checkpoint obligation")
 			}
 			for _, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v5" || input.Development != nil {
+				if input.Handler == "engine.repair.v6" || input.Development != nil {
 					t.Fatal("checkpoint bypassed finite repair decision")
 				}
 			}
 			break
 		}
-		repair, ri := d.action("engine.repair.v5")
+		repair, ri := d.action("engine.repair.v6")
 		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
@@ -326,7 +330,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	repair, ri := d.action("engine.repair.v5")
+	repair, ri := d.action("engine.repair.v6")
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()
@@ -409,6 +413,13 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 			d.t.Fatal("missing review")
 		}
 		d.receipt(id)
+		if action == review.StartReadiness && plan != nil {
+			input, ok := driverState(d.t, d).WorkerInput(id, d.f.definition)
+			if !ok {
+				d.t.Fatal("plan fixture lacks signed input")
+			}
+			fixturePlanRequirements(plan, input.RequirementPoints)
+		}
 		event, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, DefaultProvider, string(d.eventID()), protocol.ReviewResultEvidence{Action: action, DispatchID: id, RequirementRevision: d.revision, Status: "PASS", GranularityReview: plan, Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "Checked proposal and current requirement"}})
 		if err != nil {
 			d.t.Fatal(err)
@@ -528,7 +539,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	}
 	d.submit(event)
 	d.drive()
-	id, in := d.action("engine.development.batch.v4")
+	id, in := d.action("engine.development.batch.v5")
 	d.receipt(id)
 	evidence := batchEvidence(in)
 	delete(evidence.Completion.DoD, "input-contract")
@@ -536,7 +547,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	if a.Status != "REJECTED_INVALID_RESULT" {
 		t.Fatal("partial DoD completed batch")
 	}
-	retry, ri := d.action("engine.development.batch.v4")
+	retry, ri := d.action("engine.development.batch.v5")
 	if ri.Binding.Task != in.Binding.Task || d.run.Attempts[in.Binding.Task].Attempts != 1 {
 		t.Fatal("DoD rejection escaped original finite duty")
 	}

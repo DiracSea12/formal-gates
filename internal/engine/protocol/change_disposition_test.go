@@ -110,7 +110,7 @@ func (c intersectionChange) drive(t *testing.T, engine *Engine, requestID string
 		if err != nil {
 			t.Fatalf("request %s: %v", requestID, err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatalf("submit request %s: %v", requestID, err)
 		}
 		abortExistingAsk(t, engine, requestID)
@@ -239,14 +239,14 @@ func seriesEvidenceOf(mark authoring.ReviewSeriesAction) review.Action {
 // 正常完成形态）。
 func submitPlainResult(t *testing.T, engine *Engine, event, actionID string) {
 	t.Helper()
-	if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-"+event), actionID, "agent-"+event), fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-"+event), actionID, "agent-"+event), Observation{}); err != nil {
 		t.Fatalf("plain spawn: %v", err)
 	}
 	ev, err := NewWorkerResultEvent(EventID(event), actionID, testProvider, OutcomePass, "sha256:payload-"+event, "")
 	if err != nil {
 		t.Fatalf("plain result event: %v", err)
 	}
-	if acceptance, err := engine.Submit(ev, fingerprintOf(t, engine)); err != nil || acceptance.Status != "ACCEPTED" {
+	if acceptance, err := engine.Submit(ev, Observation{}); err != nil || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("plain result: %v %+v", err, acceptance)
 	}
 }
@@ -273,13 +273,13 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			engine, _, target := intersectionFixture(t, row.mark)
-			fp := fingerprintOf(t, engine)
+			observedInput := Observation{}
 			staged, err := NewReviewWorkerResultEvent("result-ix-staged", target, testProvider, "sha256:payload-ix-staged",
 				reviewEvidence(seriesEvidenceOf(row.mark), target, "", "PASS", "evidence before the receipt", nil))
 			if err != nil {
 				t.Fatalf("staged event: %v", err)
 			}
-			if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+			if acceptance, err := engine.Submit(staged, observedInput); err != nil || acceptance.Status != "STAGED" {
 				t.Fatalf("stage: %v %+v", err, acceptance)
 			}
 			row.change.drive(t, engine, "req-ix-staged")
@@ -302,7 +302,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 					t.Fatal("staging outside the redo scope must be kept")
 				}
 				receipt := spawnReceipt(t, "spawn-ix-staged", target, "agent-ix-staged")
-				if acceptance, err := engine.Submit(receipt, fp); err != nil || acceptance.Status != "ACCEPTED" {
+				if acceptance, err := engine.Submit(receipt, observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 					t.Fatalf("late receipt during the redo: %v %+v", err, acceptance)
 				}
 				snap = engine.LoadMustSucceed(t)
@@ -326,7 +326,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 					t.Fatal("staging outside the redo scope must be kept")
 				}
 				receipt := spawnReceipt(t, "spawn-ix-staged", target, "agent-ix-staged")
-				if acceptance, err := engine.Submit(receipt, fp); err != nil || acceptance.Status != "ACCEPTED" {
+				if acceptance, err := engine.Submit(receipt, observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 					t.Fatalf("late receipt pairing: %v %+v", err, acceptance)
 				}
 				if series := targetSeriesOf(t, engine, row.mark); series.Completed != 1 || series.Effective.Status != "PASS" {
@@ -345,8 +345,8 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 	quarantine := func(t *testing.T, engine *Engine, target string) {
 		t.Helper()
-		fp := fingerprintOf(t, engine)
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-q", target, "agent-ix-q"), fp); err != nil {
+		observedInput := Observation{}
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-q", target, "agent-ix-q"), observedInput); err != nil {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-q", target, testProvider, "sha256:payload-ix-q",
@@ -354,7 +354,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		if acceptance, err := engine.Submit(ev, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		if acceptance, err := engine.Submit(ev, observedInput); err != nil || acceptance.Status != "QUARANTINED" {
 			t.Fatalf("quarantine: %v %+v", err, acceptance)
 		}
 	}
@@ -368,7 +368,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		quarantine(t, engine, target)
@@ -380,7 +380,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:ix-q-redo",
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
 			Classification: RequirementClassificationChanged, RedoProductReview: true, Reason: "the product walk is redone",
-		}), fingerprintOf(t, engine)); err != nil {
+		}), Observation{}); err != nil {
 			t.Fatalf("decide: %v", err)
 		}
 		snap := engine.LoadMustSucceed(t)
@@ -406,7 +406,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		quarantine(t, engine, target)
@@ -439,7 +439,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		quarantine(t, engine, target)
@@ -455,13 +455,13 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 	})
 	t.Run("dual asks hold the quarantine until the last decision", func(t *testing.T) {
 		engine, _, target := intersectionFixture(t, authoring.ReviewSeriesProductReview)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		for _, requestID := range []string{"req-ix-q-hold", "req-ix-q-last"} {
 			request, err := NewRequirementRequestEvent(EventID(requestID), requirementPackageOf(nil), requirementOptions()...)
 			if err != nil {
 				t.Fatalf("request %s: %v", requestID, err)
 			}
-			if _, err := engine.Submit(request, fp); err != nil {
+			if _, err := engine.Submit(request, observedInput); err != nil {
 				t.Fatalf("submit request %s: %v", requestID, err)
 			}
 		}
@@ -494,7 +494,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 	driveTerminal := func(t *testing.T, engine *Engine, target string) {
 		t.Helper()
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		snap := engine.LoadMustSucceed(t)
 		pending := snap.State.PendingActions[target]
 		for i, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
@@ -502,7 +502,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 			if err != nil {
 				t.Fatalf("task event: %v", err)
 			}
-			if _, err := engine.Submit(ev, fp); err != nil {
+			if _, err := engine.Submit(ev, observedInput); err != nil {
 				t.Fatalf("task progress %s during the barrier: %v", status, err)
 			}
 		}
@@ -510,7 +510,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 	t.Run("redo of another series reconciles the terminal task", func(t *testing.T) {
 		engine, _, target := intersectionFixture(t, authoring.ReviewSeriesProductReview)
 		readinessTarget := pendingActionOfStep(t, engine, "start.readiness")
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequirementRequestEvent("req-ix-term-other", requirementPackageOf(&RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:ix-term-other",
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
@@ -519,10 +519,10 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-term", target, "agent-ix-term"), fp); err != nil {
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-term", target, "agent-ix-term"), observedInput); err != nil {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-term", target, testProvider, "sha256:payload-ix-term",
@@ -530,7 +530,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		if acceptance, err := engine.Submit(ev, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		if acceptance, err := engine.Submit(ev, observedInput); err != nil || acceptance.Status != "QUARANTINED" {
 			t.Fatalf("quarantine: %v %+v", err, acceptance)
 		}
 		driveTerminal(t, engine, target)
@@ -564,7 +564,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 	})
 	t.Run("redo of the own series voids the quarantined evidence by declaration", func(t *testing.T) {
 		engine, _, target := intersectionFixture(t, authoring.ReviewSeriesProductReview)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequirementRequestEvent("req-ix-term-own", requirementPackageOf(&RequirementDecisionPayload{
 			BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:ix-term-own",
 			ImpactDigest: "sha256:impact", Source: RequirementSourceUserInitiated,
@@ -573,10 +573,10 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-term-own", target, "agent-ix-term-own"), fp); err != nil {
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-ix-term-own", target, "agent-ix-term-own"), observedInput); err != nil {
 			t.Fatalf("receipt: %v", err)
 		}
 		ev, err := NewReviewWorkerResultEvent("result-ix-term-own", target, testProvider, "sha256:payload-ix-term-own",
@@ -584,7 +584,7 @@ func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		if acceptance, err := engine.Submit(ev, fp); err != nil || acceptance.Status != "QUARANTINED" {
+		if acceptance, err := engine.Submit(ev, observedInput); err != nil || acceptance.Status != "QUARANTINED" {
 			t.Fatalf("quarantine: %v %+v", err, acceptance)
 		}
 		driveTerminal(t, engine, target)

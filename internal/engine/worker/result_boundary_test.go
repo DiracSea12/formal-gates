@@ -13,7 +13,7 @@ import (
 
 func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.gate.v2"
+	input.Handler = "engine.gate.v3"
 	result := decodeSemantic(t, input, Gate{Findings: []Finding{{Severity: "P1", Message: "Actual public contract failure"}}})
 	if result.Outcome != protocol.OutcomePass || result.FailureClass != "" || result.Validation.Status != "FAIL" || len(result.Validation.Findings) != 1 {
 		t.Fatalf("semantic defect became a transport failure: %+v", result)
@@ -32,14 +32,14 @@ func TestCompletedSemanticFailureHasSuccessfulTransport(t *testing.T) {
 }
 
 func TestSemanticInabilityNeedsNoCompletedRolePlaceholders(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.repair.verify.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.repair.verify.v2", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v4" {
+			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v5" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-				if handler == "engine.readiness.plan.v4" {
+				if handler == "engine.readiness.plan.v5" {
 					input.Review.Action = review.StartReadiness
 				}
 			}
@@ -89,7 +89,7 @@ func TestExecutionInabilityRetainsActualCompletedComparisons(t *testing.T) {
 
 func TestSemanticRoleBodyRejectsMechanicalEnvelopeAndMixedInability(t *testing.T) {
 	input := semanticInput()
-	input.Handler = "engine.gate.v2"
+	input.Handler = "engine.gate.v3"
 	for _, raw := range []string{`{"outcome":"PASS","validation":{"status":"FAIL","findings":[]}}`, `{"status":"FAIL","findings":[],"failureClass":"BUSINESS_REJECT"}`, `{"status":"FAIL","findings":[],"interruptionReason":"cannot finish"}`, `{"interruptionReason":" "}`, `{"status":"PASS"}`, `{"status":"PASS","findings":[]} {"interruptionReason":"extra"}`} {
 		if _, err := DecodeResultWithPaths(input, "result", []byte(raw), "actual-native-digest", []string{}); err == nil {
 			t.Fatalf("invalid body accepted: %s", raw)

@@ -1,12 +1,103 @@
 package vcs
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestWorkingTreeDigestBindsCleanConvertedBytes(t *testing.T) {
+	p := realRepo(t)
+	path := filepath.Join(p.root, "material.txt")
+	original := []byte("first line\nsecond line\n")
+	if err := os.WriteFile(path, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"material.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("text input"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := p.WorkingTreeDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.root, ".git", "info", "attributes"), []byte("material.txt text eol=crlf\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, p.runner, p.root, "git", "checkout", "--", "material.txt")
+	converted, err := os.ReadFile(path)
+	if err != nil || bytes.Equal(original, converted) || !bytes.Contains(converted, []byte("\r\n")) {
+		t.Fatalf("checkout did not convert actual input bytes: %q %v", converted, err)
+	}
+	if status, err := p.Status(); err != nil || status != "" {
+		t.Fatalf("converted checkout is not native clean: %q %v", status, err)
+	}
+	if rows, err := p.CompareWorkingTree(base); err != nil || len(rows) != 0 {
+		t.Fatalf("clean converted checkout changed native comparison: %+v %v", rows, err)
+	}
+	after, err := p.WorkingTreeDigest(base)
+	if err != nil || after == before {
+		t.Fatalf("different actual input bytes retained source digest: %s %s %v", before, after, err)
+	}
+}
+
+func TestWorkingTreeDigestBindsSymlinkAndCleanExecutableMode(t *testing.T) {
+	p := realRepo(t)
+	for _, path := range []string{"first.txt", "second.txt"} {
+		writeRuntimeStatusFile(t, p.root, path, "input\n")
+	}
+	link := filepath.Join(p.root, "alias")
+	if err := os.Symlink("first.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{"first.txt", "second.txt", "alias"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("linked inputs"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := p.WorkingTreeDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, p.runner, p.root, "git", "config", "core.filemode", "false")
+	if err := os.Chmod(filepath.Join(p.root, "first.txt"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := p.Status(); err != nil || status != "" {
+		t.Fatalf("executable input is not native clean: %q %v", status, err)
+	}
+	executable, err := p.WorkingTreeDigest(base)
+	if err != nil || executable == before {
+		t.Fatalf("actual executable mode did not change input digest: %s %v", executable, err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("second.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	retargeted, err := p.WorkingTreeDigest(base)
+	if err != nil || retargeted == executable {
+		t.Fatalf("symlink target bytes did not change input digest: %s %v", retargeted, err)
+	}
+}
 
 func TestWorkingTreeDigestBindsAllContentAndNativeModes(t *testing.T) {
 	p := realRepo(t)

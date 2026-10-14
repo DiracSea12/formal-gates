@@ -170,108 +170,52 @@ func TestCompleteStepEnforcesFrontierDisciplineAndSortedCanonicalBytes(t *testin
 	}
 }
 
-// 用例：Observe 汇成规范 Observation——事实按 (Source, Key) 排序；来源枚举
-// 非法、事实来源与收集器不符、空 Key、重复事实、nil 收集器、收集器错误
-// 一律拒绝；空观察编码为 "facts": []。
-func TestObserveNormalizesAndRejectsConflictingFacts(t *testing.T) {
-	s := fxState(t, runtime.PhaseDevelopmentParallel)
-
-	if _, err := decision.Observe(nil, nil); err == nil {
-		t.Error("nil state must be rejected")
-	}
-	if _, err := decision.Observe(s, []decision.Collector{nil}); err == nil {
-		t.Error("nil collector must be rejected")
-	}
-	bad := &fakeCollector{src: "TELEPATHY", facts: nil}
-	if _, err := decision.Observe(s, []decision.Collector{bad}); err == nil {
-		t.Error("invalid source enum must be rejected")
-	} else {
-		wantErrContaining(t, err, "invalid")
-	}
-	mismatch := &fakeCollector{src: decision.SourceVCS,
-		facts: []decision.Fact{{Source: decision.SourceFile, Key: "k", Value: "v"}}}
-	if _, err := decision.Observe(s, []decision.Collector{mismatch}); err == nil {
-		t.Error("fact source must match collector source")
-	} else {
-		wantErrContaining(t, err, "produced fact with source")
-	}
-	emptyKey := &fakeCollector{src: decision.SourceHost, facts: []decision.Fact{{Source: decision.SourceHost, Key: "", Value: "v"}}}
-	if _, err := decision.Observe(s, []decision.Collector{emptyKey}); err == nil {
-		t.Error("empty fact key must be rejected")
-	} else {
-		wantErrContaining(t, err, "empty fact key")
-	}
-	dup := &fakeCollector{src: decision.SourceFile, facts: []decision.Fact{
-		{Source: decision.SourceFile, Key: "k", Value: "1"},
-		{Source: decision.SourceFile, Key: "k", Value: "2"},
-	}}
-	if _, err := decision.Observe(s, []decision.Collector{dup}); err == nil {
-		t.Error("duplicate (source, key) must be rejected regardless of value")
-	} else {
-		wantErrContaining(t, err, "duplicate fact")
-	}
-	acrossA := &fakeCollector{src: decision.SourceReceipt, facts: []decision.Fact{{Source: decision.SourceReceipt, Key: "r", Value: "x"}}}
-	acrossB := &fakeCollector{src: decision.SourceReceipt, facts: []decision.Fact{{Source: decision.SourceReceipt, Key: "r", Value: "y"}}}
-	if _, err := decision.Observe(s, []decision.Collector{acrossA, acrossB}); err == nil {
-		t.Error("duplicate across collectors must be rejected")
-	}
-	failing := &fakeCollector{src: decision.SourceCapacity, err: errBoom}
-	if _, err := decision.Observe(s, []decision.Collector{failing}); err == nil {
-		t.Error("collector error must propagate")
-	} else {
-		wantErrContaining(t, err, "CAPACITY", "boom")
-	}
-
-	// 规范排序与收集器顺序、事实提交顺序无关。
-	vcs := &fakeCollector{src: decision.SourceVCS, facts: []decision.Fact{
-		{Source: decision.SourceVCS, Key: "zz", Value: "1"},
-		{Source: decision.SourceVCS, Key: "aa", Value: "2"},
-	}}
-	file := &fakeCollector{src: decision.SourceFile, facts: []decision.Fact{
+// 用例：有序 Observation 的 canonical 字节完整保留 source/key/value，
+// 相同输入逐字节稳定；空观察编码为 "facts": []。
+func TestObservationCanonicalBytesStable(t *testing.T) {
+	obs := decision.Observation{Facts: []decision.Fact{
 		{Source: decision.SourceFile, Key: "m", Value: "3"},
+		{Source: decision.SourceVCS, Key: "aa", Value: "2"},
+		{Source: decision.SourceVCS, Key: "zz", Value: "1"},
 	}}
-	obs, err := decision.Observe(s, []decision.Collector{vcs, file})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantOrder := []string{"FILE/m", "VCS/aa", "VCS/zz"}
-	if len(obs.Facts) != len(wantOrder) {
-		t.Fatalf("facts = %v, want order %v", obs.Facts, wantOrder)
-	}
-	for i, w := range wantOrder {
-		f := obs.Facts[i]
-		if got := string(f.Source) + "/" + f.Key; got != w {
-			t.Fatalf("facts[%d] = %s, want %s", i, got, w)
+	want := `{
+  "facts": [
+    {
+      "source": "FILE",
+      "key": "m",
+      "value": "3"
+    },
+    {
+      "source": "VCS",
+      "key": "aa",
+      "value": "2"
+    },
+    {
+      "source": "VCS",
+      "key": "zz",
+      "value": "1"
+    }
+  ]
+}
+`
+	for i := 0; i < 2; i++ {
+		data, err := obs.CanonicalBytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("observation canonical bytes = %s, want %s", data, want)
 		}
 	}
-	obs2, err := decision.Observe(s, []decision.Collector{file, vcs})
+	empty := decision.Observation{}
+	data, err := empty.CanonicalBytes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b1, _ := obs.CanonicalBytes()
-	b2, _ := obs2.CanonicalBytes()
-	if string(b1) != string(b2) {
-		t.Fatal("observation canonical bytes must not depend on collector order")
-	}
-
-	empty, err := decision.Observe(s, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eb, err := empty.CanonicalBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(eb), `"facts": []`) {
-		t.Fatalf("empty observation must encode as []: %s", eb)
+	if string(data) != "{\n  \"facts\": []\n}\n" {
+		t.Fatalf("empty observation canonical bytes = %s", data)
 	}
 }
-
-var errBoom = &boomError{}
-
-type boomError struct{}
-
-func (*boomError) Error() string { return "boom" }
 
 // 用例：eligible frontier 完整且按 compiled ordinal 固定排序——新鲜 state 的
 // frontier 是入口根步骤；完成根步骤后 frontier 精确等于依赖已满足且未完成
@@ -417,9 +361,8 @@ func mustTransitionTask(t *testing.T, s *decision.State, node, step string, to r
 	}
 }
 
-// 用例：Wait 的封闭原因——frontier 只剩 engine-internal 步骤时投影为
-// WAIT/ENGINE_INTERNAL（而非空结果）；外部步骤全部在途时 WAIT/TASKS_IN_FLIGHT。
-func TestDecideWaitReasonsEngineInternalVsTasksInFlight(t *testing.T) {
+// 用例：frontier 只剩 engine-internal 步骤时投影为 WAIT/ENGINE_INTERNAL。
+func TestDecideWaitsForEngineInternalFrontier(t *testing.T) {
 	cd := fxCompile(t, fxDefinition(t), fxRegistry(t))
 
 	// 新鲜 state：唯一 frontier 步骤是 LOCAL。
@@ -427,19 +370,6 @@ func TestDecideWaitReasonsEngineInternalVsTasksInFlight(t *testing.T) {
 	plan := fxDecide(t, s, decision.Observation{}, cd)
 	if plan.Next.Kind != decision.KindWait || plan.Next.Wait.Reason != decision.WaitEngineInternal {
 		t.Fatalf("fresh next = %+v, want WAIT/ENGINE_INTERNAL", plan.Next)
-	}
-
-	// 外部步骤全部在途：WAIT/TASKS_IN_FLIGHT。
-	s = fxState(t, runtime.PhaseDevelopmentParallel)
-	if err := s.CompleteStep("s.parse", cd); err != nil {
-		t.Fatal(err)
-	}
-	mustTransitionTask(t, s, "n1", "s.review", runtime.TaskIssued)
-	mustTransitionTask(t, s, "n1", "s.dispatch", runtime.TaskIssued)
-	mustTransitionTask(t, s, "n1", "s.ask", runtime.TaskIssued)
-	plan = fxDecide(t, s, decision.Observation{}, cd)
-	if plan.Next.Kind != decision.KindWait || plan.Next.Wait.Reason != decision.WaitTasksInFlight {
-		t.Fatalf("all-external-issued next = %+v, want WAIT/TASKS_IN_FLIGHT", plan.Next)
 	}
 
 	// 外部步骤全部完成后只剩 engine-internal：回到 WAIT/ENGINE_INTERNAL。
@@ -546,11 +476,9 @@ func TestPlanCanonicalBytesStableAndDigestBound(t *testing.T) {
 	}
 
 	// 改变 observation：ObservationDigest/PlanDigest 变，其余不变。
-	obs2, err := decision.Observe(s, []decision.Collector{&fakeCollector{src: decision.SourceVCS,
-		facts: []decision.Fact{{Source: decision.SourceVCS, Key: "head", Value: "abc"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	obs2 := decision.Observation{Facts: []decision.Fact{
+		{Source: decision.SourceVCS, Key: "head", Value: "abc"},
+	}}
 	p3 := fxDecide(t, s, obs2, cd)
 	if p3.ObservationDigest == p1.ObservationDigest {
 		t.Error("observation digest must react to observation change")
@@ -608,7 +536,7 @@ func twoAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *decision.Stat
 	t.Helper()
 	root := mkLocalStep(t, fxHeader("a.root", "n0"), fxIO(),
 		authoring.LocalSpec{Handler: "h.r"})
-	io := fxIO("a.root")
+	io := fxIO()
 	io.Postconditions = []authoring.PredicateRef{{ID: "pred.ok"}}
 	a1 := mkAgentStep(t, fxHeader("a.one", "n1", "a.root"), io,
 		authoring.AgentSpec{Handler: "h.a1", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute})
@@ -646,7 +574,7 @@ func twoAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *decision.Stat
 
 // 用例：SelectIssued 按容量机械裁剪——可签发 N、容量 C 时恰好 min(C,N) 个，
 // 顺序固定为 Plan 顺序；actionID 由 TaskKey 确定性派生；非 READY 计划、
-// 负容量、nil plan/store 拒绝；落账失败传播；落账内容与签发集一致。
+// 负容量、nil plan 拒绝。
 func TestSelectIssuedCapacityAndDeterministicActionIDs(t *testing.T) {
 	cd, s := twoAgentFixture(t)
 	plan := fxDecide(t, s, decision.Observation{}, cd)
@@ -654,8 +582,7 @@ func TestSelectIssuedCapacityAndDeterministicActionIDs(t *testing.T) {
 		t.Fatalf("fixture plan = %+v, want READY with 2 tasks", plan.Next)
 	}
 
-	store := &recordingStore{}
-	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: 1}, store)
+	issued, err := decision.SelectIssued(plan, decision.Admission{Capacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,8 +591,7 @@ func TestSelectIssuedCapacityAndDeterministicActionIDs(t *testing.T) {
 		t.Fatalf("capacity 1 issued = %+v, want [a.one with act:n1/a.one]", issued)
 	}
 
-	store = &recordingStore{}
-	issued, err = decision.SelectIssued(plan, decision.Admission{Capacity: 5}, store)
+	issued, err = decision.SelectIssued(plan, decision.Admission{Capacity: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,47 +602,33 @@ func TestSelectIssuedCapacityAndDeterministicActionIDs(t *testing.T) {
 		t.Fatalf("issued order = [%s %s], want plan order [a.one a.two]", issued[0].ActionID, issued[1].ActionID)
 	}
 	// actionID 确定性：两次签发同一任务得到同一 actionID。
-	again, err := decision.SelectIssued(plan, decision.Admission{Capacity: 1}, store)
+	again, err := decision.SelectIssued(plan, decision.Admission{Capacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if again[0].ActionID != "act:n1/a.one" {
 		t.Fatalf("actionID not deterministic: %s", again[0].ActionID)
 	}
-	if len(store.sets) != 2 {
-		t.Fatalf("store persisted %d sets, want 2 (persist before return)", len(store.sets))
-	}
-
-	// 容量 0：空签发集仍落账。
-	store = &recordingStore{}
-	issued, err = decision.SelectIssued(plan, decision.Admission{Capacity: 0}, store)
+	// 容量 0：返回空签发集。
+	issued, err = decision.SelectIssued(plan, decision.Admission{Capacity: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issued) != 0 || len(store.sets) != 1 || len(store.sets[0]) != 0 {
-		t.Fatalf("capacity 0 must issue and persist an empty set, got %+v / %+v", issued, store.sets)
+	if len(issued) != 0 {
+		t.Fatalf("capacity 0 must issue an empty set, got %+v", issued)
 	}
 
 	// 拒绝路径。
-	if _, err := decision.SelectIssued(plan, decision.Admission{Capacity: -1}, &recordingStore{}); err == nil {
+	if _, err := decision.SelectIssued(plan, decision.Admission{Capacity: -1}); err == nil {
 		t.Error("negative capacity must be rejected")
 	}
-	if _, err := decision.SelectIssued(nil, decision.Admission{}, &recordingStore{}); err == nil {
+	if _, err := decision.SelectIssued(nil, decision.Admission{}); err == nil {
 		t.Error("nil plan must be rejected")
 	}
-	if _, err := decision.SelectIssued(plan, decision.Admission{}, nil); err == nil {
-		t.Error("nil store must be rejected")
-	}
 	waitPlan := fxDecide(t, fxState(t, runtime.PhaseDevelopmentParallel), decision.Observation{}, cd)
-	if _, err := decision.SelectIssued(waitPlan, decision.Admission{Capacity: 2}, &recordingStore{}); err == nil {
+	if _, err := decision.SelectIssued(waitPlan, decision.Admission{Capacity: 2}); err == nil {
 		t.Error("non-READY plan must not be issuable")
 	} else {
 		wantErrContaining(t, err, "not READY")
-	}
-	failing := &recordingStore{err: errBoom}
-	if _, err := decision.SelectIssued(plan, decision.Admission{Capacity: 1}, failing); err == nil {
-		t.Error("persist failure must propagate")
-	} else {
-		wantErrContaining(t, err, "persist")
 	}
 }

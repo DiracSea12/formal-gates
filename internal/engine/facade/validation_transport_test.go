@@ -16,7 +16,7 @@ import (
 func candidateAtStage(t *testing.T, stage string) (*validationDriver, protocol.HostActionIntent) {
 	t.Helper()
 	d := newValidationDriver(t, "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	if stage != "DEVELOPMENT" {
 		d.materialize()
@@ -133,17 +133,41 @@ func TestCandidateFailureRoutesKeepTheirOriginalEffect(t *testing.T) {
 					if raw.Correlation != intent.Correlation || raw.Step != intent.Step || raw.PayloadDigest != intent.PayloadDigest || raw.FailureClass != class {
 						t.Fatal("raw failure changed")
 					}
-					d.submit(ev)
+					accepted := d.submit(ev)
 					before := d.run.Revision
 					d.reopen()
 					d.drive()
 					if d.run.Revision != before {
 						t.Fatal("failed effect recovery changed state repeatedly")
 					}
-					// Explicit execution cannot bypass the same obligation using a new correlation.
-					if _, _, err := d.f.engine.ExecuteHostActionWithCorrelation("op.candidate", intent.Adapter.Params, "different-transport", emptyFingerprint()); err == nil {
-						t.Fatal("caller correlation bypassed existing failed obligation")
+					// Receipt transport identity cannot replace the original failed obligation.
+					beforeSnapshot, err := d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
 					}
+					conflicting := ev
+					payload := *ev.HostAction
+					payload.Correlation = "different-transport"
+					conflicting.HostAction = &payload
+					conflicting.ID = d.eventID()
+					if _, _, err := d.f.Submit(conflicting); err == nil {
+						t.Fatal("receipt correlation bypassed existing failed obligation")
+					}
+					afterSnapshot, err := d.f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(beforeSnapshot, afterSnapshot) {
+						t.Fatal("rejected receipt correlation changed original state or revision")
+					}
+					if replay := d.submit(ev); !reflect.DeepEqual(accepted, replay) {
+						t.Fatal("original failure replay changed acceptance")
+					}
+					replayed, err := d.f.engine.Load()
+					if err != nil || !reflect.DeepEqual(afterSnapshot, replayed) {
+						t.Fatalf("original failure replay changed durable state: %v", err)
+					}
+
 				})
 			}
 		}
@@ -233,7 +257,7 @@ func TestCandidateUnknownCompletionUsesTypedEvidence(t *testing.T) {
 					t.Fatal("unknown effect exposed for reexecution")
 				}
 				before, _ := d.f.engine.Load()
-				plan, _, err := d.f.engine.ReconcileHostAction(intent.ActionID, "observed", true, false, emptyFingerprint())
+				plan, _, err := d.f.engine.ReconcileHostAction(intent.ActionID, "observed", true, false, protocol.Observation{})
 				if err != nil || plan.Action != protocol.RecoveryWait {
 					t.Fatalf("untyped reconciliation=%+v %v", plan, err)
 				}
@@ -312,12 +336,12 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 		for _, firstWorker := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/worker-first=%t", held, firstWorker), func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.development.batch.v4")
+				id, input := d.action("engine.development.batch.v5")
 				key := input.Binding.Task
 				if firstWorker {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-environment-unavailable"}})
-					id, input = d.action("engine.development.batch.v4")
+					id, input = d.action("engine.development.batch.v5")
 					if input.Binding.Task != key {
 						t.Fatal("worker retry replaced logical task")
 					}
@@ -372,7 +396,7 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 				}
 				ask := d.validationAsk("RETRY")
 				decideValidation(d, ask, "approve")
-				next, ni := d.action("engine.development.batch.v4")
+				next, ni := d.action("engine.development.batch.v5")
 				if next == id || ni.Binding.Task != key {
 					t.Fatal("extra execution did not retain original task")
 				}
@@ -497,7 +521,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 
 func TestSpawnTransportRetryKeepsSpentSlotAfterSuccess(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, input := d.action("engine.development.batch.v4")
+	id, input := d.action("engine.development.batch.v5")
 	failed, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), id, d.host(), "failed-transport", protocol.SpawnStatusFailed, authoring.FailureTransientEngine)
 	if err != nil {
 		t.Fatal(err)

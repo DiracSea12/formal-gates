@@ -3,12 +3,102 @@ package facade
 import (
 	"encoding/json"
 	"errors"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+// Terminal reads and accepted-event replay expose retained review facts without
+// changing the immutable summary or recreating active state.
+func TestTerminalReadsRetainReviewFacts(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
+	passPreDevelopmentReviews(t, d, commandPlan())
+	want := d.run.Review
+	if len(want.Actions) != 2 || want.RequirementRevision != d.revision {
+		t.Fatalf("active review precondition: %+v", want)
+	}
+	for _, action := range want.Actions {
+		if action.Completed != 1 || action.BaseLimit != 3 || action.ExtraAuthorized != 0 || action.EffectiveLimit != 3 || action.Remaining != 2 || len(action.Grants) != 0 || action.RawResults != 1 || action.Adjudications != 0 || action.Corrections != 0 || action.EffectiveStatus != "PASS" || len(action.Candidates) != 1 || action.EffectiveSource != action.Candidates[0].ResultDigest {
+			t.Fatalf("completed typed PASS facts: %+v", action)
+		}
+	}
+	request, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(request)
+	token, err := d.f.Freshness(string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided, err := protocol.NewDecideEvent(d.eventID(), protocol.RequestID(request.ID), token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := d.submit(decided)
+	d.drive()
+	if d.run.Status != "ABORTED" {
+		t.Fatalf("typed abort did not complete: %s", d.run.Status)
+	}
+	f, err := Open(root, d.f.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := f.readSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Termination == nil {
+		t.Fatal("terminal summary has no retained state")
+	}
+	for index, series := range []review.Series{summary.Termination.ReviewSeries.ProductReview, summary.Termination.ReviewSeries.StartReadiness} {
+		if series.Completed != want.Actions[index].Completed || series.Effective.Source != want.Actions[index].EffectiveSource {
+			t.Fatalf("retained authority changed: %+v", series)
+		}
+	}
+	before, err := os.ReadFile(terminalSummaryPath(f.stateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, run Run) {
+		t.Helper()
+		if run.Status != "ABORTED" || !reflect.DeepEqual(run.Review, want) {
+			t.Errorf("%s lost retained review facts: status=%s review=%+v", name, run.Status, run.Review)
+		}
+	}
+	for _, entry := range []struct {
+		name string
+		read func() (Run, error)
+	}{{"Show", f.Show}, {"Status", f.Status}, {"Drive", f.Drive}} {
+		run, err := entry.read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(entry.name, run)
+	}
+	next, err := f.Next()
+	if err != nil || next.Kind != decision.KindComplete {
+		t.Fatalf("terminal next: %+v %v", next, err)
+	}
+	again, replayed, err := f.Submit(decided)
+	if err != nil || !reflect.DeepEqual(again, accepted) {
+		t.Fatalf("accepted terminal event replay: %+v %v", again, err)
+	}
+	check("Submit replay", replayed)
+	after, err := os.ReadFile(terminalSummaryPath(f.stateDir))
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("terminal reads changed summary bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.stateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("terminal reads recreated active state: %v", err)
+	}
+}
 
 // Each supported abort control preserves its accepted business identity while
 // signed workers finish through their original lifecycle and typed receipts.
@@ -42,7 +132,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				// Missing required development evidence exhausts the existing two
 				// attempts and produces a genuine RETRY disposition with Abort.
 				for n := 0; n < 2; n++ {
-					id, input := d.action("engine.development.batch.v4")
+					id, input := d.action("engine.development.batch.v5")
 					d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 					d.drive()
 				}
@@ -50,7 +140,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				requestID = ask.RequestID
 				validation = &protocol.ValidationDecision{Reason: "Abort the unavailable development obligation", Digest: ask.Validation.Digest, StateRevision: d.run.Revision}
 			} else {
-				id, _ := d.action("engine.development.batch.v4")
+				id, _ := d.action("engine.development.batch.v5")
 				d.receipt(id)
 				start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
 				if err != nil {
@@ -58,7 +148,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 				}
 				submit(start)
 				if control == protocol.ControlRecovery {
-					plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{}, emptyFingerprint())
+					plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{}, protocol.Observation{})
 					if err != nil || plan.Action != protocol.RecoveryAsk {
 						t.Fatalf("actual recovery ask: %+v %v", plan, err)
 					}
@@ -292,42 +382,5 @@ func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
 				t.Fatal("summary lost earlier event acceptance content")
 			}
 		})
-	}
-}
-
-// LastEvent is sufficient for supported terminal payloads without a State ledger.
-func TestTerminalReplaySupportsSummaryWithoutStateLedger(t *testing.T) {
-	d := nativeMasterDriver(t)
-	event, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	accepted := d.submit(event)
-	run, err := d.f.project()
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary := summaryForRun(run, ownerInterval{})
-	summary.Status = "ABORTED"
-	summary.Termination = nil
-	if err := writeJSONAtomic(terminalIntentPath(d.f.stateDir), summary); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(terminalIntentPath(d.f.stateDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := d.f.replayTerminalEvent(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, _ := json.Marshal(accepted)
-	got, _ := json.Marshal(again)
-	if string(got) != string(want) {
-		t.Fatal("LastEvent acceptance changed")
-	}
-	after, err := os.ReadFile(terminalIntentPath(d.f.stateDir))
-	if err != nil || string(before) != string(after) {
-		t.Fatalf("supported summary replay changed bytes: %v", err)
 	}
 }

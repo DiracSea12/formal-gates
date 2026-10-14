@@ -27,7 +27,7 @@ func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	refs := []facade.WorkerMaterial{}
 	inputs := []protocol.WorkerInput{}
 	for id, input := range run.ValidationInputs {
-		if input.Handler != "engine.development.batch.v4" {
+		if input.Handler != "engine.development.batch.v5" {
 			continue
 		}
 		ref := run.WorkerMaterials[id]
@@ -62,7 +62,7 @@ func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := tools.call(json.RawMessage(`{"action":"create","name":"new-source.txt","content":"actual source"}`))
+		_, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"new-source.txt","content":"actual source"}`))
 		done <- err
 	}()
 	completed := false
@@ -146,7 +146,7 @@ func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
 	if err != nil || !valuesEqual(receipt["exit_code"], 0) {
 		t.Fatal(receipt, err)
 	}
-	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"forbidden.txt","content":"after control"}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"forbidden.txt","content":"after control"}`)); err == nil {
 		t.Fatal("held original action continued writing")
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "forbidden.txt")); !os.IsNotExist(err) {

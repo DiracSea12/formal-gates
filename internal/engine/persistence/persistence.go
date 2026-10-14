@@ -28,7 +28,6 @@
 //     definitions/workflow.json 由同一生成动作产出）；
 //   - stateSchemaVersion directly uses the unique current encoder constant;
 //   - 本包不导入 internal/validate：engine 包不得反向依赖。
-//
 package persistence
 
 import (
@@ -81,10 +80,6 @@ const (
 	FaultSpawnAfterAttach    FaultPoint = "spawn_after_attach"
 	FaultResultBeforeReceipt FaultPoint = "result_before_receipt"
 	FaultSubmitResponseLost  FaultPoint = "submit_response_lost"
-	FaultHostObserveBefore   FaultPoint = "host_observe_before"
-	FaultHostReconcileBefore FaultPoint = "host_reconcile_before"
-	FaultHostCommitBefore    FaultPoint = "host_commit_before"
-	FaultHostCommitAfter     FaultPoint = "host_commit_after"
 )
 
 // ErrInjectedCrash identifies a simulated process loss. Save deliberately

@@ -164,7 +164,6 @@ func mainlineChildren(t *testing.T, conflict string) (*validationDriver, []*vali
 	master, children := mainlineReady(t, conflict, false)
 	master.drive()
 	return master, children
-
 }
 
 type mergeInterruption struct {
@@ -260,7 +259,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	var id string
 	var input protocol.ValidationInput
 	for action, in := range master.run.ValidationInputs {
-		if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v2" {
+		if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v3" {
 			id, input = action, in
 			break
 		}
@@ -268,13 +267,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 	if id == "" {
 		t.Fatalf("unexpected mainline task: %+v", master.run.ValidationInputs)
 	}
-	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
-	if input.Handler == "engine.qa.execution.v3" {
-		report := executionFor(input)
-		result.Execution = &report
-		result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
-	}
-	master.business(id, result)
+	master.business(id, mainlineResult(input))
 }
 
 func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing.T) {
@@ -291,7 +284,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 		if input.Binding.Candidate != wave.Candidate.Identity {
 			t.Fatal("mixed candidate validation")
 		}
-		if input.Handler == "engine.gate.v2" && (input.Gate == nil || input.Gate.BaseSnapshot != state.BaseSnapshot || input.Gate.Candidate != wave.Candidate) {
+		if input.Handler == "engine.gate.v3" && (input.Gate == nil || input.Gate.BaseSnapshot != state.BaseSnapshot || input.Gate.Candidate != wave.Candidate) {
 			t.Fatal("gate lost original FULL range")
 		}
 	}
@@ -350,10 +343,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 			}
 		}
 	}
-	trees, err := master.f.vcs.Worktrees()
-	if err != nil || len(trees) != 1 {
-		t.Fatal("temporary worktree remains", trees, err)
-	}
+	assertNoMainlineResources(t, master)
 }
 
 func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
@@ -413,7 +403,7 @@ func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 
 func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 	master, children := mainlineReady(t, "", false)
-	engine, err := protocol.New(master.f.store, protocol.Config{NativeRoot: master.f.root, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 3, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission), WorkerExecution: workerExecutionBridge(master.f.root, master.f.runID)}, nil)
+	engine, err := protocol.New(master.f.store, protocol.Config{NativeRoot: master.f.root, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 3, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission), WorkerExecution: workerExecutionBridge(master.f.root, master.f.runID)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +423,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 			break
 		}
 		result := mainlineResult(input)
-		if input.Handler == "engine.gate.v2" && master.run.Validation.Waves[0].Targets[input.Binding.Task.String()].SliceID == "" {
+		if input.Handler == "engine.gate.v3" && master.run.Validation.Waves[0].Targets[input.Binding.Task.String()].SliceID == "" {
 			result.Status = "FAIL"
 			result.Findings = []review.Finding{{Severity: "P2", Message: "Combined command output differs from the confirmed oracle"}}
 		}
@@ -477,7 +467,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		master.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{item}}}})
 	}
 	master.drive()
-	repair, input := master.action("engine.repair.v5")
+	repair, input := master.action("engine.repair.v6")
 	if input.Repair == nil || len(input.Repair.Problems) != 1 || len(input.Repair.ExecutionFailures) != 1 {
 		t.Fatal("simultaneous merge failures did not join one repair")
 	}
@@ -513,19 +503,19 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 		if in.Handler == "engine.qa.execution.v3" && (len(in.RequiredCases) != 1 || in.RequiredCases[0] != failedCase || len(in.Inherited) != 1) {
 			t.Fatal("AFFECTED execution lost the exact failed case or original PASS complement", in.RequiredCases, in.Inherited)
 		}
-		if in.Handler == "engine.gate.v2" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
+		if in.Handler == "engine.gate.v3" && (in.Gate == nil || in.Gate.BaseSnapshot != state.BaseSnapshot || in.Gate.Candidate != current.Candidate) {
 			t.Fatal("QA scope narrowed the ordinary gate")
 		}
 		master.receipt(id)
 		result := mainlineResult(in)
 		events = append(events, protocol.Event{ID: master.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: master.host(), Outcome: protocol.OutcomePass, PayloadDigest: id, Validation: &result}})
 	}
-	errors := make(chan error, len(events))
+	errs := make(chan error, len(events))
 	for _, event := range events {
-		go func(event protocol.Event) { _, _, err := master.f.Submit(event); errors <- err }(event)
+		go func(event protocol.Event) { _, _, err := master.f.Submit(event); errs <- err }(event)
 	}
 	for range events {
-		if err := <-errors; err != nil {
+		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}
 	}

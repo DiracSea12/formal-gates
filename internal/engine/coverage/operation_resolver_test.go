@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -19,7 +18,7 @@ func writeGoTestSource(t *testing.T, workspace, file, source string) {
 	}
 }
 
-func TestResolveGoTestUsesExactFileFunctionAndPackageDirectory(t *testing.T) {
+func TestGoTestReferenceValidatesExactFileFunctionAndPackageDirectory(t *testing.T) {
 	for name, source := range map[string]string{
 		"empty result list":     "package sample\nimport \"testing\"\nfunc TestValue(t *testing.T) () {}\n",
 		"method with same name": "package sample\nimport \"testing\"\ntype sample struct{}\nfunc TestValue(t *testing.T) {}\nfunc (sample) TestValue() {}\n",
@@ -32,11 +31,15 @@ func TestResolveGoTestUsesExactFileFunctionAndPackageDirectory(t *testing.T) {
 			workspace := t.TempDir()
 			file := "nested/value_test.go"
 			writeGoTestSource(t, workspace, file, source)
-			got, err := ResolveCaseOperations(workspace, AcceptanceCase{CaseID: "value", TestRef: file + "::TestValue"})
+			ref := file + "::TestValue"
+			if err := ValidateGoTestReference(workspace, ref); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GoTestOperation(ref)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []ResolvedOperation{{Directory: filepath.Join(workspace, "nested"), GoTestName: "TestValue", Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^TestValue$", "."}}}}
+			want := GoTestInvocation{Directory: "nested", GoTestName: "TestValue", Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^TestValue$", "."}}}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("invocation = %#v; want %#v", got, want)
 			}
@@ -44,7 +47,7 @@ func TestResolveGoTestUsesExactFileFunctionAndPackageDirectory(t *testing.T) {
 	}
 }
 
-func TestResolveGoTestRejectsMissingAmbiguousOrInvalidTestDeclarations(t *testing.T) {
+func TestGoTestReferenceRejectsMissingAmbiguousOrInvalidTestDeclarations(t *testing.T) {
 	for name, source := range map[string]string{
 		"missing":        "package sample\nimport \"testing\"\nfunc TestOther(t *testing.T) {}\n",
 		"duplicate":      "package sample\nimport \"testing\"\nfunc TestValue(t *testing.T) {}\nfunc TestValue(t *testing.T) {}\n",
@@ -62,14 +65,14 @@ func TestResolveGoTestRejectsMissingAmbiguousOrInvalidTestDeclarations(t *testin
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
 			writeGoTestSource(t, workspace, "value_test.go", source)
-			if got, err := ResolveCaseOperations(workspace, AcceptanceCase{TestRef: "value_test.go::TestValue"}); err == nil || got != nil {
-				t.Fatalf("invalid declaration resolved: %#v %v", got, err)
+			if err := ValidateGoTestReference(workspace, "value_test.go::TestValue"); err == nil {
+				t.Fatal("invalid declaration accepted")
 			}
 		})
 	}
 }
 
-func TestResolveGoTestRejectsInvalidReferencesWithoutGuessing(t *testing.T) {
+func TestGoTestReferenceRejectsInvalidReferencesWithoutGuessing(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoTestSource(t, workspace, "value_test.go", "package sample\nimport \"testing\"\nfunc TestValue(t *testing.T) {}\nfunc Testlower(t *testing.T) {}\n")
 	for _, ref := range []string{
@@ -86,25 +89,17 @@ func TestResolveGoTestRejectsInvalidReferencesWithoutGuessing(t *testing.T) {
 		"TestValue",
 	} {
 		t.Run(ref, func(t *testing.T) {
-			if got, err := ResolveCaseOperations(workspace, AcceptanceCase{TestRef: ref, Steps: "go test -run TestValue"}); err == nil || got != nil {
-				t.Fatalf("unsupported reference guessed an invocation: %#v %v", got, err)
+			if err := ValidateGoTestReference(workspace, ref); err == nil {
+				t.Fatal("unsupported reference accepted")
 			}
 		})
 	}
 }
 
-func TestResolveApprovedOperationsPreservesSequenceAndValues(t *testing.T) {
-	workspace := t.TempDir()
-	operations := []Operation{{Kind: OperationArgv, Argv: []string{"tool", "", "a b", `"quoted"`, "$(command)"}, Stdin: "input\n"}, {Kind: OperationShell, Command: "printf '%s' \"$value\"\n", Stdin: "next\n"}}
-	got, err := ResolveCaseOperations(workspace, AcceptanceCase{CaseID: "value", TestRef: "behavior.spec.ts::runs", Operations: operations})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []ResolvedOperation{{Directory: workspace, Operation: operations[0]}, {Directory: workspace, Operation: operations[1]}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("approved sequence or values changed: %#v != %#v", got, want)
-	}
-	if _, err := ResolveCaseOperations(workspace, AcceptanceCase{TestRef: "value_test.go::TestValue", Operations: operations}); err == nil || !strings.Contains(err.Error(), "cannot also declare") {
-		t.Fatalf("Go reference with another recipe accepted: %v", err)
+func TestGoTestReferenceRequiresWorkspace(t *testing.T) {
+	for _, workspace := range []string{"", "  "} {
+		if err := ValidateGoTestReference(workspace, "value_test.go::TestValue"); err == nil {
+			t.Fatal("missing workspace accepted")
+		}
 	}
 }

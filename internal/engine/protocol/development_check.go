@@ -155,9 +155,7 @@ func (s *State) editSourceCurrent(p CandidateParameters) bool {
 		}
 		paths = append(paths, r.Validation.Development.Paths...)
 	}
-	slices.Sort(paths)
-	paths = slices.Compact(paths)
-	return len(p.SourceTasks) > 0 && slices.Equal(paths, p.Paths)
+	return len(p.SourceTasks) > 0 && slices.Equal(s.candidateSourcePaths(paths), p.Paths)
 }
 
 // A shared editing frontier freezes only after every writer has settled.
@@ -196,8 +194,7 @@ func (s *State) nextEditSource(cd *compiler.CompiledDefinition) (CandidateParame
 			p.SourceResults[sourceID] = source.Digest
 			p.Paths = append(p.Paths, source.Validation.Development.Paths...)
 		}
-		slices.Sort(p.Paths)
-		p.Paths = slices.Compact(p.Paths)
+		p.Paths = s.candidateSourcePaths(p.Paths)
 		slices.SortFunc(p.SourceTasks, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
 		return p, true
 	}
@@ -345,10 +342,10 @@ func (s *State) developmentContinuation(action string, cd *compiler.CompiledDefi
 		return false
 	}
 	role := s.validationRole(pending.Task, cd)
-	return (role == "engine.development.batch.v4" || role == "engine.repair.v5") && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(result))
+	return (role == "engine.development.batch.v5" || role == "engine.repair.v6") && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(result))
 }
 
-func (s *State) nextCheckParameters(action string, cd *compiler.CompiledDefinition) (CheckParameters, bool) {
+func (s *State) nextCheckParameters(action string) (CheckParameters, bool) {
 	r, ok := s.Results[action]
 	if !ok || !s.editResultCurrent(r) || r.Validation.Status != "PASS" {
 		return CheckParameters{}, false
@@ -419,7 +416,7 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if len(s.editChecks(r)) == 0 {
 			continue
 		}
-		if role := s.validationRole(r.Validation.Binding.Task, e.cfg.Definition); s.developmentChecksPassed(r) && (role == "engine.development.batch.v4" || role == "engine.repair.v5") {
+		if role := s.validationRole(r.Validation.Binding.Task, e.cfg.Definition); s.developmentChecksPassed(r) && (role == "engine.development.batch.v5" || role == "engine.repair.v6") {
 			if _, outstanding := s.PendingActions[action]; outstanding {
 				if err := s.terminalizeTask(r.Validation.Binding.Task); err != nil {
 					return false, err
@@ -435,7 +432,7 @@ func (e *Engine) advanceDevelopmentChecks(s *State, revision uint64) (bool, erro
 		if workspace.Status != "READY" {
 			return e.ensureWorkspace(s, workspace, revision)
 		}
-		p, ready := s.nextCheckParameters(action, e.cfg.Definition)
+		p, ready := s.nextCheckParameters(action)
 		if !ready {
 			continue
 		}
@@ -539,9 +536,7 @@ func (s *State) validateNativeCheckReceipt(intent HostActionIntent, receipt Host
 	if err != nil || p.QA == nil || prior.QA == nil || p.QA.Preparation == nil || prior.QA.Preparation == nil || p.QA.Preparation.Independent || prior.QA.Preparation.Independent {
 		return validationError("only approved common preparation can reuse an execution")
 	}
-	currentStep, priorStep := *p.QA.Preparation, *prior.QA.Preparation
-	currentStep.ID, priorStep.ID = "", ""
-	if p.SourceIdentity != prior.SourceIdentity || p.SourceDigest != prior.SourceDigest || p.WorkspaceID != prior.WorkspaceID || p.QA.Directory != prior.QA.Directory || p.QA.PreparationOrdinal != prior.QA.PreparationOrdinal || digestOfCanonical(p.QA.Operation) != digestOfCanonical(prior.QA.Operation) || digestOfCanonical(currentStep) != digestOfCanonical(priorStep) {
+	if !commonQAPreparation(p, prior) || p.QA.PreparationOrdinal != prior.QA.PreparationOrdinal || digestOfCanonical(p.QA.Operation) != digestOfCanonical(prior.QA.Operation) {
 		return validationError("shared preparation original inputs differ")
 	}
 	evidence.PreparationSourceAction = ""

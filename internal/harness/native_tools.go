@@ -298,7 +298,7 @@ func (t *nativeWorkspaceTools) fact(number int, kind string) (nativeToolFact, er
 }
 
 func (t *nativeWorkspaceTools) testOwned(relative string) bool {
-	if t.material == nil || t.material.Input.Handler != "engine.gate.v2" || t.material.Input.Validation == nil || t.material.Input.Validation.Gate == nil {
+	if t.material == nil || t.material.Input.Handler != "engine.gate.v3" || t.material.Input.Validation == nil || t.material.Input.Validation.Gate == nil {
 		return false
 	}
 	for _, owned := range t.material.Input.Validation.Gate.TestOwnedPaths {
@@ -349,13 +349,6 @@ func (t *nativeWorkspaceTools) path(relative string, followLeaf bool) (string, e
 		return "", fmt.Errorf("runtime content is outside the issued workspace duty")
 	}
 	return resolved, nil
-}
-
-func (t *nativeWorkspaceTools) writable(path string) error {
-	if t.readOnly {
-		return fmt.Errorf("issued action is read-only")
-	}
-	return nil
 }
 
 type nativeWorkspaceArguments struct {
@@ -435,10 +428,6 @@ func (t *nativeWorkspaceTools) invoke(name string, raw json.RawMessage) (any, er
 		}
 	}
 	return value, err
-}
-
-func (t *nativeWorkspaceTools) call(raw json.RawMessage) (any, error) {
-	return t.invoke(nativeWorkspaceTool, raw)
 }
 
 func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, error) {
@@ -716,9 +705,6 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if err := t.writable(path); err != nil {
-			return nil, err
-		}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -760,8 +746,8 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if err := t.writable(path); err != nil {
-			return nil, err
+		if t.readOnly {
+			return nil, fmt.Errorf("issued action is read-only")
 		}
 		info, err := os.Stat(path)
 		if err != nil {
@@ -792,9 +778,6 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		}
 		path, err := t.path(filepath.Join(relative, a.Name), false)
 		if err != nil {
-			return nil, err
-		}
-		if err := t.writable(path); err != nil {
 			return nil, err
 		}
 		if a.Action == "mkdir" {
@@ -856,9 +839,6 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if err := t.writable(target); err != nil {
-			return nil, err
-		}
 		if _, err := os.Lstat(target); !os.IsNotExist(err) {
 			if err != nil {
 				return nil, err
@@ -877,9 +857,6 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			return nil, fmt.Errorf("file transfer selects a file, not a directory")
 		}
 		if a.Action == "move" {
-			if err := t.writable(source); err != nil {
-				return nil, err
-			}
 			return t.edit(raw, func() (any, error) {
 				return map[string]any{"moved": true}, os.Rename(source, target)
 			})
@@ -906,9 +883,6 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 		}
 		path, err := t.path(relative, false)
 		if err != nil {
-			return nil, err
-		}
-		if err := t.writable(path); err != nil {
 			return nil, err
 		}
 		return t.edit(raw, func() (any, error) {

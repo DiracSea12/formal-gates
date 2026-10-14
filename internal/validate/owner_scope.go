@@ -14,11 +14,9 @@ import (
 // The current engine State owns its persisted transcript/session identity; this
 // module compares the write caller against that authority.
 
-const startOwnerSidecarName = "start-owner.json"
-
 // ownerSidecarPath 返回 hook 写、Start 读的桥接文件路径。
-func ownerSidecarPath(root string) string {
-	return filepath.Join(root, ".gates", "tmp", startOwnerSidecarName)
+func ownerSidecarPath(root, runID string) string {
+	return filepath.Join(root, ".gates", "tmp", runID+".start-owner.json")
 }
 
 // hookOwnerIdentity 从 PreToolUse 载荷提取发起对话身份：transcript_path 为主键、
@@ -47,30 +45,28 @@ func hookPayloadField(value any, names ...string) string {
 	return ""
 }
 
-// isWorkflowStartCommand 识别「formal-gates workflow start」命令（复用
-// isFormalGatesExecutableToken 的命令结构解析）。
-func isWorkflowStartCommand(command string) bool {
-	for _, token := range splitCommand(command) {
-		if token == "--precheck" {
-			return false
-		}
-		if strings.HasPrefix(token, "--precheck=") {
-			precheck, err := strconv.ParseBool(strings.TrimPrefix(token, "--precheck="))
-			if err != nil || precheck {
-				return false
+// isWorkflowStartCommand checks the actual executable and start operation.
+// The final precheck value follows the CLI boolean flag semantics.
+func isWorkflowStartCommand(tokens []string) bool {
+	if len(tokens) < 3 || !isFormalGatesExecutableToken(tokens[0]) ||
+		!strings.EqualFold(tokens[1], "workflow") || !strings.EqualFold(tokens[2], "start") {
+		return false
+	}
+	precheck := false
+	for _, token := range tokens[3:] {
+		for _, name := range []string{"-precheck", "--precheck"} {
+			if token == name {
+				precheck = true
+			} else if value, ok := switchInlineValue(token, token, name); ok {
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					return false
+				}
+				precheck = parsed
 			}
 		}
 	}
-	tokens := splitCommand(command)
-	for i, token := range tokens {
-		if !isFormalGatesExecutableToken(token) || i+2 >= len(tokens) {
-			continue
-		}
-		if strings.ToLower(tokens[i+1]) == "workflow" && strings.ToLower(tokens[i+2]) == "start" {
-			return true
-		}
-	}
-	return false
+	return !precheck
 }
 
 // captureStartOwner 在「主线程 + workflow start」时把发起对话身份写入 sidecar。任何一步
@@ -79,52 +75,58 @@ func captureStartOwner(decoded any, providers ...string) {
 	if hookAgentType(decoded) != "" {
 		return
 	}
-	command := hookCommand(decoded)
-	if !isWorkflowStartCommand(command) {
-		return
-	}
-	transcript, session := hookOwnerIdentity(decoded)
-	if transcript == "" && session == "" {
-		return
-	}
-	root := workflowStartRoot(command)
-	if !filepath.IsAbs(root) {
-		cwd := hookPayloadCwd(decoded)
-		if cwd == "" {
-			return
+	for _, segment := range commandSegments(hookCommand(decoded)) {
+		tokens := executableCommandTokens(segment)
+		if !isWorkflowStartCommand(tokens) {
+			continue
 		}
-		root = filepath.Join(cwd, root)
-	}
-	dir := filepath.Dir(ownerSidecarPath(root))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-	// Use the host already selected by hook decide --provider. Transcript file
-	// names and session IDs do not establish which parser owns the format.
-	provider := ""
-	if len(providers) > 0 && strings.TrimSpace(providers[0]) != "" {
-		if descriptor, err := host.Lookup(providers[0]); err == nil {
-			provider = descriptor.ID
+		runID := strings.TrimSpace(workflowStartSwitchValue(tokens, "run-id", ""))
+		if runID == "" {
+			continue
 		}
+		transcript, session := hookOwnerIdentity(decoded)
+		if transcript == "" && session == "" {
+			continue
+		}
+		root := workflowStartSwitchValue(tokens, "root", ".")
+		if !filepath.IsAbs(root) {
+			cwd := hookPayloadCwd(decoded)
+			if cwd == "" {
+				continue
+			}
+			root = filepath.Join(cwd, root)
+		}
+		path := ownerSidecarPath(root, runID)
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			continue
+		}
+		// Use the host already selected by hook decide --provider. Transcript file
+		// names and session IDs do not establish which parser owns the format.
+		provider := ""
+		if len(providers) > 0 && strings.TrimSpace(providers[0]) != "" {
+			if descriptor, err := host.Lookup(providers[0]); err == nil {
+				provider = descriptor.ID
+			}
+		}
+		data, _ := json.Marshal(map[string]string{"transcript": transcript, "session": session, "provider": provider})
+		_ = os.WriteFile(path, data, 0o600)
 	}
-	data, _ := json.Marshal(map[string]string{"transcript": transcript, "session": session, "provider": provider})
-	_ = os.WriteFile(ownerSidecarPath(root), data, 0o600)
 }
 
-// workflowStartRoot 解析 --root（支持 --root X 与 --root=X），缺省为当前目录。
-func workflowStartRoot(command string) string {
-	for _, v := range switchValues(splitCommand(command), "root") {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
+// workflowStartSwitchValue uses the last supplied value, as the CLI flag parser does.
+func workflowStartSwitchValue(tokens []string, name, fallback string) string {
+	values := switchValues(tokens, name)
+	if len(values) > 0 {
+		return values[len(values)-1]
 	}
-	return "."
+	return fallback
 }
 
 // ConsumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
 // start），返回其中记录的 owner 身份。无 sidecar 或解析失败返回空串。
-func ConsumeStartOwner(root string) (transcript, session, provider string) {
-	path := ownerSidecarPath(root)
+func ConsumeStartOwner(root, runID string) (transcript, session, provider string) {
+	path := ownerSidecarPath(root, strings.TrimSpace(runID))
 	data, err := os.ReadFile(path)
 	_ = os.Remove(path)
 	if err != nil {

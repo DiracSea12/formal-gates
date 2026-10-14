@@ -225,6 +225,17 @@ func (s *State) nativeEffectApplicable(intent HostActionIntent, cd *compiler.Com
 	return false
 }
 
+// candidateSourcePaths combines the worker's manifest with the formal input
+// materialized by the engine before native source freezing.
+func (s *State) candidateSourcePaths(paths []string) []string {
+	paths = slices.Clone(paths)
+	if path := s.RequirementArtifactPath(); s.NativeRoot != "" && path != "" {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
 func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.CompiledDefinition) bool {
 	v := s.Validation
 	if p.Stage == "CHECK_SOURCE" {
@@ -242,7 +253,7 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 	}
 	if p.Stage == "DEVELOPMENT" && p.RepairTask != nil {
 		work := s.repairMember(*p.RepairTask)
-		return work != nil && work.result != nil && sameTaskSet(p.SourceTasks, []runtime.TaskKey{work.task}) && slices.Equal(p.Paths, work.result.Validation.Development.Paths) && p.WorkspaceID == work.result.Validation.Binding.WorkspaceID
+		return work != nil && work.result != nil && sameTaskSet(p.SourceTasks, []runtime.TaskKey{work.task}) && slices.Equal(p.Paths, s.candidateSourcePaths(work.result.Validation.Development.Paths)) && p.WorkspaceID == work.result.Validation.Binding.WorkspaceID
 	}
 	if p.Stage == "DEVELOPMENT" {
 		sources, paths, base, complete := s.developmentSources(cd)
@@ -650,6 +661,9 @@ func (s *State) nativeActionCurrent(intent HostActionIntent, cd *compiler.Compil
 }
 
 func (s *State) nativeActionAllowed(intent HostActionIntent) bool {
+	if s.NodeContinuationWithdraws(intent) {
+		return false
+	}
 	if !s.parentReviewReady() && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
 		return false
 	}

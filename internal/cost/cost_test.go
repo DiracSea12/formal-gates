@@ -2,6 +2,7 @@ package cost
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -162,6 +163,7 @@ func TestMergeNamespacesAndIsIdempotent(t *testing.T) {
 	}
 	// Re-merging the same run is a no-op (idempotent), never double-counting.
 	before := *run
+	before.Dispatches = maps.Clone(run.Dispatches)
 	Merge(run, "slice-a", other)
 	if !reflect.DeepEqual(*run, before) {
 		t.Fatalf("re-merge re-added numbers: %+v", *run)
@@ -217,24 +219,6 @@ func TestParseCodexCurrentRequestsAndMirrors(t *testing.T) {
 				t.Fatalf("usage=%+v err=%v", got, err)
 			}
 		})
-	}
-}
-
-func TestCodexTaskTimingIncludesToolsAndExcludesIdle(t *testing.T) {
-	events := `{"timestamp":"2026-09-06T16:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}
-{"timestamp":"2026-09-06T16:00:01Z","type":"response_item","payload":{"type":"function_call"}}
-{"timestamp":"2026-09-06T16:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one"}}
-{"timestamp":"2026-09-06T16:10:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}
-{"timestamp":"2026-09-06T16:10:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two"}}
-`
-	got, err := CodexTaskTiming(writeFixture(t, events))
-	if err != nil || got != (TaskTiming{StartedAt: "2026-09-06T16:00:00Z", CompletedAt: "2026-09-06T16:10:02Z", WallTimeMillis: 5000}) {
-		t.Fatalf("timing=%+v err=%v", got, err)
-	}
-	for _, content := range []string{"{}\n", events + `{"timestamp":"2026-09-06T16:11:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"unfinished"}}` + "\n"} {
-		if got, err := CodexTaskTiming(writeFixture(t, content)); err == nil || got != (TaskTiming{}) {
-			t.Fatalf("unfinished timing=%+v err=%v", got, err)
-		}
 	}
 }
 

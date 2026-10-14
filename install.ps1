@@ -80,9 +80,9 @@ try {
   if ($LASTEXITCODE -ne 0) {
     $ownerText = ($ownerOutput | Out-String)
     if (-not (Test-LegacyOwnerRejectedNewFlags $ownerText)) {
-      throw "formal-gates install failed with exit code $LASTEXITCODE"
+      throw "formal-gates install failed with exit code $LASTEXITCODE; $ownerText"
     }
-    if (-not $Force) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+    if (-not $Force) { throw "formal-gates install failed with exit code $LASTEXITCODE; $ownerText" }
     # The verified source binary runs the same native release transaction;
     # its journal snapshots the existing launcher before any replacement.
     & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args

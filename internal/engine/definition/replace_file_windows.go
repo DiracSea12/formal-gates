@@ -9,10 +9,8 @@ import (
 	"unsafe"
 )
 
-// replaceCompletedFile 在 Windows 上用 ReplaceFileW 原子替换已存在的目标文件。
-// os.Rename 遇到"读者仍持有旧句柄"的目标文件会以 Access is denied 失败
-// （writeGenerated 的并发原子性测试在 Windows 上稳定触发）；ReplaceFileW
-// 走 POSIX 语义替换，允许替换期间存在打开的读句柄。
+// replaceFileW 绑定 Windows 原生文件替换调用；replaceCompletedFile 对已存在
+// 的目标调用 ReplaceFileW，目标不存在时调用 os.Rename。
 var replaceFileW = syscall.NewLazyDLL("kernel32.dll").NewProc("ReplaceFileW")
 
 const (
@@ -34,9 +32,7 @@ func replaceCompletedFile(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	// 并发读者反复 open/close 目标文件时，替换调用仍可能撞上瞬时共享冲突。
-	// 带界重试只消化 sharing/lock violation；替换一旦落位仍是原子换页，
-	// 不改变"读者只见完整旧字节或完整新字节"的保证。
+	// 仅共享/锁冲突错误进行有界重试；其他调用错误直接返回。
 	const (
 		maxAttempts = 200
 		retryDelay  = 2 * time.Millisecond

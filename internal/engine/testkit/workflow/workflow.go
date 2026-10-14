@@ -62,24 +62,24 @@ func Registry() *compiler.Registry {
 }
 
 func Workflow() *compiler.Definition {
-	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), ioWith(),
+	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), typedIO(),
 		authoring.LocalSpec{Handler: "engine.entry.parse"})
 	must("entry.parse", err)
 	persist, err := authoring.NewDurableStep(header("entry.persist", "entry", "entry.parse"),
-		ioWith("entry.parse"), authoring.DurableSpec{
+		typedIO(), authoring.DurableSpec{
 			Handler: "engine.entry.persist", Idempotency: authoring.IdempotencyDeterministicInput,
 			Reconcile: "reconcile.entry.persist", Timeout: 30 * time.Second,
 			Retry: authoring.RetryPolicy{MaxAttempts: 3, Backoff: 2 * time.Second},
 		})
 	must("entry.persist", err)
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
-		reviewIOWith("entry.persist"), authoring.AgentSpec{
+		reviewIO(), authoring.AgentSpec{
 			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
 		})
 	must("review.worker", err)
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
-		reviewIOWith("review.worker"), authoring.AgentSpec{
+		reviewIO(), authoring.AgentSpec{
 			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: time.Minute,
 		})
@@ -98,19 +98,19 @@ func Workflow() *compiler.Definition {
 		})
 	must("fan.split", err)
 	slice, err := authoring.NewLocalStep(header("fan.slice", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.LocalSpec{Handler: "engine.fan.slice"})
+		typedIO(), authoring.LocalSpec{Handler: "engine.fan.slice"})
 	must("fan.slice", err)
 	transport, err := authoring.NewHostActionStep(header("fan.transport", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.HostActionSpec{
+		typedIO(), authoring.HostActionSpec{
 			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
 			Operation: "op.fan.transport", Schema: "schema.candidate.review-range", Timeout: 10 * time.Second,
 		})
 	must("fan.transport", err)
 	join, err := authoring.NewLocalStep(header("fan.join", "fan", "fan.slice", "fan.transport"),
-		ioWith("fan.slice", "fan.transport"), authoring.LocalSpec{Handler: "engine.fan.join"})
+		typedIO(), authoring.LocalSpec{Handler: "engine.fan.join"})
 	must("fan.join", err)
 	cost, err := authoring.NewLocalStep(header("report.cost", "report", "fan.join", "ask.decide"),
-		ioWith("fan.join", "ask.decide"), authoring.LocalSpec{
+		typedIO(), authoring.LocalSpec{
 			Handler: "engine.report.cost", Retry: &authoring.RetryPolicy{MaxAttempts: 2},
 		})
 	must("report.cost", err)
@@ -137,18 +137,12 @@ func header(id, node string, deps ...string) authoring.Header {
 	}
 }
 
-func ioWith(bindings ...string) authoring.IO {
-	inputs := make([]authoring.InputBinding, 0, len(bindings))
-	for _, b := range bindings {
-		inputs = append(inputs, authoring.InputBinding{
-			From: authoring.StepID(b), OutputField: "out", ToField: "in",
-		})
-	}
-	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+func typedIO() authoring.IO {
+	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 }
 
-func reviewIOWith(bindings ...string) authoring.IO {
-	review := ioWith(bindings...)
+func reviewIO() authoring.IO {
+	review := typedIO()
 	review.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	return review
 }

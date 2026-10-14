@@ -23,6 +23,12 @@ func TestTaskTransitionTableGolden(t *testing.T) {
 	if got := TaskTransitionTable(); !reflect.DeepEqual(got, goldenTaskEdges) {
 		t.Fatalf("task transition table mismatch:\n got  %v\n want %v", got, goldenTaskEdges)
 	}
+	tbl := TaskTransitionTable()
+	first := tbl[0]
+	tbl[0].To = TaskQueued
+	if !TaskCanTransition(first.From, first.To) {
+		t.Error("static task authority must be unaffected by mutating the returned copy")
+	}
 }
 
 // TestTaskTransitionsExhaustive 在全部点对上核对合法/非法：正常链
@@ -33,7 +39,8 @@ func TestTaskTransitionsExhaustive(t *testing.T) {
 	for _, e := range goldenTaskEdges {
 		legal[e] = true
 	}
-	all := append(append([]TaskStatus{}, taskStatuses...), "NOT_A_STATUS", "")
+	statuses := []TaskStatus{TaskQueued, TaskIssued, TaskRunning, TaskValidating, TaskTerminal}
+	all := append(append([]TaskStatus{}, statuses...), "NOT_A_STATUS", "")
 	for _, from := range all {
 		for _, to := range all {
 			e := TaskEdge{From: from, To: to}
@@ -47,26 +54,15 @@ func TestTaskTransitionsExhaustive(t *testing.T) {
 				}
 			} else if err == nil || TaskCanTransition(from, to) {
 				t.Errorf("TaskTransition(%s -> %s) accepted illegal edge", from, to)
+			} else if !strings.Contains(err.Error(), "illegal task transition") {
+				t.Errorf("TaskTransition(%s -> %s) error = %q, want illegal task transition", from, to, err.Error())
 			}
 		}
 	}
 	// TERMINAL 无出边。
-	for _, to := range taskStatuses {
+	for _, to := range statuses {
 		if TaskCanTransition(TaskTerminal, to) {
 			t.Errorf("TERMINAL must have no outgoing edge, got TERMINAL -> %s", to)
-		}
-	}
-}
-
-func TestTaskStatusValid(t *testing.T) {
-	for _, s := range taskStatuses {
-		if !s.Valid() {
-			t.Errorf("task status %q should be valid", s)
-		}
-	}
-	for _, bad := range []TaskStatus{"", "QUEUED_", "queued"} {
-		if bad.Valid() {
-			t.Errorf("task status %q should be invalid", bad)
 		}
 	}
 }
@@ -119,5 +115,11 @@ func TestTaskKey(t *testing.T) {
 	k2, _ := NewTaskKey("dev", "impl", "child-2")
 	if k != k2 {
 		t.Fatal("same triple must produce the same key")
+	}
+	if (TaskKey{Node: "n", Step: "s"}).Valid() != true {
+		t.Error("node+step key must be valid")
+	}
+	if (TaskKey{Node: "n"}).Valid() {
+		t.Error("key without step must be invalid")
 	}
 }

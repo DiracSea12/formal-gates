@@ -14,9 +14,9 @@ import (
 // payload 判别按公共头 kind 路由（与 encode 侧 switch 对称），每变体单独
 // DisallowUnknownFields 解析——closed world 不被未知字段穿透。
 
-// stepFromWire 把单步 wire 重组为 CompiledStep。version 是制品信封版本，
-// 用于步骤版本绑定（checkCoherence 复核其与信封一致）。
-func stepFromWire(version string, sw *stepWire) (*compiler.CompiledStep, error) {
+// stepFromWire 把单步 wire 重组为 CompiledStep；checkCoherence 复核步骤
+// 携带的 definitionVersion 与制品信封一致。
+func stepFromWire(sw *stepWire) (*compiler.CompiledStep, error) {
 	kind := compiler.StepKind(sw.Kind)
 	if _, ok := kindProfiles[kind]; !ok {
 		return nil, fmt.Errorf("encoder: step %q: unknown kind %q", sw.ID, sw.Kind)
@@ -63,14 +63,6 @@ func ioFromWire(w *ioWire) authoring.IO {
 	}
 	if len(w.Postconditions) > 0 {
 		out.Postconditions = predicateRefs(w.Postconditions)
-	}
-	if len(w.Inputs) > 0 {
-		out.Inputs = make([]authoring.InputBinding, 0, len(w.Inputs))
-		for _, b := range w.Inputs {
-			out.Inputs = append(out.Inputs, authoring.InputBinding{
-				From: authoring.StepID(b.From), OutputField: b.Output, ToField: b.To,
-			})
-		}
 	}
 	return out
 }

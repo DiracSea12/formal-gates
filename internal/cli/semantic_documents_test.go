@@ -13,8 +13,225 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/prompts"
 	"formal-gates/internal/settings"
+	"formal-gates/internal/validate"
 )
+
+func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
+	clearHostEnv(t)
+	source := writeInstallSource(t, "Installed workflow admission")
+	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range prompts.RequiredActionIDs {
+		mustWriteCLI(t, filepath.Join(source, "prompts", "actions", id+".md"), id+" instructions\n")
+	}
+	root := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, ".local", "bin", installTestBinaryName())
+	previous := os.Args[0]
+	os.Args[0] = launcher
+	t.Cleanup(func() { os.Args[0] = previous })
+	options := []validate.InstallOptions{
+		{Source: source, Host: "zcode", Scope: "global", BinaryTarget: launcher, Force: true},
+		{Source: source, Host: "codex", Scope: "project", Project: root, BinaryTarget: launcher, Force: true},
+	}
+	var targets []string
+	for _, option := range options {
+		report, err := validate.Install(option)
+		if err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, report.Targets[0].TargetPath)
+	}
+	bootstrap := options[1]
+	bootstrap.Bootstrap = true
+	if _, err := validate.Install(bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := validate.ResolveEngineAdmission(root, targets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	automatic, err := validate.ResolveEngineAdmission(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.RecordID == automatic.RecordID {
+		t.Fatal("explicit global and automatic project admissions are indistinguishable")
+	}
+	candidate := writerIntakeReceipt(t, root)
+	candidatePath := filepath.Join(t.TempDir(), "intake.json")
+	if err := saveWorkflowCandidate(candidatePath, candidate); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		flags []string
+		want  validate.EngineAdmission
+	}{
+		{"explicit", []string{"--package-root", targets[0]}, explicit},
+		{"last nonempty value", []string{"--package-root=", "--package-root", targets[0]}, explicit},
+		{"single dash", []string{"-package-root", targets[0]}, explicit},
+		{"last empty value", []string{"--package-root", targets[0], "--package-root="}, automatic},
+		{"empty value", []string{"--package-root", ""}, automatic},
+		{"omitted", nil, automatic},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			runID := strings.ReplaceAll(test.name, " ", "-")
+			args := []string{"workflow", "start", "--root", root, "--run-id", runID, "--route", "lightweight", "--intake-receipt", candidatePath, "--machine"}
+			args = append(args, test.flags...)
+			if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || stderr.Len() != 0 {
+				t.Fatalf("start: %d %s %s", code, &out, &stderr)
+			}
+			var run facade.Run
+			if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.RunID != runID || run.Route != "lightweight" || run.Status != "ACTIVE" {
+				t.Fatalf("start output: %+v %v", run, err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, runID, "request.json"))
+			var request facade.StartRequest
+			if err != nil || json.Unmarshal(data, &request) != nil {
+				t.Fatalf("start request: %s %v", data, err)
+			}
+			if request.AdmissionTarget != test.want.Target || request.InstalledTargetIdentity != test.want.RecordID || request.PackageDigest != test.want.PackageDigest || request.Provider != test.want.Provider || !reflect.DeepEqual(request.IntakeConfirmationReceipt, candidate) {
+				t.Fatalf("parsed package root lost its admission or confirmed input: %+v", request)
+			}
+		})
+	}
+}
+
+func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "requirements.md"}, {"commit", "-m", "Confirmed input"}} {
+		cliGit(t, root, args...)
+	}
+	before := snapshotEngineRunTree(t, root, "writer-exclusive")
+	var out, stderr bytes.Buffer
+	streams := IO{Stdout: &out, Stderr: &stderr}
+	candidatePath := filepath.Join(t.TempDir(), "intake.json")
+	if code := Run("formal-gates", []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "requirements.md", "--save-candidate", candidatePath}, streams); code != 0 {
+		t.Fatal(code, stderr.String())
+	}
+	var preview facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.RequirementDocument == nil || preview.IntakeCandidate.RequirementRevision != preview.RequirementDocument.ContentDigest {
+		t.Fatalf("omitted precheck route lost structured binding: %+v %v", preview, err)
+	}
+	raw, err := os.ReadFile(candidatePath)
+	var candidate facade.IntakeConfirmationReceipt
+	if err != nil || json.Unmarshal(raw, &candidate) != nil || !reflect.DeepEqual(candidate, preview.IntakeCandidate) {
+		t.Fatal("saved candidate differs from displayed material", err)
+	}
+	for _, args := range [][]string{
+		{"workflow", "start", "--root", root, "--run-id", "missing-route", "--intake-receipt", candidatePath},
+		{"workflow", "start", "--root", root, "--run-id", "missing-route", "--intake-receipt", candidatePath, "--route", " "},
+	} {
+		out.Reset()
+		stderr.Reset()
+		if code := Run("formal-gates", args, streams); code == 0 || !strings.Contains(stderr.String(), "requires --route regular or lightweight") || out.Len() != 0 {
+			t.Fatalf("route was implicitly selected: %d %s %s", code, &out, &stderr)
+		}
+		if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "missing-route")); !os.IsNotExist(err) {
+			t.Fatal("missing route wrote run files", err)
+		}
+	}
+	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+		t.Fatal("precheck or rejected start changed existing authority")
+	}
+	for _, route := range []string{"regular", "lightweight"} {
+		out.Reset()
+		stderr.Reset()
+		args := []string{"workflow", "start", "--root", root, "--run-id", "selected-" + route, "--intake-receipt", candidatePath, "--route", route, "--vcs", "git", "--machine"}
+		if code := Run("formal-gates", args, streams); code != 0 {
+			t.Fatalf("explicit %s start: %d %s", route, code, &stderr)
+		}
+		var run facade.Run
+		if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.Route != route || run.Unverified != (route == "lightweight") || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &candidate) {
+			t.Fatalf("explicit mode or material changed: %+v %v", run, err)
+		}
+		body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, run.RunID, "request.json"))
+		var request facade.StartRequest
+		if err != nil || json.Unmarshal(body, &request) != nil || request.Route != route || !reflect.DeepEqual(request.IntakeConfirmationReceipt, candidate) {
+			t.Fatal("persisted route or confirmed binding changed", err)
+		}
+	}
+}
+
+func TestRequirementParsesFlagsBeforeSelectingExistingRuns(t *testing.T) {
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request facade.StartRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	request.RunID = "another-target"
+	a := &facade.Admission{RegistryPath: request.AdmissionRegistryPath, Target: request.AdmissionTarget, Root: request.AdmissionRoot, Provider: request.Provider, PackageDigest: request.PackageDigest, InstalledTargetIdentity: request.InstalledTargetIdentity, Generation: request.AdmissionGeneration, Lease: request.AdmissionLease, Token: request.AdmissionToken}
+	if _, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, Request: request, Admission: a, VCSRunner: frozenGitRunner{}}); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]map[string]string{}
+	for _, id := range []string{"writer-exclusive", "another-target"} {
+		before[id] = snapshotEngineRunTree(t, root, id)
+	}
+	var out, stderr bytes.Buffer
+	streams := IO{Stdout: &out, Stderr: &stderr}
+	for _, command := range []string{"show", "append", "edit", "remove"} {
+		for _, help := range []string{"--help", "-h"} {
+			out.Reset()
+			stderr.Reset()
+			if code := Run("formal-gates", []string{"requirement", command, "--root", root, "--run", "not-a-number", help}, streams); code != 0 || !strings.Contains(out.String(), "Usage of requirement "+command) || strings.Contains(out.String(), `"runs"`) || stderr.Len() != 0 {
+				t.Fatalf("help attempted run selection: %d %s %s", code, &out, &stderr)
+			}
+		}
+	}
+	for _, flags := range [][]string{{"--unknown"}, {"--run", "not-a-number"}, {"--run", "1", "--run-id", "writer-exclusive"}, {"--run", "3"}, {"--file", "new.md"}} {
+		out.Reset()
+		stderr.Reset()
+		args := append([]string{"requirement", "show", "--root", root}, flags...)
+		if code := Run("formal-gates", args, streams); code == 0 || out.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("invalid flags reached run choices: %d %s %s", code, &out, &stderr)
+		}
+	}
+	for _, flags := range [][]string{{"--run", "1"}, {"--run-id", "writer-exclusive"}, {"--run", "2", "--document", "1"}} {
+		out.Reset()
+		stderr.Reset()
+		args := append([]string{"requirement", "show", "--root", t.TempDir(), "--root", root}, flags...)
+		if code := Run("formal-gates", args, streams); code != 0 {
+			t.Fatalf("parsed selection failed: %d %s", code, &stderr)
+		}
+		var preview facade.IntakePreview
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.IntakeCandidate.RequirementSource != request.IntakeConfirmationReceipt.RequirementSource {
+			t.Fatalf("selected run lost its bound source: %+v %v", preview, err)
+		}
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"requirement", "show", "--root", root}, streams); code != 0 || !strings.Contains(out.String(), `"runs"`) {
+		t.Fatalf("ambiguous source was guessed: %d %s %s", code, &out, &stderr)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"requirement", "append", "--root", root, "--file", "new.md", "--title", "Output", "--requirement", "Return output", "--acceptance", "Output is returned", "--source", "User request", "--solution", "Use the existing owner"}, streams); code != 0 {
+		t.Fatalf("new file required a run selection: %d %s", code, &stderr)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.md")); err != nil {
+		t.Fatal("append did not create its selected new document", err)
+	}
+	for id, original := range before {
+		if !reflect.DeepEqual(original, snapshotEngineRunTree(t, root, id)) {
+			t.Fatal("requirement help, selection or append changed run authority", id)
+		}
+	}
+}
 
 func TestRequirementCommandsCreateAndEditUsingPublishedPositions(t *testing.T) {
 	root := t.TempDir()
@@ -52,8 +269,12 @@ func TestRequirementCommandsCreateAndEditUsingPublishedPositions(t *testing.T) {
 		t.Fatalf("inherited material changed: %s", data)
 	}
 	out.Reset()
-	if code, err = runRequirementWithSource([]string{"edit", "--root", root, "--item", "1", "--title", "保留"}, streams, choices[0].Path); code != 0 || err != nil {
-		t.Fatalf("bound source edit: %d %v", code, err)
+	if code, err = runRequirement([]string{"edit", "--root", root, "--document", strconv.Itoa(choices[0].Position), "--item", "1", "--title", "保留"}, streams); code != 0 || err != nil {
+		t.Fatalf("published document edit: %d %v", code, err)
+	}
+	data, err = os.ReadFile(filepath.Join(root, choices[0].Path))
+	if err != nil || string(data) != strings.Replace(strings.Replace(before, "读取一致。", "可重复读取。", 1), "保存", "保留", 1) {
+		t.Fatalf("published title edit changed unrelated bytes: %q %v", data, err)
 	}
 }
 
@@ -81,6 +302,62 @@ func TestSettingsCommandsEditPublishedFieldFromPlainInput(t *testing.T) {
 	effective, err = settings.Load(root, home)
 	if err != nil || effective.Values.Capacity != 5 {
 		t.Fatalf("settings plain input: %+v %v", effective, err)
+	}
+	input := strings.NewReader("9\n")
+	streams.Stdin = input
+	if code, err := runSettings([]string{"set", "--root", root, "--home", home, "--field", position, "--value", "6"}, streams); code != 0 || err != nil || input.Len() != len("9\n") {
+		t.Fatalf("provided value consumed stdin: %d %v", code, err)
+	}
+	effective, err = settings.Load(root, home)
+	if err != nil || effective.Values.Capacity != 6 {
+		t.Fatalf("settings provided value: %+v %v", effective, err)
+	}
+	path := filepath.Join(root, ".gates", "config.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, err := runSettings([]string{"set", "--root", root, "--home", home, "--field", position, "--value", ""}, streams); code == 0 || err == nil || input.Len() != len("9\n") {
+		t.Fatalf("empty provided value fell back to stdin: %d %v", code, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected empty value changed configuration: %q %v", after, err)
+	}
+}
+
+func TestSettingsHelpDoesNotReadOrWriteConfiguration(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", "")
+	paths := []string{filepath.Join(root, ".gates", "config.json"), filepath.Join(home, ".config", "formal-gates", "config.json")}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("unparsed configuration"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, command := range []string{"show", "set", "remove"} {
+		for _, help := range []string{"--help", "-h"} {
+			var out, stderr bytes.Buffer
+			input := strings.NewReader("unused value")
+			streams := IO{Stdout: &out, Stderr: &stderr, Stdin: input}
+			for _, homeFlags := range [][]string{nil, {"--home", home}} {
+				out.Reset()
+				stderr.Reset()
+				args := append([]string{"settings", command, "--root", root, "--field", "not-a-number", help}, homeFlags...)
+				if code := Run("formal-gates", args, streams); code != 0 || !strings.Contains(out.String(), "Usage of settings "+command) || strings.Contains(out.String(), `"effective"`) || stderr.Len() != 0 || input.Len() != len("unused value") {
+					t.Fatalf("settings help used configuration or input: %v %d %s %s", args, code, &out, &stderr)
+				}
+			}
+		}
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != "unparsed configuration" {
+			t.Fatalf("help changed configuration: %s %q %v", path, data, err)
+		}
 	}
 }
 

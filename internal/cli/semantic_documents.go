@@ -16,10 +16,6 @@ import (
 )
 
 func runRequirement(args []string, streams IO) (int, error) {
-	return runRequirementWithSource(args, streams, "")
-}
-
-func runRequirementWithSource(args []string, streams IO, requirementSource string) (int, error) {
 	command := "show"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command, args = args[0], args[1:]
@@ -27,8 +23,8 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 	fs := flag.NewFlagSet("requirement "+command, flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
 	root := fs.String("root", ".", "project root")
-	fs.Int("run", 0, "select current formal run by published position")
-	fs.String("run-id", "", "program integration: exact run id")
+	runPosition := fs.Int("run", 0, "select current formal run by published position")
+	runID := fs.String("run-id", "", "program integration: exact run id")
 	path := fs.String("file", "", "new requirement document filename")
 	documentPosition := fs.Int("document", 0, "published existing document position")
 	item := fs.Int("item", 0, "published requirement position; 0 appends a new item")
@@ -40,11 +36,8 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 	context := fs.String("context", "", "new background prose; omitted retains the original")
 	solution := fs.String("solution", "", "new solution prose; omitted retains the original")
 	removeCondition := fs.Bool("remove-condition", false, "remove the selected acceptance condition")
-	if err := fs.Parse(args); err != nil {
-		return 1, err
-	}
-	if fs.NArg() != 0 {
-		return 1, fmt.Errorf("unexpected requirement arguments")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
 	}
 	fullRoot, err := filepath.Abs(*root)
 	if err != nil {
@@ -55,6 +48,25 @@ func runRequirementWithSource(args []string, streams IO, requirementSource strin
 	}
 	if *path != "" && *documentPosition != 0 {
 		return 1, fmt.Errorf("choose a new file or an existing document position")
+	}
+	var requirementSource string
+	if *path == "" {
+		f, selected, err := selectWorkflowRun(fullRoot, runID, *runPosition, streams.Stdout)
+		if err != nil {
+			return 1, err
+		}
+		if !selected {
+			return 0, nil
+		}
+		if f != nil {
+			run, err := f.Show()
+			if err != nil {
+				return 1, err
+			}
+			if run.IntakeConfirmationReceipt != nil {
+				requirementSource = run.IntakeConfirmationReceipt.RequirementSource
+			}
+		}
 	}
 	if *documentPosition != 0 || *path == "" && requirementSource == "" {
 		documents, err := requirementDocuments(fullRoot)
@@ -153,18 +165,15 @@ func runSettings(args []string, streams IO) (int, error) {
 	fs.SetOutput(streams.Stderr)
 	root := fs.String("root", ".", "project root")
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return 1, err
-	}
 	userHome := fs.String("home", home, "user configuration home")
 	scope := fs.String("scope", "project", "project or user overlay")
 	field := fs.Int("field", 0, "published field position")
 	value := fs.String("value", "", "new semantic value; stdin when omitted")
-	if err := fs.Parse(args); err != nil {
-		return 1, err
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
 	}
-	if fs.NArg() != 0 {
-		return 1, fmt.Errorf("unexpected settings arguments")
+	if err != nil && *userHome == "" {
+		return 1, err
 	}
 	var effective settings.Effective
 	if command == "show" {
@@ -212,44 +221,24 @@ func repositoryMetadata(entry os.DirEntry) bool {
 }
 
 func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
-	files, err := validate.ProjectRuntimeFiles(root)
+	materials, err := intakeMaterials(root)
 	if err != nil {
 		return nil, err
 	}
 	documents := []requirementDocumentChoice{}
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	for _, material := range materials {
+		if !strings.EqualFold(filepath.Ext(material.Path), ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, material.Path))
 		if err != nil {
-			return err
+			return documents, err
 		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
+		if _, err := requirement.ParseRequirementProjection(material.Path, data); err == nil {
+			documents = append(documents, requirementDocumentChoice{Position: len(documents) + 1, Path: material.Path})
 		}
-		if repositoryMetadata(entry) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			if vcs.RuntimePath(relative) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if files.ContainsFile(path) || !entry.Type().IsRegular() || !strings.EqualFold(filepath.Ext(path), ".md") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if _, err := requirement.ParseRequirementProjection(relative, data); err == nil {
-			documents = append(documents, requirementDocumentChoice{Position: len(documents) + 1, Path: filepath.ToSlash(relative)})
-		}
-		return nil
-	})
-	return documents, err
+	}
+	return documents, nil
 }
 
 // Intake materials are the project's ordinary files, excluding repository and runtime metadata.

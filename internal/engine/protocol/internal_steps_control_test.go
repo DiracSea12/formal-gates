@@ -11,7 +11,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	compiled, registry := extensionDefinition(t)
 	bindings := extensionHandlers()
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{Definition: compiled, Registry: registry, InternalSteps: bindings}, nil)
+	engine, err := New(mustStore(t, dir), Config{Definition: compiled, Registry: registry, InternalSteps: bindings})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,14 +19,14 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	request, err := NewRequestEvent("begin-change", ControlRequestRequirementChange, requirementOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+	if _, err = engine.Submit(request, Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := engine.Load()
@@ -36,7 +36,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	if !before.State.requirementChangePending() {
 		t.Fatal("barrier was not established")
 	}
-	plan, _, err := engine.Drive(fingerprintOf(t, engine))
+	plan, _, err := engine.Drive(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,11 +50,11 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	}
 	// The same pending ask survives a Store reopen without business writes.
 	frozen := stateBytesOf(t, dir)
-	reopened, err := New(mustStore(t, dir), engine.cfg, nil)
+	reopened, err := New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := reopened.Drive(fingerprintOf(t, reopened)); err != nil {
+	if _, _, err := reopened.Drive(Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(frozen, stateBytesOf(t, dir)) {
@@ -62,7 +62,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	}
 	// Cancelling the requirement change restores the existing frontier.
 	abortExistingAsk(t, reopened, "begin-change")
-	if _, _, err := reopened.Drive(fingerprintOf(t, reopened)); err != nil {
+	if _, _, err := reopened.Drive(Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := reopened.Load()
@@ -73,7 +73,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 		t.Fatalf("frontier did not resume: %+v", resumed.State)
 	}
 	complete := stateBytesOf(t, dir)
-	if _, _, err := reopened.Drive(fingerprintOf(t, reopened)); err != nil {
+	if _, _, err := reopened.Drive(Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(complete, stateBytesOf(t, dir)) {
@@ -85,7 +85,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
 	compiled, registry := extensionDefinition(t)
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{Definition: compiled, Registry: registry, InternalSteps: extensionHandlers()}, nil)
+	engine, err := New(mustStore(t, dir), Config{Definition: compiled, Registry: registry, InternalSteps: extensionHandlers()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +93,14 @@ func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	request, err := NewRequestEvent("stop", ControlAbort, AskOption{ID: "abort", Label: "Abort run"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+	if _, err = engine.Submit(request, Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	token, err := engine.Freshness("stop")
@@ -111,7 +111,7 @@ func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = engine.Submit(ev, fingerprintOf(t, engine)); err != nil {
+	if _, err = engine.Submit(ev, Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := engine.Load()
@@ -123,11 +123,11 @@ func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
 		t.Fatal("Accepting abort executed ordinary business handlers")
 	}
 	terminal := stateBytesOf(t, dir)
-	reopened, err := New(mustStore(t, dir), engine.cfg, nil)
+	reopened, err := New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := reopened.Drive(fingerprintOf(t, reopened)); err != nil {
+	if _, _, err := reopened.Drive(Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(terminal, stateBytesOf(t, dir)) {

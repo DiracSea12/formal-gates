@@ -76,18 +76,21 @@ type documentSection struct {
 }
 
 type requirementLayout struct {
-	heading int
-	end     int
-	fields  map[string]int
+	heading       int
+	end           int
+	fields        map[string]int
+	conditionEnds []int
 }
 
 type parsedRequirement struct {
-	heading     int
-	requirement FrozenRequirement
-	field       string
-	fieldLines  map[string]int
-	fieldText   map[string][]string
-	fieldOrder  []string
+	heading           int
+	requirement       FrozenRequirement
+	field             string
+	fieldLines        map[string]int
+	fieldText         map[string][]string
+	fieldOrder        []string
+	listContentIndent int
+	conditionEnds     []int
 }
 
 // ParseRequirementProjection performs the deterministic, fence-aware precheck
@@ -123,11 +126,26 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 	var current *parsedRequirement
 	fenceChar := byte(0)
 	fenceLength := 0
+	finishCondition := func(boundary int) {
+		if current == nil || len(current.conditionEnds) == len(current.requirement.AcceptanceConditions) {
+			return
+		}
+		condition := &current.requirement.AcceptanceConditions[len(current.requirement.AcceptanceConditions)-1]
+		start := condition.Line - 1
+		for boundary > start+1 && strings.TrimSpace(lines[boundary-1]) == "" {
+			boundary--
+		}
+		if boundary > start+1 {
+			condition.Text += "\n" + strings.Join(lines[start+1:boundary], "\n")
+		}
+		current.conditionEnds = append(current.conditionEnds, boundary)
+	}
 
 	finishRequirement := func(boundaryLine int) {
 		if current == nil {
 			return
 		}
+		finishCondition(boundaryLine - 1)
 		reqID := current.requirement.ID
 		expected := []string{"要求", "验收条件", "来源"}
 		for _, field := range expected {
@@ -154,15 +172,29 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 		if current.fieldLines["验收条件"] != 0 && len(current.requirement.AcceptanceConditions) == 0 {
 			addIssue(current.fieldLines["验收条件"], reqID, "验收条件 must contain at least one non-empty direct list item")
 		}
-		current.requirement.Requirement = requirementText
-		current.requirement.Source = sourceText
+		for i, field := range current.fieldOrder {
+			if field == "验收条件" {
+				continue
+			}
+			end := boundaryLine - 1
+			if i+1 < len(current.fieldOrder) {
+				end = current.fieldLines[current.fieldOrder[i+1]] - 1
+			}
+			text := strings.TrimSpace(strings.Join(lines[current.fieldLines[field]:end], "\n"))
+			switch field {
+			case "要求":
+				current.requirement.Requirement = text
+			case "来源":
+				current.requirement.Source = text
+			}
+		}
 		requirements = append(requirements, current.requirement)
 		if layout != nil {
 			fields := map[string]int{}
 			for name, line := range current.fieldLines {
 				fields[name] = line - 1
 			}
-			layout.items = append(layout.items, requirementLayout{heading: current.heading, end: boundaryLine - 1, fields: fields})
+			layout.items = append(layout.items, requirementLayout{heading: current.heading, end: boundaryLine - 1, fields: fields, conditionEnds: current.conditionEnds})
 		}
 		current = nil
 	}
@@ -245,6 +277,7 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 				addIssue(lineNo, "", "direct #### field appears before a valid REQ heading")
 				continue
 			}
+			finishCondition(index)
 			if heading != "要求" && heading != "验收条件" && heading != "来源" {
 				addIssue(lineNo, current.requirement.ID, "REQ blocks may contain only direct #### 要求, #### 验收条件, and #### 来源 fields")
 				current.field = ""
@@ -266,10 +299,29 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 			if !inSection || current == nil || current.field != "验收条件" {
 				if looksLikeAC {
 					addIssue(lineNo, requirementID(current), "AC list item appears outside its REQ's direct #### 验收条件 field")
-				} else if current != nil && current.field != "" {
+				} else if current != nil && current.field != "" && current.field != "验收条件" {
 					current.fieldText[current.field] = append(current.fieldText[current.field], raw)
 				}
 			} else {
+				indent := len(raw) - len(strings.TrimLeft(raw, " "))
+				if current.listContentIndent != 0 && indent >= current.listContentIndent {
+					continue
+				}
+				padding := 0
+				for _, char := range raw[indent+1:] {
+					if char == ' ' {
+						padding++
+					} else if char == '\t' {
+						padding += 4 - (indent+1+padding)%4
+					} else {
+						break
+					}
+				}
+				if padding > 4 {
+					padding = 1
+				}
+				current.listContentIndent = indent + 1 + padding
+				finishCondition(index)
 				trimmedList := strings.TrimSpace(listText)
 				match := acceptancePattern.FindStringSubmatch(trimmedList)
 				if trimmedList == "" || looksLikeAC && (match == nil || strings.TrimSpace(match[2]) == "") {
@@ -298,11 +350,12 @@ func parseRequirementProjection(path string, data []byte, layout *documentLayout
 			}
 			continue
 		}
-		if current != nil && current.field != "" && strings.TrimSpace(raw) != "" {
+		if current != nil && current.field != "" && current.field != "验收条件" && strings.TrimSpace(raw) != "" {
 			current.fieldText[current.field] = append(current.fieldText[current.field], raw)
 		}
 	}
-	finishRequirement(len(lines))
+	finishCondition(len(lines))
+	finishRequirement(len(lines) + 1)
 	if layout != nil && inSection && len(layout.items) > 0 {
 		layout.items[len(layout.items)-1].end = len(lines)
 	}

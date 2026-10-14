@@ -23,7 +23,7 @@ func initialGuarantee(root, route string, receipt IntakeConfirmationReceipt) (*p
 	}
 	doc, err := requirement.ParseRequirementProjection(receipt.RequirementSource, data)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	return protocol.NewGuaranteeActivation(receipt.RequirementRevision, receipt.SolutionRevision, doc), nil
 }

@@ -1,6 +1,7 @@
 package coordination
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 // 而不是在锁文件刚发布的窗口内被误判为陈旧后与持有者同时进入临界区。
 func TestAcquirePathNeverGrantsTwoHolders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.lock")
-	var violations atomic.Int32
+	var success, violations atomic.Int32
 	for round := 0; round < 100; round++ {
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -25,8 +26,13 @@ func TestAcquirePathNeverGrantsTwoHolders(t *testing.T) {
 				<-start
 				release, err := AcquirePath(path, "contended section")
 				if err != nil {
+					var held *LockHeldError
+					if !errors.As(err, &held) {
+						t.Errorf("unexpected acquisition error: %v", err)
+					}
 					return
 				}
+				success.Add(1)
 				if active.Add(1) != 1 {
 					violations.Add(1)
 				}
@@ -37,6 +43,9 @@ func TestAcquirePathNeverGrantsTwoHolders(t *testing.T) {
 		}
 		close(start)
 		wg.Wait()
+	}
+	if success.Load() == 0 {
+		t.Fatal("no concurrent caller acquired the lock")
 	}
 	if n := violations.Load(); n != 0 {
 		t.Fatalf("two concurrent callers owned the same path in %d rounds", n)

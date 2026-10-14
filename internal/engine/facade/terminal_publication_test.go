@@ -97,7 +97,7 @@ func settleAbortForPublication(t *testing.T, d *validationDriver) {
 	t.Helper()
 	d.completeWorkerTerminations()
 	for {
-		if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+		if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		snapshot, err := d.f.engine.Load()

@@ -72,10 +72,10 @@ go test -timeout=0 -count=1 -json -run ^<精确测试名>$ .
 保留原引用，其执行需要已声明或首次执行期绑定的 operations；新设计使用 operations，
 不把其他语言伪装成 Go 引用。
 
-`coverage.ResolveCaseOperations` 只返回 `ResolvedOperation`（原操作、派生目录与 Go
-精确测试名），不启动进程或判断 oracle。缺文件、缺测试、同名函数歧义、错误签名、
-不支持的引用且没有操作配方，都会返回明确错误。设计合同允许尚未具备配方的部分设计，
-这种设计不能由 resolver 推断操作来执行；批准后由 execution checkpoint 填实际 invocation。
+`coverage.ValidateGoTestReference` 核对指定工作区中的 Go 精确引用，不启动进程或判断
+oracle。缺文件、缺测试、同名函数歧义、错误签名或不支持的 Go 引用，都会返回明确错误。
+`coverage.GoTestOperation` 派生固定 Go invocation、package 相对目录与精确测试名。
+设计合同允许尚未具备配方的部分设计，批准后由 execution checkpoint 填实际 invocation。
 
 执行与接纳方须保留真实 exit、stdout/stderr 原始证据。对 Go invocation，须核到
 `GoTestName` 对应的实际 run 和 pass/fail 事件；无匹配或 skip 不能当作执行 PASS。

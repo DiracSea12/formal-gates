@@ -112,7 +112,7 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 
 func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	dev, development := d.action("engine.development.batch.v4")
+	dev, development := d.action("engine.development.batch.v5")
 	id, in := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewBlackbox)
 	black := simpleManifest(in)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &black})

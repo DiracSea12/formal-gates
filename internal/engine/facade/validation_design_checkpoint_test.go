@@ -50,7 +50,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design.v5", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), invalidRaw, "original-native-answer")
+	invalid, err := worker.DecodeResult(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.design.v5", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), invalidRaw, "original-native-answer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: "engine.qa.design.v5", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), raw, "original-native-answer")
+	event, err := worker.DecodeResult(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.design.v5", Provider: DefaultProvider, Pending: protocol.PendingAction{ActionID: id}, Validation: &in}, d.eventID(), raw, "original-native-answer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 				}
 			}
 			if resume {
-				plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+				plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -194,7 +194,7 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 
 func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	id, in := d.action("engine.development.batch.v4")
+	id, in := d.action("engine.development.batch.v5")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
 	d.materialize()
@@ -300,7 +300,7 @@ func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
 	design, input = d.action("engine.qa.design.v5")
 	value := worker.Design{DesignManifest: worker.DesignManifest{RemoveCases: []int{3}, Cases: []worker.DesignedCase{}, Coverage: make([][]int, len(input.Manifest.Points))}}
 	raw, _ := json.Marshal(value)
-	event, err := worker.DecodeResult(protocol.WorkerInput{Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &input}, d.eventID(), raw, "original-explicit-removal")
+	event, err := worker.DecodeResult(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &input}, d.eventID(), raw, "original-explicit-removal")
 	if err != nil {
 		t.Fatal(err)
 	}

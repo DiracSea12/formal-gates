@@ -62,7 +62,7 @@ type WorkspaceCleanupReceipt struct {
 	Resources        []NativeResource `json:"resources"`
 }
 
-// ResourceObservation binds an abort withdrawal to the original native root,
+// ResourceObservation binds a withdrawal to the original native root,
 // ref and actual prefix; it records no completion or cancellation receipt.
 type ResourceObservation struct {
 	Merge            *IntegrationEvidence  `json:"merge,omitempty"`
@@ -74,7 +74,7 @@ type ResourceObservation struct {
 }
 
 func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceObservation) error {
-	if intent.Adapter == nil || o.ParametersDigest != intent.PayloadDigest || o.Resource.Owner != s.RunID || s.NativeResources[o.Resource.ID] != o.Resource {
+	if intent.Adapter == nil || o.ParametersDigest != intent.PayloadDigest || o.Resource.Owner != s.RunID {
 		return validationError("withdrawal requires its original registered resource")
 	}
 	raw, _ := json.Marshal(intent.Adapter.Params)
@@ -82,17 +82,17 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 	switch intent.Adapter.Operation {
 	case "op.workspace":
 		var p WorkspaceParameters
-		if json.Unmarshal(raw, &p) != nil || p.Resource != o.Resource {
+		if json.Unmarshal(raw, &p) != nil || p.Resource != o.Resource || !SameWorkspaceInput(s.NativeResources[o.Resource.ID], p.Resource) {
 			return validationError("workspace withdrawal differs from original inputs")
 		}
 	case "op.check":
 		p, err := checkParameters(intent)
-		if err != nil || p.WorkspaceID != o.Resource.ID {
+		if err != nil || p.WorkspaceID != o.Resource.ID || s.NativeResources[o.Resource.ID] != o.Resource {
 			return validationError("check withdrawal differs from its original resource")
 		}
 	case "op.candidate":
 		p, err := candidateParameters(intent)
-		if err != nil || p.Promotion != nil || p.WorkspaceID != o.Resource.ID {
+		if err != nil || p.Promotion != nil || p.WorkspaceID != o.Resource.ID || s.NativeResources[o.Resource.ID] != o.Resource {
 			return validationError("candidate withdrawal differs from original inputs")
 		}
 		if p.Integration != nil && o.WorktreeExists && (o.Merge == nil || o.Merge.Incoming != p.Integration.Incoming || o.Merge.Prefix != p.Base || o.Merge.MergeHead != "" && o.Merge.MergeHead != p.Integration.Incoming) {
@@ -141,7 +141,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		return NativeResource{}
 	}
 	for _, b := range s.DispatchBindings {
-		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.validationWorkCarryAuthorized("", b.Task)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
+		if b.Task == key && (b.Generation == s.Validation.Generation && b.RequirementRevision == s.Validation.RequirementRevision || s.prewaveCarryAuthorized(b.Task, cd)) && b.WorkspaceID != "" && s.resourceUsable(b.WorkspaceID) {
 			return s.NativeResources[b.WorkspaceID]
 		}
 	}
@@ -149,7 +149,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 	source := s.BaseSnapshot
 	scope := s.Validation.RequirementRevision
 	switch role {
-	case "engine.development.batch.v4":
+	case "engine.development.batch.v5":
 		if s.mergeMaster() {
 			return s.integrationResource()
 		}
@@ -180,7 +180,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 			return context.resource
 		}
 		return NativeResource{}
-	case "engine.repair.v5":
+	case "engine.repair.v6":
 		for _, work := range s.repairWork() {
 			if work.task == key {
 				source = work.wave.Candidate.Identity
@@ -239,7 +239,7 @@ func (s *State) taskResource(key runtime.TaskKey, cd *compiler.CompiledDefinitio
 		} else {
 			return NativeResource{}
 		}
-	case "engine.qa.execution.v3", "engine.gate.v2":
+	case "engine.qa.execution.v3", "engine.gate.v3":
 		if _, target := s.repairGateTarget(key); target != nil {
 			if binding, ok := s.repairGateBinding(key, s.repairWork()); ok {
 				source, scope, role = binding.Candidate, key.String(), "gate"
@@ -342,6 +342,8 @@ func (e *Engine) ensureWorkspace(s *State, r NativeResource, nextRevision uint64
 	if len(tasks) != 0 {
 		task := tasks[0]
 		params.Task = &task
+		binding := s.validationBinding(task, e.cfg.Definition)
+		params.RequirementRevision, params.Generation = binding.RequirementRevision, binding.Generation
 	}
 	if r.Role == "blackbox-design" && s.Validation != nil {
 		if set := s.Validation.Sets[coverage.ReviewBlackbox]; set != nil {
@@ -470,10 +472,22 @@ func (e *Engine) applyResourceReceipt(s *State, intent HostActionIntent, receipt
 		if v.Resource.Role == "child-target" && (s.ChildCreation == nil || v.Digest != s.ChildCreation.Digest) {
 			return validationError("child workspace receipt content differs from the creation source")
 		}
+		var p WorkspaceParameters
+		raw, _ := json.Marshal(intent.Adapter.Params)
+		_ = json.Unmarshal(raw, &p)
 		applicable := s.nativeEffectApplicable(intent, e.cfg.Definition)
-		project := applicable && !s.abortRequested() && v.Resource.Role == "blackbox-design" && s.candidateInputsCurrent(intent, e.cfg.Definition)
-		if applicable {
-			s.NativeResources[v.Resource.ID] = v.Resource
+		current := s.candidateInputsCurrent(intent, e.cfg.Definition)
+		project := applicable && !s.abortRequested() && v.Resource.Role == "blackbox-design" && current
+		if applicable && (p.Manifest == nil || current) {
+			registered := s.NativeResources[v.Resource.ID]
+			resource := v.Resource
+			if registered.Identity != "" {
+				resource.Identity = registered.Identity
+			}
+			if p.Manifest == nil {
+				resource.MirrorDigest = registered.MirrorDigest
+			}
+			s.NativeResources[v.Resource.ID] = resource
 		}
 		if project {
 			s.QAWorktree = v.Resource.Path
@@ -564,7 +578,7 @@ func (s *State) cleanupAuthorized(p CleanupParameters, cd *compiler.CompiledDefi
 		return false
 	}
 	parent := parents[0]
-	if parent.RunID != p.Checkpoint.MasterRunID || !parent.validationDeliveryComplete(cd) || parent.CandidatePromotion == nil || digestOfCanonical(parent.CandidatePromotion) != digestOfCanonical(p.Checkpoint.Promotion) {
+	if parent.RunID != p.Checkpoint.MasterRunID || !parent.DeliveryComplete(cd) || parent.CandidatePromotion == nil || digestOfCanonical(parent.CandidatePromotion) != digestOfCanonical(p.Checkpoint.Promotion) {
 		return false
 	}
 	original, exists := parent.hostIntent(parent.CandidatePromotion.OperationID)
@@ -581,7 +595,7 @@ func (s *State) resourceUsable(id string) bool {
 func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.CompiledDefinition, validationTasks ...map[authoring.StepID][]decision.RequiredTask) bool {
 	if p.Resource.Role == "merge" {
 		r := s.integrationResource()
-		return s.Validation != nil && p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation && p.RouteScope == s.validationRouteDigest() && p.Resource == r && s.resourceUsable(r.ID)
+		return s.Validation != nil && p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation && p.Resource == r && s.resourceUsable(r.ID)
 	}
 	if p.Resource.Role == "child-target" {
 		return s.creationWorkspaceCurrent(p)
@@ -589,13 +603,13 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	registered := s.NativeResources[p.Resource.ID]
 	resourceMatches := registered == p.Resource
 	if p.Task != nil {
-		resourceMatches = (registered.Status == "PLANNED" || registered.Status == "READY") && sameWorkspaceInput(registered, p.Resource)
+		resourceMatches = (registered.Status == "PLANNED" || registered.Status == "READY") && SameWorkspaceInput(registered, p.Resource)
 	}
-	if s.Validation == nil || s.abortRequested() || p.RouteScope != s.validationRouteDigest() || !s.resourceUsable(p.Resource.ID) || !resourceMatches {
+	if s.Validation == nil || s.abortRequested() || !s.resourceUsable(p.Resource.ID) || !resourceMatches {
 		return false
 	}
 	current := p.RequirementRevision == s.Validation.RequirementRevision && p.Generation == s.Validation.Generation
-	carried := p.Task != nil && s.validationWorkCarryAuthorized("", *p.Task)
+	carried := p.Task != nil && s.prewaveCarryAuthorized(*p.Task, cd)
 	if !current && !carried {
 		return false
 	}
@@ -636,7 +650,7 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	}
 	for _, tasks := range required {
 		for _, task := range tasks {
-			if sameWorkspaceInput(s.taskResource(task.Task, cd), p.Resource) && (p.Task == nil && current || p.Task != nil && task.Task == *p.Task) {
+			if SameWorkspaceInput(s.taskResource(task.Task, cd), p.Resource) && (p.Task == nil && current || p.Task != nil && task.Task == *p.Task) {
 				return true
 			}
 		}
@@ -656,9 +670,57 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	return false
 }
 
-// Workspace input identity excludes creation facts owned by resource receipts.
+// WorkspaceMirrorSuperseded derives withdrawal authority from a newer signed
+// current mirror for the same physical workspace. An obsolete manifest never
+// gives permission to rewrite the original intent or execute its remainder.
+func (s *State) WorkspaceMirrorSuperseded(intent HostActionIntent, cd *compiler.CompiledDefinition) bool {
+	if intent.Adapter == nil || intent.Adapter.Operation != "op.workspace" {
+		return false
+	}
+	var before WorkspaceParameters
+	raw, _ := json.Marshal(intent.Adapter.Params)
+	if json.Unmarshal(raw, &before) != nil || before.Resource.Role != "blackbox-design" || before.Manifest == nil || s.candidateInputsCurrent(intent, cd) || !SameWorkspaceInput(s.NativeResources[before.Resource.ID], before.Resource) {
+		return false
+	}
+	replaces := func(newer HostActionIntent, completed bool) bool {
+		if newer.Revision <= intent.Revision || newer.Adapter == nil || newer.Adapter.Operation != "op.workspace" {
+			return false
+		}
+		var after WorkspaceParameters
+		raw, _ := json.Marshal(newer.Adapter.Params)
+		if json.Unmarshal(raw, &after) != nil || after.Manifest == nil || !SameWorkspaceInput(after.Resource, before.Resource) || digestOfCanonical(after.Manifest) == digestOfCanonical(before.Manifest) {
+			return false
+		}
+		if !completed {
+			return s.nativeActionCurrent(newer, cd)
+		}
+		if !s.nativeActionAllowed(newer) || s.Validation == nil || !s.resourceUsable(after.Resource.ID) {
+			return false
+		}
+		current := after.RequirementRevision == s.Validation.RequirementRevision && after.Generation == s.Validation.Generation
+		carried := after.Task != nil && s.prewaveCarryAuthorized(*after.Task, cd)
+		if !current && !carried {
+			return false
+		}
+		set := s.Validation.Sets[coverage.ReviewBlackbox]
+		return set != nil && digestOfCanonical(after.Manifest) == digestOfCanonical(&set.Manifest) && s.NativeResources[after.Resource.ID].MirrorDigest == BlackboxCasesDigest(s.RunID, *after.Manifest)
+	}
+	for _, newer := range s.PendingHostActions {
+		if replaces(newer, false) {
+			return true
+		}
+	}
+	for id, effect := range s.ReconciledEffects {
+		if effect.Status == "FULFILLED" && effect.Intent != nil && s.HostActionReceipts[id].Status == HostActionStatusExecuted && replaces(*effect.Intent, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// SameWorkspaceInput excludes creation facts owned by resource receipts.
 // Manifest equality is checked by workspaceParametersCurrent, not MirrorDigest.
-func sameWorkspaceInput(actual, issued NativeResource) bool {
+func SameWorkspaceInput(actual, issued NativeResource) bool {
 	actual.Status, actual.Identity, actual.MirrorDigest = issued.Status, issued.Identity, issued.MirrorDigest
 	return actual == issued
 }
@@ -751,7 +813,7 @@ func (s *State) cleanupQuiescent() bool {
 			return false
 		}
 	}
-	if !s.abortRequested() && s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
+	if !s.abortRequested() && !s.resetPending() && s.ChildCreation != nil && len(s.SliceChildren) == 0 && !slices.Contains(s.Completed, authoring.StepID("children.publish")) {
 		return false
 	}
 	if s.RebuildingChildren() {
@@ -777,7 +839,7 @@ func (s *State) cleanupQuiescent() bool {
 }
 
 func (s *State) CleanupEligible(cd *compiler.CompiledDefinition) bool {
-	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.validationDeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(true))
+	return s.cleanupQuiescent() && (s.resetPending() || s.RebuildingChildren() || s.abortRequested() || s.SliceChild == nil && s.DeliveryComplete(cd) || s.SliceChild != nil && s.cleanupStarted(true))
 }
 
 func (s *State) ResourceCleanupPending(id string) bool {
@@ -801,7 +863,8 @@ func (s *State) ResourceCleanupPending(id string) bool {
 
 // BeginCleanup carries related run states inside the parent's native window:
 // a child receives its delivered master; a master receives its cleaned children.
-func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) error {
+func (e *Engine) BeginCleanup(input Observation, related ...*State) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -845,7 +908,7 @@ func (e *Engine) BeginCleanup(expectedFingerprint string, related ...*State) err
 		}
 	}
 	s.PendingHostActions[intent.ActionID] = intent
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 

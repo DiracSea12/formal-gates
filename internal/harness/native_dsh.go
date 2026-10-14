@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -136,8 +137,8 @@ func dshHooks() nativeHooks {
 }
 
 // newDSHClient spawns the host with DSH's transport configuration.
-func newDSHClient(argv []string, workspace, directory string) (*nativeClient, error) {
-	return newNativeClient(dshHooks(), argv, workspace, directory)
+func newDSHClient(argv []string, workspace, directory string, environment map[string]string) (*nativeClient, error) {
+	return newNativeClientWithEnv(dshHooks(), argv, workspace, directory, environment)
 }
 
 // dshClassifySessionUnavailable is the narrow DSH error classification: never
@@ -324,13 +325,13 @@ func observeNative(directory string, identity any) (map[string]any, error) {
 	}
 	return evidenceSource(directory, "dsh", identity, map[string]any{
 		"native_turn":    turn,
-		"transcript":     getOrOf(source, "transcriptPath", ""),
+		"transcript":     filepath.Join(directory, "native-events.jsonl"),
 		"usage_evidence": usageEvidence,
 	})
 }
 
 // Recovery retains the original session, workspace and host selection.
-func dshReconcile(directory string, process any) (map[string]any, error) {
+func dshReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	recover := func() (map[string]any, error) {
 		identity, err := readJSONFile(filepath.Join(directory, "identity.json"))
 		if err != nil {
@@ -403,7 +404,8 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 		if captureErr != nil {
 			return nil, captureErr
 		}
-		executable = textOf(getOf(getOf(captured, "launch"), "executable"))
+		binding = captured
+		executable = textOf(getOf(getOf(binding, "launch"), "executable"))
 	}
 	workspaceValue, entryErr := mustEntry(request, "workspace")
 	if entryErr != nil {
@@ -422,7 +424,11 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	if err != nil {
 		return nil, err
 	}
-	client, err := newDSHClient([]string{executable, "--profile", "acp", "--patch", patch}, workspace, directory)
+	environment := map[string]string{}
+	for key, value := range objectOrEmpty(binding["environment"]) {
+		environment[key] = textOf(value)
+	}
+	client, err := newDSHClient([]string{executable, "--profile", "acp", "--patch", patch}, workspace, directory, environment)
 	if err != nil {
 		return nil, err
 	}
@@ -526,6 +532,9 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 		if err != nil {
 			return nil, err
 		}
+		if err := settleQueuedMessages(directory, request, nil, services); err != nil {
+			return nil, err
+		}
 		if !valuesEqual(getOf(response, "stopReason"), "end_turn") {
 			return nil, &blockedError{message: "DSH_STOP: " + textOf(getOf(response, "stopReason"))}
 		}
@@ -548,18 +557,72 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	return run()
 }
 
-// dshCaptureBinding binds dsh to the resolved binary it will execute
-// through PATH lookup, symlink resolution, then the
-// shared launch/files proof shape.
-func dshCaptureBinding() (map[string]any, error) { return dshConfiguredBinding(settings.Values{}) }
+func dshCaptureBinding() (map[string]any, error) {
+	native, sources := map[string]string{}, map[string]string{}
+	if err := dshResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return dshConfiguredBinding(settings.Values{Native: native})
+}
+
+func dshResolvePaths(native, sources map[string]string) error {
+	executable := settings.Values{Native: native}.NativeString("dshExecutable")
+	path, err := exec.LookPath(executable)
+	if err != nil {
+		return &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
+	}
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	home = resolveNativePath(home)
+	homeSource := "HOME"
+	if runtime.GOOS == "windows" {
+		homeSource = "USERPROFILE"
+	}
+	nativeHome := native["dshConfigRoot"]
+	rootSource := "DSH_HOME"
+	if nativeHome == "" {
+		nativeHome = os.Getenv("DSH_HOME")
+		if strings.TrimSpace(nativeHome) == "" {
+			nativeHome = filepath.Join(home, ".dsh")
+			rootSource = "dshHome"
+		}
+		if nativeHome == "~" {
+			nativeHome = home
+		} else if strings.HasPrefix(nativeHome, "~/") || strings.HasPrefix(nativeHome, `~\`) {
+			nativeHome = filepath.Join(home, nativeHome[2:])
+		}
+	}
+	for name, value := range map[string]string{"dshExecutable": resolveNativePath(path), "dshHome": home, "dshConfigRoot": resolveNativePath(nativeHome)} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{"dshExecutable": executableSource, "dshHome": homeSource, "dshConfigRoot": rootSource} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
+}
 
 func dshConfiguredBinding(config settings.Values) (map[string]any, error) {
-	executable, err := exec.LookPath(config.NativeString("dshExecutable"))
-	if err != nil {
-		return nil, &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
+	executable, home, nativeHome := config.Native["dshExecutable"], config.Native["dshHome"], config.Native["dshConfigRoot"]
+	if executable == "" || home == "" || nativeHome == "" {
+		return nil, &blockedError{message: "DSH_CONFIG: frozen native paths required"}
 	}
-	resolved := resolveNativePath(executable)
-	return buildCaptureBinding("dsh", map[string]any{"executable": resolved})
+	binding, err := buildCaptureBinding("dsh", map[string]any{"executable": executable})
+	if err != nil {
+		return nil, err
+	}
+	binding["environment"] = map[string]any{"HOME": home, "DSH_HOME": nativeHome}
+	if runtime.GOOS == "windows" {
+		binding["environment"].(map[string]any)["USERPROFILE"] = home
+	}
+	return binding, nil
 }
 
 // dshValidateBinding is the registry's validate_binding: the provider must
@@ -631,20 +694,13 @@ func runNativeJob(directory string, services ...ExecutionServices) (map[string]a
 			if !ok {
 				return nil, fmt.Errorf("native source provider is missing")
 			}
-			impl, err := nativeImplementationFor(provider)
-			if err != nil {
-				return nil, err
-			}
-			if err := impl.verifySource(directory, source); err != nil {
-				return nil, err
-			}
-			return source.(map[string]any), nil
+			return NativeJobSource(provider, directory, services...)
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
 		if _, err := os.Stat(filepath.Join(directory, "exit.json")); err == nil {
 			provider, _ := object["provider"].(string)
-			return NativeJobSource(provider, directory)
+			return NativeJobSource(provider, directory, services...)
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -696,12 +752,12 @@ func runNativeJob(directory string, services ...ExecutionServices) (map[string]a
 	if object["engine"] != nil && (len(services) == 0 || services[0].ClaimMessage == nil || services[0].ReceiptMessage == nil) {
 		return nil, fmt.Errorf("UNSUPPORTED_EXECUTION: current engine message services are unavailable")
 	}
-	prepared, messages, err := queueNativeMessages(directory, object, services)
+	prepared, err := queueNativeMessages(directory, object, services)
 	if err != nil {
 		return nil, err
 	}
 	source, err := impl.execute(prepared, directory, getOf(request, "probe") == true, services...)
-	if messageErr := settleQueuedMessages(directory, messages, err, services); messageErr != nil {
+	if messageErr := settleQueuedMessages(directory, object, err, services); messageErr != nil {
 		return nil, messageErr
 	}
 

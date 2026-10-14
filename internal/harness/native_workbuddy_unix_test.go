@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -118,16 +119,33 @@ func TestWorkBuddyCLI(t *testing.T) {
 	if err := os.MkdirAll(store, 0700); err != nil {
 		fail(err.Error())
 	}
-	if err := os.WriteFile(filepath.Join(store, identity+".jsonl"), []byte("native session "+identity), 0600); err != nil {
-		fail(err.Error())
-	}
 	encoder := json.NewEncoder(os.Stdout)
 	initialization := map[string]any{"type": "system", "subtype": "init", "session_id": identity, "uuid": identity, "cwd": cwd, "model": "selected-model", "effort": "high", "__timestamp": "2026-01-01T00:00:00Z"}
 	encoder.Encode(initialization)
 	if expected["wait"] == "true" {
 		time.Sleep(time.Hour)
 	}
-	encoder.Encode(map[string]any{"type": "assistant", "uuid": "response-" + values["--resume"], "session_id": identity, "message": map[string]any{"usage": map[string]any{"input_tokens": 11, "output_tokens": 7, "cache_read_input_tokens": 2}}})
+	itemID := "response-start"
+	nativeUsage := map[string]any{"inputTokens": 11, "outputTokens": 7, "inputTokensDetails": []any{map[string]any{"cached_tokens": 2}}}
+	printUsage := map[string]any{"input_tokens": 11, "output_tokens": 7, "cache_read_input_tokens": 2}
+	providerData := map[string]any{"usage": nativeUsage}
+	if values["--resume"] != "" {
+		itemID = "response-resume"
+		nativeUsage = map[string]any{"inputTokens": 4, "outputTokens": 5, "inputTokensDetails": []any{}}
+		printUsage = map[string]any{"input_tokens": 4, "output_tokens": 5, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 3}
+		providerData = map[string]any{"usage": nativeUsage, "rawUsage": printUsage}
+	}
+	encoder.Encode(map[string]any{"type": "assistant", "uuid": itemID, "session_id": identity, "message": map[string]any{"usage": printUsage}})
+	file, err := os.OpenFile(filepath.Join(store, identity+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		fail(err.Error())
+	}
+	if err := json.NewEncoder(file).Encode(map[string]any{"id": itemID, "type": "message", "role": "assistant", "providerData": providerData, "content": []any{map[string]any{"type": "text", "text": "native context retained"}}}); err != nil {
+		fail(err.Error())
+	}
+	if err := file.Close(); err != nil {
+		fail(err.Error())
+	}
 	server := getOf(getOf(config, "mcpServers"), "formal-gates")
 	peerSubmitSemantics(textOf(listOf(getOf(server, "args"))[2]), map[string]any{"summary": "native " + identity})
 	encoder.Encode(map[string]any{"type": "result", "subtype": "success", "uuid": "result-" + identity, "session_id": identity, "is_error": false, "structured_output": map[string]any{"summary": "native " + identity}})
@@ -158,7 +176,11 @@ func TestWorkBuddyPrintLifecyclePreservesNativeIdentityAndUsage(t *testing.T) {
 	peer := filepath.Join(home, "codebuddy")
 	os.WriteFile(peer, []byte("#!/bin/sh\nexec "+("'"+strings.ReplaceAll(executable, "'", "'\"'\"'")+"'")+" -test.run '^TestWorkBuddyCLI$' -- \"$@\"\n"), 0700)
 	t.Setenv("WORKBUDDY_PEER_SPEC", spec)
-	binding, err := NativeBinding("workbuddy", settings.Values{Native: map[string]string{"workbuddyExecutable": peer, "workbuddyHome": home}})
+	frozen, err := settings.Freeze("workbuddy", settings.Effective{Values: settings.Values{Native: map[string]string{"workbuddyExecutable": peer, "workbuddyHome": home}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := NativeBinding("workbuddy", frozen.Values)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +191,9 @@ func TestWorkBuddyPrintLifecyclePreservesNativeIdentityAndUsage(t *testing.T) {
 		raw, _ := os.ReadFile(filepath.Join(job, "host.stderr"))
 		t.Fatalf("%v: %s", err, raw)
 	}
+	if getOf(getOf(source, "files"), "native-usage.json") == nil {
+		t.Fatal("native usage source has no original file proof")
+	}
 	identity := textOf(getOf(source, "identity"))
 	if identity == "" {
 		t.Fatal("missing observed identity")
@@ -176,8 +201,8 @@ func TestWorkBuddyPrintLifecyclePreservesNativeIdentityAndUsage(t *testing.T) {
 	if err := workbuddyVerifySource(job, source); err != nil {
 		t.Fatal(err)
 	}
-	usage, err := cost.ParseTranscript("workbuddy", filepath.Join(job, "native-events.jsonl"))
-	if err != nil || usage.InputCacheMissTokens != 11 || usage.OutputTokens != 7 {
+	usage, err := cost.ParseTranscript("workbuddy", textOf(source["transcript"]))
+	if err != nil || usage.InputCacheMissTokens != 9 || usage.InputCacheHitTokens != 2 || usage.OutputTokens != 7 {
 		t.Fatalf("usage=%+v err=%v", usage, err)
 	}
 	eventsPath := filepath.Join(job, "native-events.jsonl")
@@ -237,11 +262,32 @@ func TestWorkBuddyPrintLifecyclePreservesNativeIdentityAndUsage(t *testing.T) {
 	if err != nil || strings.Count(string(raw), "\n") != 2 {
 		t.Fatalf("actual native calls=%q err=%v", raw, err)
 	}
+	combined, err := cost.ParseTranscriptFiles("workbuddy", textOf(source["transcript"]), textOf(source["transcript"]), textOf(continued["transcript"]))
+	if err != nil || combined != (cost.Usage{InputCacheMissTokens: 13, InputCacheHitTokens: 3, OutputTokens: 12}) {
+		t.Fatalf("same-session invocation usage=%+v err=%v", combined, err)
+	}
+	originalReceipt, err := canonicalBody(continued)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A lost response is observed through the same native evidence, with no call.
 	os.Remove(filepath.Join(resumed, "source.json"))
 	observed, err := workbuddyReconcile(resumed, map[string]any{"exit_code": 0, "error": ""})
 	if err != nil || getOf(observed, "identity") != identity {
 		t.Fatalf("recovery=%v err=%v", observed, err)
+	}
+	recoveredReceipt, err := canonicalBody(observed)
+	if err != nil || string(recoveredReceipt) != string(originalReceipt) {
+		t.Fatalf("recovery changed original receipt: %s != %s (%v)", recoveredReceipt, originalReceipt, err)
+	}
+	for range 2 {
+		if err := workbuddyVerifySource(resumed, observed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recoveredUsage, err := cost.ParseTranscript("workbuddy", textOf(observed["transcript"]))
+	if err != nil || recoveredUsage != (cost.Usage{InputCacheMissTokens: 4, InputCacheHitTokens: 1, OutputTokens: 5}) {
+		t.Fatalf("recovered usage=%+v err=%v", recoveredUsage, err)
 	}
 	missing := t.TempDir()
 	os.Remove(filepath.Join(home, ".workbuddy", "projects", "native-project", identity+".jsonl"))
@@ -325,4 +371,139 @@ func TestWorkBuddyHarness(t *testing.T) {
 	}
 	services := ExecutionServices{Admit: func(string, map[string]any) (func(), error) { return func() {}, nil }, ClaimMessage: func(string, string, bool) (*protocol.TaskMessage, error) { return nil, nil }, ReceiptMessage: func(string, protocol.TaskMessage) error { return nil }}
 	os.Exit(RunCommand(args[1:], os.Stdin, os.Stdout, os.Stderr, services))
+}
+
+func TestWorkBuddyPathFreezePreservesIndependentRootsWithoutInvocation(t *testing.T) {
+	homeA, rootA, homeB, rootB := resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir())
+	cliDirA, cliDirB := resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir())
+	calls := filepath.Join(t.TempDir(), "calls")
+	peer := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"$*\" \"$HOME\" \"$CODEBUDDY_CONFIG_DIR\" \"$WORKBUDDY_CONFIG_DIR\" \"$ACC_PRODUCT_CONFIG_PATH\" >> \"$WORKBUDDY_PATH_CALLS\"\n[ \"$#\" = 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s\\n' '--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk'\n"
+	for _, directory := range []string{cliDirA, cliDirB} {
+		if err := os.WriteFile(filepath.Join(directory, "codebuddy"), []byte(peer), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	product := filepath.Join(rootA, "cache", "acc-product-config-v3.json")
+	if err := os.MkdirAll(filepath.Dir(product), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(product, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", homeA)
+	t.Setenv("PATH", cliDirA)
+	t.Setenv("WORKBUDDY_CONFIG_DIR", rootA)
+	t.Setenv("ACC_PRODUCT_CONFIG_PATH", "")
+	t.Setenv("WORKBUDDY_PATH_CALLS", calls)
+	effective, err := settings.Load(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := settings.Freeze("cbc", effective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("pure mapper executed native CLI: %v", err)
+	}
+	want := map[string]string{"workbuddyExecutable": filepath.Join(cliDirA, "codebuddy"), "workbuddyHome": homeA, "workbuddyConfigRoot": rootA, "workbuddyProductConfig": product}
+	for key, value := range want {
+		if frozen.Values.Native[key] != value {
+			t.Fatalf("%s=%q, want %q", key, frozen.Values.Native[key], value)
+		}
+	}
+	for key, source := range map[string]string{"workbuddyExecutable": "PATH", "workbuddyHome": "HOME", "workbuddyConfigRoot": "WORKBUDDY_CONFIG_DIR", "workbuddyProductConfig": "workbuddyConfigRoot"} {
+		if frozen.Sources[key] != source {
+			t.Fatalf("%s source=%q, want %q", key, frozen.Sources[key], source)
+		}
+	}
+	if effective.Values.Native["workbuddyHome"] != "" || effective.Values.Native["workbuddyConfigRoot"] != "" {
+		t.Fatal("freeze modified input values")
+	}
+	body, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted settings.Effective
+	if err := json.Unmarshal(body, &persisted); err != nil || !reflect.DeepEqual(frozen, persisted) {
+		t.Fatalf("persisted values/sources differ: %v %+v", err, persisted)
+	}
+	t.Setenv("HOME", homeB)
+	t.Setenv("PATH", cliDirB)
+	t.Setenv("WORKBUDDY_CONFIG_DIR", rootB)
+	t.Setenv("ACC_PRODUCT_CONFIG_PATH", filepath.Join(rootB, "other-product.json"))
+	first, err := NativeBinding("workbuddy", persisted.Values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := map[string]any{"HOME": homeA, "CODEBUDDY_CONFIG_DIR": rootA, "WORKBUDDY_CONFIG_DIR": rootA, "ACC_PRODUCT_CONFIG_PATH": product}
+	if !valuesEqual(first["environment"], environment) || getOf(first["launch"], "executable") != want["workbuddyExecutable"] {
+		t.Fatalf("binding reread changed environment: %v", first)
+	}
+	if os.Getenv("HOME") != homeB || os.Getenv("WORKBUDDY_CONFIG_DIR") != rootB {
+		t.Fatal("binding changed process-global environment")
+	}
+	if err := os.WriteFile(want["workbuddyExecutable"], []byte(peer+"# bound file content\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbuddyValidateBinding(first); err == nil {
+		t.Fatal("file change preserved original proof")
+	}
+	second, err := NativeBinding("workbuddy", persisted.Values)
+	if err != nil || valuesEqual(first["files"], second["files"]) || !valuesEqual(second["environment"], environment) {
+		t.Fatalf("invocation did not renew proof while preserving paths: %v %v", second, err)
+	}
+	raw, err := os.ReadFile(calls)
+	line := "--help|" + homeA + "|" + rootA + "|" + rootA + "|" + product + "\n"
+	if err != nil || string(raw) != line+line {
+		t.Fatalf("native invocation arguments/environment=%q err=%v", raw, err)
+	}
+	fresh, err := settings.Freeze("workbuddy", effective)
+	if err != nil || fresh.Values.Native["workbuddyHome"] != homeB || fresh.Values.Native["workbuddyConfigRoot"] != rootB || fresh.Values.Native["workbuddyExecutable"] != filepath.Join(cliDirB, "codebuddy") || fresh.Values.Native["workbuddyProductConfig"] != filepath.Join(rootB, "other-product.json") {
+		t.Fatalf("different inputs resolved to old paths: %+v %v", fresh, err)
+	}
+	if _, err := NativeBinding("workbuddy", effective.Values); err == nil || !strings.Contains(err.Error(), "frozen native paths required") {
+		t.Fatalf("unfrozen run values discovered environment late: %v", err)
+	}
+}
+
+func TestWorkBuddyPathFreezeRetainsConfiguredPrecedenceAndSources(t *testing.T) {
+	home, root, explicitHome, product := resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir()), filepath.Join(resolveNativePath(t.TempDir()), "product.json")
+	cli := filepath.Join(t.TempDir(), "codebuddy")
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\nexit 91\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, configuredHome, configuredProduct, environmentProduct, environmentRoot, wantRoot, wantProduct, rootSource, productSource string
+	}{
+		{"environment root", "", "", "", root, root, filepath.Join(root, "cache", "acc-product-config-v3.json"), "WORKBUDDY_CONFIG_DIR", "workbuddyConfigRoot"},
+		{"explicit home", explicitHome, "", "", root, filepath.Join(explicitHome, ".workbuddy"), filepath.Join(explicitHome, ".workbuddy", "cache", "acc-product-config-v3.json"), "workbuddyHome", "workbuddyConfigRoot"},
+		{"explicit product", "", product, "ignored", root, root, product, "WORKBUDDY_CONFIG_DIR", "project.json"},
+		{"environment product", "", "", product, root, root, product, "WORKBUDDY_CONFIG_DIR", "ACC_PRODUCT_CONFIG_PATH"},
+		{"home default root", "", "", "", "", filepath.Join(home, ".workbuddy"), filepath.Join(home, ".workbuddy", "cache", "acc-product-config-v3.json"), "workbuddyHome", "workbuddyConfigRoot"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("WORKBUDDY_CONFIG_DIR", test.environmentRoot)
+			t.Setenv("ACC_PRODUCT_CONFIG_PATH", test.environmentProduct)
+			native := map[string]string{"workbuddyExecutable": cli, "workbuddyHome": test.configuredHome, "workbuddyProductConfig": test.configuredProduct}
+			sources := map[string]string{"workbuddyExecutable": "project.json", "workbuddyHome": "default", "workbuddyProductConfig": "default"}
+			if test.configuredHome != "" {
+				sources["workbuddyHome"] = "user.json"
+			}
+			if test.configuredProduct != "" {
+				sources["workbuddyProductConfig"] = "project.json"
+			}
+			if err := workbuddyResolvePaths(native, sources); err != nil {
+				t.Fatal(err)
+			}
+			wantHome, homeSource := home, "HOME"
+			if test.configuredHome != "" {
+				wantHome, homeSource = test.configuredHome, "user.json"
+			}
+			if native["workbuddyHome"] != wantHome || native["workbuddyConfigRoot"] != test.wantRoot || native["workbuddyProductConfig"] != test.wantProduct || sources["workbuddyHome"] != homeSource || sources["workbuddyExecutable"] != "project.json" || sources["workbuddyConfigRoot"] != test.rootSource || sources["workbuddyProductConfig"] != test.productSource {
+				t.Fatalf("priority/source differs: native=%v sources=%v", native, sources)
+			}
+		})
+	}
 }

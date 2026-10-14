@@ -1,6 +1,9 @@
 package protocol
 
 import (
+	"encoding/json"
+	"slices"
+
 	"formal-gates/internal/cost"
 )
 
@@ -63,7 +66,8 @@ func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
 		Provider: state.RunProvider, Correlation: receipt.Correlation,
 	})
 	if resolved.State != CostSourcePending {
-		e.recordDispatchCost(state, actionID, resolved)
+		_, _, current := state.workerActionTarget(actionID)
+		e.recordDispatchCost(state, actionID, resolved, current)
 	} else {
 		// 持留中的派发先建空 cost 投影（零数字、不预记条目）——该派发的精
 		// 确用量在 stop 证据落定的下一事务回填，持留期投影可见为零值。
@@ -74,7 +78,7 @@ func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
 
 // recordDispatchCost 通过原执行 owner 区分累计更新与完成后冻结。
 // 同 action 的继续与恢复使用同一条 cost；重复完成不重复累计。
-func (e *Engine) recordDispatchCost(state *State, actionID string, resolved ResolvedCostSource) {
+func (e *Engine) recordDispatchCost(state *State, actionID string, resolved ResolvedCostSource, cumulative bool) {
 	pending, known := state.PendingActions[actionID]
 	if !known {
 		if receipt, receipted := state.SpawnReceipts[actionID]; receipted {
@@ -87,7 +91,7 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 		Source: cost.SourceUnavailable,
 		Reason: resolved.Reason,
 	}
-	if state.validationRole(pending.Task, e.cfg.Definition) == "engine.gate.v2" {
+	if state.validationRole(pending.Task, e.cfg.Definition) == "engine.gate.v3" {
 		entry.Kind = "gate"
 	}
 	if resolved.State == CostSourceReady {
@@ -99,11 +103,52 @@ func (e *Engine) recordDispatchCost(state *State, actionID string, resolved Reso
 		entry.OutputTokens = resolved.Usage.OutputTokens
 		entry.TotalInputTokens = resolved.Usage.InputCacheHitTokens + resolved.Usage.InputCacheMissTokens
 	}
-	if _, _, current := state.workerActionTarget(actionID); current {
+	if cumulative {
 		cost.RecordCumulative(state.costLedger(), actionID, entry)
 	} else {
 		cost.Record(state.costLedger(), actionID, entry)
 	}
+}
+
+// recordRetiredDispatchCosts settles an execution that left its original owner
+// in this transaction. The persisted CAS base distinguishes its final cumulative
+// measurement from dispatches whose completed cost is already frozen.
+func (e *Engine) recordRetiredDispatchCosts(state *State, expectedRevision uint64) error {
+	if e.cfg.CostSource == nil {
+		return nil
+	}
+	ids := []string{}
+	for id := range state.ObsoleteActions {
+		if _, _, current := state.workerActionTarget(id); !current && inflightWitnessReceipt(state.SpawnReceipts[id].Status) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	base, err := e.store.Load()
+	if err != nil {
+		return err
+	}
+	if base.Revision != expectedRevision {
+		return nil
+	}
+	var original State
+	if err := json.Unmarshal(base.Content, &original); err != nil {
+		return err
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if _, _, current := original.workerActionTarget(id); !current {
+			continue
+		}
+		receipt := state.SpawnReceipts[id]
+		resolved := e.cfg.CostSource(CostSourceRef{RunID: state.RunID, ActionID: id, Provider: state.RunProvider, Correlation: receipt.Correlation})
+		if resolved.State == CostSourceReady || resolved.State == CostSourceUnavailable {
+			e.recordDispatchCost(state, id, resolved, true)
+		}
+	}
+	return nil
 }
 
 // costLedger 返回（必要时初始化）run 的 cost 投影。

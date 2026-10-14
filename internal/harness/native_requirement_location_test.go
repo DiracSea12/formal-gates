@@ -25,7 +25,7 @@ func TestNativeRequirementFindingUsesOriginalReadAcrossSourceRecovery(t *testing
 		t.Fatal(err)
 	}
 	document := requirement.FrozenRequirementProjection{Path: "requirements.md", Content: "# Frozen requirement\r\nOriginal behavior.  \r\n"}
-	input := protocol.WorkerInput{Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "original-revision"}, RequirementDocument: document}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.review.worker.v2", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "original-action", AttemptID: "original-attempt"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: "original-revision"}, RequirementDocument: document}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)

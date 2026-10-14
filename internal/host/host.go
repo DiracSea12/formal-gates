@@ -65,7 +65,6 @@ type Descriptor struct {
 	Hook              HookSpec
 	EnvironmentKeys   []string `json:"-"`
 	LifecycleRequired bool
-	CostProvider      string
 }
 
 var descriptors = []*Descriptor{
@@ -81,7 +80,7 @@ var descriptors = []*Descriptor{
 			ProjectBase: ".claude/skills", ProjectHookConfig: ".claude/settings.json", ProjectManaged: "CLAUDE.md",
 		},
 		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
-		LifecycleRequired: true, CostProvider: Claude,
+		LifecycleRequired: true,
 	},
 	{
 		ID: Codex, ReadUsage: parseCodexTranscript, EnvironmentKeys: []string{"CODEX_HOME", "CODEX_CLI_PATH"},
@@ -95,7 +94,7 @@ var descriptors = []*Descriptor{
 			ProjectBase: ".codex/skills", ProjectHookConfig: ".codex/hooks.json", ProjectManaged: "AGENTS.md",
 		},
 		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolCodex, GateEvent: "PreToolUse", GateMatcher: ".*", GateTimeout: true},
-		LifecycleRequired: true, CostProvider: Codex,
+		LifecycleRequired: true,
 	},
 	{
 		ID: Cursor, EnvironmentKeys: []string{"CURSOR_TRACE_ID", "CURSOR_RUNTIME"},
@@ -121,7 +120,6 @@ var descriptors = []*Descriptor{
 		Paths:             PathLayout{ProjectManaged: "AGENTS.md"},
 		Hook:              HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
 		LifecycleRequired: true,
-		CostProvider:      DeepSeek,
 	},
 	{
 		ID: ZCode, ReadUsage: parseZCodeTranscript, EnvironmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},
@@ -136,14 +134,13 @@ var descriptors = []*Descriptor{
 		},
 		Hook:              HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*"},
 		LifecycleRequired: true,
-		CostProvider:      ZCode,
 	},
 	{
 		ID: WorkBuddy, ReadUsage: parseWorkBuddyTranscript, EnvironmentKeys: []string{"WORKBUDDY_CONFIG_DIR"}, InstallName: "workbuddy", ManifestName: "WorkBuddy",
 		Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
-		Paths:        PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
-		CostProvider: WorkBuddy, LifecycleRequired: true,
-		Configuration: []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
+		Paths:             PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
+		LifecycleRequired: true,
+		Configuration:     []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
 	},
 	{
 		ID:                Default,

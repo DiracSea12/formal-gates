@@ -512,6 +512,9 @@ func (c *engineCanary) captureBinding() error {
 		environment[key] = value
 	}
 	binding["environment"] = environment
+	if c.nativeName() == "zcode" {
+		binding["cataloguePinned"] = true
+	}
 	c.binding = binding
 	return nil
 }

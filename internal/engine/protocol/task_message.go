@@ -19,7 +19,8 @@ type TaskMessage struct {
 	Revision  uint64 `json:"revision"`
 }
 
-func (e *Engine) QueueTaskMessage(action, text string, revision uint64, fingerprint string) (TaskMessage, error) {
+func (e *Engine) QueueTaskMessage(action, text string, revision uint64, fingerprint Observation) (TaskMessage, error) {
+	e = e.observing(fingerprint)
 	current, state, err := e.load()
 	if err != nil {
 		return TaskMessage{}, err
@@ -29,7 +30,7 @@ func (e *Engine) QueueTaskMessage(action, text string, revision uint64, fingerpr
 	}
 	pending, active := state.PendingActions[action]
 	spawn, started := state.SpawnReceipts[action]
-	if _, issued := state.WorkerInput(action, e.cfg.Definition); !issued || !active || !started || spawn.Status != SpawnStatusSpawned || spawn.agentIdentity() == "" || strings.TrimSpace(text) == "" || state.abortRequested() {
+	if _, issued := state.WorkerInput(action, e.cfg.Definition); !issued || !active || !started || !inflightWitnessReceipt(spawn.Status) || spawn.agentIdentity() == "" || strings.TrimSpace(text) == "" || state.abortRequested() {
 		return TaskMessage{}, fmt.Errorf("MESSAGE_BINDING: supplementary text requires a started unfinished action")
 	}
 	message := TaskMessage{ID: digestOfCanonical(struct {
@@ -43,7 +44,8 @@ func (e *Engine) QueueTaskMessage(action, text string, revision uint64, fingerpr
 	_, err = e.commit(state, current, fingerprint)
 	return message, err
 }
-func (e *Engine) ClaimTaskMessage(action, attempt, identity, fingerprint string, begin bool) (*TaskMessage, error) {
+func (e *Engine) ClaimTaskMessage(action, attempt, identity string, fingerprint Observation, begin bool) (*TaskMessage, error) {
+	e = e.observing(fingerprint)
 	revision, state, err := e.load()
 	if err != nil {
 		return nil, err
@@ -98,7 +100,8 @@ func (e *Engine) ClaimTaskMessage(action, attempt, identity, fingerprint string,
 	}
 	return &message, nil
 }
-func (e *Engine) RecordTaskMessage(message TaskMessage, fingerprint string) error {
+func (e *Engine) RecordTaskMessage(message TaskMessage, fingerprint Observation) error {
+	e = e.observing(fingerprint)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -113,6 +116,10 @@ func (e *Engine) RecordTaskMessage(message TaskMessage, fingerprint string) erro
 	if original.Status == message.Status && original.Reason == message.Reason {
 		return nil
 	}
+	// A later invocation failure cannot revoke observed delivery.
+	if original.Status == "ACCEPTED" && message.Status == "FAILED" {
+		return nil
+	}
 	if original.Status != "SENDING" || message.Status != "ACCEPTED" && message.Status != "FAILED" || message.Status == "FAILED" && strings.TrimSpace(message.Reason) == "" {
 		return fmt.Errorf("MESSAGE_STATE: receipt requires an actual pending delivery outcome")
 	}
@@ -121,11 +128,11 @@ func (e *Engine) RecordTaskMessage(message TaskMessage, fingerprint string) erro
 	return err
 }
 
-// A closed action cannot consume undelivered supplementary text. An interrupted
-// SENDING remains an uncertain delivery and is never automatically sent again.
+// A closed action cannot consume queued supplementary text. In-flight delivery
+// remains owned by its native acknowledgement or interrupted-delivery handling.
 func (s *State) retireTaskMessages() {
 	for id, message := range s.TaskMessages {
-		if message.Status != "PENDING" && message.Status != "SENDING" {
+		if message.Status != "PENDING" {
 			continue
 		}
 		if _, active := s.PendingActions[message.ActionID]; !active {

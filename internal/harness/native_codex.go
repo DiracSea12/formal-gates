@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -136,31 +137,75 @@ func codexToolSchemas(tools *nativeWorkspaceTools) ([]any, error) {
 	return listOf(plain), nil
 }
 
-func codexCaptureBinding() (map[string]any, error) { return codexConfiguredBinding(settings.Values{}) }
+func codexCaptureBinding() (map[string]any, error) {
+	native, sources := map[string]string{}, map[string]string{}
+	if err := codexResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return codexConfiguredBinding(settings.Values{Native: native})
+}
+
+func codexResolvePaths(native, sources map[string]string) error {
+	config := settings.Values{Native: native}
+	executable := config.NativeString("codexExecutable")
+	path, err := exec.LookPath(executable)
+	if err != nil {
+		return &blockedError{message: "CODEX_UNAVAILABLE: codex is not on PATH"}
+	}
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
+	home := config.NativeString("codexHome")
+	explicitHome := home != ""
+	homeSource := "configured"
+	if !explicitHome {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		homeSource = "HOME"
+		if runtime.GOOS == "windows" {
+			homeSource = "USERPROFILE"
+		}
+	}
+	home = resolveNativePath(home)
+	nativeHome := native["codexConfigRoot"]
+	rootSource := "codexHome"
+	if nativeHome == "" {
+		if !explicitHome {
+			nativeHome = os.Getenv("CODEX_HOME")
+			if nativeHome != "" {
+				rootSource = "CODEX_HOME"
+			}
+		}
+		if nativeHome == "" {
+			nativeHome = filepath.Join(home, ".codex")
+		}
+	}
+	for name, value := range map[string]string{"codexExecutable": resolveNativePath(path), "codexHome": home, "codexConfigRoot": resolveNativePath(nativeHome)} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{"codexExecutable": executableSource, "codexHome": homeSource, "codexConfigRoot": rootSource} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
+}
 
 func codexConfiguredBinding(config settings.Values) (map[string]any, error) {
-	executable, err := exec.LookPath(config.NativeString("codexExecutable"))
-	if err != nil {
-		return nil, &blockedError{message: "CODEX_UNAVAILABLE: codex is not on PATH"}
+	executable, home, nativeHome := config.Native["codexExecutable"], config.Native["codexHome"], config.Native["codexConfigRoot"]
+	if executable == "" || home == "" || nativeHome == "" {
+		return nil, &blockedError{message: "CODEX_CONFIG: frozen native paths required"}
 	}
-	binding, err := buildCaptureBinding("codex", map[string]any{"executable": resolveNativePath(executable)})
-	if err != nil {
-		return nil, err
-	}
-	home, err := os.UserHomeDir()
+	binding, err := buildCaptureBinding("codex", map[string]any{"executable": executable})
 	if err != nil {
 		return nil, err
-	}
-	if override := config.NativeString("codexHome"); override != "" {
-		home = override
-	}
-	nativeHome := os.Getenv("CODEX_HOME")
-	if nativeHome == "" || config.NativeString("codexHome") != "" {
-		nativeHome = filepath.Join(home, ".codex")
 	}
 	// Native config/auth resolution stays with app-server. Only its path is
 	// pinned; credentials are never copied into an evidence record.
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CODEX_HOME": resolveNativePath(nativeHome)}
+	binding["environment"] = map[string]any{"HOME": home, "CODEX_HOME": nativeHome}
 	return binding, nil
 }
 
@@ -202,7 +247,7 @@ func codexVerifySource(directory string, source any) error {
 	return nil
 }
 
-func codexInteractionID(params map[string]any, frameID any) (string, error) {
+func codexInteractionID(frameID any) (string, error) {
 	if frameID == nil {
 		return "", &blockedError{message: "CODEX_INTERACTION: missing native request id"}
 	}
@@ -239,7 +284,7 @@ func codexInteractionSpecs(thread string, turn *string) []nativeInteractionSpec 
 		if !valuesEqual(params["threadId"], thread) || (params["turnId"] != nil && !valuesEqual(params["turnId"], *turn)) {
 			return "", &blockedError{message: "CODEX_BINDING: interaction differs from original thread/turn"}
 		}
-		return codexInteractionID(params, frameID)
+		return codexInteractionID(frameID)
 	}
 	specs := []nativeInteractionSpec{}
 	for _, method := range []string{"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} {
@@ -541,6 +586,9 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 	if err = writeAtomicJSON(filepath.Join(directory, "native-source.json"), nativeSource); err != nil {
 		return nil, err
 	}
+	if err = settleQueuedMessages(directory, request, nil, services); err != nil {
+		return nil, err
+	}
 	var inflight *protocol.TaskMessage
 	defer func() {
 		if inflight != nil && len(services) > 0 && services[0].ReceiptMessage != nil {
@@ -624,7 +672,7 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 // codexObserve uses the original job request, acknowledged thread/turn and raw
 // completion evidence for both paths. Same-thread events from another turn
 // and child-thread events cannot become this invocation's answer or usage.
-func codexObserve(directory string) (map[string]any, error) {
+func codexObserve(directory string, services ...ExecutionServices) (map[string]any, error) {
 	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
 	if err != nil {
 		return nil, err
@@ -706,6 +754,11 @@ func codexObserve(directory string) (map[string]any, error) {
 	if !configured || !acknowledged {
 		return nil, &blockedError{message: "CODEX_BINDING: original native configuration/turn response is missing"}
 	}
+	if len(services) > 0 {
+		if err := settleQueuedMessages(directory, request, nil, services); err != nil {
+			return nil, err
+		}
+	}
 	if terminal == nil {
 		return nil, &blockedError{message: "CODEX_RESULT: original turn terminal is missing"}
 	}
@@ -718,6 +771,11 @@ func codexObserve(directory string) (map[string]any, error) {
 	return evidenceSource(directory, "codex", thread, map[string]any{"native_turn": turn, "native_result": terminal, "selection": getOf(source, "selection"), "selection_evidence": map[string]any{"configuration": getOf(source, "configuration"), "turn_request": getOf(source, "turn_request")}, "transcript": getOf(getOf(source, "thread"), "path"), "usage_evidence": usage})
 }
 
-func codexReconcile(directory string, process any) (map[string]any, error) {
-	return recoverNativeSource(directory, process, "CODEX", func() (map[string]any, error) { return codexObserve(directory) })
+func codexReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
+	observe := func() (map[string]any, error) { return codexObserve(directory, services...) }
+	if len(services) > 0 {
+		source, err := observe()
+		observe = func() (map[string]any, error) { return source, err }
+	}
+	return recoverNativeSource(directory, process, "CODEX", observe)
 }

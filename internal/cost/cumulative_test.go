@@ -34,12 +34,12 @@ func TestActiveDispatchCumulativeUsagePreservesOtherCosts(t *testing.T) {
 
 func TestUnavailableContinuationRetainsExactMeasuredPrefix(t *testing.T) {
 	run := &RunCost{}
-	measured := DispatchCost{Target: "task", Kind: "action", Source: SourceTranscript, TotalInputTokens: 20, InputCacheHitTokens: 6, InputCacheMissTokens: 14, OutputTokens: 4, TranscriptPath: "original-source"}
+	measured := DispatchCost{Target: "task", Kind: "action", Source: SourceTranscript, TotalInputTokens: 20, InputCacheHitTokens: 6, InputCacheMissTokens: 14, OutputTokens: 4}
 	RecordCumulative(run, "active", measured)
 	unavailable := DispatchCost{Target: measured.Target, Kind: measured.Kind, Source: SourceUnavailable, Reason: "continuation source has no complete usage record"}
 	RecordCumulative(run, "active", unavailable)
 	entry := run.Dispatches["active"]
-	if entry.Source != SourceUnavailable || entry.Reason != unavailable.Reason || entry.TotalInputTokens != 20 || entry.InputCacheHitTokens != 6 || entry.InputCacheMissTokens != 14 || entry.OutputTokens != 4 || entry.TranscriptPath != measured.TranscriptPath || run.TotalInputTokens != 20 || run.OutputTokens != 4 {
+	if entry.Source != SourceUnavailable || entry.Reason != unavailable.Reason || entry.TotalInputTokens != 20 || entry.InputCacheHitTokens != 6 || entry.InputCacheMissTokens != 14 || entry.OutputTokens != 4 || run.TotalInputTokens != 20 || run.OutputTokens != 4 {
 		t.Fatalf("unavailable continuation erased exact usage/source qualification: %#v", run)
 	}
 	data, err := json.Marshal(run)

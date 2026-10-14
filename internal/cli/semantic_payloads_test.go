@@ -17,7 +17,7 @@ import (
 
 func assertIntakePayloadWithoutRun(t *testing.T, root string, want facade.IntakeConfirmationReceipt) {
 	t.Helper()
-	paths, err := originalPayloadPaths(workflowPayloadDirectory(root, "", "intake"))
+	paths, err := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "", "intake"))
 	if err != nil || len(paths) != 1 {
 		t.Fatal("original intake candidate not saved", paths, err)
 	}
@@ -109,7 +109,7 @@ func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
 				if err := json.Unmarshal(out.Bytes(), &choices); err != nil || !reflect.DeepEqual(choices, materials) {
 					t.Fatal("ambiguous lightweight intake did not retain original positions", out.String(), err)
 				}
-				if paths, err := originalPayloadPaths(workflowPayloadDirectory(root, "", "intake")); err != nil || len(paths) != 0 {
+				if paths, err := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "", "intake")); err != nil || len(paths) != 0 {
 					t.Fatal("ambiguous selection saved a candidate", paths, err)
 				}
 			}
@@ -182,7 +182,7 @@ func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T
 	if run, err := f.Show(); err != nil || len(run.PendingAsks) != 0 {
 		t.Fatal("preparation applied request before confirmation", run, err)
 	}
-	paths, _ := originalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "control"))
+	paths, _ := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "control"))
 	original, err := os.ReadFile(paths[0])
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T
 	if err != nil || len(run.PendingAsks) != 0 || run.Status != "ACTIVE" {
 		t.Fatal(run, err)
 	}
-	paths, _ = originalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "control"))
+	paths, _ = facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "control"))
 	var candidate facade.ControlCandidate
 	if err := readJSONFileInto(paths[1], &candidate); err != nil || candidate.Event.Decide.Request != protocol.RequestID(request.RequestID) || candidate.Input.Reason != reason {
 		t.Fatal("original request/token/content lost", candidate, err)
@@ -226,7 +226,7 @@ func TestProgressPayloadSelectionReadsOriginalCursor(t *testing.T) {
 	if code := Run("formal-gates", []string{"workflow", "progress", "--root", root, "--save-progress"}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
-	paths, _ := originalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "progress"))
+	paths, _ := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "writer-exclusive", "progress"))
 	if len(paths) != 1 {
 		t.Fatal(paths)
 	}
@@ -281,7 +281,7 @@ func TestNativePayloadSelectionBindsOriginalRequestAndTextBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decisions, err := originalPayloadPaths(filepath.Join(originalDirectory, "decisions"))
+	decisions, err := facade.OriginalPayloadPaths(filepath.Join(originalDirectory, "decisions"))
 	if err != nil || len(decisions) != 1 {
 		t.Fatal(decisions, err)
 	}
@@ -321,7 +321,7 @@ func TestNativePayloadSelectionBindsOriginalRequestAndTextBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, _ := originalPayloadPaths(filepath.Join(directory, "responses", "1"))
+	paths, _ := facade.OriginalPayloadPaths(filepath.Join(directory, "responses", "1"))
 	body, err := os.ReadFile(paths[0])
 	if err != nil || string(body) != text {
 		t.Fatal("original native text bytes changed", err)
@@ -349,13 +349,13 @@ func TestOriginalPayloadPositionsRemainStableUnderConcurrentPreparation(t *testi
 		group.Add(1)
 		go func(i int) {
 			defer group.Done()
-			if _, _, err := saveOriginalPayload(directory, []byte(strconv.Itoa(i))); err != nil {
+			if _, _, err := facade.SaveOriginalPayload(directory, []byte(strconv.Itoa(i))); err != nil {
 				t.Error(err)
 			}
 		}(i)
 	}
 	group.Wait()
-	paths, err := originalPayloadPaths(directory)
+	paths, err := facade.OriginalPayloadPaths(directory)
 	if err != nil || len(paths) != 8 {
 		t.Fatal(paths, err)
 	}
@@ -367,11 +367,11 @@ func TestOriginalPayloadPositionsRemainStableUnderConcurrentPreparation(t *testi
 		}
 		originals[path] = string(body)
 	}
-	_, position, err := saveOriginalPayload(directory, []byte("additional"))
+	_, position, err := facade.SaveOriginalPayload(directory, []byte("additional"))
 	if err != nil || position != 9 {
 		t.Fatal(position, err)
 	}
-	after, _ := originalPayloadPaths(directory)
+	after, _ := facade.OriginalPayloadPaths(directory)
 	for i, path := range paths {
 		body, err := os.ReadFile(after[i])
 		if err != nil || after[i] != path || string(body) != originals[path] {
@@ -425,17 +425,17 @@ func TestPayloadSaveFailurePreservesCompleteOriginalFile(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "candidate.json")
 	original := []byte("complete original candidate\r\n  ")
-	if err := writeWorkflowPayload(path, original, false); err != nil {
+	if err := facade.WriteOriginalPayload(path, original, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeWorkflowPayload(path, []byte("replacement"), true); !os.IsExist(err) {
+	if err := facade.WriteOriginalPayload(path, []byte("replacement"), true); !os.IsExist(err) {
 		t.Fatal("exclusive save replaced original", err)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(body, original) {
 		t.Fatal("failed publication changed original bytes", err)
 	}
-	if err := writeWorkflowPayload(directory, []byte("replacement"), false); err == nil {
+	if err := facade.WriteOriginalPayload(directory, []byte("replacement"), false); err == nil {
 		t.Fatal("file save replaced a directory")
 	}
 	entries, err := os.ReadDir(directory)

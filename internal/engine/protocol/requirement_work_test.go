@@ -36,6 +36,63 @@ func workEngine(t *testing.T, names ...string) (*Engine, string) {
 	return reviewEngine(t, cd, reg)
 }
 
+// stopSupersededDispatch supplies the original execution's receipt and paired
+// lifecycle, then accepts its exact termination receipt if one was signed.
+func stopSupersededDispatch(t *testing.T, engine *Engine, actionID string) uint64 {
+	t.Helper()
+	state := engine.LoadMustSucceed(t).State
+	if _, obsolete := state.ObsoleteActions[actionID]; !obsolete {
+		t.Fatal("stop fixture requires a superseded original dispatch")
+	}
+	if _, _, active := state.workerActionTarget(actionID); !active {
+		return 0
+	}
+	receipt, known := state.SpawnReceipts[actionID]
+	if !known {
+		event := spawnReceipt(t, EventID("original-spawn:"+actionID), actionID, "worker:"+actionID)
+		if _, err := engine.Submit(event, Observation{}); err != nil {
+			t.Fatal(err)
+		}
+		receipt = engine.LoadMustSucceed(t).State.SpawnReceipts[actionID]
+	}
+	identity := receipt.agentIdentity()
+	if receipt.Status == SpawnStatusUnknown {
+		identity = "worker:" + actionID
+	}
+	var stopRevision uint64
+	for _, edge := range []string{LifecycleStart, LifecycleStop} {
+		event, err := NewCorrelatedLifecycleEvent(EventID("original-lifecycle:"+actionID+":"+edge), testProvider, receipt.Correlation, identity, edge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted, err := engine.Submit(event, Observation{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if edge == LifecycleStop {
+			stopRevision = accepted.Revision
+		}
+	}
+	state = engine.LoadMustSucceed(t).State
+	for _, intent := range state.PendingHostActions {
+		if intent.Terminate == nil || intent.Terminate.WorkerActionID != actionID {
+			continue
+		}
+		event, err := NewAgentHostActionReceiptEvent(EventID("original-termination:"+actionID), intent.ActionID, HostActionTerminateAgent, testProvider, intent.ActionID, intent.PayloadDigest, HostActionStatusExecuted, "", LifecycleEvidence{Identity: identity, Event: LifecycleStop})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.Submit(event, Observation{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state = engine.LoadMustSucceed(t).State
+	if _, _, active := state.workerActionTarget(actionID); active {
+		t.Fatal("exact stop failed to retire original execution")
+	}
+	return stopRevision
+}
+
 func TestRequirementWorkRequiresEveryDispositionBeforeOpeningBarrier(t *testing.T) {
 	engine, dir := workEngine(t, "develop", "verify")
 	action := issueReady(t, engine)[0]
@@ -48,7 +105,7 @@ func TestRequirementWorkRequiresEveryDispositionBeforeOpeningBarrier(t *testing.
 			t.Fatal(err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeRequirementDecisionRejected {
+		if _, err := engine.Submit(request, Observation{}); err == nil || rejectionCode(t, err) != CodeRequirementDecisionRejected {
 			t.Fatalf("incomplete work accepted: %v", err)
 		}
 		if !slices.Equal(before, stateBytesOf(t, dir)) {
@@ -72,21 +129,21 @@ func TestRequirementWorkRedoFailureKeepsDependentBlockedAcrossRestart(t *testing
 	if pendingActionOfStep(t, engine, "publish") != "" {
 		t.Fatal("carried descendant concealed unfinished upstream redo")
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "redo-failed-spawn", replacement, "redo-worker"), fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "redo-failed-spawn", replacement, "redo-worker"), Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := NewWorkerResultEvent("redo-failed", replacement, testProvider, OutcomeFail, "failed-payload", authoring.FailureBusinessReject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = engine.Submit(failed, fingerprintOf(t, engine)); err != nil {
+	if _, err = engine.Submit(failed, Observation{}); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := New(mustStore(t, dir), engine.cfg, nil)
+	restarted, err := New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, _, err := restarted.Plan()
+	plan, _, err := restarted.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,12 +180,12 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 				t.Fatal(err)
 			}
 			if boundary == "staged" {
-				if _, err := engine.Submit(result, fingerprintOf(t, engine)); err != nil {
+				if _, err := engine.Submit(result, Observation{}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if boundary == "terminal" || boundary == "completed" {
-				if _, err := engine.Submit(spawnReceipt(t, "old-spawn", old, "old-worker"), fingerprintOf(t, engine)); err != nil {
+				if _, err := engine.Submit(spawnReceipt(t, "old-spawn", old, "old-worker"), Observation{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -140,13 +197,13 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil {
+					if _, err := engine.Submit(event, Observation{}); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
 			if boundary == "completed" {
-				if _, err := engine.Submit(result, fingerprintOf(t, engine)); err != nil {
+				if _, err := engine.Submit(result, Observation{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -155,11 +212,11 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+			if _, err := engine.Submit(request, Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			if boundary == "quarantined" {
-				if _, err := engine.Submit(result, fingerprintOf(t, engine)); err != nil {
+				if _, err := engine.Submit(result, Observation{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -167,7 +224,7 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := engine.Submit(requirementDecideEvent(t, "change-work", token, "proceed", payload), fingerprintOf(t, engine)); err != nil {
+			if _, err := engine.Submit(requirementDecideEvent(t, "change-work", token, "proceed", payload), Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			state := engine.LoadMustSucceed(t).State
@@ -179,11 +236,19 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 					t.Fatal("received raw evidence was discarded")
 				}
 			}
-			if pendingActionOfStep(t, engine, "develop") == "" {
-				t.Fatal("replacement obligation was not issued")
+			if boundary != "completed" {
+				for id, pending := range state.PendingActions {
+					if id != old && pending.Task.Step == "develop" {
+						t.Fatal("replacement issued before the original execution stopped")
+					}
+				}
+				stopSupersededDispatch(t, engine, old)
+			}
+			if replacement := pendingActionOfStep(t, engine, "develop"); replacement == "" || replacement == old {
+				t.Fatal("exact stop did not issue the distinct replacement obligation")
 			}
 			if boundary == "terminal" {
-				acceptance, err := engine.Submit(result, fingerprintOf(t, engine))
+				acceptance, err := engine.Submit(result, Observation{})
 				if err != nil || acceptance.Status != "OBSOLETE_RESULT" {
 					t.Fatalf("late terminal result: %+v %v", acceptance, err)
 				}
@@ -195,13 +260,16 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T) {
 	engine, dir := workEngine(t, "develop")
 	old := issueReady(t, engine)[0]
+	if _, err := engine.Submit(spawnReceipt(t, "original-spawn", old, "original-worker"), Observation{}); err != nil {
+		t.Fatal(err)
+	}
 	first := workChange(t, engine, "rev-2", map[string]string{"develop": RequirementWorkRedo})
 	for _, requestID := range []string{"change-first", "change-held"} {
 		request, err := NewRequirementRequestEvent(EventID(requestID), first.packageView(), requirementOptions()...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -209,13 +277,15 @@ func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(requirementDecideEvent(t, "change-first", token, "proceed", first), fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(requirementDecideEvent(t, "change-first", token, "proceed", first), Observation{}); err != nil {
 		t.Fatal(err)
 	}
-	if pendingActionOfStep(t, engine, "develop") != "" {
-		t.Fatal("replacement issued through a remaining change barrier")
+	for id, pending := range engine.LoadMustSucceed(t).State.PendingActions {
+		if id != old && pending.Task.Step == "develop" {
+			t.Fatal("replacement issued through a remaining change barrier")
+		}
 	}
-	restarted, err := New(mustStore(t, dir), engine.cfg, nil)
+	restarted, err := New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,10 +299,16 @@ func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T
 	queued := inventory[0]
 	next := workChange(t, restarted, "rev-3", map[string]string{"develop": RequirementWorkRedo})
 	askAndDecideRequirement(t, restarted, "change-queued", "proceed", next)
-	if pendingActionOfStep(t, restarted, "develop") != "" {
-		t.Fatal("second redo issued while held Ask remained")
+	for id, pending := range restarted.LoadMustSucceed(t).State.PendingActions {
+		if id != old && pending.Task.Step == "develop" {
+			t.Fatal("second redo issued while held Ask remained")
+		}
 	}
 	abortExistingAsk(t, restarted, "change-held")
+	if _, _, active := restarted.LoadMustSucceed(t).State.workerActionTarget(old); !active {
+		t.Fatal("original execution retired before its exact stop")
+	}
+	stopSupersededDispatch(t, restarted, old)
 	replacement := pendingActionOfStep(t, restarted, "develop")
 	if replacement == "" || replacement == old || replacement == queued.ActionID {
 		t.Fatalf("wrong final obligation issued: %s", replacement)
@@ -245,7 +321,7 @@ func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T
 		t.Fatal("superseding redo duplicated work obligations")
 	}
 	submitPlainResult(t, restarted, "final-queued-work", replacement)
-	plan, _, err := restarted.Plan()
+	plan, _, err := restarted.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +341,7 @@ func TestRequirementWorkIncludesIndependentGateReview(t *testing.T) {
 		t.Fatal("independent gate missing from impact decisions")
 	}
 	askAndDecideRequirement(t, engine, "redo-gate", "proceed", payload)
+	stopSupersededDispatch(t, engine, old)
 	replacement := pendingActionOfStep(t, engine, "gate.check")
 	if replacement == "" || replacement == old {
 		t.Fatal("independent review gate was not replaced")
@@ -285,7 +362,7 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(request, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		transient, err := NewWorkerResultEvent("transient-result", action, testProvider, OutcomeRuntimeError, "transient-payload", authoring.FailureTransientEngine)
@@ -301,7 +378,7 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 			slices.Reverse(results)
 		}
 		for _, event := range results {
-			if _, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil {
+			if _, err := engine.Submit(event, Observation{}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -309,7 +386,7 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := engine.Submit(requirementDecideEvent(t, "change-work", token, "proceed", payload), fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(requirementDecideEvent(t, "change-work", token, "proceed", payload), Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		history := engine.LoadMustSucceed(t).State.ObsoleteResults[action]
@@ -328,14 +405,14 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 		archived = digests
 		replay := transient
 		replay.ID = "late-same-result"
-		if acceptance, err := engine.Submit(replay, fingerprintOf(t, engine)); err != nil || acceptance.Status != "OBSOLETE_RESULT" {
+		if acceptance, err := engine.Submit(replay, Observation{}); err != nil || acceptance.Status != "OBSOLETE_RESULT" {
 			t.Fatalf("known obsolete evidence replay: %+v %v", acceptance, err)
 		}
 		if len(engine.LoadMustSucceed(t).State.ObsoleteResults[action]) != 2 {
 			t.Fatal("duplicate payload was archived again")
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(replay, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(replay, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(before, stateBytesOf(t, dir)) {
@@ -346,7 +423,7 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := engine.Submit(conflict, fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
+		if _, err := engine.Submit(conflict, Observation{}); err == nil || rejectionCode(t, err) != CodeReceiptConflict {
 			t.Fatalf("conflicting late evidence accepted: %v", err)
 		}
 	}

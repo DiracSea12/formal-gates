@@ -10,6 +10,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/requirement"
 )
 
 // ResultSchema contains the role's semantic body and a closed inability
@@ -30,7 +31,7 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		fields["findings"] = body["properties"].(map[string]any)["findings"]
 	}
 	alternatives := []any{body, interruption}
-	if input.Validation != nil && (input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5") {
+	if input.Validation != nil && (input.Handler == "engine.development.batch.v5" || input.Handler == "engine.repair.v6") {
 		partial, err := resultTypeSchema(reflect.TypeOf(DevelopmentContinuation{}))
 		if err != nil {
 			return nil, err
@@ -40,13 +41,23 @@ func ResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		}
 		alternatives = append(alternatives, partial)
 	}
-	if input.Handler == "engine.repair.v5" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
+	if input.Handler == "engine.repair.v6" && completionBatch(input) == nil && body["properties"].(map[string]any)["completion"] != nil {
 		fields := body["properties"].(map[string]any)
 		completed := maps.Clone(body)
 		completedFields := maps.Clone(fields)
+		delete(completedFields, "requirements")
 		completed["properties"] = completedFields
+		delete(completed, "anyOf")
 		completed["required"] = append(slices.Clone(body["required"].([]any)), "granularityReview", "completion", "summary")
 		completedFields["summary"] = map[string]any{"type": "string", "minLength": 1}
+		completion := maps.Clone(completedFields["completion"].(map[string]any))
+		completionFields := maps.Clone(completion["properties"].(map[string]any))
+		completionFields["requirements"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}, "description": "Actual completion evidence for the proposed single batch's selected requirement points in their published order."}
+		completion["properties"] = completionFields
+		if len(input.RequirementPoints) > 0 {
+			completion["required"] = append(slices.Clone(completion["required"].([]any)), "requirements")
+		}
+		completedFields["completion"] = completion
 		plan := maps.Clone(fields["granularityReview"].(map[string]any))
 		planFields := maps.Clone(plan["properties"].(map[string]any))
 		batches := maps.Clone(planFields["batches"].(map[string]any))
@@ -82,9 +93,9 @@ func StableResultSchema(input protocol.WorkerInput) (map[string]any, error) {
 		roles = []any{&CommandBindings{}, &ExecutionJudgments{}}
 	case "engine.qa.design.v5":
 		roles = []any{&Design{}, &CaseRevisions{}}
-	case "engine.development.batch.v4":
+	case "engine.development.batch.v5":
 		roles = []any{&Development{}, &DevelopmentContinuation{}}
-	case "engine.repair.v5":
+	case "engine.repair.v6":
 		roles = []any{&Repair{}, &DevelopmentContinuation{}}
 	}
 	alternatives := []any{}
@@ -216,7 +227,17 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		return nil, err
 	}
 	fields := body["properties"].(map[string]any)
-	if input.Handler == "engine.repair.v5" {
+	if input.Handler == "engine.repair.v6" {
+		if completionBatch(input) == nil {
+			if points := standaloneRepairPoints(input); len(points) > 0 {
+				fields["requirements"] = requirementEvidenceSchema(points)
+				body["anyOf"] = []any{map[string]any{"required": []string{"granularityReview"}, "not": map[string]any{"required": []string{"requirements"}}}, map[string]any{"required": []string{"summary", "requirements"}, "not": map[string]any{"required": []string{"granularityReview"}}}}
+			} else {
+				delete(fields, "requirements")
+			}
+		} else {
+			delete(fields, "requirements")
+		}
 		if cases := repairCaseIDs(input.Validation); len(cases) > 0 {
 			fields["affectedCases"].(map[string]any)["items"] = indexSchema(cases)
 		} else {
@@ -226,6 +247,16 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 	if plan, ok := fields["granularityReview"].(map[string]any); ok {
 		batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
 		properties := batch["properties"].(map[string]any)
+		if len(input.RequirementPoints) > 0 {
+			ids := []string{}
+			for _, point := range input.RequirementPoints {
+				ids = append(ids, point.ID)
+			}
+			properties["requirements"] = map[string]any{"type": "array", "items": indexSchema(ids), "uniqueItems": true, "description": "Select confirmed points assigned to this batch by their published positions."}
+			batch["required"] = append(batch["required"].([]any), "requirements")
+		} else {
+			delete(properties, "requirements")
+		}
 		location := LocationSchema(false)
 		delete(location["properties"].(map[string]any), "line")
 		location["description"] = "Select one original read number or listing/entry numbers for the file. The program supplies its path."
@@ -240,7 +271,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			}
 			alternatives = append(alternatives, fixedObject(map[string]any{"reuse": indexSchema(ids)}, []string{"reuse"}))
 			command["not"] = map[string]any{"enum": commands}
-			if input.Handler == "engine.repair.v5" {
+			if input.Handler == "engine.repair.v6" {
 				purpose["enum"] = []string{""}
 			}
 		}
@@ -300,7 +331,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			plan["properties"].(map[string]any)["batches"].(map[string]any)["items"] = map[string]any{"anyOf": []any{batch, changed}}
 		}
 	}
-	if input.Handler == "engine.development.batch.v4" {
+	if input.Handler == "engine.development.batch.v5" {
 		pending, positions, commands := pendingDevelopmentCommands(input)
 		duties := []any{}
 		for _, check := range pending {
@@ -315,6 +346,24 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			}
 		} else {
 			delete(fields, "commands")
+		}
+	}
+	if input.Handler == "engine.gate.v3" {
+		items := []any{}
+		for _, point := range input.RequirementPoints {
+			item := fixedObject(map[string]any{
+				"status":   map[string]any{"type": "string", "enum": []string{protocol.OutcomePass, protocol.OutcomeFail}},
+				"evidence": map[string]any{"type": "string", "minLength": 1},
+				"findings": map[string]any{"type": "array", "items": map[string]any{"type": "integer", "minimum": 1}, "uniqueItems": true},
+			}, []string{"status", "evidence"})
+			item["description"] = requirementDescription(point)
+			items = append(items, item)
+		}
+		fields["requirements"] = orderedSchema(items)
+		if len(items) > 0 {
+			body["required"] = append(body["required"].([]any), "requirements")
+		} else {
+			delete(fields, "requirements")
 		}
 	}
 	if input.Review != nil {
@@ -437,7 +486,7 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 	}
 
 	if batch := completionBatch(input); batch != nil {
-		if input.Handler == "engine.repair.v5" {
+		if input.Handler == "engine.repair.v6" {
 			fields["summary"] = map[string]any{"type": "string", "minLength": 1}
 			body["required"] = append(body["required"].([]any), "summary")
 		}
@@ -447,7 +496,12 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 			items = append(items, map[string]any{"type": "string", "minLength": 1, "description": criterion.Description})
 		}
 		completion["dod"] = orderedSchema(items)
-	} else if !(input.Handler == "engine.repair.v5" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
+		completion["requirements"] = requirementEvidenceSchema(input.RequirementPoints)
+		if len(batch.RequirementPoints) > 0 {
+			object := fields["completion"].(map[string]any)
+			object["required"] = append(object["required"].([]any), "requirements")
+		}
+	} else if !(input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Repair.FinalCandidate == nil) {
 		delete(fields, "completion")
 	}
 	if input.Handler == "engine.repair.verify.v2" {
@@ -604,9 +658,12 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		}
 		item := map[string]any{"type": "array", "items": operation}
 		items := []any{}
-		for _, id := range input.Validation.CommandCases {
+		for index, id := range input.Validation.CommandCases {
 			entry := maps.Clone(item)
 			entry["description"] = "Supply only the invocation for approved case " + id
+			if len(input.Validation.CommandSources) > 0 && strings.HasPrefix(input.Validation.CommandSources[index], "shared:") {
+				entry["description"] = "Supply only the invocation for approved shared preparation " + strings.TrimPrefix(input.Validation.CommandSources[index], "shared:") + " referenced by case " + id
+			}
 			entry["minItems"] = 1
 			items = append(items, entry)
 		}
@@ -764,7 +821,7 @@ func resultTypeSchema(value reflect.Type, stable ...bool) (map[string]any, error
 // Completion keys come only from the issued member batch. Final-candidate
 // verification and repair planning have different evidence duties.
 func completionBatch(input protocol.WorkerInput) *protocol.DevelopmentBatch {
-	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v5") {
+	if input.Validation == nil || input.Validation.Development == nil || input.Validation.Development.Batch.ID == "" || (input.Handler != "engine.development.batch.v5" && input.Handler != "engine.repair.v6") {
 		return nil
 	}
 	if input.Validation.Repair != nil && input.Validation.Repair.FinalCandidate != nil {
@@ -794,6 +851,22 @@ func orderedSchema(items []any) map[string]any {
 		schema["prefixItems"] = items
 	}
 	return schema
+}
+func requirementDescription(point requirement.Point) string {
+	return "Confirmed requirement: " + point.Requirement + "\nPoint: " + point.Text + "\nOracle: " + point.Oracle + "\nSource: " + point.Source
+}
+func requirementEvidenceSchema(points []requirement.Point) map[string]any {
+	items := []any{}
+	for _, point := range points {
+		items = append(items, map[string]any{"type": "string", "minLength": 1, "description": requirementDescription(point)})
+	}
+	return orderedSchema(items)
+}
+func standaloneRepairPoints(input protocol.WorkerInput) []requirement.Point {
+	if input.Validation == nil || input.Validation.Repair == nil {
+		return nil
+	}
+	return input.Validation.Repair.RequiredPoints
 }
 func comparisonSchema(ids []string, item map[string]any, partial bool) map[string]any {
 	items := []any{}

@@ -1,6 +1,8 @@
 package facade
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -66,7 +68,7 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 		t.Fatal("route update rewrote/duplicated original evidence")
 	}
 	resolveGateFinding(d, finding, w.ID)
-	_, in = d.action("engine.repair.v5")
+	_, in = d.action("engine.repair.v6")
 	if in.Binding.Candidate != w.Candidate.Identity {
 		t.Fatal("repair candidate changed without a repair")
 	}
@@ -77,13 +79,13 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 	d, finding, oldID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, oldID)
-	repairID, repairInput := d.action("engine.repair.v5")
+	repairID, repairInput := d.action("engine.repair.v6")
 	d.receipt(repairID)
 	unlockRouteByRequirementRedo(d)
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
 	d.reopen()
 	d.drive()
-	id, in := d.action("engine.repair.v5")
+	id, in := d.action("engine.repair.v6")
 	if id != repairID || in.Binding != repairInput.Binding {
 		t.Fatal("route addition replaced an already issued repair obligation")
 	}
@@ -112,11 +114,11 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 		t.Run(map[bool]string{false: "original", true: "replacement"}[replacement], func(t *testing.T) {
 			d, finding, oldID := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, oldID)
-			oldRepair, _ := d.action("engine.repair.v5")
+			oldRepair, _ := d.action("engine.repair.v6")
 			if replacement {
 				confirmValidationWork(d, oldRepair)
 				d.materialize()
-				current, _ := d.action("engine.repair.v5")
+				current, _ := d.action("engine.repair.v6")
 				if current == oldRepair {
 					t.Fatal("REDO retained original dispatch")
 				}
@@ -126,7 +128,7 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 			d.reopen()
 			d.drive()
 			for action, input := range d.run.ValidationInputs {
-				if input.Handler == "engine.repair.v5" {
+				if input.Handler == "engine.repair.v6" {
 					t.Errorf("THAW revived canceled repair %s as %s with task %s", oldRepair, action, input.Binding.Task.String())
 				}
 			}
@@ -152,7 +154,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 	if a.Status != "ACCEPTED" {
 		t.Fatalf("ordinary gate addition rejected unchanged in-flight QA review: %s", a.Status)
 	}
-	id, in = d.action("engine.development.batch.v4")
+	id, in = d.action("engine.development.batch.v5")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate inputs"}})
 	d.materialize()
 	d.materialize()
@@ -349,7 +351,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newValidationDriver(t, "whitebox", "quality")
-			id, in := d.action("engine.development.batch.v4")
+			id, in := d.action("engine.development.batch.v5")
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "validate input"}})
 			d.materialize()
 			d.materialize()
@@ -403,12 +405,12 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v5")
+	id, in := d.action("engine.repair.v6")
 	task := in.Binding.Task
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "worker-interrupted"}})
 	d.drive()
-	id, retry := d.action("engine.repair.v5")
+	id, retry := d.action("engine.repair.v6")
 	before := d.run.Attempts[task]
 	if before.Attempts != 1 || before.MaxAttempts != 2 || retry.Binding.Task != task {
 		t.Fatal("setup did not retain first failure")
@@ -480,7 +482,7 @@ func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
 	}
 	d.drive()
-	d.action("engine.development.batch.v4")
+	d.action("engine.development.batch.v5")
 }
 
 // TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges：§6.3.1 开发已
@@ -539,7 +541,7 @@ func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing
 	d.confirmRoute(route)
 	d.confirmRoute(route)
 	d.drive()
-	id, in := d.action("engine.development.batch.v4")
+	id, in := d.action("engine.development.batch.v5")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.materialize()
 	d.materialize()
@@ -570,7 +572,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, waveID := validationWithGateFinding(t)
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
-	id, in := d.action("engine.repair.v5")
+	id, in := d.action("engine.repair.v6")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	d.verifyRepair(edit)
@@ -622,7 +624,7 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	resolution := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "input", RootCause: "valid input panic", Consequence: "normal command cannot complete", Severity: "P1", SeverityRationale: "core valid input fails with no workaround", Verification: review.FindingVerification{Scope: "confirmed input", Severity: "core failure", Causality: "input panic", Reproduction: "app run valid-input", Classification: "implementation"}, Reason: "observed valid input panic"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v5")
+	id, in = d.action("engine.repair.v6")
 	edit := gateRepairResult(in)
 	d.business(id, edit)
 	if edit.Binding.PureP2 {
@@ -698,5 +700,178 @@ func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
 	id, in := planBatchAction(d, "command")
 	if in.Development == nil || in.Development.Batch.ID != "command" {
 		t.Fatalf("reselection broke development dispatch: %s %+v", id, in)
+	}
+}
+
+func TestCarriedPrewaveWorkRetainsConfirmedSources(t *testing.T) {
+	for _, source := range []string{"requirement", "solution", "changed-solution"} {
+		for _, role := range []string{"design", "review"} {
+			t.Run(source+"/"+role, func(t *testing.T) {
+				root := t.TempDir()
+				solution := ""
+				if source != "requirement" {
+					solution = "solution.md"
+					if err := os.WriteFile(filepath.Join(root, solution), []byte("# Confirmed solution\nUse documented input validation.\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				repo := newFrozenGitRepo()
+				d := startValidationDriverAtVCS(t, root, DefaultProvider, repo, frozenSnapshot, nil, solution)
+				d.frozen = repo
+				passPreDevelopmentReviews(t, d, commandPlan())
+				d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
+				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
+				d.drive()
+				action, original := d.action("engine.qa.design.v5")
+				manifest := simpleManifest(original)
+				result := protocol.ValidationResult{Binding: original.Binding, Status: "PASS", Manifest: &manifest}
+				if role == "review" {
+					d.business(action, result)
+					d.drive()
+					action, original = d.action("engine.qa.review.rationale.v2")
+					review := approvedReview(manifest)
+					result = protocol.ValidationResult{Binding: original.Binding, Status: "PASS", Review: &review}
+				}
+				attempt := d.run.PendingActions[action].AttemptID
+				if source == "changed-solution" {
+					if err := os.WriteFile(filepath.Join(root, solution), []byte("# Confirmed solution\nUse documented input validation.\n\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				unlockRouteByRequirementRedo(d)
+				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
+				d.reopen()
+				d.drive()
+				current, visible := d.run.ValidationInputs[action]
+				if !visible || current.Binding != original.Binding || current.Manifest.Binding != original.Manifest.Binding || !reflect.DeepEqual(current.Contract, original.Contract) || d.run.PendingActions[action].AttemptID != attempt {
+					t.Fatal("carried work lost its signed source, contract, action, task or attempt")
+				}
+				state := driverState(t, d)
+				confirmed := state.CurrentIntakeConfirmation()
+				if current.RequirementDocument.ContentDigest != confirmed.RequirementRevision || confirmed.RequirementRevision == original.Binding.RequirementRevision {
+					t.Fatal("carried work did not receive current confirmed requirement context")
+				}
+				if (confirmed.SolutionRevision != original.Manifest.Binding.SolutionRevision) != (source != "solution") {
+					t.Fatal("current solution revision does not match the actual selected source")
+				}
+				d.business(action, result)
+				state = driverState(t, d)
+				if !reflect.DeepEqual(state.Results[action].Validation, &result) {
+					t.Fatal("acceptance rewrote the original signed result evidence")
+				}
+				set := state.Validation.Sets[coverage.ReviewBlackbox]
+				if role == "review" && (len(set.ReviewHistory) != 1 || !reflect.DeepEqual(set.ReviewHistory[0].Manifest, original.Manifest) || !reflect.DeepEqual(set.ReviewHistory[0].Review, *result.Review)) {
+					t.Fatal("review history did not preserve the original manifest and review evidence")
+				}
+				if set.Manifest.Binding.RequirementRevision != confirmed.RequirementRevision || set.Manifest.Binding.SolutionRevision != confirmed.SolutionRevision {
+					t.Fatal("acceptance did not project the carried evidence to current sources")
+				}
+				if role == "design" {
+					d.drive()
+					id, in := d.action("engine.qa.review.rationale.v2")
+					review := approvedReview(in.Manifest)
+					d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &review})
+				}
+				if d.run.Validation.Sets[coverage.ReviewBlackbox].Status != "FROZEN" {
+					t.Fatal("carried sources did not reach frozen approval")
+				}
+			})
+		}
+	}
+}
+
+func TestCarriedPrewaveResultSurvivesDeliveryOrder(t *testing.T) {
+	for _, role := range []string{"design", "review"} {
+		for _, delivery := range []string{"staged", "quarantine", "retry"} {
+			t.Run(role+"/"+delivery, func(t *testing.T) {
+				d := newValidationDriver(t, "blackbox", "quality")
+				action, original := d.action("engine.qa.design.v5")
+				manifest := simpleManifest(original)
+				result := protocol.ValidationResult{Binding: original.Binding, Status: "PASS", Manifest: &manifest}
+				if role == "review" {
+					d.business(action, result)
+					d.drive()
+					action, original = d.action("engine.qa.review.rationale.v2")
+					review := approvedReview(manifest)
+					result = protocol.ValidationResult{Binding: original.Binding, Status: "PASS", Review: &review}
+				}
+				event := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "signed-original-evidence", Validation: &result}}
+				if delivery == "staged" {
+					d.submit(event)
+				}
+				if delivery == "quarantine" {
+					d.receipt(action)
+					path := filepath.Join(d.f.root, d.run.IntakeConfirmationReceipt.RequirementSource)
+					document, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, append(document, '\n'), 0600); err != nil {
+						t.Fatal(err)
+					}
+					choices := make([]WorkChoice, len(d.run.RequirementWork))
+					for i := range choices {
+						choices[i] = WorkChoice{Disposition: protocol.RequirementWorkCarry, Reason: "confirm original signed duties"}
+					}
+					request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Redo: []string{"route"}, Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, CarryReasons: []string{"same signed cases and candidate"}}}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, d.run, err = d.f.SubmitControl(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(event)
+					state := driverState(t, d)
+					if !reflect.DeepEqual(state.QuarantinedResults[string(event.ID)].Validation, &result) {
+						t.Fatal("barrier did not retain exact worker evidence")
+					}
+					confirmation, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "carry original evidence and reopen route"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, d.run, err = d.f.SubmitControl(confirmation)
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					unlockRouteByRequirementRedo(d)
+				}
+				d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
+				d.reopen()
+				d.drive()
+				if delivery == "retry" {
+					d.receipt(action)
+					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: authoring.FailureTransientEngine, PayloadDigest: "interrupted-original-work"}})
+					d.drive()
+					var input protocol.ValidationInput
+					action, input = d.action(original.Handler)
+					if input.Binding != original.Binding || input.Manifest.Binding != original.Manifest.Binding || !reflect.DeepEqual(input.Contract, original.Contract) {
+						t.Fatal("retry selected new confirmation instead of the signed source epoch")
+					}
+					d.business(action, result)
+				} else if delivery == "staged" {
+					current, visible := d.run.ValidationInputs[action]
+					if !visible || current.Binding != original.Binding || current.Manifest.Binding != original.Manifest.Binding {
+						t.Fatal("staged carry lost original issued input")
+					}
+					d.receipt(action)
+				}
+				state := driverState(t, d)
+				if !reflect.DeepEqual(state.Results[action].Validation, &result) || len(state.ObsoleteResults[action]) != 0 {
+					t.Fatal("delivery order changed or obsoleted carried evidence")
+				}
+				set := state.Validation.Sets[coverage.ReviewBlackbox]
+				if role == "review" && (len(set.ReviewHistory) != 1 || !reflect.DeepEqual(set.ReviewHistory[0].Manifest, original.Manifest) || !reflect.DeepEqual(set.ReviewHistory[0].Review, *result.Review)) {
+					t.Fatal("review history did not preserve the original manifest and review evidence")
+				}
+				if set.Manifest.Binding.RequirementRevision != state.RequirementRevision() || set.Manifest.Binding.SolutionRevision != state.CurrentIntakeConfirmation().SolutionRevision {
+					t.Fatal("carried result did not settle current source projection")
+				}
+				if role == "review" && set.Status != "FROZEN" {
+					t.Fatal("carried review failed to freeze")
+				}
+			})
+		}
 	}
 }

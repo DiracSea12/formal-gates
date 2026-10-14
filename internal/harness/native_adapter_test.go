@@ -3,6 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"formal-gates/internal/host"
+	"formal-gates/internal/settings"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,11 +42,20 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	}
 	directory := t.TempDir()
 	calls := []string{}
-	entry := nativePlatform{Descriptor: &host.Descriptor{ID: "native-peer", InstallName: "native-peer", Aliases: []string{"native-peer-alias"}}}
+	entry := nativePlatform{Descriptor: &host.Descriptor{ID: "native-peer", Installable: true, InstallName: "native-peer", Aliases: []string{"native-peer-alias"}}}
 	binding := map[string]any{"identity": "binary-identity"}
 	source := map[string]any{"session": "session-identity"}
 	process := map[string]any{"attempt": "attempt-identity"}
 	entry.implementation = nativeImplementation{
+		resolvePaths: func(native, sources map[string]string) error {
+			if !reflect.DeepEqual(native, map[string]string{"nativePeerExecutable": "selected-input", "unselectedExecutable": "unselected-input"}) || sources["nativePeerExecutable"] != "source-input" {
+				t.Fatal("resolver input differs", native, sources)
+			}
+			calls = append(calls, "resolve")
+			native["nativePeerExecutable"] = "selected-output"
+			sources["nativePeerExecutable"] = "source-output"
+			return nil
+		},
 		capture: func() (map[string]any, error) { calls = append(calls, "capture"); return binding, nil },
 		validateBinding: func(got any) error {
 			if !reflect.DeepEqual(got, binding) {
@@ -68,7 +78,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 			calls = append(calls, "start")
 			return nil
 		},
-		reconcile: func(dir string, got any) (map[string]any, error) {
+		reconcile: func(dir string, got any, services ...ExecutionServices) (map[string]any, error) {
 			if dir != directory || !reflect.DeepEqual(got, process) {
 				t.Fatalf("process = %s %#v", dir, got)
 			}
@@ -85,6 +95,10 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	}
 	if err := registerNativePlatform(entry.Descriptor, entry.implementation); err != nil {
 		t.Fatal(err)
+	}
+	frozen, err := settings.Freeze("native-peer-alias", settings.Effective{Values: settings.Values{Native: map[string]string{"nativePeerExecutable": "selected-input", "unselectedExecutable": "unselected-input"}}, Sources: map[string]string{"nativePeerExecutable": "source-input"}})
+	if err != nil || frozen.Values.Native["nativePeerExecutable"] != "selected-output" || frozen.Values.Native["unselectedExecutable"] != "unselected-input" || frozen.Sources["nativePeerExecutable"] != "source-output" {
+		t.Fatal("registered resolver differs", frozen, err)
 	}
 	adapter, err := nativeImplementationFor("native-peer")
 	if err != nil {
@@ -122,7 +136,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, source) {
 		t.Fatalf("reconcile = %#v %v", got, err)
 	}
-	if !reflect.DeepEqual(calls, []string{"capture", "validate", "verify", "start", "validate", "execute", "reconcile"}) {
+	if !reflect.DeepEqual(calls, []string{"resolve", "capture", "validate", "verify", "start", "validate", "execute", "reconcile"}) {
 		t.Fatalf("boundary calls = %v", calls)
 	}
 }

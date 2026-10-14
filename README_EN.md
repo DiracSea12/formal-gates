@@ -24,12 +24,17 @@ intake begins only when the user explicitly requests it.
    raw finding and the user decides valid findings. Technical review produces Batch→Subtask,
    dependencies, DoD, verification, and recovery contracts.
 4. **Plan and route.** Bind exact split topology or the no-split reason after technical review,
-   then choose full/custom. Start does not predict split; the engine creates child runs.
-5. **Concurrent development.** Development runs alongside blackbox design/review in a baseline
+   then confirm default/full/custom. In an unsliced run, default selects every ordinary gate without
+   blackbox/whitebox QA; full selects every ordinary gate and both QA modes (the QA stage is heavier
+   and suits large tasks); custom selects a nonempty subset or the entire current candidate set.
+   Recommendations still require confirmation, and each child decides independently. Children exclude
+   ordinary QA, so default/full both select every ordinary gate; the master requires merge verification.
+   Start does not predict split; the engine creates child runs.
+5. **Concurrent development.** When blackbox is selected, development runs alongside its design/review in a baseline
    workspace. Developers and reviewers remain isolated. Each Batch starts a new development
    session; retries and recovery within the Batch retain the original identity.
 6. **Freeze the candidate.** The adapter validates the manifest, tracks paths, commits, and fixes
-   a snapshot. Whitebox QA independently assesses coverage and tests. All FROZEN case sets and
+   a snapshot. When selected, whitebox QA independently assesses coverage and tests. All selected QA modes' FROZEN case sets and
    deliverables belong to the final candidate; Git squash precedes the last required validation.
 7. **Parallel validation.** Freeze one complete expected set and run QA and gates up to capacity,
    refilling slots promptly. Gates read the full baseline-to-candidate diff; independent QA case
@@ -59,9 +64,12 @@ choices and confirm at the required human nodes. The exhaustive public workflow 
 
 Start bootstraps, drive advances and recovers, and submit accepts business results and confirmed
 user decisions. Message adds temporary text to an existing action; handoff requests the original
-recovery Ask; replan prepares the original confirmation. Other operations are read-only. Requirement changes, route changes, reset, abort,
+recovery Ask; replan prepares and saves the plan-review confirmation payload. Show/status/diagnose/guard-preview are read-only; semantic next choices prepare a confirmation payload, and progress can explicitly save its payload. Preparation or saving does not confirm a user decision. Requirement changes, route changes, reset, abort,
 waiver/skip, and HUMAN legal-node jumps use availableActions and typed Ask decisions. Reconcile
 UNKNOWN before another spawn or VCS side effect.
+
+User/project model, effort, concurrency, token cap, and native path settings are frozen at start;
+recovery preserves their sources and budgets. See [configuration](references/user-configuration.md).
 
 Version, definition/package digest, or installation identity mismatch rejects ordinary reads and
 writes. Diagnose can inspect raw state; unsupported runs are neither migrated nor continued. Create
@@ -89,7 +97,7 @@ unexecuted cells are reported as unverified or skipped.
 
 ### Install from a release (recommended)
 
-No Go toolchain needed. Download the latest release source archive, extract it, and run the install script inside it (`install.command` on macOS/Linux, `install.bat` on Windows). The script downloads the matching native binary, canary, and SHA256 checksums, verifies them, assembles a local package, and calls the same native installer:
+No Go toolchain needed. Download the target release source archive, extract it, and run the install script inside it (`install.command` on macOS/Linux, `install.bat` on Windows). Select the version with `--version <target tag>` on macOS/Linux or `-Version <target tag>` on Windows. If omitted, the scripts read `FORMAL_GATES_VERSION`, then fall back to `v0.1.0`. Running a script from an archive does not automatically select that archive's version. The script downloads the selected tag's source, matching native binary, canary, and SHA256 checksums, verifies them, assembles a local package, and calls the same native installer:
 
 ```bash
 ./install.command --host claude --scope global
@@ -98,10 +106,13 @@ No Go toolchain needed. Download the latest release source archive, extract it, 
 
 ### Build from source (read-only validation)
 
-A source-built binary is a candidate. It may run package validation and the isolated canary, but
-it cannot install, bootstrap, uninstall, or write workflow state. Production installation always
-uses the release bootstrap above, which stages the verified binary at the fixed stable launcher
-before entering the single native transaction:
+A source-built binary is a candidate for package validation and the isolated canary; it rejects
+ordinary installation, bootstrap, uninstall, and workflow writes. The release script stages a verified
+binary only when the fixed stable launcher is absent, then uses that launcher for the single native
+transaction. Only when the existing launcher rejects new release-install flags and `--force`
+(`-Force` on Windows) is explicit does the script use the verified release source package's binary
+for the same transaction, updating the default fixed launcher. The original journal owns its backup
+before replacement. See [installation and hooks](references/install-and-hooks.md#原生安装). Source validation:
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
@@ -171,5 +182,3 @@ Gate review prose lives in `gates/*.md`; executable tasks still require registra
 in the current definition. Update CHANGELOG for behavior changes and use GitHub issues for reports.
 
 [MIT](LICENSE) · [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases)
-
-Editable user/project model, effort, concurrency, token cap and native path settings are frozen at start; recovery preserves their sources and budgets. See [configuration](references/user-configuration.md) and the [public feedback, progress, replan and handoff contract](references/formal-flow.md).

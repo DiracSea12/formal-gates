@@ -4,10 +4,120 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/prompts"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+// Route confirmation retains the native creation responsibility; normal
+// completion and a lost response admit the same original workspace proof.
+func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
+	for _, lostResponse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lost-response=%t", lostResponse), func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := nativeMasterAt(t, root, base, nil)
+			passPreDevelopmentReviews(t, d, commandPlan())
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
+			catalog, err := prompts.PackageRouteCandidates(d.f.admission.Target)
+			if err != nil || len(catalog) < 4 {
+				t.Fatal("fixture needs two installed ordinary gates", catalog, err)
+			}
+			d.confirmRoute(routeDecisionForGates([]string{catalog[2]}))
+			state := driverState(t, d)
+			if len(state.PendingHostActions) != 1 || len(state.PendingActions) != 0 {
+				t.Fatal("fixture requires an unobserved workspace before development")
+			}
+			var original protocol.HostActionIntent
+			for _, intent := range state.PendingHostActions {
+				original = intent
+			}
+			var parameters protocol.WorkspaceParameters
+			if err := decodeNativeParams(original, &parameters); err != nil || parameters.Task == nil || parameters.Resource.Role != "development" {
+				t.Fatal("fixture has no original development workspace", err)
+			}
+			var executed nativeResult
+			if lostResponse {
+				var complete bool
+				executed, complete, err = d.f.nativeEvidence(state, original, true)
+				if err != nil || !complete || executed.Workspace == nil {
+					t.Fatal("native execution did not establish its actual effect", complete, err)
+				}
+				unknown, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), original.ActionID, "op.workspace", d.host(), original.Correlation, original.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(unknown)
+			}
+			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, d.run, err = d.f.SubmitControl(request); err != nil {
+				t.Fatal(err)
+			}
+			// Replacing an ordinary gate is legal before any development dispatch.
+			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{4}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, d.run, err = d.f.SubmitControl(choice); err != nil || !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[3:4]) {
+				t.Fatal("queued workspace blocked confirmed route replacement", err)
+			}
+			d.reopen()
+			state = driverState(t, d)
+			if len(state.PendingHostActions) != 1 || !reflect.DeepEqual(state.PendingHostActions[original.ActionID], original) || state.NativeResources[parameters.Resource.ID] != parameters.Resource || !state.NativeActionCurrent(original, d.f.definition) || state.NativeActionWritable(original, d.f.definition) == lostResponse {
+				t.Fatal("route replacement changed original responsibility or UNKNOWN qualification")
+			}
+			if progress, err := d.f.completeNativeIntent(state, original, !lostResponse); err != nil || !progress {
+				t.Fatal("original completion did not reach typed receipt admission", progress, err)
+			}
+			state = driverState(t, d)
+			receipt := state.HostActionReceipts[original.ActionID]
+			if receipt.AdapterEvidence == nil {
+				t.Fatal("original completion lacks typed workspace evidence")
+			}
+			var proof protocol.WorkspaceEvidence
+			raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+			if err != nil || json.Unmarshal(raw, &proof) != nil {
+				t.Fatal("original receipt lacks typed resource proof", err)
+			}
+			expected := parameters.Resource
+			expected.Status, expected.Identity = "READY", expected.Source
+			digest, err := d.f.vcs.TreeDigest(base)
+			if err != nil || proof.Resource != expected || proof.ParametersDigest != original.PayloadDigest || proof.Digest != digest || proof.SourceDigest != digest || receipt.Status != protocol.HostActionStatusExecuted || receipt.Correlation != original.Correlation || receipt.PayloadDigest != original.PayloadDigest {
+				t.Fatal("original receipt differs from its actual registered source", proof, err)
+			}
+			if lostResponse && !reflect.DeepEqual(proof, *executed.Workspace) {
+				t.Fatal("observation changed the lost-response proof")
+			}
+			if effect := state.ReconciledEffects[original.ActionID]; effect.Intent == nil || !reflect.DeepEqual(*effect.Intent, original) || lostResponse && effect.UnknownReceipt == nil {
+				t.Fatal("receipt settlement discarded the original intent or UNKNOWN evidence")
+			}
+			body, err := os.ReadFile(filepath.Join(expected.Path, "requirements.md"))
+			if err != nil || string(body) != validationDocument {
+				t.Fatal("workspace material differs from its confirmed source", err)
+			}
+			before := state
+			event, err := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:"+receipt.ActionID), receipt.ActionID, receipt.AdapterOperation, receipt.Provider, receipt.Correlation, receipt.PayloadDigest, receipt.Status, receipt.FailureClass, receipt.AdapterEvidence.Values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if accepted := d.submit(event); !reflect.DeepEqual(accepted, before.Events[string(event.ID)].Acceptance) {
+				t.Fatal("original receipt event replay changed acceptance", accepted)
+			}
+			d.reopen()
+			if progress, err := d.f.completeNativeIntent(driverState(t, d), original, false); err != nil || progress || !reflect.DeepEqual(before, driverState(t, d)) {
+				t.Fatal("reopen or duplicate receipt repeated the workspace effect", progress, err)
+			}
+		})
+	}
+}
 
 func TestCarriedPendingWorkspaceKeepsItsOriginalReceipt(t *testing.T) {
 	pendingWorkspaceRequirementChange(t, false)
@@ -30,7 +140,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			d.drive()
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution.v3")
-			gate, gi := d.action("engine.gate.v2")
+			gate, gi := d.action("engine.gate.v3")
 			report := executionFor(qi)
 			tool, environment := protocol.ExecutionIdentities(qi.ExecutionFacts)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: tool, Environment: environment})
@@ -126,7 +236,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 				if _, executed := state.HostActionReceipts[original.ActionID]; executed {
 					t.Fatal("REDO executed the obsolete workspace")
 				}
-				_, repair := d.action("engine.repair.v5")
+				_, repair := d.action("engine.repair.v6")
 				if repair.Binding.Task == *originalInput.Task || repair.Binding.WorkspaceID == originalInput.Resource.ID {
 					t.Fatal("replacement borrowed the original task or resource")
 				}
@@ -189,11 +299,178 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 			if after.HostActionReceipts[original.ActionID].Digest != receipt.Digest || len(after.HostActionReceipts) != len(beforeExecution.HostActionReceipts) {
 				t.Fatal("reopen reexecuted the original workspace")
 			}
-			_, repair := d.action("engine.repair.v5")
+			_, repair := d.action("engine.repair.v6")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}
 			t.Logf("resolved %s; current requirement=%s; repair resumed", choice, expected)
+		})
+	}
+}
+
+// A confirmed route addition binds a new mirror while retained calls keep
+// their original evidence and observe their native prefix before new writes.
+func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
+	for _, response := range []string{"pending", "unknown-absent", "unknown-executed", "late-executed"} {
+		t.Run(response, func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := nativeMasterAt(t, root, base, nil)
+			passPreDevelopmentReviews(t, d, commandPlan())
+			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
+			catalog, err := prompts.PackageRouteCandidates(d.f.admission.Target)
+			if err != nil || len(catalog) < 4 {
+				t.Fatal("fixture needs two installed ordinary gates", catalog, err)
+			}
+			d.confirmRoute(routeDecisionForGates([]string{"blackbox", catalog[2]}))
+			d.drive()
+			design, input := d.action("engine.qa.design.v5")
+			manifest := simpleManifest(input)
+			d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+			state := driverState(t, d)
+			var original protocol.HostActionIntent
+			var parameters protocol.WorkspaceParameters
+			for _, intent := range state.PendingHostActions {
+				var p protocol.WorkspaceParameters
+				if intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" && decodeNativeParams(intent, &p) == nil && p.Manifest != nil {
+					original, parameters = intent, p
+				}
+			}
+			if original.ActionID == "" || parameters.Resource.Status != "READY" {
+				t.Fatal("normal design did not queue a mirror on its created workspace")
+			}
+			var executed nativeResult
+			if response == "unknown-executed" || response == "late-executed" {
+				var complete bool
+				executed, complete, err = d.f.nativeEvidence(state, original, true)
+				if err != nil || !complete || executed.Workspace == nil {
+					t.Fatal("original mirror did not establish its exact effect", complete, err)
+				}
+			}
+			var unknown protocol.Event
+			if response != "pending" {
+				unknown, err = protocol.NewAdapterHostActionReceiptEvent(d.eventID(), original.ActionID, "op.workspace", d.host(), original.Correlation, original.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(unknown)
+			}
+			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, d.run, err = d.f.SubmitControl(request); err != nil {
+				t.Fatal(err)
+			}
+			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{1, 3, 4}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, d.run, err = d.f.SubmitControl(choice); err != nil {
+				t.Fatal(err)
+			}
+			d.reopen()
+			state = driverState(t, d)
+			if !reflect.DeepEqual(state.PendingHostActions[original.ActionID], original) || state.NativeActionCurrent(original, d.f.definition) || state.NativeActionWritable(original, d.f.definition) || !state.WorkspaceMirrorSuperseded(original, d.f.definition) {
+				t.Fatal("route addition rewrote original evidence or retained its writer")
+			}
+			target := filepath.Join(parameters.Resource.Path, ".gates", "cases", "blackbox.md")
+			prior, priorErr := os.ReadFile(target)
+			if priorErr != nil && !os.IsNotExist(priorErr) {
+				t.Fatal(priorErr)
+			}
+			if _, _, err := d.f.nativeEvidence(state, original, true); err != nil {
+				t.Fatal("stale observation failed to use original physical inputs", err)
+			}
+			if actual, err := os.ReadFile(target); err != nil && !os.IsNotExist(err) || os.IsNotExist(err) != os.IsNotExist(priorErr) || string(actual) != string(prior) {
+				t.Fatal("stale intent changed its native mirror", err)
+			}
+			if response == "late-executed" {
+				var current protocol.HostActionIntent
+				for _, intent := range state.PendingHostActions {
+					if intent.ActionID != original.ActionID && intent.Adapter != nil && intent.Adapter.Operation == "op.workspace" && state.NativeActionCurrent(intent, d.f.definition) {
+						current = intent
+					}
+				}
+				if current.ActionID == "" {
+					t.Fatal("route addition lacks its signed current mirror")
+				}
+				if progress, err := d.f.completeNativeIntent(state, current, true); err != nil || !progress {
+					t.Fatal("current mirror did not produce its original receipt", progress, err)
+				}
+				state = driverState(t, d)
+				if !state.WorkspaceMirrorSuperseded(original, d.f.definition) {
+					t.Fatal("completed current mirror lost supersession evidence")
+				}
+			}
+			d.drive()
+			state = driverState(t, d)
+			if _, pending := state.PendingHostActions[original.ActionID]; pending {
+				t.Fatal("current mirror left original native responsibility unresolved")
+			}
+			effect := state.ReconciledEffects[original.ActionID]
+			if effect.Intent == nil || !reflect.DeepEqual(*effect.Intent, original) {
+				t.Fatal("mirror settlement changed original signed parameters")
+			}
+			if response == "unknown-executed" {
+				receipt := state.HostActionReceipts[original.ActionID]
+				var proof protocol.WorkspaceEvidence
+				raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+				if err != nil || json.Unmarshal(raw, &proof) != nil || !reflect.DeepEqual(proof, *executed.Workspace) || receipt.PayloadDigest != original.PayloadDigest || effect.Status != "FULFILLED" || effect.UnknownReceipt == nil {
+					t.Fatal("lost-response completion changed its original workspace proof", proof, err)
+				}
+			} else {
+				if effect.Status != "WITHDRAWN" || effect.Resource == nil || effect.Resource.ParametersDigest != original.PayloadDigest || effect.Resource.Resource != parameters.Resource || !effect.Resource.WorktreeExists || effect.Resource.Prefix == nil || effect.ObservationDigest == "" {
+					t.Fatal("unfinished mirror was not withdrawn from its exact observed resource")
+				}
+				if receipt, exists := state.HostActionReceipts[original.ActionID]; exists && receipt.Status == protocol.HostActionStatusExecuted {
+					t.Fatal("unfinished mirror manufactured an EXECUTED receipt")
+				}
+				if response != "pending" && effect.UnknownReceipt == nil {
+					t.Fatal("withdrawal discarded the original UNKNOWN receipt")
+				}
+			}
+			currentManifest := state.Validation.Sets[coverage.ReviewBlackbox].Manifest
+			body, err := os.ReadFile(target)
+			if err != nil || string(body) != protocol.BlackboxCasesMarkdown(state.RunID, currentManifest) || state.NativeResources[parameters.Resource.ID].MirrorDigest != protocol.BlackboxCasesDigest(state.RunID, currentManifest) {
+				t.Fatal("materialized mirror differs from the entire current manifest", err)
+			}
+			_, reviewInput := d.action("engine.qa.review.rationale.v2")
+			if reviewInput.Binding.WorkspaceID != parameters.Resource.ID {
+				t.Fatal("current QA review borrowed another physical workspace")
+			}
+			if response == "late-executed" {
+				before := state.NativeResources[parameters.Resource.ID]
+				values, err := executed.fields()
+				if err != nil {
+					t.Fatal(err)
+				}
+				late, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), original.ActionID, "op.workspace", d.host(), original.Correlation, original.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(late)
+				state = driverState(t, d)
+				if state.NativeResources[parameters.Resource.ID] != before || state.ReconciledEffects[original.ActionID].Status != "WITHDRAWN" || state.HostActionReceipts[original.ActionID].Status != protocol.HostActionStatusExecuted {
+					t.Fatal("late original completion rolled back current native facts")
+				}
+				if !reflect.DeepEqual(d.submit(late), state.Events[string(late.ID)].Acceptance) {
+					t.Fatal("original receipt replay changed acceptance")
+				}
+			}
+			if response != "pending" {
+				d.submit(unknown)
+			}
+			before := driverState(t, d)
+			d.reopen()
+			d.drive()
+			after := driverState(t, d)
+			if !reflect.DeepEqual(before.NativeResources, after.NativeResources) || !reflect.DeepEqual(before.HostActionReceipts, after.HostActionReceipts) || !reflect.DeepEqual(before.ReconciledEffects, after.ReconciledEffects) {
+				t.Fatal("reopen or duplicate observation changed settled native evidence")
+			}
+			if actual, err := os.ReadFile(target); err != nil || string(actual) != string(body) {
+				t.Fatal("reopen or replay changed current mirror bytes", err)
+			}
 		})
 	}
 }

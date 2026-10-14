@@ -5,6 +5,7 @@
 package review
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -161,6 +162,9 @@ func TestFindingDecisionReportsEffectiveAdjudication(t *testing.T) {
 	if !ok || action != ProductReview || decision != "" || severity != "P1" {
 		t.Fatalf("FindingDecision = %s,%q,%q,%v want unadjudicated P1", action, decision, severity, ok)
 	}
+	if _, _, _, ok := FindingDecision(set, "sha256:unknown"); ok {
+		t.Fatal("an unknown digest must not be locatable")
+	}
 	confirmed := mustApply(t, set, "run-owner", "rev-1", CorrectionInput{
 		Action: ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
 		ResultDigest: round.ResultDigest, FindingID: round.Findings[0].ID,
@@ -180,27 +184,76 @@ func TestFindingDecisionReportsEffectiveAdjudication(t *testing.T) {
 	}
 }
 
-// TestFindingOwnerLocatesActiveEvidence：FindingOwner 只在未被整轮失效排除
-// 的证据中定位 finding；排除后同一 digest 不再可绑。
-func TestFindingOwnerLocatesActiveEvidence(t *testing.T) {
-	set := NewSet()
-	set, round := mustRecord(t, set, "run-owner", ProductReview,
-		Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1"},
-		Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", Message: "advisory defect"}}})
-	digest := round.Findings[0].Digest
-	if action, ok := FindingOwner(set, digest); !ok || action != ProductReview {
-		t.Fatalf("FindingOwner = %s,%v want ProductReview,true", action, ok)
-	}
-	if _, ok := FindingOwner(set, "sha256:unknown"); ok {
-		t.Fatal("an unknown digest must not be locatable")
-	}
-	invalidated := mustApply(t, set, "run-owner", "rev-1", CorrectionInput{
-		Action: ProductReview, DispatchID: "dispatch-1", RequirementRevision: "rev-1",
-		ResultDigest: round.ResultDigest,
-		Decision:     "INVALIDATE_RESULT", Invalidity: "STALE",
-		Reason: "the round is stale", Source: "engine-decide:req-1", UserAuthorized: true,
-	})
-	if _, ok := FindingOwner(invalidated, digest); ok {
-		t.Fatal("a finding inside an invalidated round must not be locatable")
+func TestFindingDecisionUsesTheCurrentBindingAndLatestUserDisposition(t *testing.T) {
+	for _, action := range []Action{ProductReview, StartReadiness} {
+		for _, originalDecision := range []string{"DISMISS", "CONFIRM"} {
+			t.Run(string(action)+"/"+originalDecision, func(t *testing.T) {
+				const runID = "run-finding-disposition"
+				finding := Finding{Severity: "P2", Category: "acceptance-entry", Message: "documented input boundary", Locations: []string{"requirements.md:5"}}
+				oldOnly := Finding{Severity: "P3", Category: "implementation-detail", Message: "original wording"}
+				set, original := mustRecord(t, NewSet(), runID, action, Dispatch{ID: "original-review", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{finding, oldOnly}})
+				apply := func(candidate RawCandidate, decision, severity, reason string) {
+					t.Helper()
+					series, _ := set.Series(action)
+					set = mustApply(t, set, runID, candidate.RequirementRevision, CorrectionInput{Action: action, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision, ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID, Decision: decision, Severity: severity, Reason: reason, Source: "user", UserAuthorized: true, Supersedes: LatestDecisionID(series, candidate.ResultDigest, candidate.Findings[0].ID)})
+				}
+				apply(original, originalDecision, "", "original premise checked")
+				// The lookup uses the series' own effective content binding.
+				if owner, decision, severity, ok := FindingDecision(set, original.Findings[0].Digest); !ok || owner != action || decision != originalDecision || severity != "P2" {
+					t.Fatalf("original bound disposition = %s/%s/%s/%v", owner, decision, severity, ok)
+				}
+				set = StaleSeries(set, action, "requirement-change:current", 9)
+				set, current := mustRecord(t, set, runID, action, Dispatch{ID: "current-review", RequirementRevision: "rev-2"}, Result{Status: "PASS", Findings: []Finding{finding}})
+				if current.Findings[0].Digest != original.Findings[0].Digest || current.Findings[0].ID != original.Findings[0].ID {
+					t.Fatal("content identity must remain stable across requirement bindings")
+				}
+				if owner, decision, severity, ok := FindingDecision(set, current.Findings[0].Digest); !ok || owner != action || decision != "" || severity != "P2" {
+					t.Fatalf("current raw finding borrowed an original disposition: %s/%s/%s/%v", owner, decision, severity, ok)
+				}
+				if _, _, _, ok := FindingDecision(set, original.Findings[1].Digest); ok {
+					t.Fatal("an original-only finding cannot drive the current binding")
+				}
+				if facts := SettledFindings(set); len(facts) != 1 || facts[0].Decision != originalDecision || facts[0].RequirementRevision != "rev-1" {
+					t.Fatalf("historical settled context was lost: %+v", facts)
+				}
+				currentDecision := "CONFIRM"
+				if originalDecision == "CONFIRM" {
+					currentDecision = "DISMISS"
+				}
+				apply(current, currentDecision, "", "current premise checked")
+				if owner, decision, severity, ok := FindingDecision(set, current.Findings[0].Digest); !ok || owner != action || decision != currentDecision || severity != "P2" {
+					t.Fatalf("current decision was replaced by the original one: %s/%s/%s/%v", owner, decision, severity, ok)
+				}
+				set, repeated := mustRecord(t, set, runID, action, Dispatch{ID: "repeated-review", RequirementRevision: "rev-2"}, Result{Status: "PASS", Findings: []Finding{finding}})
+				apply(repeated, "DISMISS", "", "repeated premise checked")
+				apply(current, "RESEVERITIZE", "P3", "latest current correction")
+				before, err := json.Marshal(set)
+				if err != nil {
+					t.Fatal(err)
+				}
+				check := func(value Set) {
+					t.Helper()
+					owner, decision, severity, ok := FindingDecision(value, current.Findings[0].Digest)
+					facts := SettledFindings(value)
+					if !ok || owner != action || decision != "RESEVERITIZE" || severity != "P3" || len(facts) != 1 || facts[0].Decision != decision || facts[0].EffectiveSeverity != severity || facts[0].Reason != "latest current correction" || facts[0].RequirementRevision != "rev-2" {
+						t.Fatalf("current lookup and latest settled source differ: %s/%s/%s/%v, %+v", owner, decision, severity, ok, facts)
+					}
+				}
+				check(set)
+				var reopened Set
+				if err := json.Unmarshal(before, &reopened); err != nil {
+					t.Fatal(err)
+				}
+				check(reopened)
+				after, _ := json.Marshal(set)
+				if string(after) != string(before) {
+					t.Fatal("finding queries changed the original ledger")
+				}
+				set = mustApply(t, set, runID, "rev-2", CorrectionInput{Action: action, DispatchID: current.DispatchID, RequirementRevision: current.RequirementRevision, ResultDigest: current.ResultDigest, Decision: "INVALIDATE_RESULT", Invalidity: "STALE", Reason: "current round excluded", Source: "user", UserAuthorized: true})
+				if _, decision, severity, ok := FindingDecision(set, findingDigest(finding)); !ok || decision != "DISMISS" || severity != "P2" {
+					t.Fatalf("excluded correction still supplies current disposition: %s/%s/%v", decision, severity, ok)
+				}
+			})
+		}
 	}
 }

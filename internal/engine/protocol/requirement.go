@@ -59,7 +59,7 @@ var requirementScopeItems = []string{
 	"route",
 }
 
-// validRequirementSource 报告来源是否属于决定包可用的封闭三值。
+// validRequirementSource 报告来源是否属于决定包可用的封闭来源集合。
 func validRequirementSource(source string) bool {
 	switch source {
 	case RequirementSourceUserInitiated, RequirementSourceReviewFindingP2, RequirementSourceReviewFindingP1, RequirementSourceReset:
@@ -90,7 +90,7 @@ func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the impact-preview digest binding"}
 	}
 	if !validRequirementSource(pkg.Source) {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement decision source %q invalid (closed set: USER_INITIATED, REVIEW_FINDING_P2, REVIEW_FINDING_P1)", pkg.Source)}
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement decision source %q invalid (closed set: USER_INITIATED, REVIEW_FINDING_P2, REVIEW_FINDING_P1, RESET)", pkg.Source)}
 	}
 	if !validRequirementClassification(pkg.Classification) {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("requirement decision classification %q invalid (closed set: PRESERVED, CHANGED)", pkg.Classification)}
@@ -109,13 +109,14 @@ func validateRequirementPackage(pkg *RequirementDecisionPackage) error {
 }
 
 // validateRequirementDecisionPayload validates the original package, base and
-// user reason. Equal content is limited to reset or explicit plan reconfirmation.
+// user reason. Equal requirement text needs an intake for stateful material
+// comparison, except reset or explicit plan reconfirmation.
 func validateRequirementDecisionPayload(payload *RequirementDecisionPayload) error {
 	if strings.TrimSpace(payload.BaseRevision) == "" {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision requires the base revision it is decided against"}
 	}
 	replan := planReconfirmation(payload.Source, payload.Classification, requirementRedoScope(payload))
-	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset && !replan {
+	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset && !replan && payload.Intake == nil {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "requirement decision candidate revision must differ from its base"}
 	}
 	if strings.TrimSpace(payload.Reason) == "" {
@@ -146,7 +147,8 @@ func (s *State) initialRequirementRevision() string {
 	return s.IntakeConfirmationReceipt.RequirementRevision
 }
 
-// CurrentIntakeConfirmation reads material bindings from the original revision ledger.
+// CurrentIntakeConfirmation reads the latest local material confirmation,
+// then the creation binding for a child or the initial intake for a top-level run.
 // The initial intake remains the immutable start confirmation.
 func (s *State) CurrentIntakeConfirmation() *IntakeConfirmationReceipt {
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
@@ -154,7 +156,49 @@ func (s *State) CurrentIntakeConfirmation() *IntakeConfirmationReceipt {
 			return receipt
 		}
 	}
+	return s.initialIntakeConfirmation()
+}
+
+func (s *State) initialIntakeConfirmation() *IntakeConfirmationReceipt {
+	if s.SliceChild != nil && s.SliceChild.InheritedIntake != nil {
+		return s.SliceChild.InheritedIntake
+	}
 	return s.IntakeConfirmationReceipt
+}
+
+// intakeConfirmationForWork reads the exact confirmation epoch retained by
+// signed work. A retry's issue time cannot select a newer confirmation.
+func (s *State) intakeConfirmationForWork(b WorkBinding) *IntakeConfirmationReceipt {
+	var issued uint64
+	for action, binding := range s.DispatchBindings {
+		if binding == b && s.DispatchIssueRevisions[action] > issued {
+			issued = s.DispatchIssueRevisions[action]
+		}
+	}
+	if issued == 0 {
+		return nil
+	}
+	if b.Generation == 0 && b.RequirementRevision == s.initialRequirementRevision() {
+		return s.initialIntakeConfirmation()
+	}
+	for _, entry := range s.RequirementRevisions {
+		if entry.StateRevision == b.Generation && entry.Revision == b.RequirementRevision && entry.StateRevision < issued {
+			return entry.Intake
+		}
+	}
+	for id, decision := range s.Decisions {
+		if decision.Continuation == nil || decision.Continuation.AppliedRevision != b.Generation || s.PendingAsks[id].Continuation.RequirementRevision != b.RequirementRevision {
+			continue
+		}
+		confirmation := s.initialIntakeConfirmation()
+		for _, entry := range s.RequirementRevisions {
+			if entry.StateRevision <= b.Generation && entry.Intake != nil {
+				confirmation = entry.Intake
+			}
+		}
+		return confirmation
+	}
+	return nil
 }
 
 // requirementRevisionAt keeps historical work bound to its local issue time.
@@ -170,10 +214,18 @@ func (s *State) requirementRevisionAt(stateRevision uint64) string {
 
 func (s *State) requirementGeneration() uint64 {
 	// Initial intake registration records the authorization already supplied at Start.
-	if len(s.RequirementRevisions) <= 1 {
-		return 0
+	var generation uint64
+	for _, entry := range s.RequirementRevisions {
+		if entry.Source != RequirementSourceIntake && entry.StateRevision > generation {
+			generation = entry.StateRevision
+		}
 	}
-	return s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision
+	for id, decision := range s.Decisions {
+		if decision.Continuation != nil && decision.Continuation.AppliedRevision > generation && decision.Continuation.changesExecutionEpoch(s.PendingAsks[id].Continuation.To) {
+			generation = decision.Continuation.AppliedRevision
+		}
+	}
+	return generation
 }
 
 // bindRequirementPackage updates only the pending Ask. The barrier remains
@@ -329,7 +381,7 @@ func (e *Engine) quarantineWorkerResult(state *State, ev Event, nextRevision uin
 // 半套账目），其余记录照常继续。重放按 eventID 排序保持确定性；重放
 // 内部的补位签发由 refill 的既有屏障扣发持住，决定提交后的统一 refill
 // 补进。
-func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRevision uint64, expectedFingerprint string) {
+func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRevision uint64, input Observation) {
 	if len(state.QuarantinedResults) == 0 {
 		return
 	}
@@ -344,7 +396,7 @@ func (e *Engine) replayQuarantinedResults(state *State, requestID string, nextRe
 		snapshot, cloneErr := cloneState(state)
 		var admitErr error
 		if cloneErr == nil {
-			_, _, admitErr = e.admitWorkerResultRecord(state, record.ActionID, workerResultPayloadOf(record), eventID, requestID, nextRevision, nextRevision, expectedFingerprint)
+			_, _, admitErr = e.admitWorkerResultRecord(state, record.ActionID, workerResultPayloadOf(record), eventID, requestID, nextRevision, nextRevision, input)
 		}
 		if cloneErr != nil || admitErr != nil {
 			if snapshot != nil {
@@ -409,10 +461,19 @@ func cloneState(state *State) (*State, error) {
 	return out, nil
 }
 
-// retireReviewDispatch closes the superseded task. FreshOwed owns the new
-// requirement's review obligation; normal issuance assigns its TaskKey, plan,
-// and retry budget after every requirement-change barrier has cleared.
+// retireReviewDispatch withdraws the superseded review and preserves its live
+// execution for exact termination. FreshOwed owns its new review obligation.
 func (s *State) retireReviewDispatch(actionID string, mark review.Action, requestID string, nextRevision uint64) error {
+	detail := fmt.Sprintf("the %s-series dispatch was superseded by the redo declared in requirement decision %s", mark, requestID)
+	s.archiveDispatchResults(actionID)
+	if pending, attempt, live := s.workerActionTarget(actionID); live {
+		s.recordObsoleteAction(pending, attempt, "", detail)
+		s.RecoveryRecords = append(s.RecoveryRecords, RecoveryRecord{
+			ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
+			Action: RecoveryReconcile, RequestID: requestID, Detail: detail, Revision: nextRevision,
+		})
+		return nil
+	}
 	if retired, exists := s.ObsoleteActions[actionID]; exists {
 		if ended, owed := s.EndedAttempts[retired.Task]; owed && ended.ActionID == actionID {
 			delete(s.EndedAttempts, retired.Task)
@@ -420,14 +481,7 @@ func (s *State) retireReviewDispatch(actionID string, mark review.Action, reques
 		}
 		return nil
 	}
-	detail := fmt.Sprintf("the %s-series dispatch was terminated by the redo declared in requirement decision %s", mark, requestID)
-	s.archiveDispatchResults(actionID)
-	pending, known := s.PendingActions[actionID]
-	if known {
-		s.ObsoleteActions[actionID] = ObsoleteAction{ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID, Reason: detail}
-	} else {
-		pending, known = s.retireAction(actionID, "", detail)
-	}
+	pending, known := s.retireAction(actionID, "", detail)
 	if !known {
 		return &RejectedError{Code: CodeUnknownAction, Detail: fmt.Sprintf("review dispatch %q is unknown", actionID)}
 	}
@@ -454,7 +508,7 @@ func (s *State) retireReviewDispatch(actionID string, mark review.Action, reques
 // （REDO 保留旧证据并登记新任务义务；CARRY 精确绑定续用工作）→ 屏障解除
 // 边界上的隔离账重分类（未勾选 series 携原
 // revision carry）。
-func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, expectedFingerprint, document string) error {
+func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, nextRevision uint64, input Observation, document string) error {
 	if ask.Control != ControlRequestRequirementChange {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a requirement decision payload", ask.Control)}
 	}
@@ -465,7 +519,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		}
 		// 放弃：不登记 revision、不动 scope；最后一个未决 Ask 解决时隔离
 		// 账按现行权威重放（应被纳），否则继续持有。
-		return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)
+		return e.replayWhenBarrierLifts(state, requestID, nextRevision, input)
 	case requirementProceedOption:
 		if decide.Requirement == nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "proceeding with a requirement change requires the typed requirement payload"}
@@ -496,6 +550,9 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 			Detail: fmt.Sprintf("the requirement change ask %s is expired: it was raised at base %q, the decide carries %q, the current authoritative revision is %q; rebuild the ask on the current base",
 				requestID, ask.BaseRevision, payload.BaseRevision, current),
 		}
+	}
+	if payload.CandidateRevision == payload.BaseRevision && payload.Source != RequirementSourceReset && !planReconfirmation(payload.Source, payload.Classification, requirementRedoScope(payload)) && !requirementMaterialsChanged(state.CurrentIntakeConfirmation(), payload.Intake) {
+		return reject("requirement confirmation must change its complete confirmed materials")
 	}
 	// 来源必须绑用户的 finding 处置（§7.1 的引擎强制）：
 	//   - 未裁决（raw）的 finding 不能驱动任何修订来源——先处置再发起。
@@ -616,7 +673,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 			return err
 		}
 	}
-	if err := e.applyRequirementWork(state, payload.WorkDecisions, requestID); err != nil {
+	if err := e.applyWorkAuthorization(state, state.RequirementRevisions[len(state.RequirementRevisions)-1]); err != nil {
 		return err
 	}
 	if document != "" && state.Route == "regular" {
@@ -624,15 +681,16 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		if err := e.acceptValidationObservation(state, observation, nextRevision-1, nextRevision); err != nil {
 			return err
 		}
+		state.carryCaseBindings()
 	}
 	// 屏障解除边界上的隔离账重分类。
-	return e.replayWhenBarrierLifts(state, requestID, nextRevision, expectedFingerprint)
+	return e.replayWhenBarrierLifts(state, requestID, nextRevision, input)
 }
 
 // replayWhenBarrierLifts 是隔离账重分类的屏障解除边界：本 Ask 解决后仍
 // 有未决需求 Ask 时隔离继续持有（本次决定已生效的 scope 处置不受影响）
 // 并留痕；这是最后一个未决 Ask 时在同一事务内逐条原子重放。
-func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevision uint64, expectedFingerprint string) error {
+func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevision uint64, input Observation) error {
 	if state.requirementChangePendingExcept(requestID) {
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
 			Detail:   fmt.Sprintf("the quarantine ledger stays held: another requirement change ask is still pending after %s", requestID),
@@ -640,7 +698,7 @@ func (e *Engine) replayWhenBarrierLifts(state *State, requestID string, nextRevi
 		})
 		return nil
 	}
-	e.replayQuarantinedResults(state, requestID, nextRevision, expectedFingerprint)
+	e.replayQuarantinedResults(state, requestID, nextRevision, input)
 	return nil
 }
 
@@ -672,11 +730,12 @@ func verifyRequirementLedger(state *State) error {
 		previousRevision = state.SliceChild.RequirementRevision
 	}
 	previousState := intake.StateRevision
+	previousIntake := state.initialIntakeConfirmation()
 	for index, entry := range state.RequirementRevisions[1:] {
 		if entry.BaseRevision != previousRevision {
 			return fail("entry %d base revision %q breaks the confirmation chain (previous %q)", index+2, entry.BaseRevision, previousRevision)
 		}
-		if entry.Revision == "" || entry.Revision == entry.BaseRevision && entry.Source != RequirementSourceReset && !planReconfirmation(entry.Source, entry.Classification, entry.DecidedScope) || entry.DeltaDigest == "" || entry.RequestID == "" {
+		if entry.Revision == "" || entry.Revision == entry.BaseRevision && entry.Source != RequirementSourceReset && !planReconfirmation(entry.Source, entry.Classification, entry.DecidedScope) && !requirementMaterialsChanged(previousIntake, entry.Intake) || entry.DeltaDigest == "" || entry.RequestID == "" {
 			return fail("entry %d is missing its revision, delta, or ask binding", index+2)
 		}
 		if !validRequirementSource(entry.Source) || !validRequirementClassification(entry.Classification) {
@@ -697,6 +756,9 @@ func verifyRequirementLedger(state *State) error {
 		}
 		previousRevision = entry.Revision
 		previousState = entry.StateRevision
+		if entry.Intake != nil {
+			previousIntake = entry.Intake
+		}
 	}
 	return nil
 }
@@ -744,4 +806,9 @@ func requirementRedoScope(payload *RequirementDecisionPayload) []string {
 }
 func planReconfirmation(source, classification string, scope []string) bool {
 	return source == RequirementSourceUserInitiated && classification == RequirementClassificationPreserved && len(scope) == 2 && slices.Contains(scope, string(review.StartReadiness)) && slices.Contains(scope, "route")
+}
+
+// requirementMaterialsChanged compares the confirmed file identities, not receipt metadata.
+func requirementMaterialsChanged(base, candidate *IntakeConfirmationReceipt) bool {
+	return base != nil && candidate != nil && (base.RequirementSource != candidate.RequirementSource || base.SolutionSource != candidate.SolutionSource || !slices.Equal(base.Artifacts, candidate.Artifacts))
 }

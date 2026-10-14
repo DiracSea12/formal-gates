@@ -7,10 +7,8 @@ package harness
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -708,7 +706,7 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 		t.Fatal(err)
 	}
 	for id, input := range run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			ref := run.WorkerMaterials[id]
 			body, err := os.ReadFile(ref.Path)
 			if err != nil {
@@ -759,7 +757,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 			t.Fatal(err)
 		}
 		for id, input := range run.ValidationInputs {
-			if input.Handler == "engine.gate.v2" {
+			if input.Handler == "engine.gate.v3" {
 				gate = id
 			}
 		}
@@ -1169,18 +1167,30 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	document := canaryRequirementDocument + "\n"
-	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
+	documentPath := filepath.Join(fRoot(ref), filepath.FromSlash(input.Intake.RequirementSource))
+	documentBytes, err := os.ReadFile(documentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentBytes = append(documentBytes, '\n')
 	run, err := f.Show()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(documentPath, documentBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	intake, err := facade.PrepareIntake(fRoot(ref), input.Intake.RequirementSource, input.Intake.SolutionSource, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := "sha256:" + intake.Revision
 	var choices []protocol.RequirementWorkDecision
 	for _, work := range run.RequirementWork {
 		choices = append(choices, protocol.RequirementWorkDecision{Work: work, Disposition: protocol.RequirementWorkCarry, Reason: "Formatting preserves this original duty"})
 	}
 	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"same original inputs and obligations"}}
-	pkg := protocol.RequirementDecisionPackage{Impact: impact, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, Impact: impact, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
 	event, err := protocol.NewRequirementRequestEvent("held-requirement", pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
@@ -1198,7 +1208,12 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 		if ask == nil {
 			t.Fatal("original requirement ask missing")
 		}
-		_, _, err = f.Submit(protocol.Event{ID: "held-confirmation", Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Impact: impact, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "Explicitly carry every unchanged original duty"}}})
+		askPosition := slices.IndexFunc(run.PendingAsks, func(pending facade.PendingAskFace) bool { return pending.RequestID == ask.RequestID }) + 1
+		confirmation, err := f.PrepareControl(facade.ControlInput{Ask: askPosition, Choice: "proceed", Reason: "Explicitly carry every unchanged original duty"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, run, err = f.SubmitControl(confirmation)
 		if err == nil {
 			break
 		}
@@ -1207,13 +1222,24 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, run, err = f.Submit(protocol.Event{ID: "held-document", Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	carried, ok := run.WorkerMaterials[ref.ActionID]
 	if !ok || carried.AttemptID != ref.AttemptID || carried.Digest == ref.Digest {
 		t.Fatal("explicit carry did not preserve logical identity with new material")
+	}
+	confirmedBytes, err := os.ReadFile(documentPath)
+	if err != nil || !bytes.Equal(confirmedBytes, documentBytes) {
+		t.Fatal("confirmed carry changed its original source document", err)
+	}
+	materialBytes, err := os.ReadFile(carried.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var material worker.Material
+	if err := json.Unmarshal(materialBytes, &material); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(material.Input.RequirementDocument, *intake.RequirementDocument) || !reflect.DeepEqual(material.Input.Intake.Artifacts, intake.IntakeCandidate.Artifacts) || !reflect.DeepEqual(material.Input.Materials, intake.Materials) {
+		t.Fatal("carried material differs from its confirmed source document", material.Input.Intake.Artifacts, material.Input.Materials)
 	}
 	// Keep the actual host turn active across foreground polling of the carried input.
 	time.Sleep(300 * time.Millisecond)
@@ -1844,4 +1870,110 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	if nativePeerTurns(t, s) != 2 {
 		t.Fatal("parent replay duplicated child native work")
 	}
+}
+
+func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t *testing.T) {
+	f, ref, s, binary := engineNativeFixture(t, true)
+	call := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		t.Logf("argv=%v exit=%v stdout=%s stderr=%s", cmd.Args, err, stdout.Bytes(), stderr.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout.Bytes()
+	}
+	s.peer.Mode = "bad_json"
+	s.save(t)
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	run, err := f.Show()
+	if err != nil || len(run.WorkerMaterials) != 1 {
+		t.Fatalf("original worker: %+v %v", run.WorkerMaterials, err)
+	}
+	text := "Keep this exact supplementary text.\n原文和空格  "
+	var message protocol.TaskMessage
+	raw := call("workflow", "message", "--root", s.workspace, "--run-id", "native-execution", "--worker", "1", "--text", text)
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	ask := 0
+	for i, request := range run.PendingAsks {
+		if request.Control == protocol.ControlRecovery {
+			ask = i + 1
+		}
+	}
+	if ask == 0 {
+		t.Fatal("original recovery Ask missing")
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: ask, Choice: "resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.SubmitControl(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := ""
+	for _, intent := range run.AdapterIntents {
+		if intent.Resume != nil {
+			resume = intent.ActionID
+		}
+	}
+	if resume == "" {
+		t.Fatal("original resume intent missing")
+	}
+	request, _, directory, original, err := f.WorkerExecutionRequest(ref, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request["binding"] = s.request["binding"]
+	s.request, s.directory = request, directory
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.save(t)
+	effective := map[string]any{}
+	for k, v := range request {
+		effective[k] = v
+	}
+	effective["prompt"] = request["prompt"].(string) + "\n\n[Supplementary user message]\n" + text
+	s.peer.TurnParams, err = codexTurnParameters(effective, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(s.peer.TurnParams, "threadId")
+	if err := writeAtomicJSON(filepath.Join(s.config, "peer.json"), s.peer); err != nil {
+		t.Fatal(err)
+	}
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
+	if err != nil || getOf(getOf(source, "turn_ack"), "id") == nil {
+		t.Fatalf("original turn acknowledgement missing: %v %v", source, err)
+	}
+	expected, err := codexTurnParameters(effective, message.Identity)
+	if err != nil || !valuesEqual(getOf(source, "turn_request"), expected) {
+		t.Fatalf("supplementary input differs: %v %v", getOf(source, "turn_request"), err)
+	}
+	body, _, identity, err := NativeFailureEvidence("codex", directory)
+	if err != nil || identity != message.Identity || !bytes.Contains(body, []byte("NATIVE_RESULT: current invocation has no submitted semantic tool evidence")) {
+		t.Fatalf("original native error changed: %s %s %v", body, identity, err)
+	}
+	check := func() {
+		t.Helper()
+		current, err := f.Show()
+		actual := current.TaskMessages[message.ID]
+		if err != nil || actual.Status != "ACCEPTED" || actual.Reason != "" || actual.ActionID != original.ActionID || actual.AttemptID != original.AttemptID || actual.Identity != message.Identity || actual.Text != text || actual.Revision != message.Revision || nativePeerTurns(t, s) != 2 {
+			t.Fatalf("delivery facts: %+v %v", actual, err)
+		}
+	}
+	check()
+	f, err = facade.Open(s.workspace, "native-execution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	check()
 }

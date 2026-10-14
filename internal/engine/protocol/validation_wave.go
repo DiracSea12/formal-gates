@@ -142,7 +142,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 	if !pipelineEnabled(s, e.cfg.Definition) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
 		return changed, nil
 	}
-	if s.validationConcluded(e.cfg.Definition) {
+	if s.DeliveryComplete(e.cfg.Definition) {
 		return changed, nil
 	}
 	for _, ask := range s.PendingAsks {
@@ -542,7 +542,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			mode = coverage.ReviewMerge
 		}
 		target := &ValidationTarget{Status: "PENDING", Gate: gate, Kind: "GATE"}
-		handler := "engine.gate.v2"
+		handler := "engine.gate.v3"
 		part := gate
 		if mode != "" {
 			handler = "engine.qa.execution.v3"
@@ -608,12 +608,15 @@ func (s *State) carryGateResult(target *ValidationTarget, prior, current *Valida
 		if !sameTarget(previous, target) {
 			continue
 		}
+		if !s.sameGateResponsibility(prior, previous, current, target) {
+			return
+		}
 		sourceWave, responsibility := s.targetResponsibility(prior, previous)
 		if prior.Generation != current.Generation && !s.validationWorkCarryAuthorized(responsibility.ResultAction, responsibility.Task) {
 			return
 		}
 		if prior.Candidate == current.Candidate && (previous.GateImpact != nil || previous.Status == "PASS" || previous.Status == "FAIL" || previous.Status == "DISPOSED" || previous.Status == "AUTHORIZED_SKIP") {
-			s.carryValidationTarget(target, previous, current)
+			s.carryValidationTarget(target, previous, prior, current)
 			return
 		}
 		repairs, repairOnly := s.candidateRepairChanges(prior, current)
@@ -791,7 +794,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 		return false, nil
 	}
 
-	task := pipelineTask(e.cfg.Definition, "engine.repair.v5", w.Candidate.Identity)
+	task := pipelineTask(e.cfg.Definition, "engine.repair.v6", w.Candidate.Identity)
 	// Native identities may contain separators; the logical snapshot key uses
 	// its content digest, never a platform path embedded in TaskKey syntax.
 	task.Scope = strings.TrimPrefix(digestOfCanonical(w.Candidate), "sha256:")

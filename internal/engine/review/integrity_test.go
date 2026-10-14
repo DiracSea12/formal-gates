@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// richLedger 构造一个覆盖 adjudication、MarkStale、授权轮、supersede 链的
+// richLedger 构造一个覆盖 adjudication、需求修订重走、授权轮、supersede 链的
 // 合法账本，作为防篡改负控的基底。
 func richLedger(t *testing.T) (Set, string) {
 	t.Helper()
@@ -19,7 +19,7 @@ func richLedger(t *testing.T) (Set, string) {
 		Action: ProductReview, DispatchID: productFirst.DispatchID, ResultDigest: productFirst.ResultDigest, RequirementRevision: productFirst.RequirementRevision,
 		FindingID: productFirst.Findings[0].ID, Decision: "CONFIRM", Reason: "user confirms the blocker", Source: "user", UserAuthorized: true,
 	})
-	set = MarkStale(set, "REQUIREMENT_REVISION_INVALIDATION")
+	set = StaleSeries(set, ProductReview, "requirement-change:req-product", 7)
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p2", RequirementRevision: "rev-2"}, Result{Status: "PASS", Findings: []Finding{{Severity: "P3", Message: "advisory only"}}})
 	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-s1", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
 	var err error
@@ -286,8 +286,10 @@ func TestStoredProjectionsMatchFullRecomputation(t *testing.T) {
 		FindingID: readiness.Findings[0].ID, Decision: "DISMISS", Reason: "concern retracted", Source: "user", UserAuthorized: true,
 	})
 	assertRecomputed(t, set)
-	set = MarkStale(set, "IMPACT_INVALIDATION")
-	assertRecomputed(t, set)
+	for _, action := range []Action{ProductReview, StartReadiness} {
+		set = StaleSeries(set, action, "requirement-change:req-both", 9)
+		assertRecomputed(t, set)
+	}
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-p2", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
 	assertRecomputed(t, set)
 	var err error

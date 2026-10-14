@@ -186,7 +186,7 @@ func TestNativeWorkspacePublishedAliasesRespectRuntimeVisibility(t *testing.T) {
 		{"action": "create", "listing": root["listing"], "entry": entry, "name": "created.txt", "content": "changed"},
 	} {
 		raw, _ := json.Marshal(arguments)
-		if _, err := tools.call(raw); err == nil {
+		if _, err := tools.invoke(nativeWorkspaceTool, raw); err == nil {
 			t.Fatalf("published alias bypassed visibility: %s", raw)
 		}
 	}

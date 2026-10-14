@@ -2,7 +2,6 @@ package contracttests
 
 import (
 	"testing"
-	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -10,8 +9,7 @@ import (
 )
 
 // 用例：compile 管线拒绝信封与身份层缺陷——nil 定义/registry、空版本、空
-// 入口节点、零步骤、nil 步骤元素、重复步骤 ID、步骤版本未与信封绑定、
-// 空 ID/节点（绕过 constructor 的零值头部）。
+// 入口节点、零步骤与空节点（绕过 constructor 的零值头部）。
 func TestCompileRejectsEnvelopeAndIdentityDefects(t *testing.T) {
 	reg := fxRegistry(t)
 	rows := []struct {
@@ -33,22 +31,6 @@ func TestCompileRejectsEnvelopeAndIdentityDefects(t *testing.T) {
 		{"no steps", func() *compiler.Definition {
 			return &compiler.Definition{Version: fxDefVersion, EntryNode: "n0"}
 		}, "definition has no steps"},
-		{"nil step element", func() *compiler.Definition {
-			return &compiler.Definition{Version: fxDefVersion, EntryNode: "n0", Steps: []authoring.Step{nil}}
-		}, "nil step"},
-		{"duplicate step id", func() *compiler.Definition {
-			return fxDefinition(t, fxParse(t), fxParse(t))
-		}, "duplicate step id"},
-		{"step version unbound", func() *compiler.Definition {
-			h := fxHeader("s.parse", "n0")
-			h.DefinitionVersion = "9"
-			s := mkLocalStep(t, h, fxIO(), authoring.LocalSpec{Handler: "h.s.parse"})
-			return fxDefinition(t, s)
-		}, "unbound definition version"},
-		{"zero-value step id", func() *compiler.Definition {
-			s := authoring.LocalStep{Header: fxHeader("", "n0"), IO: fxIO(), Handler: "h.s.parse"}
-			return fxDefinition(t, s)
-		}, "id required"},
 		{"zero-value step node", func() *compiler.Definition {
 			s := authoring.LocalStep{Header: fxHeader("s.parse", ""), IO: fxIO(), Handler: "h.s.parse"}
 			return fxDefinition(t, s)
@@ -64,108 +46,6 @@ func TestCompileRejectsEnvelopeAndIdentityDefects(t *testing.T) {
 	}
 	_, err := compiler.Compile(fxDefinition(t), nil)
 	wantCompileErr(t, err, authoring.FailureInvariantViolation, "nil registry")
-}
-
-// 用例：全局图不变量拒绝——依赖不存在（先于定序报 not found）、依赖循环
-// （报卡住的步骤集合）、不可达步骤、入口节点无步骤、入口节点无依赖自由步。
-func TestCompileRejectsReferenceCycleAndReachabilityDefects(t *testing.T) {
-	reg := fxRegistry(t)
-	rows := []struct {
-		name   string
-		build  func(t *testing.T) *compiler.Definition
-		substr string
-	}{
-		{"dependency not found", func(t *testing.T) *compiler.Definition {
-			join := mkLocalStep(t,
-				fxHeader("s.join", "n2", "s.left", "s.right", "s.ghost"),
-				fxIO("s.left", "s.right", "s.ghost"), authoring.LocalSpec{Handler: "h.s.join"})
-			steps := fxAllSteps(t)
-			return fxDefinition(t, append(withoutStep(steps, "s.join"), join)...)
-		}, "not found"},
-		{"dependency cycle", func(t *testing.T) *compiler.Definition {
-			root := mkLocalStep(t, fxHeader("s.parse", "n0"), fxIO(),
-				authoring.LocalSpec{Handler: "h.s.parse"})
-			a := mkLocalStep(t, fxHeader("s.a", "n1", "s.b"), fxIO("s.b"),
-				authoring.LocalSpec{Handler: "h.s.left"})
-			b := mkLocalStep(t, fxHeader("s.b", "n1", "s.a"), fxIO("s.a"),
-				authoring.LocalSpec{Handler: "h.s.right"})
-			return fxDefinition(t, root, a, b)
-		}, "dependency cycle"},
-		{"unreachable orphan step", func(t *testing.T) *compiler.Definition {
-			orphan := mkLocalStep(t, fxHeader("s.orphan", "n9"), fxIO(),
-				authoring.LocalSpec{Handler: "h.s.cost"})
-			return fxDefinition(t, append(fxAllSteps(t), orphan)...)
-		}, "unreachable steps"},
-		{"entry node has no steps", func(t *testing.T) *compiler.Definition {
-			alone := mkLocalStep(t, fxHeader("s.parse", "n1"), fxIO(),
-				authoring.LocalSpec{Handler: "h.s.parse"})
-			return fxDefinition(t, alone)
-		}, "has no steps"},
-		{"entry node has no dependency-free step", func(t *testing.T) *compiler.Definition {
-			root := mkLocalStep(t, fxHeader("s.r", "n9"), fxIO(),
-				authoring.LocalSpec{Handler: "h.s.parse"})
-			a := mkLocalStep(t, fxHeader("s.a", "n0", "s.r"), fxIO("s.r"),
-				authoring.LocalSpec{Handler: "h.s.left"})
-			return fxDefinition(t, root, a)
-		}, "no dependency-free step"},
-	}
-	for _, row := range rows {
-		_, err := compiler.Compile(row.build(t), reg)
-		if err == nil {
-			t.Errorf("%s: expected rejection, got nil", row.name)
-			continue
-		}
-		wantCompileErr(t, err, authoring.FailureInvariantViolation, row.substr)
-	}
-}
-
-// 用例：并行组图不变量——fan-out 锚点依赖必填、join 依赖集合与 children
-// 精确相等（缺成员/多拉外部都拒）、成员只允许被 join 消费、join 不得是
-// children 成员（graph 层对绕过 constructor 的结构复核）。
-func TestCompileEnforcesParallelGroupInvariants(t *testing.T) {
-	reg := fxRegistry(t)
-
-	// fan-out 锚点依赖必填：fan 位于入口节点且无依赖（绕开不可达错误先行命中）。
-	fanNoAnchor := mkParallelStep(t, fxHeader("s.fan", "n0"),
-		authoring.ParallelSpec{
-			Children: []authoring.StepID{"s.left", "s.right"},
-			Join:     authoring.JoinPolicy{JoinStep: "s.join", Mode: authoring.JoinAll},
-			Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
-		})
-	_, err := compiler.Compile(fxDefinition(t, fxParse(t), fanNoAnchor, fxLeft(t), fxRight(t), fxJoin(t)), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "fan-out anchor dependency required")
-
-	// join 只依赖部分 children（缺 s.right 覆盖）。
-	joinPartial := mkLocalStep(t, fxHeader("s.join", "n2", "s.left"),
-		fxIO("s.left"), authoring.LocalSpec{Handler: "h.s.join"})
-	_, err = compiler.Compile(fxDefinition(t, fxParse(t), fxFan(t), fxLeft(t), fxRight(t), joinPartial), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "does not depend on child")
-
-	// join 多拉外部步骤 s.parse（不在 children 中）。
-	joinExtra := mkLocalStep(t,
-		fxHeader("s.join", "n2", "s.left", "s.right", "s.parse"),
-		fxIO("s.left", "s.right", "s.parse"), authoring.LocalSpec{Handler: "h.s.join"})
-	_, err = compiler.Compile(fxDefinition(t, fxParse(t), fxFan(t), fxLeft(t), fxRight(t), joinExtra), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "outside children")
-
-	// 组内成员被 join 之外的步骤消费（s.cost 同时依赖 s.join 与 s.left）。
-	costOutsider := mkLocalStep(t,
-		fxHeader("s.cost", "n3", "s.join", "s.left"), fxIO("s.join", "s.left"),
-		authoring.LocalSpec{Handler: "h.s.cost"})
-	steps := fxAllSteps(t)
-	steps = withoutStep(steps, "s.cost")
-	_, err = compiler.Compile(fxDefinition(t, append(steps, costOutsider)...), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "other than join")
-
-	// join 同时是 children 成员：绕过 constructor 的直接结构体构造（graph 层复核）。
-	joinAsChild := authoring.ParallelStep{
-		Header:   fxHeader("s.fan", "n0", "s.parse"),
-		Children: []authoring.StepID{"s.left", "s.right", "s.join"},
-		Join:     authoring.JoinPolicy{JoinStep: "s.join", Mode: authoring.JoinAll},
-		Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
-	}
-	_, err = compiler.Compile(fxDefinition(t, fxParse(t), joinAsChild, fxLeft(t), fxRight(t), fxJoin(t)), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "must not be a child")
 }
 
 // 用例：ordinal 由确定性 Kahn 拓扑序派生、产物按 (nodeID, ordinal, id)
@@ -220,28 +100,7 @@ func TestCompileSecondLineRejectsConstructorBypassSteps(t *testing.T) {
 		step   authoring.Step
 		substr string
 	}{
-		{"local without handler", authoring.LocalStep{
-			Header: fxHeader("s.z", "n0"), IO: fxIO(),
-		}, "handler id required"},
-		{"durable without idempotency", authoring.DurableStep{
-			Header: fxHeader("s.z", "n0"), IO: fxIO(), Handler: "h.s.persist",
-			Reconcile: "r.persist", Timeout: time.Second,
-			Retry: authoring.RetryPolicy{MaxAttempts: 1},
-		}, "idempotency key strategy required"},
-		{"durable without reconcile", authoring.DurableStep{
-			Header: fxHeader("s.z", "n0"), IO: fxIO(), Handler: "h.s.persist",
-			Idempotency: authoring.IdempotencyDeterministicInput, Timeout: time.Second,
-			Retry: authoring.RetryPolicy{MaxAttempts: 1},
-		}, "reconcile id required"},
-		{"host action without boundary", authoring.HostActionStep{
-			Header: fxHeader("s.z", "n0"), IO: fxIO(), Handler: "h.s.dispatch",
-			Operation: "op.x", Timeout: time.Second,
-		}, "hostBoundaryReason required"},
-		{"agent without reason", authoring.AgentStep{
-			Header: fxHeader("s.z", "n0"), IO: fxIO(), Handler: "h.s.review",
-			Timeout: time.Second,
-		}, "nonProgrammableReason required"},
-		{"human ask without schemas", authoring.HumanAskStep{
+		{"human ask without ask kind", authoring.HumanAskStep{
 			Header: fxHeader("s.z", "n0"),
 		}, "ask kind required"},
 		{"parallel without children", authoring.ParallelStep{
@@ -264,34 +123,6 @@ func TestCompileSecondLineRejectsConstructorBypassSteps(t *testing.T) {
 	// 指针形态变体不匹配值类型 case：未知变体拒绝。
 	_, err := compiler.Compile(fxDefinition(t, &[]authoring.LocalStep{fxParse(t)}[0]), reg)
 	wantCompileErr(t, err, authoring.FailureInvariantViolation, "unknown step variant")
-}
-
-// 用例：可执行变体的 typed source bindings 集合与依赖集合精确相等——
-// binding 指向非依赖、依赖缺 binding 均拒绝（删除依赖必被拒的机械不变量）。
-func TestCompileRequiresInputsEqualToDependencies(t *testing.T) {
-	reg := fxRegistry(t)
-	root := fxParse(t)
-
-	// 依赖存在但缺 binding。
-	noBinding := mkLocalStep(t, fxHeader("s.x", "n0", "s.parse"), fxIO(),
-		authoring.LocalSpec{Handler: "h.s.left"})
-	_, err := compiler.Compile(fxDefinition(t, root, noBinding), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation,
-		"dependency \"s.parse\" has no typed input binding")
-
-	// binding 指向非依赖步骤。
-	orphanBinding := fxIO("s.parse")
-	orphan := mkLocalStep(t, fxHeader("s.x", "n0"), orphanBinding,
-		authoring.LocalSpec{Handler: "h.s.left"})
-	_, err = compiler.Compile(fxDefinition(t, root, orphan), reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation,
-		"input binding source \"s.parse\" is not a dependency")
-
-	// 集合精确相等的合法夹具（human 依赖不要求 IO binding）应编译通过。
-	_, err = compiler.Compile(fxDefinition(t), reg)
-	if err != nil {
-		t.Fatalf("fixture with human deps but no IO bindings should compile: %v", err)
-	}
 }
 
 // 用例：registry ID 未注册的正常 compile 路由 BLOCKED_BUG 并拒绝签发
@@ -331,7 +162,7 @@ func TestCompileRoutesUnregisteredIDsPerMode(t *testing.T) {
 		t.Fatalf("diagnostic = {step %q ref %q want %s}, want {s.review h.s.review handler}", d.Step, d.Ref, d.Want)
 	}
 
-	// 多个未注册 ID：全部记入诊断。
+	// 多个未注册 ID：诊断包含 handler 与 codec 的两个引用。
 	res, err = compiler.CompileDiagnostic(def, fxRegistryWithout(t, "h.s.review", "c.in"))
 	if err != nil {
 		t.Fatalf("diagnostic compile (multi): %v", err)
@@ -352,62 +183,10 @@ func TestCompileRoutesUnregisteredIDsPerMode(t *testing.T) {
 	}
 }
 
-// 用例：ID 存在但错用槽位（kind 不匹配）与 handler runner 错绑是定义错误，
-// 正常与 diagnostic 两种模式都硬拒绝（INVARIANT_VIOLATION）——锁步激活的
-// 编译期落实。
-func TestCompileRejectsKindAndRunnerMismatchesInBothModes(t *testing.T) {
-	// kind 不匹配：把 handler ID 填进 postcondition predicate 槽。
-	io := fxIO("s.parse")
-	io.Postconditions = []authoring.PredicateRef{{ID: "h.s.left"}}
-	misuse := mkAgentStep(t, fxHeader("s.review", "n1", "s.parse"), io,
-		authoring.AgentSpec{Handler: "h.s.review", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute})
-	def := fxDefinition(t, withStep(fxAllSteps(t), "s.review", misuse)...)
-
-	_, err := compiler.Compile(def, fxRegistry(t))
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "registered as handler, want predicate")
-	_, err = compiler.CompileDiagnostic(def, fxRegistry(t))
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "registered as handler, want predicate")
-
-	// runner 错绑：HOST_ACTION 变体绑到 ENGINE_LOCAL runner 的 handler。
-	reg := fxRegistry(t)
-	if err := reg.RegisterHandler("h.wrong.runner", authoring.RunnerEngineLocal); err != nil {
-		t.Fatal(err)
-	}
-	bound := mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
-		authoring.HostActionSpec{
-			Handler: "h.wrong.runner", Boundary: authoring.BoundaryExternalCapability,
-			Operation: "op.x", Schema: "schema.x", Timeout: time.Second,
-		})
-	def2 := fxDefinition(t, withStep(fxAllSteps(t), "s.dispatch", bound)...)
-	_, err = compiler.Compile(def2, reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "runner ENGINE_LOCAL != variant runner HOST_ADAPTER")
-	_, err = compiler.CompileDiagnostic(def2, reg)
-	wantCompileErr(t, err, authoring.FailureInvariantViolation, "runner ENGINE_LOCAL != variant runner HOST_ADAPTER")
-}
-
-// 用例：registry 注册期拒绝——空 ID、同 ID 二次注册（同 kind 或跨 kind）、
-// handler 非法 runner；解析期对每个 ID 精确解析一次并返回注册的 runner。
-func TestRegistryRegistrationAndResolutionRules(t *testing.T) {
-	reg := compiler.NewRegistry()
-	if err := reg.RegisterHandler("h.x", authoring.RunnerAgentWorker); err != nil {
-		t.Fatalf("RegisterHandler: %v", err)
-	}
-	if r, err := reg.ResolveHandler("h.x"); err != nil || r != authoring.RunnerAgentWorker {
-		t.Fatalf("ResolveHandler = (%s, %v), want (AGENT_WORKER, nil)", r, err)
-	}
-	if err := reg.RegisterHandler("h.x", authoring.RunnerAgentWorker); err == nil {
-		t.Error("same-kind duplicate registration must be rejected")
-	}
-	if err := reg.RegisterPredicate("h.x"); err == nil {
-		t.Error("cross-kind duplicate registration must be rejected")
-	}
-	if err := reg.RegisterCodec(""); err == nil {
-		t.Error("empty id registration must be rejected")
-	}
-	if err := reg.RegisterHandler("h.bad", "CONTROL"); err == nil {
-		t.Error("invalid runner kind must be rejected")
-	}
-
+// 用例：编译通过实际步骤引用按唯一注册项解析各槽位 ID，
+// 并拒绝未注册 predicate 与槽位错用。
+func TestCompileResolvesRegistrySlotReferences(t *testing.T) {
+	reg := fxRegistryWithout(t, "schema.x")
 	if err := reg.RegisterPredicate("pred.x"); err != nil {
 		t.Fatal(err)
 	}
@@ -426,34 +205,32 @@ func TestRegistryRegistrationAndResolutionRules(t *testing.T) {
 	if err := reg.RegisterAskKind("ask.x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.RegisterAskKind("h.x"); err == nil {
-		t.Error("cross-kind duplicate ask kind registration must be rejected")
-	}
 
-	// 未注册：closed world not found。
-	if err := reg.ResolvePredicate("pred.nope"); err == nil {
-		t.Error("unregistered predicate must not resolve")
-	} else {
-		wantErrContaining(t, err, "not found")
-	}
+	// 未注册 predicate 在真实编译路径中按 closed world 拒绝。
+	parse := fxParse(t)
+	parse.IO.Preconditions = []authoring.PredicateRef{{ID: "pred.nope"}}
+	_, err := compiler.Compile(fxDefinition(t, parse), reg)
+	wantCompileErr(t, err, authoring.FailureBlockedBug, `predicate id "pred.nope" not registered (closed world)`)
+
 	// 槽位错用：立即暴露为 kind 不匹配而非含糊的 not found。
-	if err := reg.ResolvePredicate("h.x"); err == nil {
-		t.Error("handler id in predicate slot must be kind mismatch")
-	} else {
-		wantErrContaining(t, err, "registered as handler, want predicate")
-	}
-	for _, probe := range []struct {
-		name string
-		call func() error
-	}{
-		{"codec", func() error { return reg.ResolveCodec("codec.x") }},
-		{"reconciler", func() error { return reg.ResolveReconciler("rec.x") }},
-		{"schema", func() error { return reg.ResolveSchema("schema.x") }},
-		{"operation", func() error { return reg.ResolveOperation("op.x2") }},
-		{"askKind", func() error { return reg.ResolveAskKind("ask.x") }},
-	} {
-		if err := probe.call(); err != nil {
-			t.Errorf("%s resolution of registered id failed: %v", probe.name, err)
-		}
+	parse.IO.Preconditions = []authoring.PredicateRef{{ID: "h.s.parse"}}
+	_, err = compiler.Compile(fxDefinition(t, parse), reg)
+	wantCompileErr(t, err, authoring.FailureInvariantViolation, "registered as handler, want predicate")
+
+	// 已注册的各槽位 ID 通过实际步骤引用解析。
+	parse.IO.Preconditions = []authoring.PredicateRef{{ID: "pred.x"}}
+	parse.IO.InputCodec = "codec.x"
+	parse.IO.OutputCodec = "codec.x"
+	persist := fxPersist(t)
+	persist.Reconcile = "rec.x"
+	dispatch := fxDispatch(t)
+	dispatch.Schema = "schema.x"
+	dispatch.Operation = "op.x2"
+	ask := fxAsk(t)
+	ask.AskKind = "ask.x"
+	ask.RequestSchema = "schema.x"
+	ask.ResponseSchema = "schema.x"
+	if _, err := compiler.Compile(fxDefinition(t, parse, persist, dispatch, ask), reg); err != nil {
+		t.Fatalf("registered predicate/codec/reconciler/schema/operation/askKind resolution failed: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,4 +105,80 @@ func prepareConfirmedIntake(root string, receipt *IntakeConfirmationReceipt, str
 		paths[i] = artifact.Path
 	}
 	return PrepareIntake(root, receipt.RequirementSource, receipt.SolutionSource, paths, structured)
+}
+
+// MaterialDelta is the complete ordered difference for one confirmed material.
+type MaterialDelta struct {
+	Path              string                 `json:"path"`
+	BaseRevision      string                 `json:"baseRevision"`
+	CandidateRevision string                 `json:"candidateRevision"`
+	Hunks             []requirement.TextHunk `json:"hunks"`
+}
+
+// captureIntake retains full original materials under their existing receipt.
+func captureIntake(root string, receipt *IntakeConfirmationReceipt) (IntakePreview, error) {
+	preview, err := prepareConfirmedIntake(root, receipt, false)
+	if err != nil {
+		return preview, err
+	}
+	if !slices.Equal(preview.IntakeCandidate.Artifacts, receipt.Artifacts) {
+		return preview, fmt.Errorf("confirmed material bytes differ from their original receipt")
+	}
+	preview.IntakeCandidate = *receipt
+	return preview, nil
+}
+
+func saveIntake(directory string, preview IntakePreview) error {
+	_, err := SaveOriginalCandidate(filepath.Join(directory, "payloads", "intake"), preview)
+	return err
+}
+
+// confirmedIntake selects evidence using only the current authoritative receipt.
+func (f *Facade) confirmedIntake(run Run) (IntakePreview, error) {
+	directory := f.stateDir
+	if run.MasterRunID != "" {
+		directory = filepath.Join(f.root, EngineNamespace, run.MasterRunID)
+	}
+	paths, err := OriginalPayloadPaths(filepath.Join(directory, "payloads", "intake"))
+	if err != nil {
+		return IntakePreview{}, err
+	}
+	digest, err := IntakeDigest(*run.IntakeConfirmationReceipt)
+	if err != nil {
+		return IntakePreview{}, err
+	}
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return IntakePreview{}, err
+		}
+		var preview IntakePreview
+		if err := json.Unmarshal(body, &preview); err != nil {
+			return IntakePreview{}, err
+		}
+		original, err := IntakeDigest(preview.IntakeCandidate)
+		if err != nil {
+			return IntakePreview{}, err
+		}
+		if original == digest {
+			return preview, nil
+		}
+	}
+	return IntakePreview{}, fmt.Errorf("complete confirmed intake materials are unavailable for %s", run.IntakeConfirmationReceipt.RequirementRevision)
+}
+
+func materialDelta(base, candidate IntakePreview) ([]MaterialDelta, string) {
+	var changes []MaterialDelta
+	for i, material := range candidate.Materials {
+		original := base.Materials[i]
+		hunks := requirement.TextDelta(original.Content, material.Content)
+		if len(hunks) != 0 {
+			changes = append(changes, MaterialDelta{Path: material.Path, BaseRevision: original.Revision, CandidateRevision: material.Revision, Hunks: hunks})
+		}
+	}
+	digest := controlDigest(struct {
+		Base, Candidate IntakeConfirmationReceipt
+		Changes         []MaterialDelta
+	}{base.IntakeCandidate, candidate.IntakeCandidate, changes})
+	return changes, digest
 }

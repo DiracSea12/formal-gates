@@ -16,7 +16,6 @@ type eventRecord struct {
 	Provider string `json:"provider"`
 	Event    string `json:"event"`
 	Identity string `json:"identity,omitempty"`
-	Reason   string `json:"reason,omitempty"`
 }
 
 type bindingRecord struct {
@@ -131,10 +130,6 @@ func readBindingPath(path string) (bindingRecord, error) {
 		return bindingRecord{}, fmt.Errorf("lifecycle dispatch binding is invalid: %w", err)
 	}
 	return record, nil
-}
-
-func interruptionReasonPath(root, runID, dispatchID string) string {
-	return filepath.Join(runLifecycleRoot(root, runID), "events", digest(dispatchID), "interruption.json")
 }
 
 func eventExists(root, runID, dispatchID, provider, identity, event string) (bool, error) {

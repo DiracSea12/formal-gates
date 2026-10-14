@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
@@ -9,6 +10,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	engineRuntime "formal-gates/internal/engine/runtime"
 
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -537,5 +539,90 @@ func TestVCSWriteMarkersCoverGitSvnP4(t *testing.T) {
 		if isVCSWriteCommand(cmd) {
 			t.Errorf("read-only VCS query misjudged as write: %q", cmd)
 		}
+	}
+}
+
+func TestWriteBlockUsesActualCommandDestinations(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "active repo")
+	outside := filepath.Join(t.TempDir(), "outside code.go")
+	writeCurrentHookFixture(t, root, "actual-targets", true, true, "", "owner-session")
+	code := filepath.Join(root, "code file.go")
+	doc := filepath.Join(root, "notes.md")
+	for path, body := range map[string]string{code: "package source\n", doc: "Document source\n", filepath.Join(root, "README.md"): "git commit and cp documentation\n"} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, command, role string
+		deny                bool
+	}{
+		{"quoted code target", fmt.Sprintf("printf 'package main\\n' > %q", code), "", true},
+		{"quoted outside target", fmt.Sprintf("printf 'package main\\n' > %q", outside), "", false},
+		{"copy code to document", fmt.Sprintf("cp %q %q", code, doc), "", false},
+		{"copy document to code", fmt.Sprintf("cp %q %q", doc, code), "", true},
+		{"install code to document", fmt.Sprintf("install %q %q", code, doc), "", false},
+		{"move removes code source", fmt.Sprintf("mv %q %q", code, outside), "", true},
+		{"read-only VCS mention", "rg 'git commit' README.md", "product-review", false},
+		{"read-only file tool mention", "rg 'cp code.go' README.md", "product-review", false},
+		{"unquoted literal VCS words", "printf git commit", "product-review", false},
+		{"git commit", "git commit -m 'current change'", "", true},
+		{"svn commit", "svn commit", "", true},
+		{"p4 submit", "p4 submit", "", true},
+		{"sudo prefix", "sudo git add code.go", "", true},
+		{"sudo user prefix", "sudo -u owner git commit -m change", "", true},
+		{"environment prefix", "env NAME=value git add code.go", "", true},
+		{"command prefix", "command /usr/bin/git add code.go", "", true},
+		{"compound VCS write", "git status && git add code.go", "", true},
+		{"adjacent compound VCS write", "git status;git add code.go", "", true},
+		{"compound file write", "printf note && touch code.go", "", true},
+		{"in-place source edit", "sed -i 's/a/b/' code.go", "", true},
+		{"read-only source transform", "sed 's/a/b/' code.go", "product-review", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"cwd": root, "session_id": "owner-session", "tool_name": "Bash", "tool_input": map[string]any{"command": tc.command}}
+			if tc.role != "" {
+				payload["agent_type"] = tc.role
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := Hook(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (decision.PermissionDecision == "deny") != tc.deny {
+				t.Fatalf("actual command destination %q: deny=%t decision=%+v", tc.command, tc.deny, decision)
+			}
+		})
+	}
+}
+
+func TestWriteBlockKeepsCLIArgumentsAndShellWritesSeparate(t *testing.T) {
+	root := t.TempDir()
+	writeCurrentHookFixture(t, root, "cli-arguments", true, true, "", "owner-session")
+	for _, tc := range []struct{ name, command, role, want string }{
+		{"main code with CLI name", "printf 'package main\\n// %s\\n' formal-gates > main.go", "", "deny"},
+		{"reviewer output with CLI name", "echo formal-gates > README.md", "product-review", "deny"},
+		{"actual CLI main", "formal-gates workflow snapshot --root . --run-id x --dispatch d", "", "allow"},
+		{"actual CLI reviewer", "formal-gates workflow snapshot --root . --run-id x --dispatch d", "product-review", "allow"},
+		{"CLI then code output", "formal-gates workflow snapshot --root . --run-id x; printf 'package main' > main.go", "", "deny"},
+		{"CLI then VCS write", "formal-gates workflow snapshot --root . --run-id x && git commit -m change", "", "deny"},
+		{"CLI output writes code", "formal-gates workflow snapshot --root . --run-id x > main.go", "", "deny"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"cwd": root, "session_id": "owner-session", "agent_type": tc.role, "tool_name": "Bash", "tool_input": map[string]any{"command": tc.command}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Hook(raw, "codex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.PermissionDecision != tc.want {
+				t.Fatalf("command=%q: got %s (%s), want %s", tc.command, got.PermissionDecision, got.Reason, tc.want)
+			}
+		})
 	}
 }

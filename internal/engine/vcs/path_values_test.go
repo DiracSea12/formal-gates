@@ -131,7 +131,7 @@ func TestTrackPreservesFilenameBytes(t *testing.T) {
 	}
 }
 
-func TestDiffNamesPreservesOriginalPathsWithDefaultGitQuoting(t *testing.T) {
+func TestChangesPreserveOriginalPathsWithDefaultGitQuoting(t *testing.T) {
 	p := realRepo(t)
 	if _, err := p.runner.Run(p.Root(), "git", "config", "core.quotePath", "true"); err != nil {
 		t.Fatal(err)
@@ -170,10 +170,6 @@ func TestDiffNamesPreservesOriginalPathsWithDefaultGitQuoting(t *testing.T) {
 		t.Fatal(err)
 	}
 	slices.Sort(wanted)
-	got, err := p.DiffNames(base, head)
-	if err != nil || !slices.Equal(got, wanted) {
-		t.Fatalf("DiffNames=%q err=%v want=%q", got, err, wanted)
-	}
 	changes, err := p.Changes(base, head)
 	if err != nil || len(changes) != len(wanted) {
 		t.Fatalf("native changes=%+v err=%v", changes, err)

@@ -17,58 +17,34 @@ import (
 	"unicode/utf8"
 )
 
-// ResolvedOperation describes an invocation without executing it. GoTestName
-// identifies the exact test whose real run and terminal events must be observed.
-type ResolvedOperation struct {
+// GoTestInvocation binds a fixed Go test command to its package and exact test.
+type GoTestInvocation struct {
 	Directory  string
 	Operation  Operation
 	GoTestName string
 }
 
-// ResolveCaseOperations uses only an approved recipe or the fixed Go test
-// reference protocol. Natural-language instructions never supply commands.
-func ResolveCaseOperations(workspace string, qaCase AcceptanceCase) ([]ResolvedOperation, error) {
-	if err := validateCaseOperations(qaCase, "case"); err != nil {
-		return nil, err
-	}
+// ValidateGoTestReference verifies the exact test declaration in the workspace.
+func ValidateGoTestReference(workspace, ref string) error {
 	if strings.TrimSpace(workspace) == "" {
-		return nil, fmt.Errorf("QA operation workspace is required")
+		return fmt.Errorf("QA operation workspace is required")
 	}
 	root, err := filepath.Abs(workspace)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if isGoTestRef(qaCase.TestRef) {
-		operation, err := resolveGoTest(root, qaCase.TestRef)
-		if err != nil {
-			return nil, err
-		}
-		return []ResolvedOperation{operation}, nil
-	}
-	if len(qaCase.Operations) == 0 {
-		return nil, fmt.Errorf("case %s has no approved operations or supported Go test reference", qaCase.CaseID)
-	}
-	operations := make([]ResolvedOperation, 0, len(qaCase.Operations))
-	for _, operation := range qaCase.Operations {
-		operations = append(operations, ResolvedOperation{Directory: root, Operation: operation})
-	}
-	return operations, nil
-}
-
-func resolveGoTest(workspace, ref string) (ResolvedOperation, error) {
-	operation, err := GoTestOperation(ref)
-	if err != nil {
-		return ResolvedOperation{}, err
+	if _, err := GoTestOperation(ref); err != nil {
+		return err
 	}
 	file, name, _ := strings.Cut(ref, "::")
-	filename := filepath.Join(workspace, file)
+	filename := filepath.Join(root, file)
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return ResolvedOperation{}, fmt.Errorf("read Go test reference %s: %w", ref, err)
+		return fmt.Errorf("read Go test reference %s: %w", ref, err)
 	}
 	source, err := parser.ParseFile(token.NewFileSet(), filename, data, 0)
 	if err != nil {
-		return ResolvedOperation{}, fmt.Errorf("parse Go test reference %s: %w", ref, err)
+		return fmt.Errorf("parse Go test reference %s: %w", ref, err)
 	}
 	var test *ast.FuncDecl
 	for _, declaration := range source.Decls {
@@ -77,15 +53,14 @@ func resolveGoTest(workspace, ref string) (ResolvedOperation, error) {
 			continue
 		}
 		if test != nil {
-			return ResolvedOperation{}, fmt.Errorf("Go test reference %s has multiple function declarations", ref)
+			return fmt.Errorf("Go test reference %s has multiple function declarations", ref)
 		}
 		test = fn
 	}
 	if test == nil || !goTestSignature(source, test) {
-		return ResolvedOperation{}, fmt.Errorf("Go test reference %s needs an exact function with signature func(*testing.T)", ref)
+		return fmt.Errorf("Go test reference %s needs an exact function with signature func(*testing.T)", ref)
 	}
-	operation.Directory = filepath.Dir(filename)
-	return operation, nil
+	return nil
 }
 
 // GoTestSymbols lists executable test declarations in their source order.
@@ -154,20 +129,20 @@ func goTestSignature(source *ast.File, fn *ast.FuncDecl) bool {
 }
 
 // GoTestOperation derives the fixed invocation without reading source files.
-// ResolveCaseOperations additionally verifies the referenced frozen declaration.
-func GoTestOperation(ref string) (ResolvedOperation, error) {
+// ValidateGoTestReference verifies the referenced workspace declaration.
+func GoTestOperation(ref string) (GoTestInvocation, error) {
 	file, name, exact := strings.Cut(ref, "::")
 	if !exact || !strings.HasSuffix(file, "_test.go") || !filepath.IsLocal(file) || !token.IsIdentifier(name) || !strings.HasPrefix(name, "Test") {
-		return ResolvedOperation{}, fmt.Errorf("Go test reference must be relative <path>_test.go::TestName: %s", ref)
+		return GoTestInvocation{}, fmt.Errorf("Go test reference must be relative <path>_test.go::TestName: %s", ref)
 	}
 	if suffix := strings.TrimPrefix(name, "Test"); suffix != "" {
 		first, _ := utf8.DecodeRuneInString(suffix)
 		if unicode.IsLower(first) {
-			return ResolvedOperation{}, fmt.Errorf("Go test function %s is not a Go test name", name)
+			return GoTestInvocation{}, fmt.Errorf("Go test function %s is not a Go test name", name)
 		}
 	}
 
-	return ResolvedOperation{Directory: filepath.Dir(file), Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}}, GoTestName: name}, nil
+	return GoTestInvocation{Directory: filepath.Dir(file), Operation: Operation{Kind: OperationArgv, Argv: []string{"go", "test", "-timeout=0", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(name) + "$", "."}}, GoTestName: name}, nil
 }
 
 // GoTestExecutionResult requires the exact test's real run and terminal event.

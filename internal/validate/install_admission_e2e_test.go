@@ -407,7 +407,7 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 	for _, target := range codexTargets {
 		prepareInstalledRuntimeFixture(t, source, target.targetPath)
 	}
-	beforeTarget, err := PackageDigest(targets[0].targetPath)
+	beforeTarget, err := PackageReceipt(targets[0].targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,9 +426,9 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 	if report.BootstrapReceiptPath != filepath.ToSlash(registry+".bootstrap.json") || report.ReceiptPath != report.BootstrapReceiptPath {
 		t.Fatalf("bootstrap report did not expose its durable receipt: %+v", report)
 	}
-	afterTarget, err := PackageDigest(targets[0].targetPath)
-	if err != nil || afterTarget != beforeTarget {
-		t.Fatalf("bootstrap mutated the existing runtime: before=%s after=%s err=%v", beforeTarget, afterTarget, err)
+	afterTarget, err := PackageReceipt(targets[0].targetPath)
+	if err != nil || afterTarget.Digest != beforeTarget.Digest {
+		t.Fatalf("bootstrap mutated the existing runtime: before=%s after=%s err=%v", beforeTarget.Digest, afterTarget.Digest, err)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".gates")); !os.IsNotExist(err) {
 		t.Fatalf("bootstrap created workflow state root: %v", err)
@@ -578,7 +578,7 @@ func TestInstallLockSerializesInstallAndUninstall(t *testing.T) {
 	assertLockUnchanged(true)
 	unlock()
 	assertLockUnchanged(false)
-	// 释放即关闭描述符：锁文件持久保留（内核文件锁永不删除），能否被
+	// 普通释放即关闭描述符：锁文件保留，能否被
 	// 第二个进程获取才是释放语义。
 	childOutput = e2eRunInstallLockChild(t, target, "free")
 	if !strings.Contains(childOutput, "free-acquired") {
@@ -727,7 +727,7 @@ func TestCrashJournalReconcileRestoresBackupAndReceipt(t *testing.T) {
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileOuterInstallJournal(registry); err != nil {
+	if _, err := reconcileOuterInstallJournal(registry); err != nil {
 		t.Fatal(err)
 	}
 	if got := e2eReadFile(t, filepath.Join(target, "stable.txt")); got != "stable\n" {

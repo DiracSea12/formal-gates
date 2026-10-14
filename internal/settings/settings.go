@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"formal-gates/internal/host"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,11 +37,41 @@ type input struct {
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
+// Freeze resolves only the selected native platform into the persisted values.
+func Freeze(provider string, effective Effective) (Effective, error) {
+	adapter, err := host.LookupAdapter(provider)
+	if err != nil {
+		return effective, err
+	}
+	if !adapter.HostDescriptor().Installable {
+		return effective, nil
+	}
+	resolver, ok := adapter.(interface {
+		ResolveNativePaths(map[string]string, map[string]string) error
+	})
+	if !ok {
+		return effective, fmt.Errorf("native path resolver unavailable for %s", adapter.HostDescriptor().ID)
+	}
+	resolved := effective
+	resolved.Values.Native = maps.Clone(effective.Values.Native)
+	if resolved.Values.Native == nil {
+		resolved.Values.Native = map[string]string{}
+	}
+	resolved.Sources = maps.Clone(effective.Sources)
+	if resolved.Sources == nil {
+		resolved.Sources = map[string]string{}
+	}
+	if err := resolver.ResolveNativePaths(resolved.Values.Native, resolved.Sources); err != nil {
+		return effective, err
+	}
+	return resolved, nil
+}
+
 // Load overlays project values over installation/user values field by field.
 // Unknown fields and null are errors: a typo must never silently remove a cap.
 func Load(root, home string) (Effective, error) {
 	nativeFields := host.Configuration()
-	e := Effective{Values: Values{QACapacity: 4, Capacity: 16, Native: map[string]string{}}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
+	e := Effective{Values: Values{QACapacity: 4, Capacity: 16, Native: map[string]string{}}, Sources: map[string]string{}, Files: overlayPaths(root, home)}
 	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
 		e.Sources[name] = "default"
 	}
@@ -85,6 +116,10 @@ func Load(root, home string) (Effective, error) {
 		}
 	}
 	return e, nil
+}
+
+func overlayPaths(root, home string) []string {
+	return []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}
 }
 
 // applyOverlay is the single-file parser and validator for persisted and edited
@@ -180,8 +215,7 @@ func (v Values) NativeString(name string) string {
 	return host.Configuration()[name].Default
 }
 
-// Preserve the existing flat JSON wire format. Adding a native option changes
-// only its descriptor, never this struct, encoder, decoder or overlay loop.
+// The flat JSON wire carries common values and all adapter-owned strings.
 func (v Values) MarshalJSON() ([]byte, error) {
 	type common Values
 	data, err := json.Marshal(common(v))
@@ -214,17 +248,25 @@ func (v *Values) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
+		delete(fields, name)
+	}
+	nativeFields := host.Configuration()
 	native := map[string]string{}
-	for name := range host.Configuration() {
-		raw, ok := fields[name]
-		if !ok {
+	for name, raw := range fields {
+		_, known := nativeFields[name]
+		var value *string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			if known {
+				return fmt.Errorf("%s: %w", name, err)
+			}
 			continue
 		}
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+		if value != nil {
+			native[name] = *value
+		} else if known {
+			native[name] = ""
 		}
-		native[name] = value
 	}
 	*v = Values(base)
 	v.Native = native

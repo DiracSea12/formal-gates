@@ -4,6 +4,7 @@ package harness
 // saves their complete bindings before an explicit confirmation can deliver them.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -278,7 +279,9 @@ func submitNativeAnswer(candidate nativeAnswerCandidate) error {
 	return writeAtomicJSON(nativeAnswerPath(candidate.Directory), answer)
 }
 
-func NativeRespond(args []string, errout io.Writer) int {
+// NativeRespondFlags shares the native argument owner with the semantic entry.
+// onPosition receives the original input or form position selected during parsing.
+func NativeRespondFlags(errout io.Writer, onPosition func(string, int)) (*flag.FlagSet, func() int) {
 	flags := flag.NewFlagSet("native-respond", flag.ContinueOnError)
 	flags.SetOutput(errout)
 	run := flags.String("run", "", "original run directory")
@@ -300,6 +303,9 @@ func NativeRespond(args []string, errout io.Writer) int {
 	flags.Func("response-question", "select the displayed input question for subsequent responses", func(value string) error {
 		var err error
 		responseQuestion, err = position(value)
+		if err == nil && onPosition != nil {
+			onPosition("response-question", responseQuestion)
+		}
 		return err
 	})
 	response := func() *nativeQuestionResponse {
@@ -334,6 +340,9 @@ func NativeRespond(args []string, errout io.Writer) int {
 	flags.Func("form-field", "select the displayed form field for the next value or choice", func(value string) error {
 		var err error
 		formField, err = position(value)
+		if err == nil && onPosition != nil {
+			onPosition("form-field", formField)
+		}
 		return err
 	})
 	flags.Func("form-choice", "select an original enum option for the current form field", func(value string) error {
@@ -364,20 +373,90 @@ func NativeRespond(args []string, errout io.Writer) int {
 	cancel := flags.Bool("cancel", false, "cancel the question")
 	save := flags.String("save-decision", "", "save a complete decision candidate")
 	confirmed := flags.String("decision-file", "", "confirm the original saved candidate")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		return 2
-	}
-	if *confirmed != "" {
-		if flags.NFlag() != 1 {
-			fmt.Fprintln(errout, "confirm only the original --decision-file")
+	return flags, func() int {
+		if *confirmed != "" {
+			if flags.NFlag() != 1 {
+				fmt.Fprintln(errout, "confirm only the original --decision-file")
+				return 2
+			}
+			body, err := os.ReadFile(*confirmed)
+			if err == nil {
+				var candidate nativeAnswerCandidate
+				err = StrictDecode(body, &candidate)
+				if err == nil {
+					err = submitNativeAnswer(candidate)
+				}
+			}
+			if err != nil {
+				fmt.Fprintln(errout, err)
+				return 1
+			}
+			return 0
+		}
+		if *run == "" || *save == "" {
+			fmt.Fprintln(errout, "prepare with --run, a numeric choice or cancel, and --save-decision; confirm with --decision-file")
 			return 2
 		}
-		body, err := os.ReadFile(*confirmed)
+		questions, err := nativeRunQuestions(*run)
+		if err == nil && (*question < 1 || *question > len(questions)) {
+			err = fmt.Errorf("select a current displayed native question")
+		}
 		if err == nil {
+			held := questions[*question-1]
+			selection := nativeSelection{Choice: *choice, Cancel: *cancel}
+			if len(responses) != 0 {
+				selection.Responses = make([]nativeQuestionResponse, len(listOf(held.Record["questions"])))
+				for n, value := range responses {
+					if n > len(selection.Responses) {
+						fmt.Fprintln(errout, "select a current displayed input question")
+						return 2
+					}
+					selection.Responses[n-1] = *value
+				}
+			}
+			if len(formChoices) != 0 || len(formValues) != 0 {
+				fields := nativeFormFields(held.Record)
+				selection.Values = make([]any, len(fields))
+				for n := range formChoices {
+					if n > len(fields) {
+						fmt.Fprintln(errout, "select a current displayed form field")
+						return 2
+					}
+				}
+				for n := range formValues {
+					if n > len(fields) {
+						fmt.Fprintln(errout, "select a current displayed form field")
+						return 2
+					}
+				}
+				properties := objectOrEmpty(getOf(getOf(held.Record, "requestedSchema"), "properties"))
+				for i, field := range fields {
+					value, valueProvided := formValues[i+1]
+					selected, choiceProvided := formChoices[i+1]
+					if valueProvided == choiceProvided {
+						fmt.Fprintln(errout, "supply one value or enum choice for each displayed form field")
+						return 2
+					}
+					property := objectOrEmpty(properties[field])
+					if choiceProvided {
+						if len(listOf(property["enum"])) == 0 {
+							fmt.Fprintln(errout, "this form field does not offer enum choices")
+							return 2
+						}
+						selection.Values[i] = map[string]any{"choice": selected}
+					} else {
+						selection.Values[i], err = nativeFormValue(property, value)
+						if err != nil {
+							fmt.Fprintln(errout, err)
+							return 2
+						}
+					}
+				}
+			}
 			var candidate nativeAnswerCandidate
-			err = StrictDecode(body, &candidate)
+			candidate, err = prepareNativeAnswer(held, selection)
 			if err == nil {
-				err = submitNativeAnswer(candidate)
+				err = writeAtomicJSON(*save, candidate)
 			}
 		}
 		if err != nil {
@@ -386,77 +465,31 @@ func NativeRespond(args []string, errout io.Writer) int {
 		}
 		return 0
 	}
-	if *run == "" || *save == "" {
-		fmt.Fprintln(errout, "prepare with --run, a numeric choice or cancel, and --save-decision; confirm with --decision-file")
+}
+
+func NativeRespond(args []string, errout io.Writer) int {
+	flags, execute := NativeRespondFlags(errout, nil)
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
 	}
-	questions, err := nativeRunQuestions(*run)
-	if err == nil && (*question < 1 || *question > len(questions)) {
-		err = fmt.Errorf("select a current displayed native question")
-	}
-	if err == nil {
-		held := questions[*question-1]
-		selection := nativeSelection{Choice: *choice, Cancel: *cancel}
-		if len(responses) != 0 {
-			selection.Responses = make([]nativeQuestionResponse, len(listOf(held.Record["questions"])))
-			for n, value := range responses {
-				if n > len(selection.Responses) {
-					fmt.Fprintln(errout, "select a current displayed input question")
-					return 2
-				}
-				selection.Responses[n-1] = *value
-			}
-		}
-		if len(formChoices) != 0 || len(formValues) != 0 {
-			fields := nativeFormFields(held.Record)
-			selection.Values = make([]any, len(fields))
-			for n := range formChoices {
-				if n > len(fields) {
-					fmt.Fprintln(errout, "select a current displayed form field")
-					return 2
-				}
-			}
-			for n := range formValues {
-				if n > len(fields) {
-					fmt.Fprintln(errout, "select a current displayed form field")
-					return 2
-				}
-			}
-			properties := objectOrEmpty(getOf(getOf(held.Record, "requestedSchema"), "properties"))
-			for i, field := range fields {
-				value, valueProvided := formValues[i+1]
-				selected, choiceProvided := formChoices[i+1]
-				if valueProvided == choiceProvided {
-					fmt.Fprintln(errout, "supply one value or enum choice for each displayed form field")
-					return 2
-				}
-				property := objectOrEmpty(properties[field])
-				if choiceProvided {
-					if len(listOf(property["enum"])) == 0 {
-						fmt.Fprintln(errout, "this form field does not offer enum choices")
-						return 2
-					}
-					selection.Values[i] = map[string]any{"choice": selected}
-				} else {
-					selection.Values[i], err = nativeFormValue(property, value)
-					if err != nil {
-						fmt.Fprintln(errout, err)
-						return 2
-					}
-				}
-			}
-		}
-		var candidate nativeAnswerCandidate
-		candidate, err = prepareNativeAnswer(held, selection)
-		if err == nil {
-			err = writeAtomicJSON(*save, candidate)
-		}
-	}
+	return execute()
+}
+
+// NativeRequestPayloadDirectory uses the original displayed request binding.
+func NativeRequestPayloadDirectory(run string, position int) (string, error) {
+	questions, err := nativeRunQuestions(run)
 	if err != nil {
-		fmt.Fprintln(errout, err)
-		return 1
+		return "", err
 	}
-	return 0
+	if position < 1 || position > len(questions) {
+		return "", fmt.Errorf("select a current displayed native question")
+	}
+	held := questions[position-1]
+	request, err := json.Marshal([]any{held.Record["connection"], held.Record["request_id"]})
+	if err != nil || held.Record["request_id"] == nil {
+		return "", fmt.Errorf("original native request is unavailable")
+	}
+	return filepath.Join(held.Directory, "input-payloads", base64.RawURLEncoding.EncodeToString(request)), nil
 }
 
 func nativeFormValue(property map[string]any, value string) (any, error) {

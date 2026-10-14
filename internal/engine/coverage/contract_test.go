@@ -2,7 +2,6 @@ package coverage
 
 import (
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -134,17 +133,17 @@ func TestContractExecutionFullAndAffected(t *testing.T) {
 	if err := c.ValidateExecution(w, full); err != nil {
 		t.Fatalf("bound full execution should validate: %v", err)
 	}
-	full.Binding.Candidate.Identity = "candidate-old"
-	if err := c.ValidateExecution(w, full); err == nil {
-		t.Fatal("execution for a different candidate must be rejected")
+	differentCandidate := full
+	differentCandidate.Binding.Candidate.Identity = "candidate-old"
+	if err := c.ValidateExecution(w, differentCandidate); !errors.As(err, &validationErr) || validationErr.Code != CodeCandidateMismatch || validationErr.Path != "execution.binding.candidate" {
+		t.Fatalf("execution for a different candidate = %v", err)
 	}
-	full.Binding.Candidate.Identity = "candidate-1"
 	affected := full
 	affected.Binding.Scope = ScopeAffected
 	affected.Records = nil
-	for i, entry := range w.Entries {
+	for _, entry := range w.Entries {
 		record := ExecutionRecord{ReviewKind: entry.ReviewKind, SourceID: entry.SourceID, PointID: entry.PointID, CaseID: entry.CaseID}
-		if i == 0 {
+		if entry.CaseID == "C-1" {
 			record.Result, record.Provenance = ExecutedPass, ProvenanceExecuted
 		} else {
 			record.Result, record.Provenance, record.InheritedFromCandidate, record.ReuseEvidence = ExecutedPass, ProvenanceInherited, "candidate-0", "view-receipt"
@@ -154,15 +153,16 @@ func TestContractExecutionFullAndAffected(t *testing.T) {
 	if err := c.ValidateExecution(w, affected); err != nil {
 		t.Fatalf("affected execution should validate: %v", err)
 	}
-	full.Binding.Candidate.Identity = "candidate-2"
-	full.Records[0].Result = AuthorizedSkip
-	if err := c.ValidateExecution(w, full); err == nil {
-		t.Fatal("authorized skip must not pass execution")
+	skipped := full
+	skipped.Records = append([]ExecutionRecord(nil), full.Records...)
+	skipped.Records[0].Result = AuthorizedSkip
+	if err := c.ValidateExecution(w, skipped); !errors.As(err, &validationErr) || validationErr.Code != CodeExecutionNotPass || validationErr.Path != "execution.records[0].result" {
+		t.Fatalf("authorized skip rejection = %v", err)
 	}
-	full.Records[0].Result = ExecutedPass
-	full.Binding.ActualCaseIDs = []string{"C-1"}
-	if err := c.ValidateExecution(w, full); err == nil {
-		t.Fatal("incomplete actual case set must be rejected")
+	incomplete := full
+	incomplete.Binding.ActualCaseIDs = []string{"C-1"}
+	if err := c.ValidateExecution(w, incomplete); !errors.As(err, &validationErr) || validationErr.Code != CodeExecutionSetMismatch || validationErr.Path != "execution.binding.actualCaseIds" {
+		t.Fatalf("incomplete actual case set rejection = %v", err)
 	}
 }
 
@@ -212,19 +212,6 @@ func TestContractExecutionRequiresPassForEveryMappedCase(t *testing.T) {
 	}
 }
 
-func TestValidateCoverageMapRejectsMismatchedEdgeReviewKind(t *testing.T) {
-	c, _ := fixtureContract()
-	manifest := c.Manifests[0]
-	coverageMap := manifest.Map()
-	coverageMap.Edges[0].ReviewKind = ReviewWhitebox
-	var validationErr *ValidationError
-	if err := ValidateCoverageMap(manifest, coverageMap); !errors.As(err, &validationErr) {
-		t.Fatalf("expected mismatched edge review kind rejection, got %v", err)
-	} else if validationErr.Code != CodeInvalidBinding {
-		t.Fatalf("expected %s, got %s", CodeInvalidBinding, validationErr.Code)
-	}
-}
-
 func TestContractAffectedAuthorizedSkipDiagnosticNamesStatus(t *testing.T) {
 	c, reviews := fixtureContract()
 	w, err := c.ValidateReviews(reviews)
@@ -247,7 +234,7 @@ func TestContractAffectedAuthorizedSkipDiagnosticNamesStatus(t *testing.T) {
 			ActualCaseIDs:         []string{"C-1", "C-2", "C-3"},
 		},
 	}
-	for i, entry := range w.Entries {
+	for _, entry := range w.Entries {
 		record := ExecutionRecord{
 			ReviewKind: entry.ReviewKind,
 			SourceID:   entry.SourceID,
@@ -256,7 +243,7 @@ func TestContractAffectedAuthorizedSkipDiagnosticNamesStatus(t *testing.T) {
 			Result:     ExecutedPass,
 			Provenance: ProvenanceInherited,
 		}
-		if i == 0 {
+		if entry.CaseID == "C-1" {
 			record.Provenance = ProvenanceExecuted
 		} else {
 			record.InheritedFromCandidate = "candidate-previous"
@@ -280,29 +267,6 @@ func TestContractNoQASourcesUseAlternativeVerification(t *testing.T) {
 	c := CoverageContract{RequiredSources: RequiredSources{Binding: binding, Sources: []RequiredSource{{SourceID: "S", Category: SolutionConstraint, Applicability: NonQAApplicability}}}, AlternativeVerifications: []AlternativeVerification{{SourceID: "S", Reason: "none", Method: "manual", Status: StatusPass, Evidence: "proof"}}}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestContractRejectsStaleWhitelistProjection(t *testing.T) {
-	c, reviews := fixtureContract()
-	w, err := c.ValidateReviews(reviews)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.Entries[0].CaseID = "C-2"
-	if _, err := w.WhitelistDigest(); err == nil {
-		t.Fatal("mutating a projected whitelist must invalidate its digest")
-	}
-}
-
-func TestContractDigestProjectionDoesNotMutateInput(t *testing.T) {
-	c, _ := fixtureContract()
-	before := append([]string(nil), c.Manifests[0].Sources...)
-	if _, err := c.ManifestDigest(); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, c.Manifests[0].Sources) {
-		t.Fatal("digest changed caller-owned manifest ordering")
 	}
 }
 

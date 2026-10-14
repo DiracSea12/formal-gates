@@ -21,7 +21,17 @@
 // No keychain and no user interaction are involved, and a value the host stored in
 // the clear is returned as it is.
 //
-// usage: node zcode_credential.mjs <providerId> [storeFile]
+// The account whose credential is spent is named the host's own way: the
+// provider's identity entry a login wrote, or -- when a desktop OAuth login
+// left no identity entry -- that login's current records, the encrypted
+// oauth:active_provider family plus the same family's user_info id. The
+// accountType argument carries the provider's family (the catalogue's
+// access.accountType, or the request's own accountAccess value) and is spent
+// only on that second source; the id addresses one exact retained key, so
+// several retained accounts are normal and neither the first nor the last one
+// is ever taken.
+//
+// usage: node zcode_credential.mjs <providerId> [storeFile] [accountType]
 //
 // stdout: the credential, or nothing. Never a diagnostic, so a caller cannot
 // mistake a message for a secret. Exit 3 means "this host has no such provider".
@@ -34,12 +44,15 @@ const PREFIX = 'enc:v1:';
 const ACCOUNT_KEY_PREFIX = 'account-provider:coding-plan:';
 const ACCOUNT_KEY_SUFFIX = ':api-key';
 const IDENTITY_SEPARATOR = ':account:';
+const OAUTH_ACTIVE_PROVIDER_KEY = 'oauth:active_provider';
+const oauthUserInfoKey = (family) => `oauth:${family}:user_info`;
 
 const providerId = (process.argv[2] || '').trim();
 if (!providerId) {
-  process.stderr.write('usage: zcode_credential.mjs <providerId> [storeFile]\n');
+  process.stderr.write('usage: zcode_credential.mjs <providerId> [storeFile] [accountType]\n');
   process.exit(2);
 }
+const accountType = (process.argv[4] || '').trim();
 const storeFile = process.argv[3] || process.env.FORMAL_GATES_ZCODE_CREDENTIALS
   || path.join(os.homedir(), '.zcode', 'v2', 'credentials.json');
 
@@ -69,17 +82,28 @@ try {
   process.exit(3);
 }
 
-const wanted = ACCOUNT_KEY_PREFIX + providerId + IDENTITY_SEPARATOR;
-for (const [name, value] of Object.entries(store)) {
-  if (!name.startsWith(wanted) || !name.endsWith(ACCOUNT_KEY_SUFFIX)) continue;
-  try {
-    const plain = decrypt(value).trim();
-    if (!plain) continue;
-    process.stdout.write(plain);
-    process.exit(0);
-  } catch (error) {
-    process.stderr.write(`credential for ${providerId} could not be read: ${error.message}\n`);
-    process.exit(4);
+try {
+  let identity = decrypt(store[`account-provider:${providerId}:identity`] || '').trim();
+  if (!identity && accountType) {
+    // A desktop OAuth login keeps no identity entry; its current account is
+    // the active family plus that family's user_info id.
+    const family = decrypt(store[OAUTH_ACTIVE_PROVIDER_KEY] || '').trim();
+    if (family === accountType) {
+      const userInfo = decrypt(store[oauthUserInfoKey(accountType)] || '').trim();
+      if (userInfo) {
+        const id = JSON.parse(userInfo).id;
+        if (id != null) identity = String(id).trim();
+      }
+    }
   }
+  if (!identity) process.exit(3);
+  const wanted = ACCOUNT_KEY_PREFIX + providerId + IDENTITY_SEPARATOR
+    + encodeURIComponent(identity) + ACCOUNT_KEY_SUFFIX;
+  const plain = decrypt(store[wanted] || '').trim();
+  if (!plain) process.exit(3);
+  process.stdout.write(plain);
+  process.exit(0);
+} catch (error) {
+  process.stderr.write(`credential for ${providerId} could not be read: ${error.message}\n`);
+  process.exit(4);
 }
-process.exit(3);

@@ -3,6 +3,7 @@ package validate
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,9 +80,7 @@ type InstallTargetReport struct {
 
 type BootstrapReceipt struct {
 	Operation     string           `json:"operation"`
-	Code          string           `json:"code,omitempty"`
 	Accepted      bool             `json:"accepted"`
-	Status        string           `json:"status,omitempty"`
 	Registry      string           `json:"registry"`
 	Epoch         uint64           `json:"epoch"`
 	PackageDigest string           `json:"packageDigest"`
@@ -90,7 +89,6 @@ type BootstrapReceipt struct {
 	SourceLstat   PathLstat        `json:"sourceLstat"`
 	Records       []RegistryRecord `json:"records"`
 	StateCreated  bool             `json:"stateCreated"`
-	Reason        string           `json:"reason,omitempty"`
 	ObservedAt    string           `json:"observedAt"`
 }
 
@@ -120,7 +118,7 @@ type installTarget struct {
 	managedRulePath string
 }
 
-func Install(options InstallOptions) (InstallReport, error) {
+func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if strings.TrimSpace(options.Source) == "" {
 		return InstallReport{}, fmt.Errorf("formal-gates source is required (--source); it must point at the package directory to install")
 	}
@@ -260,7 +258,11 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Recover an interrupted transaction before validating the bridge or
 		// touching a new target. The outer journal owns all runtime, host-config
 		// and registry snapshots.
-		if err := reconcileOuterInstallJournal(registryPath); err != nil {
+		recoveredUninstall, err := reconcileOuterInstallJournal(registryPath)
+		if recoveredUninstall {
+			defer func() { resultErr = errors.Join(resultErr, retireUnusedInstallLocks(registryPath)) }()
+		}
+		if err != nil {
 			return InstallReport{}, err
 		}
 		// Validate the existing bridge before changing any host target.  A
@@ -605,13 +607,14 @@ func Install(options InstallOptions) (InstallReport, error) {
 	return report, nil
 }
 
-func Uninstall(options UninstallOptions) (UninstallReport, error) {
+func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
 	if err != nil {
 		return UninstallReport{}, err
 	}
 	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
 	var unlock func()
+	retireLocks := false
 	var activeRegistryRecords []RegistryRecord
 	if registryPath != "" {
 		unlock, err = acquireInstallLock(registryPath)
@@ -624,7 +627,13 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, err
 		}
 		defer unlock()
-		if err := reconcileOuterInstallJournal(registryPath); err != nil {
+		defer func() {
+			if retireLocks {
+				resultErr = errors.Join(resultErr, retireUnusedInstallLocks(registryPath))
+			}
+		}()
+		retireLocks, err = reconcileOuterInstallJournal(registryPath)
+		if err != nil {
 			return UninstallReport{}, err
 		}
 		// Resolve the launcher only after taking both locks.  Otherwise a
@@ -760,7 +769,33 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			seen[canonicalRegistryPath(record.ResourceRoot)] = true
 		}
 	}
+	for index, record := range selected {
+		shared := false
+		for _, other := range remaining {
+			if canonicalRegistryPath(record.StateRoot) == canonicalRegistryPath(other.StateRoot) {
+				shared = true
+				break
+			}
+		}
+		if record.StateRoot == "" || shared {
+			continue
+		}
+		lock, err := snapshotOuterFile(filepath.Join(record.StateRoot, "config.json.lock"), filepath.Join(transactionRoot, fmt.Sprintf("settings-lock-%d", index)))
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		outer.Receipts = append(outer.Receipts, lock)
+	}
 	if len(remaining) == 0 {
+		home, err := installHomeDir()
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		lock, err := snapshotOuterFile(filepath.Join(home, ".config", "formal-gates", "config.json.lock"), filepath.Join(transactionRoot, "user-settings-lock"))
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		outer.Receipts = append(outer.Receipts, lock)
 		for index, suffix := range []string{".install.json", ".bootstrap.json", ".admission.json", ".transaction.json.receipt.json", ".transaction.json.failure.json"} {
 			receipt, err := snapshotOuterFile(registryPath+suffix, filepath.Join(transactionRoot, fmt.Sprintf("receipt-%d", index)))
 			if err != nil {
@@ -866,14 +901,14 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
+	retireLocks = len(remaining) == 0
 	return report, nil
 }
 
 // managedRuleSharedByActiveInstall keeps a shared project instruction file
 // until every active host installation that owns that path is removed. Codex,
 // DeepSeek Harness, and ZCode can share project-level AGENTS.md; uninstalling
-// one must not erase another host's managed block. Skip-hooks records do not
-// claim ownership because they deliberately did not write the rule.
+// one must not erase another installed host's managed block.
 func managedRuleSharedByActiveInstall(path string, removing []installTarget, records []RegistryRecord) bool {
 	want := canonicalRegistryPath(path)
 	removingTargets := map[string]bool{}
@@ -881,7 +916,7 @@ func managedRuleSharedByActiveInstall(path string, removing []installTarget, rec
 		removingTargets[canonicalRegistryPath(target.targetPath)] = true
 	}
 	for _, record := range records {
-		if !strings.EqualFold(strings.TrimSpace(record.Status), "active") || record.SkipHooks || removingTargets[canonicalRegistryPath(record.Target)] {
+		if !strings.EqualFold(strings.TrimSpace(record.Status), "active") || removingTargets[canonicalRegistryPath(record.Target)] {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(record.Scope), "project") {
@@ -986,11 +1021,9 @@ func installRegistryPath(options InstallOptions) string {
 	return ""
 }
 
-// defaultStableLauncherPath 解析默认稳定 launcher 落点。Windows 优先使用
-// %LOCALAPPDATA%\formal-gates\bin（~/.local/bin 不是 Windows 惯例）；但当
-// HOME 被显式设置时改走 HOME——真实 Windows 会话不设置 HOME，显式 HOME 只
-// 出现在测试/便携环境，此时 registry 等其余状态都锚定该 HOME（installHomeDir），
-// launcher 必须跟随，否则会绕过隔离把桩写进真实用户目录。
+// defaultStableLauncherPath follows an explicit HOME together with the
+// registry. Windows without HOME uses LOCALAPPDATA when available; other
+// environments use the resolved home directory.
 func defaultStableLauncherPath(options InstallOptions) string {
 	if runtime.GOOS == "windows" {
 		if strings.TrimSpace(os.Getenv("HOME")) != "" {
@@ -1116,7 +1149,7 @@ func RequireUninstallLauncher(options UninstallOptions) error {
 	return fmt.Errorf("UNREGISTERED_INSTALL: uninstall maintenance must run through the registered stable launcher")
 }
 
-func bootstrapInstall(options InstallOptions, targets []installTarget, source PackageReceiptReport, registryPath string) (InstallReport, error) {
+func bootstrapInstall(options InstallOptions, targets []installTarget, source PackageReceiptReport, registryPath string) (_ InstallReport, resultErr error) {
 	if registryPath == "" {
 		return InstallReport{}, fmt.Errorf("bootstrap requires a registry path for the selected scope")
 	}
@@ -1130,7 +1163,11 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		return InstallReport{}, err
 	}
 	defer unlock()
-	if err := reconcileOuterInstallJournal(registryPath); err != nil {
+	recoveredUninstall, err := reconcileOuterInstallJournal(registryPath)
+	if recoveredUninstall {
+		defer func() { resultErr = errors.Join(resultErr, retireUnusedInstallLocks(registryPath)) }()
+	}
+	if err != nil {
 		return InstallReport{}, err
 	}
 	receiptPath := registryPath + ".bootstrap.json"
@@ -1619,7 +1656,6 @@ func validateInstallPackage(root string) error {
 }
 
 func installTargets(hostName, scope, project string) ([]installTarget, error) {
-	hosts := []string{hostName}
 	home := ""
 	if scope == "global" {
 		var err error
@@ -1628,32 +1664,21 @@ func installTargets(hostName, scope, project string) ([]installTarget, error) {
 			return nil, err
 		}
 	}
-	targets := make([]installTarget, 0, len(hosts))
-	for _, h := range hosts {
-		descriptor, err := host.Lookup(h)
-		if err != nil {
-			return nil, err
-		}
-		base, hookConfig, managedRulePath, err := installTargetPaths(descriptor, home, project, scope)
-		if err != nil {
-			return nil, err
-		}
-		managedRule := ""
-		if managedRulePath != "" {
-			managedRule = filepath.Clean(managedRulePath)
-		}
-		hookConfigPath := ""
-		if hookConfig != "" {
-			hookConfigPath = filepath.Clean(hookConfig)
-		}
-		targets = append(targets, installTarget{
-			host:            h,
-			targetPath:      filepath.Clean(filepath.Join(base, "formal-gates")),
-			hookConfig:      hookConfigPath,
-			managedRulePath: managedRule,
-		})
+	descriptor, err := host.Lookup(hostName)
+	if err != nil {
+		return nil, err
 	}
-	return targets, nil
+	base, hookConfig, managedRulePath, err := installTargetPaths(descriptor, home, project, scope)
+	if err != nil {
+		return nil, err
+	}
+	if managedRulePath != "" {
+		managedRulePath = filepath.Clean(managedRulePath)
+	}
+	if hookConfig != "" {
+		hookConfig = filepath.Clean(hookConfig)
+	}
+	return []installTarget{{host: hostName, targetPath: filepath.Clean(filepath.Join(base, "formal-gates")), hookConfig: hookConfig, managedRulePath: managedRulePath}}, nil
 }
 
 type installPathResolver func(home, project, scope string) (base, hookConfig, managedRulePath string, err error)
@@ -1779,7 +1804,7 @@ type hookCapability struct {
 var hookCapabilities = map[host.HookKind]hookCapability{
 	host.HookNested: {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
 	host.HookFlat:   {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
-	host.HookDSH:    {configure: configureDSHInstallHook, remove: removeDshHook, packageFiles: dshHookPackageFiles},
+	host.HookDSH:    {configure: configureDshHook, remove: removeDshHook, packageFiles: dshHookPackageFiles},
 	host.HookZCode:  {configure: configureZCodeHook, remove: removeZCodeHook},
 }
 
@@ -1796,13 +1821,6 @@ func configureInstallHook(target installTarget) (bool, error) {
 		return false, fmt.Errorf("host %q has no hook install capability", descriptor.ID)
 	}
 	return capability.configure(target)
-}
-
-func configureDSHInstallHook(target installTarget) (bool, error) {
-	if err := configureDshHook(target); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func configureGenericInstallHook(target installTarget) (bool, error) {
@@ -1822,7 +1840,7 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 	gateArgs := []string{"hook", "decide"}
 	// Metered hosts must bind their transcript parser even when their hook
 	// response uses the generic protocol (Claude Code).
-	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.CostProvider != "" {
+	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil {
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
@@ -1913,11 +1931,7 @@ func removeGenericInstallHooks(target installTarget) error {
 			hooks[event] = remaining
 		}
 	}
-	after, _ := json.Marshal(config)
-	if string(before) == string(after) {
-		return nil
-	}
-	if len(config) == 1 {
+	if len(config) == 1 || descriptor.Hook.Kind == host.HookFlat && len(config) == 2 && config["version"] == float64(1) {
 		empty := true
 		for _, value := range hooks {
 			entries, ok := value.([]any)
@@ -1929,6 +1943,10 @@ func removeGenericInstallHooks(target installTarget) error {
 		if empty {
 			return os.Remove(target.hookConfig)
 		}
+	}
+	after, _ := json.Marshal(config)
+	if string(before) == string(after) {
+		return nil
 	}
 	return writeHookConfig(target.hookConfig, config)
 }
@@ -2078,7 +2096,7 @@ func installerHookCommands(target installTarget) map[string]bool {
 		}
 	}
 	gateArgs := []string{"hook", "decide"}
-	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.CostProvider != "") {
+	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil) {
 		add("hook", "decide")
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}

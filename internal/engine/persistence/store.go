@@ -279,13 +279,13 @@ func (s *Store) readDocument() (*document, error) {
 
 // Save 执行一次完整写事务：
 //
-//	加锁重读 → 信封/摘要校验 → revision CAS → 写前指纹重验 →
+//	加锁重读/信封与摘要校验 → 对账已有事务 → revision CAS → 写前指纹重验 →
 //	persist intent → execute（原子 rename）→ observe/reconcile →
 //	commit result（写后指纹重验 + 清除 intent）
 //
-// 一切拒绝都发生在 persist intent 之前：被拒路径不写状态文件，也不留
-// intent/temp 协议字节（锁文件的创建与释放是目录互斥机制，不属于状态
-// 写入）。
+// 本次事务的输入、CAS 与写前指纹拒绝均发生在本次 persist intent 之前，
+// 不留下本次 intent/temp。锁内对账可能先提交已有的完整持久事务，再按
+// 对账后的 revision 拒绝本次过期输入。锁文件属于目录互斥机制。
 func (s *Store) Save(tx Transaction) (SaveResult, error) {
 	if tx.Content == nil {
 		return SaveResult{}, fmt.Errorf("persistence: save: content is required")
@@ -310,17 +310,13 @@ func (s *Store) Save(tx Transaction) (SaveResult, error) {
 	}
 	defer unlock()
 
-	// 加锁重读：后续所有校验针对锁内现状，不依赖加锁前的旧投影。
-	// 信封或摘要不通过（UNSUPPORTED_RUN_VERSION / 篡改）在这里直接
-	// 拒绝，绝不写状态。
-	current, err := s.readDocument()
+	// 对账先校验当前信封与摘要，再接纳已有事务；本次 CAS 不使用
+	// 接纳前的 revision，也不覆盖尚未对账的 intent。
+	recovery, err := s.recoverLocked()
 	if err != nil {
 		return SaveResult{}, err
 	}
-	var observedRevision uint64
-	if current != nil {
-		observedRevision = current.Revision
-	}
+	observedRevision := recovery.Revision
 	if observedRevision != tx.ExpectedRevision {
 		return SaveResult{}, &RevisionConflictError{
 			Path: s.statePath(), Expected: tx.ExpectedRevision, Observed: observedRevision,

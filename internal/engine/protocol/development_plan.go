@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/requirement"
 )
 
 // GranularityReview is the readiness worker's proposed development contract.
@@ -21,24 +22,25 @@ type GranularityReview struct {
 	CheckpointReason string             `json:"checkpointReason,omitempty"`
 }
 type DevelopmentBatch struct {
-	Owner         string                 `json:"owner,omitempty"`
-	Route         *RouteDecision         `json:"route,omitempty"`
-	ID            string                 `json:"id"`
-	Subtasks      []DevelopmentSubtask   `json:"subtasks"`
-	DependsOn     []string               `json:"dependsOn,omitempty"`
-	Deliverable   string                 `json:"deliverable"`
-	PublicEntry   string                 `json:"publicEntry"`
-	Artifacts     []string               `json:"artifacts"`
-	Interfaces    string                 `json:"interfaces"`
-	StateBoundary string                 `json:"stateBoundary"`
-	Risk          string                 `json:"risk"`
-	DoD           []DevelopmentCriterion `json:"dod"`
-	Checks        []DevelopmentCheck     `json:"checks"`
-	Rollback      string                 `json:"rollback"`
-	Recovery      string                 `json:"recovery"`
-	Handoff       string                 `json:"handoff"`
-	ContextCost   string                 `json:"contextCost"`
-	Spike         bool                   `json:"spike,omitempty"`
+	RequirementPoints []string               `json:"requirementPoints"`
+	Owner             string                 `json:"owner,omitempty"`
+	Route             *RouteDecision         `json:"route,omitempty"`
+	ID                string                 `json:"id"`
+	Subtasks          []DevelopmentSubtask   `json:"subtasks"`
+	DependsOn         []string               `json:"dependsOn,omitempty"`
+	Deliverable       string                 `json:"deliverable"`
+	PublicEntry       string                 `json:"publicEntry"`
+	Artifacts         []string               `json:"artifacts"`
+	Interfaces        string                 `json:"interfaces"`
+	StateBoundary     string                 `json:"stateBoundary"`
+	Risk              string                 `json:"risk"`
+	DoD               []DevelopmentCriterion `json:"dod"`
+	Checks            []DevelopmentCheck     `json:"checks"`
+	Rollback          string                 `json:"rollback"`
+	Recovery          string                 `json:"recovery"`
+	Handoff           string                 `json:"handoff"`
+	ContextCost       string                 `json:"contextCost"`
+	Spike             bool                   `json:"spike,omitempty"`
 }
 type DevelopmentSubtask struct {
 	ID          string `json:"id"`
@@ -65,9 +67,13 @@ type DevelopmentCheck struct {
 	Command string `json:"command,omitempty"`
 	Goal    string `json:"goal,omitempty"`
 }
+
+// DevelopmentCompletion records this batch's contribution to its assigned points.
+// A shared point is fully verified independently by the ordinary gate.
 type DevelopmentCompletion struct {
-	DoD     map[string]string `json:"dod"`
-	Handoff string            `json:"handoff"`
+	RequirementResults []requirement.PointResult `json:"requirementResults"`
+	DoD                map[string]string         `json:"dod"`
+	Handoff            string                    `json:"handoff"`
 }
 
 // DevelopmentStarted projects current or explicitly carried issued work.
@@ -285,7 +291,7 @@ func (s *State) ReadinessProposal() *GranularityReview {
 	return proposal
 }
 func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return pipelineTask(cd, "engine.development.batch.v4", planTaskScope(p, id))
+	return pipelineTask(cd, "engine.development.batch.v5", planTaskScope(p, id))
 }
 func planTaskScope(plan *GranularityReview, id string) string {
 	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
@@ -300,6 +306,9 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 		id, p = "", route.DevelopmentPlan.Proposal
 	}
 	if err := ValidateGranularity(p); err != nil {
+		return nil, err
+	}
+	if err := s.validatePlanRequirementCoverage(p, true); err != nil {
 		return nil, err
 	}
 	checks := p
@@ -412,6 +421,13 @@ func (s *State) validateSplitPlan(proposal *GranularityReview) error {
 	for _, batch := range proposal.Batches {
 		if batch.Owner != masterMergeOwner && !slices.Contains(s.Topology.Slices, batch.Owner) {
 			return validationError("split batch requires an explicit confirmed owner: " + batch.ID)
+		}
+	}
+	for id, owner := range s.Topology.ACOwners {
+		if !slices.ContainsFunc(proposal.Batches, func(batch DevelopmentBatch) bool {
+			return batch.Owner == owner && slices.Contains(batch.RequirementPoints, id)
+		}) {
+			return validationError("primary owner plan omits requirement point: " + id)
 		}
 	}
 	for _, owner := range s.Topology.Slices {
@@ -584,7 +600,7 @@ func (s *State) currentPlanTaskFrom(task runtime.TaskKey, p *GranularityReview, 
 			batch = b
 		}
 	}
-	for _, entry := range s.RequirementRevisions {
+	for _, entry := range s.workAuthorizations() {
 		for i, c := range entry.WorkDecisions {
 			prior, known := s.plannedBatchSource(c.Work.Task)
 			if c.Work.Task == task || known && prior.ID == id && (c.Disposition == RequirementWorkRedo || digestOfCanonical(prior) == digestOfCanonical(batch)) {
@@ -663,7 +679,10 @@ func validateDevelopmentCompletion(batch DevelopmentBatch, e *DevelopmentEvidenc
 			return validationError("missing batch DoD evidence: " + d.ID)
 		}
 	}
-	return nil
+	if len(e.RequirementResults) > 0 {
+		return validationError("batch completion keeps its point evidence in the confirmed completion contract")
+	}
+	return validateImplementedPoints(batch.RequirementPoints, e.Completion.RequirementResults)
 }
 func (s *State) developmentBatch(task runtime.TaskKey, cd *compiler.CompiledDefinition) (string, *GranularityReview, DevelopmentBatch, bool) {
 	request, p, _ := s.confirmedDevelopmentPlan()
@@ -744,8 +763,9 @@ func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error 
 				}
 			}
 			var choice *RequirementWorkDecision
-			for i := len(s.RequirementRevisions) - 1; i >= 0 && choice == nil; i-- {
-				entry := s.RequirementRevisions[i]
+			entries := s.workAuthorizations()
+			for i := len(entries) - 1; i >= 0 && choice == nil; i-- {
+				entry := entries[i]
 				for j, c := range entry.WorkDecisions {
 					if c.Work.Task == key || c.Disposition == RequirementWorkRedo && replacementWorkTask(entry, j) == key {
 						copy := c
@@ -927,15 +947,13 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 		paths = append(paths, work.result.Validation.Development.Paths...)
 	}
 	for i := range s.Validation.Waves {
-		if work := s.repairVerificationWork(&s.Validation.Waves[i], cd); work != nil && work.result == nil {
+		if work := s.repairVerificationWork(&s.Validation.Waves[i], cd); work != nil && !s.repairCompleted(&s.Validation.Waves[i], cd) {
 			return nil, nil, "", false
 		}
 	}
 
-	slices.Sort(paths)
-	paths = slices.Compact(paths)
+	paths = s.candidateSourcePaths(paths)
 	slices.SortFunc(sources, func(a, b runtime.TaskKey) int { return strings.Compare(a.String(), b.String()) })
-	slices.Sort(paths)
 	return sources, paths, base, len(sources) > 0
 }
 
@@ -1027,7 +1045,7 @@ func (s *State) fullProjectChecks() []DevelopmentCheck {
 }
 
 func validateDevelopmentContinuation(e *DevelopmentEvidence) error {
-	if e == nil || e.Paths == nil || strings.TrimSpace(e.Summary) == "" || strings.TrimSpace(e.RemainingWork) == "" || e.Completion != nil || len(e.CaseRuns) != 0 {
+	if e == nil || e.Paths == nil || strings.TrimSpace(e.Summary) == "" || strings.TrimSpace(e.RemainingWork) == "" || e.Completion != nil || len(e.RequirementResults) != 0 || len(e.CaseRuns) != 0 {
 		return validationError("development continuation requires actual progress and remaining work without completion claims")
 	}
 	return nil

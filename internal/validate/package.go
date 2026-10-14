@@ -83,14 +83,13 @@ var knownManifestParts = []string{
 }
 
 type manifest struct {
-	Name       string         `json:"name"`
-	Hosts      []manifestHost `json:"hosts"`
-	Parts      []string       `json:"package_parts"`
-	Installs   []string       `json:"install_commands"`
-	Commands   []string       `json:"verification_commands"`
-	Notes      []string       `json:"validation_notes"`
-	Caveats    []string       `json:"support_caveats"`
-	Validators []any          `json:"external_validators"`
+	Name     string         `json:"name"`
+	Hosts    []manifestHost `json:"hosts"`
+	Parts    []string       `json:"package_parts"`
+	Installs []string       `json:"install_commands"`
+	Commands []string       `json:"verification_commands"`
+	Notes    []string       `json:"validation_notes"`
+	Caveats  []string       `json:"support_caveats"`
 }
 
 type manifestHost struct {
@@ -225,10 +224,6 @@ func validateCIText(text string, result *Result) {
 		"suffix: macos-amd64",
 		"binary: formal-gates-macos-arm64",
 		"binary: formal-gates-macos-amd64",
-		"portable-canary-macos-arm64.json",
-		"portable-canary-macos-amd64.json",
-		"SHA256SUMS-macos-arm64.txt",
-		"SHA256SUMS-macos-amd64.txt",
 	} {
 		if !strings.Contains(text, required) {
 			result.add(".github/workflows/portable-validation.yml", "missing required macOS matrix text: "+required)

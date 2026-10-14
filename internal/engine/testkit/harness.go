@@ -15,7 +15,6 @@ import (
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
-	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
@@ -27,9 +26,7 @@ const (
 	terminalSummaryName  = "terminal-summary.json"
 )
 
-// HarnessOptions is the documented test-only protocol surface. Public
-// workflow drive/submit commands remain absent; every write stays under the
-// explicitly supplied isolated project root.
+// HarnessOptions supplies the isolated project and inputs for test-only scenarios.
 type HarnessOptions struct {
 	ProjectRoot       string
 	Scenario          string
@@ -53,20 +50,10 @@ type HarnessOptions struct {
 	DefinitionFixture string
 	Declared          string
 	Declaredness      string
-	ReceiptFile       string
-	Prepare           string
-	Template          string
-	BindTemplate      bool
-	Continue          bool
 	ExpectedRevision  uint64
 	Capacity          int
 	LifecycleMatches  string
-	Fact              string
-	Expected          string
-	Conflict          string
 	Target            string
-	Operation         string
-	Params            string
 }
 
 type HarnessError struct {
@@ -83,42 +70,31 @@ type HarnessAction struct {
 	ActionID string `json:"actionID"`
 }
 
-type ReceiptInput struct {
-	Path          string `json:"path"`
-	SHA256        string `json:"sha256"`
-	ActionID      string `json:"actionID"`
-	Operation     string `json:"operation"`
-	Correlation   string `json:"correlation"`
-	PayloadDigest string `json:"payloadDigest"`
-}
-
 type HarnessReport struct {
-	Status                    string                     `json:"status"`
-	Scenario                  string                     `json:"scenario"`
-	Phase                     string                     `json:"phase,omitempty"`
-	Recovery                  persistence.RecoveryReport `json:"recovery,omitempty"`
-	Envelope                  *persistence.Envelope      `json:"envelope,omitempty"`
-	Summary                   StateSummary               `json:"summary,omitempty"`
-	Snapshot                  *protocol.Snapshot         `json:"snapshot,omitempty"`
-	PreResultSnapshot         *protocol.Snapshot         `json:"preResultSnapshot,omitempty"`
-	Terminal                  *TerminalSummary           `json:"terminal,omitempty"`
-	Acceptances               []protocol.Acceptance      `json:"acceptances,omitempty"`
-	Acceptance                *protocol.Acceptance       `json:"acceptance,omitempty"`
-	Errors                    []HarnessError             `json:"errors,omitempty"`
-	RecoveryPlan              []protocol.RecoveryPlan    `json:"recoveryPlans,omitempty"`
-	Next                      []NextRecord               `json:"next,omitempty"`
-	Freshness                 map[string]string          `json:"freshness,omitempty"`
-	Revisions                 []uint64                   `json:"revisions,omitempty"`
-	Actions                   []HarnessAction            `json:"actions,omitempty"`
-	SideEffects               map[string]int             `json:"sideEffects,omitempty"`
-	FaultCalls                []persistence.FaultPoint   `json:"faultCalls,omitempty"`
-	CompletedTasksBeforeFault []string                   `json:"completedTasksBeforeFault,omitempty"`
-	Paths                     []string                   `json:"paths,omitempty"`
-	StatePath                 string                     `json:"statePath,omitempty"`
-	SummaryPath               string                     `json:"summaryPath,omitempty"`
-	Metadata                  map[string]any             `json:"metadata,omitempty"`
-	Input                     *ReceiptInput              `json:"input,omitempty"`
-	Error                     string                     `json:"error,omitempty"`
+	Status            string                     `json:"status"`
+	Scenario          string                     `json:"scenario"`
+	Phase             string                     `json:"phase,omitempty"`
+	Recovery          persistence.RecoveryReport `json:"recovery,omitempty"`
+	Envelope          *persistence.Envelope      `json:"envelope,omitempty"`
+	Summary           StateSummary               `json:"summary,omitempty"`
+	Snapshot          *protocol.Snapshot         `json:"snapshot,omitempty"`
+	PreResultSnapshot *protocol.Snapshot         `json:"preResultSnapshot,omitempty"`
+	Terminal          *TerminalSummary           `json:"terminal,omitempty"`
+	Acceptances       []protocol.Acceptance      `json:"acceptances,omitempty"`
+	Acceptance        *protocol.Acceptance       `json:"acceptance,omitempty"`
+	Errors            []HarnessError             `json:"errors,omitempty"`
+	RecoveryPlan      []protocol.RecoveryPlan    `json:"recoveryPlans,omitempty"`
+	Next              []NextRecord               `json:"next,omitempty"`
+	Freshness         map[string]string          `json:"freshness,omitempty"`
+	Revisions         []uint64                   `json:"revisions,omitempty"`
+	Actions           []HarnessAction            `json:"actions,omitempty"`
+	SideEffects       map[string]int             `json:"sideEffects,omitempty"`
+	FaultCalls        []persistence.FaultPoint   `json:"faultCalls,omitempty"`
+	Paths             []string                   `json:"paths,omitempty"`
+	StatePath         string                     `json:"statePath,omitempty"`
+	SummaryPath       string                     `json:"summaryPath,omitempty"`
+	Metadata          map[string]any             `json:"metadata,omitempty"`
+	Error             string                     `json:"error,omitempty"`
 }
 
 type TerminalSummary struct {
@@ -166,9 +142,6 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 	if scenario == "envelope" || scenario == "envelope-write" || scenario == "envelope_write" {
 		return runEnvelopeScenario(report, options, root, envelope)
 	}
-	if scenario == "receipt-file" {
-		return runReceiptFileScenario(report, options, root)
-	}
 	if scenario == "wait-user-action" {
 		return runWaitUserActionScenario(report, options, root)
 	}
@@ -214,27 +187,6 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 		}
 		return runScenarioWithFixture(report, fixture, func(r *HarnessReport) error {
 			err := runInterruption(r, fixture, options)
-			filtered := r.Next[:0]
-			for _, next := range r.Next {
-				if next.Kind != decision.KindReady {
-					filtered = append(filtered, next)
-				}
-			}
-			r.Next = filtered
-			return err
-		})
-	}
-	if scenario == "reconcile-host-action" || scenario == "reconcile_host_action" {
-		options.Status = valueOr(options.Status, protocol.HostActionStatusUnknown)
-		if strings.TrimSpace(options.Choice) == "" && strings.TrimSpace(options.Fact) == "" && strings.TrimSpace(options.Expected) == "" && strings.TrimSpace(options.Conflict) == "" {
-			options.Choice = "fulfilled"
-		}
-		fixture, fixtureErr := NewProtocolFixture(root)
-		if fixtureErr != nil {
-			return report, fixtureErr
-		}
-		return runScenarioWithFixture(report, fixture, func(r *HarnessReport) error {
-			err := runHostAction(r, fixture, options)
 			filtered := r.Next[:0]
 			for _, next := range r.Next {
 				if next.Kind != decision.KindReady {
@@ -300,8 +252,6 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 		runErr = runConcurrent(&report, fixture)
 	case "cas":
 		runErr = runCAS(&report, fixture, options)
-	case "fingerprint":
-		runErr = runFingerprint(&report, fixture)
 	case "fault":
 		runErr = runFault(&report, fixture, options)
 	case "recover":
@@ -319,8 +269,6 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 		}
 	case "lock-recovery":
 		runErr = runLockRecovery(&report, fixture)
-	case "host-action":
-		runErr = runHostAction(&report, fixture, options)
 	case "lifecycle":
 		runErr = runLifecycle(&report, fixture)
 	case "interruption":
@@ -331,8 +279,6 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 		runErr = runInvalidEvents(&report, fixture)
 	case "terminal":
 		runErr = runTerminal(&report, fixture)
-	case "full":
-		runErr = runFull(&report, fixture, options)
 	default:
 		runErr = fmt.Errorf("testkit: unknown harness scenario %q", scenario)
 	}
@@ -391,16 +337,23 @@ func runSmoke(report *HarnessReport, fixture *ProtocolFixture) error {
 		if len(actions) != 1 {
 			return fmt.Errorf("harness issued %d actions, want 1", len(actions))
 		}
+		snapshot, err := fixture.Engine.Load()
+		if err != nil {
+			return err
+		}
 		spawn, err := fixture.Host.SpawnEvent("smoke-spawn", actions[0], "installed-agent", protocol.SpawnStatusSpawned)
 		if err != nil {
 			return err
 		}
 		report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-		acceptance, err := fixture.Worker.ResultEvent("smoke-result", actions[0], protocol.OutcomePass, "sha256:harness-result", "")
+		acceptance, err := fixture.Worker.ResultEventFor("smoke-result", actions[0], snapshot.State.PendingActions[actions[0]].ReviewSeries, "sha256:harness-result")
 		if err != nil {
 			return err
 		}
 		report.Acceptances = append(report.Acceptances, acceptance)
+		if acceptance.Status != "ACCEPTED" {
+			return fmt.Errorf("smoke result status %q, want ACCEPTED", acceptance.Status)
+		}
 		report.Phase = "initial"
 		return nil
 	}
@@ -464,7 +417,7 @@ func runRevisionSequence(report *HarnessReport, fixture *ProtocolFixture) error 
 		if err != nil {
 			return err
 		}
-		acceptance, err := submit(fixture.Engine, event)
+		acceptance, err := submit(fixture, event)
 		if err != nil {
 			return err
 		}
@@ -490,7 +443,7 @@ func runSubmitRequest(report *HarnessReport, fixture *ProtocolFixture, options H
 	if err != nil {
 		return err
 	}
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -521,7 +474,7 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 	if err != nil {
 		return err
 	}
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -547,7 +500,7 @@ func runSubmitWorker(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		return loadErr
 	}
 	_, replayed := before.State.Events[string(event.ID)]
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -576,7 +529,7 @@ func runSubmitWorker(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		}
 		report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
 	} else {
-		plan, _, decideErr := fixture.Engine.Plan()
+		plan, _, decideErr := fixture.Engine.Plan(protocol.Observation{})
 		if decideErr != nil {
 			return decideErr
 		}
@@ -597,7 +550,7 @@ func runSubmitSpawn(report *HarnessReport, fixture *ProtocolFixture, options Har
 	if err != nil {
 		return err
 	}
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -614,7 +567,7 @@ func runSubmitLifecycle(report *HarnessReport, fixture *ProtocolFixture, options
 	if err != nil {
 		return err
 	}
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -647,7 +600,7 @@ func runSubmitOperator(report *HarnessReport, fixture *ProtocolFixture, options 
 		if spawnErr != nil {
 			return spawnErr
 		}
-		unknownAcceptance, submitErr := submit(fixture.Engine, unknown)
+		unknownAcceptance, submitErr := submit(fixture, unknown)
 		if submitErr != nil {
 			return submitErr
 		}
@@ -659,7 +612,7 @@ func runSubmitOperator(report *HarnessReport, fixture *ProtocolFixture, options 
 	if err != nil {
 		return err
 	}
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -679,17 +632,17 @@ func runSubmitOperator(report *HarnessReport, fixture *ProtocolFixture, options 
 			if lifecycleErr != nil {
 				return lifecycleErr
 			}
-			if lifecycleAcceptance, submitErr := submit(fixture.Engine, lifecycle); submitErr != nil {
+			if lifecycleAcceptance, submitErr := submit(fixture, lifecycle); submitErr != nil {
 				return submitErr
 			} else {
 				report.Acceptances = append(report.Acceptances, lifecycleAcceptance)
 			}
 		}
-		fingerprint, fingerprintErr := fixture.Engine.ObserveFingerprint()
+		observedInput, fingerprintErr := fixture.VCS.Observe()
 		if fingerprintErr != nil {
 			return fingerprintErr
 		}
-		plan, _, reconcileErr := fixture.Engine.ReconcileUnknownReceipt(subject, fingerprint)
+		plan, _, reconcileErr := fixture.Engine.ReconcileUnknownReceipt(subject, observedInput)
 		if reconcileErr != nil {
 			return reconcileErr
 		}
@@ -707,17 +660,17 @@ func runIdempotency(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	firstAcceptance, err := submit(fixture.Engine, event)
+	firstAcceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
-	secondAcceptance, err := submit(fixture.Engine, event)
+	secondAcceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
 	report.Acceptances = append(report.Acceptances, firstAcceptance, secondAcceptance)
 	mismatch, _ := protocol.NewRequestEvent("idempotent-event", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
-	_, mismatchErr := submit(fixture.Engine, mismatch)
+	_, mismatchErr := submit(fixture, mismatch)
 	if mismatchErr == nil {
 		return fmt.Errorf("same event ID with different payload was accepted")
 	}
@@ -731,7 +684,7 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	request, _ := protocol.NewRequestEvent("freshness-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
-	requestAcceptance, err := submit(fixture.Engine, request)
+	requestAcceptance, err := submit(fixture, request)
 	if err != nil {
 		return err
 	}
@@ -741,7 +694,7 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 	}
 	// 生命周期观测事件沿原协议接纳路径推进 revision。
 	bump, _ := protocol.NewCorrelatedLifecycleEvent("freshness-bump", "fake-host", "freshness-agent", "freshness-agent", protocol.LifecycleStart)
-	if _, err := submit(fixture.Engine, bump); err != nil {
+	if _, err := submit(fixture, bump); err != nil {
 		return err
 	}
 	t2, err := fixture.Engine.Freshness("freshness-request")
@@ -749,13 +702,13 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	stale, _ := protocol.NewDecideEvent("freshness-stale", "freshness-request", t1, "cancel")
-	if _, staleErr := submit(fixture.Engine, stale); staleErr == nil {
+	if _, staleErr := submit(fixture, stale); staleErr == nil {
 		return fmt.Errorf("stale freshness token was accepted")
 	} else {
 		report.addError(staleErr)
 	}
 	fresh, _ := protocol.NewDecideEvent("freshness-current", "freshness-request", t2, "cancel")
-	freshAcceptance, err := submit(fixture.Engine, fresh)
+	freshAcceptance, err := submit(fixture, fresh)
 	if err != nil {
 		return err
 	}
@@ -783,12 +736,12 @@ func runConcurrent(report *HarnessReport, fixture *ProtocolFixture) error {
 	errs := SubmitConcurrently(
 		func() (protocol.Acceptance, error) {
 			var submitErr error
-			acceptances[0], submitErr = submit(fixture.Engine, events[0])
+			acceptances[0], submitErr = submit(fixture, events[0])
 			return acceptances[0], submitErr
 		},
 		func() (protocol.Acceptance, error) {
 			var submitErr error
-			acceptances[1], submitErr = submit(fixture.Engine, events[1])
+			acceptances[1], submitErr = submit(fixture, events[1])
 			return acceptances[1], submitErr
 		},
 	)
@@ -797,7 +750,7 @@ func runConcurrent(report *HarnessReport, fixture *ProtocolFixture) error {
 			report.addError(concurrentErr)
 		}
 		if acceptances[index].Status == "" {
-			acceptance, retryErr := submit(fixture.Engine, events[index])
+			acceptance, retryErr := submit(fixture, events[index])
 			if retryErr != nil {
 				return retryErr
 			}
@@ -817,7 +770,7 @@ func runCAS(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpti
 		return err
 	}
 	event, _ := protocol.NewCorrelatedLifecycleEvent("cas-advance", "fake-host", "cas-agent", "cas-agent", protocol.LifecycleStart)
-	advance, err := submit(fixture.Engine, event)
+	advance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -825,7 +778,11 @@ func runCAS(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpti
 	if err != nil {
 		return err
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
+	if err != nil {
+		return err
+	}
+	sampleDigest, err := observedInput.Facts.Digest()
 	if err != nil {
 		return err
 	}
@@ -833,12 +790,12 @@ func runCAS(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpti
 	if options.ExpectedRevision != 0 {
 		staleRevision = options.ExpectedRevision
 	}
-	_, staleErr := fixture.Store.Save(persistence.Transaction{ExpectedRevision: staleRevision, ExpectedFingerprint: fingerprint, CollectFingerprint: fixture.VCS.Fingerprint, Content: &current.State})
+	_, staleErr := fixture.Store.Save(persistence.Transaction{ExpectedRevision: staleRevision, ExpectedFingerprint: sampleDigest, CollectFingerprint: observedInput.Fingerprint, Content: &current.State})
 	if staleErr == nil {
 		return fmt.Errorf("stale revision %d was accepted at current revision %d", staleRevision, current.Revision)
 	}
 	report.addError(staleErr)
-	saved, err := fixture.Store.Save(persistence.Transaction{ExpectedRevision: current.Revision, ExpectedFingerprint: fingerprint, CollectFingerprint: fixture.VCS.Fingerprint, Content: &current.State})
+	saved, err := fixture.Store.Save(persistence.Transaction{ExpectedRevision: current.Revision, ExpectedFingerprint: sampleDigest, CollectFingerprint: observedInput.Fingerprint, Content: &current.State})
 	if err != nil {
 		return err
 	}
@@ -847,54 +804,7 @@ func runCAS(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpti
 	return nil
 }
 
-func runFingerprint(report *HarnessReport, fixture *ProtocolFixture) error {
-	if _, err := ensureReady(report, fixture); err != nil {
-		return err
-	}
-	oldFingerprint, err := fixture.Engine.ObserveFingerprint()
-	if err != nil {
-		return err
-	}
-	count, err := fixture.VCS.ApplyOnce("fingerprint-drift", "facts/head", []byte("new-head\n"))
-	if err != nil {
-		return err
-	}
-	if _, _, driftErr := fixture.Engine.ExecuteHostAction("op.fan.transport", map[string]any{"stage": "old-head"}, oldFingerprint); driftErr == nil {
-		return fmt.Errorf("stale external fingerprint was accepted")
-	} else {
-		report.addError(driftErr)
-	}
-	newFingerprint, err := fixture.Engine.ObserveFingerprint()
-	if err != nil {
-		return err
-	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "new-head"})
-	if err != nil {
-		return err
-	}
-	acceptance, err := fixture.Host.Receipt(intent, protocol.HostActionStatusExecuted)
-	if err != nil {
-		return err
-	}
-	if acceptance.Status != "ACCEPTED" {
-		return fmt.Errorf("fingerprint retry receipt status %q, want ACCEPTED", acceptance.Status)
-	}
-	report.SideEffects = map[string]int{"fingerprint-drift": count, "stale-operation": 0, "retry-operation": fixture.Host.ActionCalls(intent.ActionID)}
-	report.Metadata["oldFingerprint"] = oldFingerprint
-	report.Metadata["newFingerprint"] = newFingerprint
-	report.Metadata["intent"] = intent
-	report.Acceptances = append(report.Acceptances, acceptance)
-	return nil
-}
-
 func runFault(report *HarnessReport, fixture *ProtocolFixture, options HarnessOptions) error {
-	if strings.TrimSpace(options.Fixture) != "" && strings.TrimSpace(options.Fault) == string(persistence.FaultExecuteAfter) {
-		plan, err := readFullRecoveryFixture(options.Fixture)
-		if err != nil {
-			return err
-		}
-		return runFullRecoveryFault(report, fixture, plan)
-	}
 	actions, err := ensureReady(report, fixture)
 	if err != nil {
 		return err
@@ -926,34 +836,23 @@ func runFault(report *HarnessReport, fixture *ProtocolFixture, options HarnessOp
 		if _, spawnErr := fixture.Host.SpawnEventWithoutSubmitResponseFault("fault-spawn", first(actions), "fault-agent", protocol.SpawnStatusSpawned); spawnErr != nil {
 			return spawnErr
 		}
-		_, err = fixture.Worker.ResultEvent("fault-result", first(actions), protocol.OutcomePass, "sha256:fault-result", "")
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		var acceptance protocol.Acceptance
+		acceptance, err = fixture.Worker.ResultEventFor("fault-result", first(actions), snapshot.State.PendingActions[first(actions)].ReviewSeries, "sha256:fault-result")
+		report.Acceptances = append(report.Acceptances, acceptance)
+		if (err == nil || errors.Is(err, ErrInjected)) && acceptance.Status != "ACCEPTED" {
+			return fmt.Errorf("response-lost result status %q, want ACCEPTED", acceptance.Status)
+		}
 		report.SideEffects = map[string]int{"fakeHost.spawn": fixture.Host.SpawnCalls(first(actions))}
-	case persistence.FaultHostCommitBefore, persistence.FaultHostCommitAfter:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
-		err = executeErr
-		if intent.ActionID != "" {
-			report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
-		}
-	case persistence.FaultHostObserveBefore:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
-		if executeErr != nil {
-			return executeErr
-		}
-		report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
-		_, err = fixture.Host.Observe(intent.ActionID, "sha256:observed")
-	case persistence.FaultHostReconcileBefore:
-		intent, executeErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fault"})
-		if executeErr != nil {
-			return executeErr
-		}
-		report.SideEffects = map[string]int{"fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
-		_, err = fixture.Host.Reconcile(intent.ActionID, "sha256:observed", false, false)
 	default:
 		event, eventErr := protocol.NewRequestEvent("fault-request", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
 		if eventErr != nil {
 			return eventErr
 		}
-		_, err = submit(fixture.Engine, event)
+		_, err = submit(fixture, event)
 	}
 	if err == nil {
 		return fmt.Errorf("fault %s was not consumed", point)
@@ -970,7 +869,7 @@ func runLockRecovery(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	event, _ := protocol.NewRequestEvent("after-crashed-lock", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
-	acceptance, err := submit(fixture.Engine, event)
+	acceptance, err := submit(fixture, event)
 	if err != nil {
 		return err
 	}
@@ -1001,7 +900,7 @@ func recoverSpawnAfterAttach(report *HarnessReport, fixture *ProtocolFixture) er
 		if eventErr != nil {
 			return eventErr
 		}
-		acceptance, submitErr := submit(fixture.Engine, event)
+		acceptance, submitErr := submit(fixture, event)
 		if submitErr != nil {
 			return submitErr
 		}
@@ -1017,85 +916,6 @@ func countSpawnCalls(fixture *ProtocolFixture, actionID string) int {
 		return 0
 	}
 	return count
-}
-
-func runHostAction(report *HarnessReport, fixture *ProtocolFixture, options HarnessOptions) error {
-	if _, err := ensureReady(report, fixture); err != nil {
-		return err
-	}
-	operation := valueOr(options.Operation, "op.fan.transport")
-	var params any = map[string]any{"stage": "fixture", "generation": 1}
-	if strings.TrimSpace(options.Params) != "" {
-		if err := json.Unmarshal([]byte(options.Params), &params); err != nil {
-			return fmt.Errorf("testkit: --params must be valid JSON: %w", err)
-		}
-	}
-	intent, err := fixture.Host.Execute(authoring.OperationID(operation), params)
-	if err != nil {
-		return err
-	}
-	before, err := fixture.Engine.Load()
-	if err != nil {
-		return err
-	}
-	report.Metadata["pendingIntent"] = before.State.PendingHostActions[intent.ActionID]
-	acceptance, err := fixture.Host.ReceiptEvent(protocol.EventID(valueOr(options.EventID, "host-action-receipt")), intent, valueOr(options.Status, protocol.HostActionStatusExecuted), valueOr(options.Correlation, "host-action-correlation"))
-	if err != nil {
-		return err
-	}
-	report.Acceptances = append(report.Acceptances, acceptance)
-	report.SideEffects = map[string]int{intent.ActionID: fixture.Host.ActionCalls(intent.ActionID)}
-	if valueOr(options.Status, protocol.HostActionStatusExecuted) == protocol.HostActionStatusUnknown {
-		fulfilled, conflict := true, false
-		if strings.TrimSpace(options.Fact) != "" || strings.TrimSpace(options.Expected) != "" {
-			if strings.TrimSpace(options.Expected) == "" {
-				fulfilled = parseTruthy(options.Fact)
-			} else {
-				fulfilled = strings.TrimSpace(options.Fact) == strings.TrimSpace(options.Expected)
-			}
-		}
-		if strings.TrimSpace(options.Conflict) != "" {
-			conflict = parseTruthy(options.Conflict)
-			if conflict {
-				fulfilled = false
-			}
-		}
-		switch strings.ToLower(strings.TrimSpace(options.Choice)) {
-		case "":
-		case "fulfilled":
-			fulfilled, conflict = true, false
-		case "pending":
-			fulfilled = false
-		case "conflict":
-			fulfilled, conflict = false, true
-		default:
-			return fmt.Errorf("testkit: host-action UNKNOWN choice must be fulfilled, pending, or conflict")
-		}
-		observationDigest := "sha256:host-action-observed"
-		if strings.TrimSpace(options.Fact) != "" {
-			observationDigest = options.Fact
-		}
-		plan, reconcileErr := fixture.Host.Reconcile(intent.ActionID, observationDigest, fulfilled, conflict)
-		if reconcileErr != nil {
-			return reconcileErr
-		}
-		report.RecoveryPlan = append(report.RecoveryPlan, plan)
-		if plan.Action == protocol.RecoveryOperator {
-			report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: decision.OperatorPayload{Facts: []decision.Fact{
-				{Source: decision.SourceHost, Key: "actionID", Value: intent.ActionID},
-				{Source: decision.SourceHost, Key: "observation", Value: observationDigest},
-				{Source: decision.SourceHost, Key: "conflict", Value: "true"},
-			}}})
-		}
-		if fulfilled {
-			replay, replayErr := fixture.Host.Reconcile(intent.ActionID, observationDigest, true, false)
-			if replayErr != nil {
-				return replayErr
-			}
-			report.RecoveryPlan = append(report.RecoveryPlan, replay)
-		}
-	}
-	return nil
 }
 
 func runLifecycle(report *HarnessReport, fixture *ProtocolFixture) error {
@@ -1122,7 +942,7 @@ func runLifecycle(report *HarnessReport, fixture *ProtocolFixture) error {
 		events = append(events, event)
 	}
 	for _, event := range events {
-		acceptance, submitErr := submit(fixture.Engine, event)
+		acceptance, submitErr := submit(fixture, event)
 		if event.ID == "lifecycle-unpaired" {
 			if submitErr == nil {
 				return fmt.Errorf("unpaired lifecycle stop was accepted")
@@ -1136,7 +956,7 @@ func runLifecycle(report *HarnessReport, fixture *ProtocolFixture) error {
 		report.Acceptances = append(report.Acceptances, acceptance)
 	}
 	for _, event := range events[:2] {
-		acceptance, submitErr := submit(fixture.Engine, event)
+		acceptance, submitErr := submit(fixture, event)
 		if submitErr != nil {
 			return submitErr
 		}
@@ -1152,7 +972,7 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 	}
 	actionID := first(actions)
 	mode := strings.ToLower(valueOr(options.Interruption, "transient"))
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
 		return err
 	}
@@ -1166,24 +986,24 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		if eventErr != nil {
 			return eventErr
 		}
-		accepted, submitErr := submit(fixture.Engine, started)
+		accepted, submitErr := submit(fixture, started)
 		if submitErr != nil {
 			return submitErr
 		}
 		report.Acceptances = append(report.Acceptances, accepted)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
 		return err
 	}
 	var plan protocol.RecoveryPlan
 	switch mode {
 	case "transient":
-		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{Class: authoring.FailureTransientEngine}, fingerprint)
+		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{Class: authoring.FailureTransientEngine}, observedInput)
 	case "nontransient":
-		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{CauseKnown: true}, fingerprint)
+		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{CauseKnown: true}, observedInput)
 	case "unknown":
-		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{}, fingerprint)
+		plan, _, err = fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{}, observedInput)
 	case "receipt-one", "receipt-multiple", "receipt-none":
 		matches := 0
 		if mode == "receipt-one" {
@@ -1209,7 +1029,7 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 				if eventErr != nil {
 					return eventErr
 				}
-				if _, submitErr := submit(fixture.Engine, event); submitErr != nil {
+				if _, submitErr := submit(fixture, event); submitErr != nil {
 					return submitErr
 				}
 			}
@@ -1218,13 +1038,13 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		if eventErr != nil {
 			return eventErr
 		}
-		if acceptance, submitErr := submit(fixture.Engine, unknown); submitErr != nil {
+		if acceptance, submitErr := submit(fixture, unknown); submitErr != nil {
 			return submitErr
 		} else {
 			report.Acceptances = append(report.Acceptances, acceptance)
 		}
-		fingerprint, _ = fixture.Engine.ObserveFingerprint()
-		plan, _, err = fixture.Engine.ReconcileUnknownReceipt(actionID, fingerprint)
+		observedInput, _ = fixture.VCS.Observe()
+		plan, _, err = fixture.Engine.ReconcileUnknownReceipt(actionID, observedInput)
 	default:
 		return fmt.Errorf("testkit: unknown interruption mode %q", mode)
 	}
@@ -1248,7 +1068,7 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 			if eventErr != nil {
 				return eventErr
 			}
-			accepted, submitErr := submit(fixture.Engine, observed)
+			accepted, submitErr := submit(fixture, observed)
 			if submitErr != nil {
 				return submitErr
 			}
@@ -1257,7 +1077,7 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 			if eventErr != nil {
 				return eventErr
 			}
-			accepted, submitErr = submit(fixture.Engine, receipt)
+			accepted, submitErr = submit(fixture, receipt)
 			if submitErr != nil {
 				return submitErr
 			}
@@ -1275,18 +1095,25 @@ func runInterruption(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: map[string]any{"matches": plan.LifecycleMatches}})
 	}
 	if mode == "transient" && plan.Action == protocol.RecoveryResumeAttempt {
-		accepted, resultErr := fixture.Worker.ResultEvent("interruption-resume-result", actionID, protocol.OutcomePass, "sha256:resumed", "")
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		accepted, resultErr := fixture.Worker.ResultEventFor("interruption-resume-result", actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:resumed")
 		if resultErr != nil {
 			return resultErr
 		}
 		report.Acceptances = append(report.Acceptances, accepted)
+		if accepted.Status != "ACCEPTED" {
+			return fmt.Errorf("resumed result status %q, want ACCEPTED", accepted.Status)
+		}
 	}
 	if mode == "nontransient" && plan.Action == protocol.RecoveryNewAttempt {
 		late, eventErr := protocol.NewWorkerResultEvent("interruption-late-result", actionID, "fake-host", protocol.OutcomePass, "sha256:late", "")
 		if eventErr != nil {
 			return eventErr
 		}
-		lateAcceptance, submitErr := submit(fixture.Engine, late)
+		lateAcceptance, submitErr := submit(fixture, late)
 		if submitErr != nil {
 			return submitErr
 		}
@@ -1362,7 +1189,7 @@ func runInvalidEvents(report *HarnessReport, fixture *ProtocolFixture) error {
 	otherTask, _ := protocol.NewTaskEvent("other-node", TaskKey("other", "entry.parse"), "missing-attempt", runtime.TaskIssued)
 	invalid = append(invalid, otherTask)
 	for _, event := range invalid {
-		if _, submitErr := submit(fixture.Engine, event); submitErr == nil {
+		if _, submitErr := submit(fixture, event); submitErr == nil {
 			return fmt.Errorf("invalid event %q was accepted", event.ID)
 		} else {
 			report.addError(submitErr)
@@ -1395,7 +1222,7 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	request, _ := protocol.NewRequestEvent("terminal-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
-	requestAcceptance, err := submit(fixture.Engine, request)
+	requestAcceptance, err := submit(fixture, request)
 	if err != nil {
 		return err
 	}
@@ -1404,7 +1231,7 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 		return err
 	}
 	decisionEvent, _ := protocol.NewDecideEvent("terminal-decision", "terminal-request", token, "abort")
-	eventAcceptance, err := submit(fixture.Engine, decisionEvent)
+	eventAcceptance, err := submit(fixture, decisionEvent)
 	if err != nil {
 		return err
 	}
@@ -1426,226 +1253,6 @@ func runTerminal(report *HarnessReport, fixture *ProtocolFixture) error {
 	report.Next = append(report.Next, summary.Next)
 	report.Phase = "terminal"
 	return nil
-}
-
-// drivablePendingAction 挑一条可驱动的在途派发（确定性：按 actionID 排
-// 序取最小者，并发轮在场时驱动顺序稳定）：优先无回执者（补回执＋结
-// 果），否则回执已在账者（只欠结果）。
-func drivablePendingAction(pending map[string]protocol.PendingAction, receipts map[string]protocol.SpawnReceipt) string {
-	unreceipted := make([]string, 0, len(pending))
-	any := make([]string, 0, len(pending))
-	for id := range pending {
-		any = append(any, id)
-		if _, receipted := receipts[id]; !receipted {
-			unreceipted = append(unreceipted, id)
-		}
-	}
-	sort.Strings(unreceipted)
-	if len(unreceipted) > 0 {
-		return unreceipted[0]
-	}
-	sort.Strings(any)
-	if len(any) > 0 {
-		return any[0]
-	}
-	return ""
-}
-
-func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOptions) error {
-	if strings.TrimSpace(options.Fixture) != "" {
-		plan, err := readFullRecoveryFixture(options.Fixture)
-		if err != nil {
-			return err
-		}
-		if !options.Continue {
-			return fmt.Errorf("testkit: full fixture requires --continue")
-		}
-		if err := validateFullRecoveryPlan(plan); err != nil {
-			return err
-		}
-		// The fixture's first two workflow steps are completed before the
-		// injected transport fault. Preserve that fact in both the fault and
-		// continuation reports so the recovery chain is auditable end-to-end.
-		report.CompletedTasksBeforeFault = append([]string(nil), plan.Tasks[:2]...)
-	}
-	if _, err := ensureReady(report, fixture); err != nil {
-		return err
-	}
-	// 各决策边界由原协议事件推进；副作用仍经过 intent、执行和 receipt 接纳。
-	seq := 0
-	nextEventID := func(prefix string) protocol.EventID {
-		seq++
-		return protocol.EventID(fmt.Sprintf("full-%s-%d", prefix, seq))
-	}
-	var lastRequest protocol.Acceptance
-	requestDigest := ""
-	var hostIntent protocol.HostActionIntent
-	hostReceiptAcceptance := protocol.Acceptance{}
-	vcsCount := 0
-	for round := 0; round < 64; round++ { // 有界防御：定义本身有限步，正常路径远小于该值
-		snapshot, loadErr := fixture.Engine.Load()
-		if loadErr != nil {
-			return loadErr
-		}
-		plan, _, decideErr := fixture.Engine.Plan()
-		if decideErr != nil {
-			return decideErr
-		}
-		switch plan.Next.Kind {
-		case decision.KindWait:
-			// WAIT(TASKS_IN_FLIGHT)：frontier 的外部步骤已全部签发在途——
-			// 驱动唯一 pending action（spawn 回执 + PASS result）完成它，
-			// 而不是空转。无在途任务时才是真正的死锁。
-			actionID := drivablePendingAction(snapshot.State.PendingActions, snapshot.State.SpawnReceipts)
-			if actionID == "" {
-				return fmt.Errorf("full scenario WAIT without a drivable pending action")
-			}
-			spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("wait-spawn"), actionID, "full-agent-wait", protocol.SpawnStatusSpawned)
-			if spawnErr != nil {
-				return spawnErr
-			}
-			// 审查载体步的结果必须携带语义证据（载体完成走审查账投影），
-			// 其余派发以普通 PASS 落定。
-			result, resultErr := fixture.Worker.ResultEventFor(nextEventID("wait-result"), actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
-			if resultErr != nil {
-				return resultErr
-			}
-			report.Acceptances = append(report.Acceptances, spawn.Acceptance, result)
-		case decision.KindComplete:
-			final, loadErr := fixture.Engine.Load()
-			if loadErr != nil {
-				return loadErr
-			}
-			if final.State.Phase != runtime.PhaseTerminal && len(final.State.Expected) != 0 {
-				return fmt.Errorf("full scenario reached COMPLETE with %d unsettled tasks", len(final.State.Expected))
-			}
-			hostReceiptDigest := ""
-			if hostReceiptAcceptance.EventID != "" {
-				hostEvent, eventErr := protocol.NewHostActionReceiptEvent(
-					protocol.EventID(hostReceiptAcceptance.EventID), hostIntent.ActionID, hostIntent.Adapter.Operation,
-					"fake-host", "full-host-correlation", hostIntent.PayloadDigest, protocol.HostActionStatusExecuted)
-				if eventErr != nil {
-					return eventErr
-				}
-				digest, digestErr := hostEvent.Digest()
-				if digestErr != nil {
-					return digestErr
-				}
-				hostReceiptDigest = digest
-			}
-			summary, summaryErr := WriteTerminalSummary(fixture.Root, final.Revision, lastRequest, requestDigest, hostReceiptAcceptance, hostReceiptDigest, "COMPLETE")
-			if summaryErr != nil {
-				return summaryErr
-			}
-			if err := os.Remove(report.StatePath); err != nil {
-				return err
-			}
-			report.Terminal = &summary
-			report.Next = append(report.Next, summary.Next)
-			report.SideEffects = map[string]int{
-				"fakeVCS.full-commit":             vcsCount,
-				"fakeHost.spawn":                  fixture.Host.SpawnCalls(lastSpawnActionID(report)),
-				"fakeHost." + hostIntent.ActionID: fixture.Host.ActionCalls(hostIntent.ActionID),
-			}
-			report.Phase = "terminal"
-			return nil
-		case decision.KindReady:
-			for _, task := range plan.Next.Ready.Tasks {
-				actionID := "act:" + task.Task.String()
-				spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("spawn"), actionID, "full-agent-"+string(task.Step), protocol.SpawnStatusSpawned)
-				if spawnErr != nil {
-					return spawnErr
-				}
-				report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-				// 审查载体步的结果必须携带语义证据（载体完成走审查账投影），
-				// 其余派发以普通 PASS 落定。
-				result, resultErr := fixture.Worker.ResultEventFor(nextEventID("result"), actionID, snapshot.State.PendingActions[actionID].ReviewSeries, "sha256:full-result")
-				if resultErr != nil {
-					return resultErr
-				}
-				report.Acceptances = append(report.Acceptances, result)
-			}
-		case decision.KindAsk:
-			// ask.decide 的选项集来自 canonical definition（schema 固定）；
-			// request 事件携带与旧 full 场景一致的 confirm 选项。
-			requestID := ""
-			for pendingID, pending := range snapshot.State.PendingAsks {
-				if !pending.Resolved && (requestID == "" || pendingID < requestID) {
-					requestID = pendingID
-				}
-			}
-			var requestAcceptance protocol.Acceptance
-			if requestID != "" {
-				record, ok := snapshot.State.Events[requestID]
-				if !ok {
-					return fmt.Errorf("full scenario pending Ask %q has no request event", requestID)
-				}
-				requestAcceptance = record.Acceptance
-				requestDigest = record.Digest
-			} else {
-				request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
-				if reqErr != nil {
-					return reqErr
-				}
-				var submitErr error
-				requestAcceptance, submitErr = submit(fixture.Engine, request)
-				if submitErr != nil {
-					return submitErr
-				}
-				requestID = string(request.ID)
-				requestDigest, submitErr = request.Digest()
-				if submitErr != nil {
-					return submitErr
-				}
-				report.Acceptances = append(report.Acceptances, requestAcceptance)
-			}
-			token, tokenErr := fixture.Engine.Freshness(protocol.RequestID(requestID))
-			if tokenErr != nil {
-				return tokenErr
-			}
-			decideEvent, decErr := protocol.NewDecideEvent(nextEventID("decision"), protocol.RequestID(requestID), token, "cancel")
-			if decErr != nil {
-				return decErr
-			}
-			decisionAcceptance, submitErr := submit(fixture.Engine, decideEvent)
-			if submitErr != nil {
-				return submitErr
-			}
-			lastRequest = requestAcceptance
-			report.Acceptances = append(report.Acceptances, decisionAcceptance)
-			count, vcsErr := fixture.VCS.ApplyOnce("full-commit", "delivery/result.txt", []byte("complete\n"))
-			if vcsErr != nil {
-				return vcsErr
-			}
-			vcsCount = count
-		case decision.KindHostAction:
-			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "fixture", "generation": float64(1)})
-			if execErr != nil {
-				return execErr
-			}
-			receipt, receiptErr := fixture.Host.ReceiptEvent(nextEventID("host-receipt"), intent, protocol.HostActionStatusExecuted, "full-host-correlation")
-			if receiptErr != nil {
-				return receiptErr
-			}
-			hostIntent = intent
-			hostReceiptAcceptance = receipt
-			report.Acceptances = append(report.Acceptances, receipt)
-		default:
-			return fmt.Errorf("full scenario cannot drive NextResult kind %s", plan.Next.Kind)
-		}
-	}
-	return fmt.Errorf("full scenario did not reach COMPLETE within the step bound")
-}
-
-// lastSpawnActionID returns the most recent action the full loop spawned, for
-// the side-effect projection.
-func lastSpawnActionID(report *HarnessReport) string {
-	for index := len(report.Acceptances) - 1; index >= 0; index-- {
-		if report.Acceptances[index].Kind == "SPAWN_RECEIPT" {
-			return report.Acceptances[index].ActionID
-		}
-	}
-	return ""
 }
 
 func runEnvelopeScenario(report HarnessReport, options HarnessOptions, root string, envelope persistence.Envelope) (HarnessReport, error) {
@@ -1783,20 +1390,6 @@ func readEnvelopeWriteFixture(path string) (persistence.Envelope, string, error)
 	return envelope, target, nil
 }
 
-type receiptFileWire struct {
-	ActionID          string                      `json:"actionID"`
-	Operation         string                      `json:"operation"`
-	AdapterOperation  string                      `json:"adapterOperation"`
-	Params            any                         `json:"params"`
-	Provider          string                      `json:"provider"`
-	Correlation       string                      `json:"correlation"`
-	PayloadDigest     string                      `json:"payloadDigest"`
-	Status            string                      `json:"status"`
-	FailureClass      authoring.FailureClass      `json:"failureClass"`
-	LifecycleEvidence *protocol.LifecycleEvidence `json:"lifecycleEvidence"`
-	AdapterEvidence   map[string]any              `json:"adapterEvidence"`
-}
-
 type waitUserActionFixture struct {
 	EventID      string `json:"eventId"`
 	FailureClass string `json:"failureClass"`
@@ -1829,311 +1422,6 @@ func setWaitUserActionReport(report *HarnessReport, input waitUserActionFixture)
 	report.Metadata["taskID"] = input.TaskID
 }
 
-type fullRecoveryFixture struct {
-	RunID            string         `json:"runID"`
-	Tasks            []string       `json:"tasks"`
-	Provider         string         `json:"provider"`
-	VCS              string         `json:"vcs"`
-	PackageDigest    string         `json:"packageDigest"`
-	AdapterOperation string         `json:"adapterOperation"`
-	AdapterParams    map[string]any `json:"adapterParams"`
-	Fault            struct {
-		Point string `json:"point"`
-		Once  bool   `json:"once"`
-	} `json:"fault"`
-}
-
-func readFullRecoveryFixture(path string) (fullRecoveryFixture, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fullRecoveryFixture{}, err
-	}
-	var fixture fullRecoveryFixture
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		return fullRecoveryFixture{}, err
-	}
-	if err := validateFullRecoveryPlan(fixture); err != nil {
-		return fullRecoveryFixture{}, err
-	}
-	return fixture, nil
-}
-
-func validateFullRecoveryPlan(fixture fullRecoveryFixture) error {
-	if fixture.RunID != "full-recovery-qa" || len(fixture.Tasks) != 3 ||
-		fixture.Tasks[0] != "fan.split" || fixture.Tasks[1] != "fan.slice" || fixture.Tasks[2] != "fan.transport" ||
-		fixture.Provider != "fake-host" || fixture.VCS != "fake-vcs" || fixture.PackageDigest != HarnessPackageDigest ||
-		fixture.AdapterOperation != "op.fan.transport" || fixture.Fault.Point != string(persistence.FaultExecuteAfter) || !fixture.Fault.Once {
-		return fmt.Errorf("testkit: full recovery fixture does not match the registered plan")
-	}
-	if len(fixture.AdapterParams) != 2 || fixture.AdapterParams["stage"] != "fixture" {
-		return fmt.Errorf("testkit: full recovery fixture adapter params are invalid")
-	}
-	if generation, ok := fixture.AdapterParams["generation"].(float64); !ok || generation != 1 {
-		return fmt.Errorf("testkit: full recovery fixture generation must be 1")
-	}
-	return nil
-}
-
-func runFullRecoveryFault(report *HarnessReport, fixture *ProtocolFixture, plan fullRecoveryFixture) error {
-	if err := validateFullRecoveryPlan(plan); err != nil {
-		return err
-	}
-	if _, err := os.Stat(report.StatePath); os.IsNotExist(err) {
-		view, viewErr := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
-		if viewErr != nil {
-			return viewErr
-		}
-		compiled, compileErr := compiler.Compile(definition.Workflow(), definition.Registry())
-		if compileErr != nil {
-			return compileErr
-		}
-		for _, step := range []authoring.StepID{"entry.parse", "entry.persist", "fan.split", "fan.slice"} {
-			if err := view.CompleteStep(step, compiled); err != nil {
-				return err
-			}
-		}
-		if err := fixture.Initialize(view, plan.Provider); err != nil {
-			return err
-		}
-		decisionPlan, _, decideErr := fixture.Engine.Plan()
-		if decideErr != nil {
-			return decideErr
-		}
-		fingerprint, fingerprintErr := fixture.Engine.ObserveFingerprint()
-		if fingerprintErr != nil {
-			return fingerprintErr
-		}
-		issued, _, issueErr := fixture.Engine.IssueFromPlan(decisionPlan, decision.Admission{Capacity: 4}, fingerprint)
-		if issueErr != nil {
-			return issueErr
-		}
-		for _, action := range issued {
-			report.Actions = append(report.Actions, HarnessAction{ActionID: action.ActionID})
-		}
-	}
-	report.CompletedTasksBeforeFault = append([]string(nil), plan.Tasks[:2]...)
-	fixture.Faults.ArmCrash(persistence.FaultExecuteAfter)
-	event, err := protocol.NewRequestEvent("full-recovery-fault-request", protocol.ControlAbort,
-		protocol.AskOption{ID: "cancel", Label: "Cancel abort"})
-	if err != nil {
-		return err
-	}
-	_, err = submit(fixture.Engine, event)
-	if err == nil {
-		return fmt.Errorf("testkit: full recovery execute_after fault was not consumed")
-	}
-	report.Phase = "fault-injected"
-	return err
-}
-
-func runReceiptFileScenario(report HarnessReport, options HarnessOptions, root string) (HarnessReport, error) {
-	fixture, err := NewProtocolFixture(root)
-	if err != nil {
-		return report, err
-	}
-	if strings.TrimSpace(options.Prepare) != "" {
-		if strings.TrimSpace(options.ReceiptFile) != "" || options.BindTemplate {
-			return report, fmt.Errorf("testkit: --prepare cannot be combined with --receipt-file or --bind-template")
-		}
-		path := options.Template
-		if strings.TrimSpace(path) == "" {
-			return report, fmt.Errorf("testkit: --template is required with --prepare")
-		}
-		return prepareReceiptTemplate(&report, fixture, options.Prepare, path)
-	}
-	if options.BindTemplate {
-		if strings.TrimSpace(options.ReceiptFile) != "" {
-			return report, fmt.Errorf("testkit: --bind-template cannot be combined with --receipt-file")
-		}
-		path := options.Template
-		if strings.TrimSpace(path) == "" {
-			return report, fmt.Errorf("testkit: --template is required with --bind-template")
-		}
-		return bindReceiptTemplate(&report, fixture, path)
-	}
-	if strings.TrimSpace(options.ReceiptFile) == "" {
-		return report, fmt.Errorf("testkit: --receipt-file is required")
-	}
-	path, err := filepath.Abs(options.ReceiptFile)
-	if err != nil {
-		return report, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return report, err
-	}
-	var wire receiptFileWire
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return report, err
-	}
-	report.Input = &ReceiptInput{
-		Path: path, SHA256: encoder.Digest(data), ActionID: wire.ActionID,
-		Operation: wire.Operation, Correlation: wire.Correlation, PayloadDigest: wire.PayloadDigest,
-	}
-	event, err := receiptEvent(wire)
-	if err != nil {
-		report.Status = "ERROR"
-		report.Error = errorCode(err)
-		report.addError(err)
-		report.Paths, _ = harnessPaths(root)
-		return report, err
-	}
-	acceptance, err := submit(fixture.Engine, event)
-	if err != nil {
-		report.Status = "ERROR"
-		report.Error = errorCode(err)
-		report.addError(err)
-		report.Paths, _ = harnessPaths(root)
-		return report, err
-	}
-	report.Status = "ACCEPTED"
-	report.Acceptances = append(report.Acceptances, acceptance)
-	report.Acceptance = &report.Acceptances[0]
-	if wire.Operation == string(protocol.HostActionExecuteAdapterOperation) {
-		if count, countErr := fixture.VCS.OperationCount("fake-host.action:" + wire.ActionID); countErr == nil {
-			report.SideEffects = map[string]int{"fakeHost." + wire.ActionID: count}
-		}
-	}
-	report.Phase = "receipt-file"
-	if snapshot, loadErr := fixture.Engine.Load(); loadErr == nil {
-		report.Snapshot = &snapshot
-		report.Summary, _ = Summarize(fixture.Engine)
-	}
-	report.Paths, _ = harnessPaths(root)
-	return report, nil
-}
-
-func receiptEvent(wire receiptFileWire) (protocol.Event, error) {
-	switch protocol.HostActionOperation(wire.Operation) {
-	case protocol.HostActionExecuteAdapterOperation:
-		if strings.TrimSpace(wire.AdapterOperation) == "" {
-			return protocol.Event{}, &protocol.RejectedError{Code: protocol.CodeFreeCommandForm, Detail: "receipt adapter operation is empty; free command forms do not exist"}
-		}
-		if wire.AdapterOperation != "op.fan.transport" {
-			return protocol.Event{}, &protocol.RejectedError{Code: protocol.CodeOperationNotRegistered, Detail: fmt.Sprintf("receipt adapter operation %q is not registered by the canonical definition", wire.AdapterOperation)}
-		}
-		return protocol.NewAdapterHostActionReceiptEvent(
-			protocol.EventID("receipt-file-"+wire.ActionID), wire.ActionID,
-			authoring.OperationID(wire.AdapterOperation), wire.Provider, wire.Correlation,
-			wire.PayloadDigest, wire.Status, wire.FailureClass, wire.AdapterEvidence,
-		)
-	case protocol.HostActionResumeAgent, protocol.HostActionTerminateAgent:
-		if wire.LifecycleEvidence == nil {
-			return protocol.Event{}, &protocol.RejectedError{Code: protocol.CodeEventSchemaInvalid, Detail: "agent receipt lifecycle evidence is required"}
-		}
-		return protocol.NewAgentHostActionReceiptEvent(
-			protocol.EventID("receipt-file-"+wire.ActionID), wire.ActionID,
-			protocol.HostActionOperation(wire.Operation), wire.Provider, wire.Correlation,
-			wire.PayloadDigest, wire.Status, wire.FailureClass, *wire.LifecycleEvidence,
-		)
-	default:
-		return protocol.Event{}, &protocol.RejectedError{Code: protocol.CodeEventSchemaInvalid, Detail: fmt.Sprintf("receipt operation %q is invalid", wire.Operation)}
-	}
-}
-
-func prepareReceiptTemplate(report *HarnessReport, fixture *ProtocolFixture, kind, path string) (HarnessReport, error) {
-	actions, err := ensureReady(report, fixture)
-	if err != nil {
-		return *report, err
-	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
-	if err != nil {
-		return *report, err
-	}
-	var intent protocol.HostActionIntent
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "adapter":
-		intent, _, err = fixture.Engine.ExecuteHostActionWithCorrelation(
-			"op.fan.transport", map[string]any{"stage": "fixture", "generation": float64(1)},
-			"host-action-correlation", fingerprint)
-		if err == nil {
-			digest := strings.TrimPrefix(encoder.Digest([]byte(intent.ActionID)), "sha256:")
-			_, err = fixture.VCS.ApplyOnce("fake-host.action:"+intent.ActionID,
-				filepath.Join("fake-host", "action", digest+".txt"), []byte("op.fan.transport\n"))
-		}
-	case "terminate":
-		if len(actions) == 0 {
-			return *report, fmt.Errorf("testkit: terminate preparation requires a worker action")
-		}
-		identity := "agent-terminate-1"
-		spawn, spawnErr := fixture.Host.SpawnEvent("receipt-prepare-spawn", actions[0], identity, protocol.SpawnStatusSpawned)
-		if spawnErr != nil {
-			return *report, spawnErr
-		}
-		report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-		lifecycle, lifecycleErr := protocol.NewCorrelatedLifecycleEvent("receipt-prepare-stop", "fake-host", identity, identity, protocol.LifecycleStop)
-		if lifecycleErr != nil {
-			return *report, lifecycleErr
-		}
-		if _, err = submit(fixture.Engine, lifecycle); err != nil {
-			return *report, err
-		}
-		intent, _, err = fixture.Engine.TerminateAgentWithCorrelation(actions[0], identity, "qa receipt fixture", identity, fingerprint)
-	default:
-		return *report, fmt.Errorf("testkit: --prepare must be adapter or terminate")
-	}
-	if err != nil {
-		return *report, err
-	}
-	if err := writeHarnessJSON(path, receiptTemplate(intent, "fake-host")); err != nil {
-		return *report, err
-	}
-	report.Metadata["template"] = path
-	report.Metadata["actionID"] = intent.ActionID
-	report.Phase = "receipt-template"
-	report.Paths, _ = harnessPaths(fixture.Root)
-	return *report, nil
-}
-
-func bindReceiptTemplate(report *HarnessReport, fixture *ProtocolFixture, path string) (HarnessReport, error) {
-	snapshot, err := fixture.Engine.Load()
-	if err != nil {
-		return *report, err
-	}
-	ids := make([]string, 0, len(snapshot.State.PendingHostActions))
-	for actionID := range snapshot.State.PendingHostActions {
-		ids = append(ids, actionID)
-	}
-	sort.Strings(ids)
-	if len(ids) == 0 {
-		return *report, &protocol.RejectedError{Code: protocol.CodeUnknownAction, Detail: "no pending HostAction intent to bind"}
-	}
-	intent := snapshot.State.PendingHostActions[ids[0]]
-	if err := writeHarnessJSON(path, receiptTemplate(intent, snapshot.State.RunProvider)); err != nil {
-		return *report, err
-	}
-	report.Metadata["template"] = path
-	report.Metadata["actionID"] = intent.ActionID
-	report.Phase = "receipt-template"
-	report.Paths, _ = harnessPaths(fixture.Root)
-	return *report, nil
-}
-
-func receiptTemplate(intent protocol.HostActionIntent, provider string) map[string]any {
-	correlation := intent.Correlation
-	if correlation == "" {
-		correlation = "host-action-correlation"
-	}
-	template := map[string]any{
-		"actionID": intent.ActionID, "provider": provider, "correlation": correlation,
-		"payloadDigest": intent.PayloadDigest, "status": protocol.HostActionStatusExecuted,
-	}
-	switch intent.Operation {
-	case protocol.HostActionExecuteAdapterOperation:
-		template["operation"] = string(intent.Operation)
-		template["adapterOperation"] = string(intent.Adapter.Operation)
-		template["params"] = intent.Adapter.Params
-		template["adapterEvidence"] = map[string]any{"identity": "fixture", "digest": "sha256:fixture"}
-	case protocol.HostActionTerminateAgent:
-		template["operation"] = string(intent.Operation)
-		template["lifecycleEvidence"] = map[string]any{"identity": intent.Terminate.Identity, "event": protocol.LifecycleStop}
-	case protocol.HostActionResumeAgent:
-		template["operation"] = string(intent.Operation)
-		template["lifecycleEvidence"] = map[string]any{"identity": intent.Resume.Identity, "event": protocol.LifecycleStart}
-	}
-	return template
-}
-
 func runWaitUserActionScenario(report HarnessReport, options HarnessOptions, root string) (HarnessReport, error) {
 	if strings.TrimSpace(options.Fixture) == "" {
 		return report, fmt.Errorf("testkit: --fixture is required for wait-user-action")
@@ -2161,7 +1449,7 @@ func runWaitUserActionScenario(report HarnessReport, options HarnessOptions, roo
 		if eventErr != nil {
 			return report, eventErr
 		}
-		if _, err := submit(fixture.Engine, event); err != nil {
+		if _, err := submit(fixture, event); err != nil {
 			return report, err
 		}
 		report.Phase = "wait"
@@ -2267,15 +1555,15 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 	if err := fixture.Initialize(view, "fake-host"); err != nil {
 		return report, err
 	}
-	plan, _, err := fixture.Engine.Plan()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
 		return report, err
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	plan, _, err := fixture.Engine.Plan(observedInput)
 	if err != nil {
 		return report, err
 	}
-	issued, _, err := fixture.Engine.IssueFromPlan(plan, decision.Admission{Capacity: capacity}, fingerprint)
+	issued, _, err := fixture.Engine.IssueFromPlan(plan, decision.Admission{Capacity: capacity}, observedInput)
 	if err != nil {
 		return report, err
 	}
@@ -2444,7 +1732,7 @@ func runTransientRetryRouting(report *HarnessReport, options HarnessOptions) err
 		if attempt.RetryExhausted {
 			latest := current.State.RecoveryRecords[len(current.State.RecoveryRecords)-1]
 			report.RecoveryPlan = []protocol.RecoveryPlan{{Class: latest.Class, Action: latest.Action, Detail: latest.Detail}}
-			plan, _, err := fixture.Engine.Plan()
+			plan, _, err := fixture.Engine.Plan(protocol.Observation{})
 			if err != nil {
 				return err
 			}
@@ -2647,6 +1935,10 @@ func runSemanticRecoveryScenario(report HarnessReport, root string, options Harn
 	if len(actions) != 1 {
 		return report, fmt.Errorf("testkit: semantic recovery fixture issued %d actions, want 1", len(actions))
 	}
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return report, err
+	}
 	plan := protocol.DecideRecovery(protocol.Interruption{Class: authoring.FailureAgentRecoverable, CauseKnown: true})
 	report.RecoveryPlan = append(report.RecoveryPlan, plan)
 	report.Metadata["nonProgrammableReason"] = string(authoring.ReasonIndependentReview)
@@ -2654,11 +1946,14 @@ func runSemanticRecoveryScenario(report HarnessReport, root string, options Harn
 	if err != nil {
 		return report, err
 	}
-	result, err := fixture.Worker.ResultEvent("semantic-recovery-result", actions[0], protocol.OutcomePass, "sha256:semantic-recovery", "")
+	result, err := fixture.Worker.ResultEventFor("semantic-recovery-result", actions[0], snapshot.State.PendingActions[actions[0]].ReviewSeries, "sha256:semantic-recovery")
 	if err != nil {
 		return report, err
 	}
 	report.Acceptances = append(report.Acceptances, spawn.Acceptance, result)
+	if result.Status != "ACCEPTED" {
+		return report, fmt.Errorf("semantic recovery result status %q, want ACCEPTED", result.Status)
+	}
 	report.SideEffects = map[string]int{"fakeHost.spawn": fixture.Host.SpawnCalls(actions[0])}
 	report.Phase = "semantic-recovery"
 	report.Paths, _ = harnessPaths(root)
@@ -2795,15 +2090,6 @@ func errorCode(err error) string {
 	}
 }
 
-func parseTruthy(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "fulfilled", "satisfied", "match":
-		return true
-	default:
-		return false
-	}
-}
-
 func nextRecord(next decision.NextResult) NextRecord {
 	switch next.Kind {
 	case decision.KindReady:
@@ -2823,12 +2109,12 @@ func nextRecord(next decision.NextResult) NextRecord {
 	}
 }
 
-func submit(engine *protocol.Engine, event protocol.Event) (protocol.Acceptance, error) {
-	fingerprint, err := engine.ObserveFingerprint()
+func submit(fixture *ProtocolFixture, event protocol.Event) (protocol.Acceptance, error) {
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
 		return protocol.Acceptance{}, err
 	}
-	return engine.Submit(event, fingerprint)
+	return fixture.Engine.Submit(event, observedInput)
 }
 
 func harnessPaths(root string) ([]string, error) {
@@ -2861,8 +2147,6 @@ func faultPoint(value string) (persistence.FaultPoint, error) {
 		persistence.FaultReplaceBefore, persistence.FaultReplaceAfter,
 		persistence.FaultCommitResponseLost, persistence.FaultSpawnAfterAttach,
 		persistence.FaultResultBeforeReceipt, persistence.FaultSubmitResponseLost,
-		persistence.FaultHostObserveBefore, persistence.FaultHostReconcileBefore,
-		persistence.FaultHostCommitBefore, persistence.FaultHostCommitAfter,
 	} {
 		if point == known {
 			return point, nil

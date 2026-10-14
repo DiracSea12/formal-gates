@@ -8,6 +8,16 @@ import (
 	"syscall"
 )
 
+func openLockFile(path string, create bool) (*os.File, error) {
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	return os.OpenFile(path, flags, 0o600)
+}
+
+func retirePath(path string) error { return os.Remove(path) }
+
 // lockFile 在本次打开的描述符上放置非阻塞的独占 flock。flock 冲突以
 // 打开文件描述为单位：即使同一进程两次独立 open，第二次也会被拒。
 func lockFile(f *os.File) error {
@@ -24,5 +34,3 @@ func lockFileBlocking(f *os.File) error {
 func isLockHeld(err error) bool {
 	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
-
-func initializeLockFile(f *os.File) error { return nil }

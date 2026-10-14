@@ -282,7 +282,7 @@ func repairStartEngine(project, target, registry, runID string) (*facade.Facade,
 	if err != nil {
 		return nil, facade.Run{}, err
 	}
-	return facade.Start(facade.StartOptions{Root: project, Capacity: 1, PackageRoot: target, ArtifactRoot: project, Request: facade.StartRequest{RunID: runID, Route: "regular", VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	return facade.Start(facade.StartOptions{Root: project, Capacity: 1, ArtifactRoot: project, Request: facade.StartRequest{RunID: runID, Route: "regular", VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 }
 
 func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {

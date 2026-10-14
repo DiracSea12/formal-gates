@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/requirement"
 )
 
 // CoverageInventory registers only confirmed solution obligations and links.
@@ -14,10 +15,7 @@ type CoverageInventory struct {
 	Links        []SourcePoint                      `json:"links,omitempty"`
 	Alternatives []coverage.AlternativeVerification `json:"alternatives,omitempty"`
 }
-type SourcePoint struct {
-	SourceID string `json:"sourceId"`
-	PointID  string `json:"pointId"`
-}
+type SourcePoint = requirement.SourcePoint
 
 func (s *State) confirmedCoverage() *CoverageInventory {
 	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
@@ -34,20 +32,14 @@ func (s *State) confirmedCoverage() *CoverageInventory {
 	return nil
 }
 func (s *State) coveragePoints() ([]coverage.AcceptancePoint, []SourcePoint) {
-	points := []coverage.AcceptancePoint{}
-	links := []SourcePoint{}
-	for _, req := range s.Validation.Document.Requirements {
-		for _, ac := range req.AcceptanceConditions {
-			points = append(points, coverage.AcceptancePoint{PointID: ac.ID, ObservableBehavior: ac.Text, Oracle: ac.Text})
-			links = append(links, SourcePoint{req.ID, ac.ID})
-		}
-	}
-	if inventory := s.confirmedCoverage(); inventory != nil {
-		points = append(points, inventory.Points...)
-		links = append(links, inventory.Links...)
+	finite, links := s.requirementPoints()
+	points := make([]coverage.AcceptancePoint, len(finite))
+	for i, point := range finite {
+		points[i] = coverage.AcceptancePoint{PointID: point.ID, ObservableBehavior: point.Text, Oracle: point.Oracle}
 	}
 	return points, links
 }
+
 func (s *State) validateConfirmedCoverage() error {
 	if inventory := s.confirmedCoverage(); inventory != nil {
 		for _, source := range inventory.Sources {

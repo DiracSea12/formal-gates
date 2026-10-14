@@ -113,7 +113,7 @@ func executeRequest(dir string, request map[string]any) (map[string]any, error) 
 
 	argv := extractArgs(request["argv"])
 	cwd := toString(request["cwd"])
-	stdin := toStringDefault(request["stdin"], "")
+	stdin := toString(request["stdin"])
 
 	executionFacts := map[string]string{}
 	spawnErrMsg, candidates := resolveSpawn(argv, cwd, request)
@@ -225,9 +225,6 @@ func resolveSpawn(argv []string, cwd string, request map[string]any) (string, []
 		return "", []string{name}
 	}
 	candidates := searchCandidates(name, mergedEnvMap(request))
-	if len(candidates) == 0 {
-		return spawnErr("FileNotFoundError", 2, name), nil
-	}
 	return "", candidates
 }
 
@@ -505,13 +502,6 @@ func toString(v any) string {
 	return s
 }
 
-func toStringDefault(v any, def string) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return def
-}
-
 func proofToMap(p ContentProof) map[string]any {
 	return map[string]any{"sha256": p.SHA256, "size": p.Size}
 }
@@ -565,6 +555,31 @@ func supervisedCheck(request map[string]any) bool {
 func supervisedOwnedJob(request map[string]any) bool {
 	_, managed := request["engine"]
 	return supervisedCheck(request) || request["kind"] == "native" && managed
+}
+
+// observeSupervisor reports liveness before cancelling a request-bound process group.
+func observeSupervisor(directory, requestDigest string, cancel bool) (bool, error) {
+	value, err := readJSONFile(filepath.Join(directory, "process.json"))
+	if err != nil {
+		return false, err
+	}
+	if textOf(getOf(value, "request_digest")) != requestDigest {
+		return false, fmt.Errorf("supervisor process differs from its request")
+	}
+	alive := supervisorAlive(directory)
+	if alive && cancel {
+		pid, pgid := intOf(getOf(value, "pid")), intOf(getOf(value, "pgid"))
+		actual, err := nativeProcessGroupID(pid)
+		if err != nil || pgid <= 0 || actual != pgid {
+			return false, fmt.Errorf("supervisor has no matching process group")
+		}
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			return false, err
+		}
+		terminateJob(&exec.Cmd{Process: process}, pgid)
+	}
+	return alive, nil
 }
 
 // supervisorAlive matches the recorded PID and creation time to a live process.

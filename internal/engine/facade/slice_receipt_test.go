@@ -73,7 +73,7 @@ func meterReceiptDispatches(d *validationDriver, hit, miss, output int64) {
 		}
 		return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
 	}
-	eng, err := protocol.New(d.f.store, protocol.Config{Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)}, nil)
+	eng, err := protocol.New(d.f.store, protocol.Config{Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)})
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				eng, err := protocol.New(store, protocol.Config{Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission)}, nil)
+				eng, err := protocol.New(store, protocol.Config{Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission)})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -506,15 +506,13 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 		finding = id
 	}
 	resolveGateFinding(child, finding, wave.ID)
-	repair, input := child.action("engine.repair.v5")
+	repair, input := child.action("engine.repair.v6")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app.go"), []byte("package main\nfunc main() {}\n// documented output order\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	child.business(repair, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "corrected ordering"}})
 	child.drive()
-	compare, ci := repairComparisonAction(t, child, repair)
-	nativeRepairComparison(t, child, compare, ci)
-	child.drive()
+	assertChildRepairHasNoComparisonWorker(t, child)
 	current := child.run.Validation.Waves[len(child.run.Validation.Waves)-1]
 	child.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: current.ID, Validation: &protocol.ValidationObservation{Kind: "GATE_IMPACT", Gate: "security", Decision: "INHERIT", Reason: "The ordering repair leaves the checked security boundaries unchanged"}}})
 	child.drive()

@@ -138,7 +138,7 @@ func driverState(t *testing.T, d *validationDriver) *protocol.State {
 }
 
 // sliceChildStart 构造 child run 的启动请求（与 master 同根、共享同一 Git
-// 夹具 runner、受理 revision 与 master 当前确认对齐）。
+// 夹具 runner；child 身份与受理均由 master 账本派生，不由本载荷证明）。
 func sliceChildStart(d *validationDriver, childRunID, sliceID string, receipt IntakeConfirmationReceipt) StartOptions {
 	return StartOptions{Capacity: 16, Root: d.f.root, VCSRunner: d.f.vcsRunner, Request: StartRequest{
 		RunID: childRunID, Route: "regular", Provider: d.host(), BaseSnapshot: d.run.BaseSnapshot,
@@ -147,8 +147,7 @@ func sliceChildStart(d *validationDriver, childRunID, sliceID string, receipt In
 	}, Admission: &d.f.admission}
 }
 
-// sliceChildReceipt 构造 child 受理回执（revision 与 master 当前确认对齐时
-// 合法；传其他值用于身份不匹配用例）。
+// sliceChildReceipt 构造绑定指定 revision 的 child 受理回执载荷。
 func sliceChildReceipt(revision string) IntakeConfirmationReceipt {
 	receipt := testReceipt()
 	receipt.RequirementRevision = revision
@@ -169,6 +168,28 @@ func sliceLanePlan() *protocol.GranularityReview {
 // 取回精确确认后再走两段决定。
 func (d *validationDriver) confirmSliceRoute(route protocol.RouteDecision, plan *protocol.GranularityReview) {
 	d.t.Helper()
+	state := driverState(d.t, d)
+	master, err := Open(d.f.root, state.SliceChild.MasterRunID)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	source, err := master.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	inherited, err := source.State.SliceDevelopmentPlan(state.SliceChild.SliceID)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	for index := range plan.Batches {
+		if plan.Batches[index].RequirementPoints == nil {
+			for _, batch := range inherited.Batches {
+				if batch.ID == plan.Batches[index].ID {
+					plan.Batches[index].RequirementPoints = append([]string{}, batch.RequirementPoints...)
+				}
+			}
+		}
+	}
 	route.DevelopmentPlan = &protocol.DevelopmentPlanConfirmation{Proposal: plan}
 	preview, err := d.f.DevelopmentPlan(route)
 	if err != nil {
@@ -492,7 +513,7 @@ func TestChildCreationIsFrozenByRequirementBarrier(t *testing.T) {
 
 // TestSplitTopologyRequiresDistinctSliceNames：split 的 Slices 列表逐项唯一
 // （分片名是 child 认领键），重复声明在绑定校验（slice.go splitACOwners）
-// 可区分拒绝、零写；no-split 不受影响。
+// 可区分拒绝、零写。
 func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 	master := splitMasterDriver(t)
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})

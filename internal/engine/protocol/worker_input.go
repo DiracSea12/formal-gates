@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/requirement"
@@ -35,7 +36,7 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 		return WorkerInput{}, "", fmt.Errorf("worker resume intent is already consumed")
 	}
 	receipt, known := s.SpawnReceipts[actionID]
-	if !known || receipt.Status != SpawnStatusSpawned || receipt.agentIdentity() != intent.Resume.Identity {
+	if !known || !inflightWitnessReceipt(receipt.Status) || receipt.agentIdentity() != intent.Resume.Identity {
 		return WorkerInput{}, "", fmt.Errorf("worker resume differs from the original native identity")
 	}
 	return input, intent.Resume.Identity, nil
@@ -44,6 +45,7 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 // WorkerInput is a projection of an issued action, not another work ledger.
 // Review and Validation carry their existing owners' exact business context.
 type WorkerInput struct {
+	RequirementPoints        []requirement.Point                     `json:"requirementPoints"`
 	Intake                   *IntakeConfirmationReceipt              `json:"intake,omitempty"`
 	Materials                []IntakeMaterial                        `json:"materials,omitempty"`
 	AvailableRouteCandidates []string                                `json:"availableRouteCandidates,omitempty"`
@@ -52,6 +54,8 @@ type WorkerInput struct {
 	VCS                      string                                  `json:"vcs"`
 	Pending                  PendingAction                           `json:"pending"`
 	Handler                  string                                  `json:"handler"`
+	InputCodec               authoring.CodecID                       `json:"inputCodec"`
+	OutputCodec              authoring.CodecID                       `json:"outputCodec"`
 	RequirementDocument      requirement.FrozenRequirementProjection `json:"requirementDocument"`
 	Scope                    *WorkerScope                            `json:"scope,omitempty"`
 	ApprovedPlan             *GranularityReview                      `json:"approvedPlan,omitempty"`
@@ -59,6 +63,8 @@ type WorkerInput struct {
 	Review                   *WorkerReviewInput                      `json:"review,omitempty"`
 	Validation               *ValidationInput                        `json:"validation,omitempty"`
 }
+
+const WorkerInputCodec authoring.CodecID = "codec.any.in"
 
 // WorkerScope carries confirmed child responsibilities without narrowing the
 // complete requirement or the review of regressions caused by its changes.
@@ -68,9 +74,10 @@ type WorkerScope struct {
 }
 
 type WorkerReviewInput struct {
-	Action              review.Action `json:"action"`
-	RequirementRevision string        `json:"requirementRevision"`
-	AuthorizationID     string        `json:"authorizationId,omitempty"`
+	Action              review.Action           `json:"action"`
+	RequirementRevision string                  `json:"requirementRevision"`
+	AuthorizationID     string                  `json:"authorizationId,omitempty"`
+	SettledFindings     []review.SettledFinding `json:"settledFindings,omitempty"`
 }
 
 func (s *State) WorkerInputs(cd *compiler.CompiledDefinition) map[string]WorkerInput {
@@ -88,6 +95,9 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if s.Validation == nil || s.Validation.Document.Content == "" || s.requirementChangePending() || s.abortRequested() {
 		return WorkerInput{}, false
 	}
+	if _, obsolete := s.ObsoleteActions[id]; obsolete {
+		return WorkerInput{}, false
+	}
 	pending, issued := s.PendingActions[id]
 	if !issued {
 		return WorkerInput{}, false
@@ -99,30 +109,35 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if _, rejected := s.RejectedResults[id]; rejected {
 		return WorkerInput{}, false
 	}
-	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v4" || s.validationRole(pending.Task, cd) == "engine.repair.v5") && !s.developmentContinuation(id, cd) {
+	if result, delivered := s.Results[id]; delivered && result.Validation != nil && (s.validationRole(pending.Task, cd) == "engine.development.batch.v5" || s.validationRole(pending.Task, cd) == "engine.repair.v6") && !s.developmentContinuation(id, cd) {
 		return WorkerInput{}, false
 	}
-	input := WorkerInput{Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, RequirementDocument: s.Validation.Document}
+	var step *compiler.CompiledStep
+	for i := range cd.Steps {
+		if cd.Steps[i].Header.ID == pending.Task.Step {
+			step = &cd.Steps[i]
+			break
+		}
+	}
+	if step == nil || step.IO.InputCodec != WorkerInputCodec {
+		return WorkerInput{}, false
+	}
+	payload, ok := step.Payload.(compiler.CompiledAgentStep)
+	if !ok {
+		return WorkerInput{}, false
+	}
+	input := WorkerInput{Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, Handler: string(payload.Handler), InputCodec: step.IO.InputCodec, OutputCodec: step.IO.OutputCodec, RequirementDocument: s.Validation.Document}
 	if s.SliceChild != nil {
 		input.Scope = &WorkerScope{Owner: s.SliceChild.SliceID, AcceptanceOwners: maps.Clone(s.Topology.ACOwners)}
 	}
 	if value, ok := s.issuedValidationInput(id, pending, cd); ok {
-		input.Handler = value.Handler
 		input.Validation = &value
 	} else if pending.ReviewSeries != "" {
 		series, ok := s.ReviewSeries.Series(pending.ReviewSeries)
 		if !ok {
 			return WorkerInput{}, false
 		}
-		input.Review = &WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: s.requirementRevisionAt(s.DispatchIssueRevisions[id]), AuthorizationID: review.AuthorizationOfDispatch(series, id)}
-		for _, step := range cd.Steps {
-			if step.Header.ID == pending.Task.Step {
-				if payload, ok := step.Payload.(compiler.CompiledAgentStep); ok {
-					input.Handler = string(payload.Handler)
-				}
-				break
-			}
-		}
+		input.Review = &WorkerReviewInput{Action: pending.ReviewSeries, RequirementRevision: s.requirementRevisionAt(s.DispatchIssueRevisions[id]), AuthorizationID: review.AuthorizationOfDispatch(series, id), SettledFindings: review.SettledFindings(s.ReviewSeries)}
 	} else {
 		return WorkerInput{}, false
 	}
@@ -132,7 +147,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			return WorkerInput{}, false
 		}
 	}
-	if input.Handler == "engine.repair.v5" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v6" || input.Review != nil && input.Review.Action == review.StartReadiness {
 		for _, check := range s.fullProjectChecks() {
 			if check.Command != "" {
 				input.ApprovedChecks = append(input.ApprovedChecks, check)
@@ -150,8 +165,9 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 			}
 		}
 	}
-	if input.Handler == "engine.repair.v5" || input.Review != nil && input.Review.Action == review.StartReadiness {
+	if input.Handler == "engine.repair.v6" || input.Review != nil && input.Review.Action == review.StartReadiness {
 		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
 	}
+	input.RequirementPoints = s.workerRequirementPoints(input)
 	return input, true
 }

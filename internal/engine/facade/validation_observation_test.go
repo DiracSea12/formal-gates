@@ -100,7 +100,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 			t.Fatal("adjudication fact was lost or duplicated")
 		}
 		for _, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.repair.v5" {
+			if input.Handler == "engine.repair.v6" {
 				t.Fatal("requirement barrier issued repair")
 			}
 		}
@@ -115,7 +115,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 	}
 	count := 0
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v5" {
+		if input.Handler == "engine.repair.v6" {
 			count++
 		}
 	}
@@ -225,7 +225,7 @@ func TestRequirementRedoDiscardsPendingWaveSettlement(t *testing.T) {
 		t.Fatal("requirement redo erased original observation evidence")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v5" {
+		if input.Handler == "engine.repair.v6" {
 			t.Fatal("held finding issued repair after its gate was redone")
 		}
 	}

@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 // golden 定义：九步覆盖全部六变体 + 并行组（split → slice/transport → join），
-// 跨四个业务节点（entry/fan/ask/review/report），使 ordinal 的节点字典序
+// 跨五个业务节点（entry/fan/ask/review/report），使 ordinal 的节点字典序
 // tie-break 有实际作用。图表（A → B 表示 B 依赖 A）：
 //
 //	entry.parse ──→ entry.persist ──→ ask.decide ──┐
@@ -126,28 +127,21 @@ func header(id, node string, deps ...string) authoring.Header {
 	}
 }
 
-// ioWith 构造合法共享 IO 段：每个来源步骤恰好一个 typed input binding
-// （inputs 集合 == dependencies 集合是 compiler 强制的不变量）。
-func ioWith(bindings ...string) authoring.IO {
-	inputs := make([]authoring.InputBinding, 0, len(bindings))
-	for _, b := range bindings {
-		inputs = append(inputs, authoring.InputBinding{
-			From: authoring.StepID(b), OutputField: "out", ToField: "in",
-		})
-	}
-	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+// typedIO 构造合法共享 IO 段的 codec 引用。
+func typedIO() authoring.IO {
+	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 }
 
 // goldenSteps 经 authoring constructor 构造的九步表。每次调用产生全新实例，
 // 测试可安全增删改。
 func goldenSteps() []authoring.Step {
-	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), ioWith(),
+	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), typedIO(),
 		authoring.LocalSpec{Handler: "engine.entry.parse"})
 	if err != nil {
 		panic(err)
 	}
 	persist, err := authoring.NewDurableStep(header("entry.persist", "entry", "entry.parse"),
-		ioWith("entry.parse"), authoring.DurableSpec{
+		typedIO(), authoring.DurableSpec{
 			Handler: "engine.entry.persist", Idempotency: authoring.IdempotencyDeterministicInput,
 			Reconcile: "reconcile.entry.persist", Timeout: 30 * time.Second,
 			Retry: authoring.RetryPolicy{MaxAttempts: 3, Backoff: 2 * time.Second},
@@ -155,7 +149,7 @@ func goldenSteps() []authoring.Step {
 	if err != nil {
 		panic(err)
 	}
-	reviewIO := ioWith("entry.persist")
+	reviewIO := typedIO()
 	reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
 		reviewIO, authoring.AgentSpec{
@@ -183,12 +177,12 @@ func goldenSteps() []authoring.Step {
 		panic(err)
 	}
 	slice, err := authoring.NewLocalStep(header("fan.slice", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.LocalSpec{Handler: "engine.fan.slice"})
+		typedIO(), authoring.LocalSpec{Handler: "engine.fan.slice"})
 	if err != nil {
 		panic(err)
 	}
 	transport, err := authoring.NewHostActionStep(header("fan.transport", "fan", "fan.split"),
-		ioWith("fan.split"), authoring.HostActionSpec{
+		typedIO(), authoring.HostActionSpec{
 			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
 			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: 10 * time.Second,
 		})
@@ -196,12 +190,12 @@ func goldenSteps() []authoring.Step {
 		panic(err)
 	}
 	join, err := authoring.NewLocalStep(header("fan.join", "fan", "fan.slice", "fan.transport"),
-		ioWith("fan.slice", "fan.transport"), authoring.LocalSpec{Handler: "engine.fan.join"})
+		typedIO(), authoring.LocalSpec{Handler: "engine.fan.join"})
 	if err != nil {
 		panic(err)
 	}
 	cost, err := authoring.NewLocalStep(header("report.cost", "report", "fan.join", "ask.decide"),
-		ioWith("fan.join", "ask.decide"), authoring.LocalSpec{
+		typedIO(), authoring.LocalSpec{
 			Handler: "engine.report.cost", Retry: &authoring.RetryPolicy{MaxAttempts: 2},
 		})
 	if err != nil {
@@ -299,14 +293,76 @@ func TestCompileGolden(t *testing.T) {
 		t.Fatalf("human ask payload not materialized: %+v", byID["ask.decide"].Payload)
 	}
 	// human/parallel 无共享 IO 段；report.cost 的可选 retry 指针物化。
-	if io := byID["ask.decide"].IO; io.InputCodec != "" || io.OutputCodec != "" || io.Inputs != nil {
+	if io := byID["ask.decide"].IO; io.InputCodec != "" || io.OutputCodec != "" {
 		t.Fatalf("human ask must not carry IO block: %+v", io)
 	}
-	if io := byID["fan.split"].IO; io.InputCodec != "" || io.OutputCodec != "" || io.Inputs != nil {
+	if io := byID["fan.split"].IO; io.InputCodec != "" || io.OutputCodec != "" {
 		t.Fatalf("parallel must not carry IO block: %+v", io)
 	}
 	if p, ok := byID["report.cost"].Payload.(CompiledLocalStep); !ok || p.Retry == nil || p.Retry.MaxAttempts != 2 {
 		t.Fatalf("local optional retry not materialized: %+v", byID["report.cost"].Payload)
+	}
+}
+
+func TestCompileRetrySnapshot(t *testing.T) {
+	for _, variant := range []string{"local", "agent"} {
+		for _, withRetry := range []bool{false, true} {
+			for _, diagnostic := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/retry=%t/diagnostic=%t", variant, withRetry, diagnostic), func(t *testing.T) {
+					want := authoring.RetryPolicy{MaxAttempts: 2, Backoff: time.Second}
+					var retry *authoring.RetryPolicy
+					if withRetry {
+						r := want
+						retry = &r
+					}
+					var step authoring.Step
+					var err error
+					if variant == "local" {
+						step, err = authoring.NewLocalStep(header("entry.work", "entry"), typedIO(),
+							authoring.LocalSpec{Handler: "engine.entry.parse", Retry: retry})
+					} else {
+						io := typedIO()
+						io.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
+						step, err = authoring.NewAgentStep(header("entry.work", "entry"), io,
+							authoring.AgentSpec{Handler: "engine.review.worker.v2", Reason: authoring.ReasonSemanticJudgment, Retry: retry})
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					def := defWith(step)
+					var cd *CompiledDefinition
+					if diagnostic {
+						result, compileErr := CompileDiagnostic(def, goldenRegistry(t))
+						err = compileErr
+						if result != nil {
+							cd = result.Definition
+						}
+					} else {
+						cd, err = Compile(def, goldenRegistry(t))
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					var got *authoring.RetryPolicy
+					switch p := cd.Steps[0].Payload.(type) {
+					case CompiledLocalStep:
+						got = p.Retry
+					case CompiledAgentStep:
+						got = p.Retry
+					}
+					if !withRetry {
+						if got != nil {
+							t.Fatalf("absent retry became %+v", got)
+						}
+						return
+					}
+					*retry = authoring.RetryPolicy{MaxAttempts: 3, Backoff: 2 * time.Second}
+					if got == nil || *got != want {
+						t.Fatalf("compiled retry changed with authoring input: got %+v, want %+v", got, want)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -330,7 +386,7 @@ func TestCompileIrrelevantToAssemblyAndRegistrationOrder(t *testing.T) {
 		t.Fatal("compiled IR differs between assembly orders")
 	}
 
-	// 注册顺序反排：同一批条目逆序注册。
+	// 变更注册顺序：调整类别顺序并逆序注册 handler。
 	reg := NewRegistry()
 	for _, id := range goldenAskKinds {
 		if err := reg.RegisterAskKind(id); err != nil {
@@ -381,7 +437,7 @@ func TestCompileIrrelevantToAssemblyAndRegistrationOrder(t *testing.T) {
 	mk := func(order ...string) *Definition {
 		var steps []authoring.Step
 		for _, id := range order {
-			s, err := authoring.NewLocalStep(header(id, goldenEntry), ioWith(),
+			s, err := authoring.NewLocalStep(header(id, goldenEntry), typedIO(),
 				authoring.LocalSpec{Handler: "engine.entry.parse"})
 			if err != nil {
 				panic(err)

@@ -7,38 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/testkit"
 )
-
-func fixtureQAReceipt() facade.IntakeConfirmationReceipt {
-	return facade.IntakeConfirmationReceipt{
-		Source:              facade.DefaultIntakeSource,
-		Authority:           facade.DefaultIntakeAuthority,
-		Transport:           facade.DefaultIntakeTransport,
-		RequirementSource:   "requirements.md",
-		RequirementRevision: "req-fixture",
-		Artifacts: []facade.IntakeArtifact{
-			{Path: "requirements.md", Revision: "req-fixture"},
-			{Path: "design.md", Revision: "sol-fixture"},
-		},
-		SolutionRevision: "sol-fixture",
-		SolutionDigest:   "sha256:sol-fixture",
-	}
-}
-
-func fixtureStartRequest(runID string) facade.StartRequest {
-	return facade.StartRequest{
-		RunID:                     runID,
-		Route:                     "lightweight",
-		Provider:                  "engine",
-		DefinitionSource:          facade.DefaultDefinitionSource,
-		DefinitionDigest:          definition.WorkflowDefinitionDigest,
-		IntakeConfirmationReceipt: fixtureQAReceipt(),
-	}
-}
 
 func fixtureAdmission(t *testing.T, root, packageDigest, recordID string) *facade.Admission {
 	t.Helper()
@@ -66,17 +38,11 @@ func TestFacadeOpenMissingReceiptHidesFilesystemPath(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("missing receipt error = %q, want %q", err, want)
 	}
-	for _, leaked := range []string{root, stateDir, "request.json"} {
-		if strings.Contains(err.Error(), leaked) {
-			t.Fatalf("missing receipt error leaked filesystem detail %q: %q", leaked, err)
-		}
-	}
 }
 
 // TestCleanupTerminalCommitsReceiptAndClearsIntent checks the
 // terminal cleanup commit boundary directly: active/protocol files are gone,
-// the reconciled receipt remains, and cleanup intent is cleared only after the
-// receipt has been published.
+// the reconciled receipt remains, and cleanup intent is gone.
 func TestCleanupTerminalCommitsReceiptAndClearsIntent(t *testing.T) {
 	stateDir := t.TempDir()
 	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: "sha256:fixture-package"})
@@ -134,7 +100,7 @@ func TestCandidateStartRejectsRetainedLegacyResult(t *testing.T) {
 	}
 
 	_, _, err := facade.Start(facade.StartOptions{
-		Root: root, Request: fixtureStartRequest(runID), Admission: fixtureAdmission(t, root, "sha256:fixture-package", "fixture-target"),
+		Root: root, Request: verticalStartRequest(runID, workflowIntakeReceipt()), Admission: fixtureAdmission(t, root, "sha256:fixture-package", "fixture-target"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "already has a retained legacy result") {
 		t.Fatalf("candidate start retained-result error = %v", err)

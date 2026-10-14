@@ -226,22 +226,60 @@ func EffectiveFindingDecision(s Series, resultDigest string, finding Finding) (d
 	return decision, severity, source
 }
 
-// EffectiveFindingRationale 返回一条 finding 当前生效的严重度理由：最新的
-// 非空裁决理由覆盖原始理由。
-func EffectiveFindingRationale(s Series, resultDigest string, finding Finding) string {
-	rationale := finding.SeverityRationale
-	latestRevision := -1
-	for _, adjudication := range s.Adjudications {
-		if adjudication.ResultDigest == resultDigest && adjudication.FindingID == finding.ID && adjudication.EffectiveRevision > latestRevision && adjudication.SeverityRationale != "" {
-			rationale, latestRevision = adjudication.SeverityRationale, adjudication.EffectiveRevision
+// SettledFindings carries only user-disposed, non-excluded evidence. Repeated
+// stable IDs retain the latest actual decision in their original display order.
+func SettledFindings(set Set) []SettledFinding {
+	values := []SettledFinding{}
+	for _, action := range []Action{ProductReview, StartReadiness} {
+		series, _ := set.Series(action)
+		values = append(values, findingDispositions(series, "", false)...)
+	}
+	return values
+}
+
+// findingDispositions selects each stable finding's latest actual user decision
+// within one series. An empty requirement revision includes historical context.
+// Undisposed evidence retains its original severity and an empty decision.
+func findingDispositions(series Series, requirementRevision string, includeUndisposed bool) []SettledFinding {
+	values := []SettledFinding{}
+	selected := map[string]struct{ position, revision int }{}
+	for _, candidate := range series.RawCandidates {
+		if ResultExcluded(series, candidate.ResultDigest) || requirementRevision != "" && candidate.RequirementRevision != requirementRevision {
+			continue
+		}
+		for _, finding := range candidate.Findings {
+			decision, severity, source := EffectiveFindingDecision(series, candidate.ResultDigest, finding)
+			if source == "" && !includeUndisposed {
+				continue
+			}
+			reason, revision := "", 0
+			for _, item := range series.Adjudications {
+				if item.ID == source {
+					reason, revision = item.Reason, item.EffectiveRevision
+				}
+			}
+			for _, item := range series.Corrections {
+				if item.ID == source {
+					reason, revision = item.Reason, item.EffectiveRevision
+				}
+			}
+			prior, exists := selected[finding.ID]
+			if exists && prior.revision >= revision {
+				continue
+			}
+			finding.Locations = slices.Clone(finding.Locations)
+			value := SettledFinding{Action: series.Action, RequirementRevision: candidate.RequirementRevision, Finding: finding, Decision: decision, EffectiveSeverity: severity, Reason: reason}
+			if exists {
+				values[prior.position] = value
+			} else {
+				prior.position = len(values)
+				values = append(values, value)
+			}
+			prior.revision = revision
+			selected[finding.ID] = prior
 		}
 	}
-	for _, correction := range s.Corrections {
-		if correction.ResultDigest == resultDigest && correction.FindingID == finding.ID && correction.EffectiveRevision > latestRevision && correction.SeverityRationale != "" {
-			rationale, latestRevision = correction.SeverityRationale, correction.EffectiveRevision
-		}
-	}
-	return rationale
+	return values
 }
 
 // LatestDecisionID 返回 (resultDigest, findingID) 当前最新决定的 ID；无任何
@@ -284,31 +322,19 @@ func HasConfirmedBlocking(s Series) bool {
 }
 
 // FindingDecision 报告给定 digest 的 finding 的所属动作、有效裁决与有效
-// 严重度（仅在未被整轮失效排除的证据中查找）。发现项驱动的需求修订以它
-// 核对来源标签与真实裁决的一致性。
+// 严重度。证据须未被整轮排除且属于所在 series 的当前 effective 绑定
+// revision；合法 carry 保留其原 revision。同一稳定 finding 使用真正最新
+// 用户决定，发现项驱动的需求修订以它核对来源标签与裁决的一致性。
 func FindingDecision(set Set, findingDigest string) (action Action, decision, severity string, ok bool) {
 	for _, action := range []Action{ProductReview, StartReadiness} {
 		series, _ := set.Series(action)
-		for _, candidate := range series.RawCandidates {
-			if ResultExcluded(series, candidate.ResultDigest) {
-				continue
-			}
-			for _, finding := range candidate.Findings {
-				if finding.Digest == findingDigest {
-					decision, severity, _ = EffectiveFindingDecision(series, candidate.ResultDigest, finding)
-					return action, decision, severity, true
-				}
+		for _, finding := range findingDispositions(series, series.Effective.RequirementRevision, true) {
+			if finding.Finding.Digest == findingDigest {
+				return action, finding.Decision, finding.EffectiveSeverity, true
 			}
 		}
 	}
 	return "", "", "", false
-}
-
-// FindingOwner 报告哪条 series 的有效（未被整轮失效排除）证据中存在给定
-// digest 的 finding；不存在的 finding 无法驱动修订。
-func FindingOwner(set Set, findingDigest string) (Action, bool) {
-	action, _, _, ok := FindingDecision(set, findingDigest)
-	return action, ok
 }
 
 // candidateByDigest 按 result digest 查找候选。

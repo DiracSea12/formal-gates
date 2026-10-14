@@ -65,7 +65,7 @@ func TestDevelopmentCheckCompletionOwnsDependency(t *testing.T) {
 	}
 	addDevelopmentSource(t, s)
 	for i, command := range batch.Checks {
-		p, ready := s.nextCheckParameters("edit-action", cd)
+		p, ready := s.nextCheckParameters("edit-action")
 		if !ready || p.Check != command {
 			t.Fatalf("approved command order/value: %#v", p)
 		}
@@ -99,9 +99,9 @@ func TestDevelopmentCheckCompletionOwnsDependency(t *testing.T) {
 
 func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
 	s, _, task := developmentCheckState(t)
-	cd := compiledCanonicalWorkflow(t)
+	_ = compiledCanonicalWorkflow(t)
 	addDevelopmentSource(t, s)
-	p, ready := s.nextCheckParameters("edit-action", cd)
+	p, ready := s.nextCheckParameters("edit-action")
 	if !ready {
 		t.Fatal("not ready")
 	}
@@ -109,7 +109,7 @@ func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
 	if s.developmentResult(task) != nil || s.developmentCheckFailure() == nil {
 		t.Fatal("actual failure did not block completion")
 	}
-	if _, ready := s.nextCheckParameters("edit-action", cd); ready {
+	if _, ready := s.nextCheckParameters("edit-action"); ready {
 		t.Fatal("business failure became automatic retry")
 	}
 	original := s.HostActionReceipts[intent.ActionID]
@@ -131,7 +131,7 @@ func TestFailedDeveloperKeepsSharedEditingFrontierOpen(t *testing.T) {
 	s, _, task := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)
 	addDevelopmentSource(t, s)
-	p, ready := s.nextCheckParameters("edit-action", cd)
+	p, ready := s.nextCheckParameters("edit-action")
 	if !ready {
 		t.Fatal("original check not ready")
 	}
@@ -206,13 +206,13 @@ func TestDevelopmentCheckSharedFrontierFreezesAfterWriters(t *testing.T) {
 	resource.Status, resource.Identity = "READY", proof.Identity
 	s.NativeResources[resource.ID] = resource
 	for range batch.Checks {
-		check, ready := s.nextCheckParameters("edit-action", cd)
+		check, ready := s.nextCheckParameters("edit-action")
 		if !ready {
 			t.Fatal("missing first check")
 		}
 		addCheckReceipt(t, s, check, 0)
 	}
-	otherCheck, ready := s.nextCheckParameters(other.ActionID, cd)
+	otherCheck, ready := s.nextCheckParameters(other.ActionID)
 	if !ready {
 		t.Fatal("missing independent check")
 	}
@@ -262,12 +262,12 @@ func TestMissingVerificationCallsRequireBoundActualReceipts(t *testing.T) {
 	source.Validation.Development.Commands = []string{"build-project", "tests-project"}
 	s.Results[source.ActionID] = source
 	addDevelopmentSource(t, s)
-	first, ready := s.nextCheckParameters(source.ActionID, cd)
+	first, ready := s.nextCheckParameters(source.ActionID)
 	if !ready || first.Check.ID != batch.Checks[0].ID || first.Check.Command != "build-project" || first.Check.Goal != "" {
 		t.Fatalf("program did not bind the confirmed obligation: %+v", first)
 	}
 	addCheckReceipt(t, s, first, 0)
-	second, ready := s.nextCheckParameters(source.ActionID, cd)
+	second, ready := s.nextCheckParameters(source.ActionID)
 	if !ready || second.Check.Command != "tests-project" {
 		t.Fatal("second missing call was lost")
 	}

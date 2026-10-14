@@ -42,11 +42,13 @@ func (s *State) acceptGateImpact(subject string, o *ValidationObservation) error
 			if prior.Gate != target.Gate || prior.Status != "PASS" {
 				continue
 			}
+			impact := target.GateImpact
+			if o.Decision == "INHERIT" && !s.carryValidationTarget(target, prior, source, w) {
+				return validationError("gate inheritance requires the same completed responsibility")
+			}
+			target.GateImpact = impact
 			target.GateImpact.Decision, target.GateImpact.Reason = o.Decision, o.Reason
 			s.routingReleasedCapacity = true
-			if o.Decision == "INHERIT" {
-				target.Status, target.ResultAction = prior.Status, prior.ResultAction
-			}
 			return nil
 		}
 	}
@@ -55,6 +57,7 @@ func (s *State) acceptGateImpact(subject string, o *ValidationObservation) error
 
 // GateInput identifies the native range for one gate without QA case content.
 type GateInput struct {
+	Batches        []DevelopmentBatch           `json:"batches,omitempty"`
 	Gate           string                       `json:"gate"`
 	BaseSnapshot   string                       `json:"baseSnapshot"`
 	Candidate      coverage.ValidationCandidate `json:"candidate"`
@@ -92,5 +95,6 @@ func (s *State) gateInput(binding WorkBinding, task runtime.TaskKey) *GateInput 
 	if selected.ActionID == "" {
 		return nil
 	}
-	return &GateInput{Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(proof.GateView.TestOwnedPaths)}
+	_, batches := s.gateRequirementContext(binding)
+	return &GateInput{Batches: batches, Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(proof.GateView.TestOwnedPaths)}
 }

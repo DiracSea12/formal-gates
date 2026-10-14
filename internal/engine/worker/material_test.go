@@ -16,6 +16,62 @@ import (
 	"formal-gates/internal/requirement"
 )
 
+func TestReviewMaterialsCarrySettledFactsWithOriginalMeaning(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := []review.SettledFinding{{Action: review.ProductReview, RequirementRevision: "settled-original-revision", Finding: review.Finding{ID: "finding-original-stable", Digest: "private-finding-digest", Severity: "P2", Category: "requirement-conflict", Requirement: "original acceptance", NormalPath: "original normal path", ActualError: "original actual error", Message: "original finding message", Locations: []string{"requirements.md:5"}}, Decision: "DISMISS", EffectiveSeverity: "P2", Reason: "original user disposition reason"}, {Action: review.StartReadiness, RequirementRevision: "technical-original-revision", Finding: review.Finding{ID: "finding-technical-stable", Digest: "private-technical-digest", Severity: "P2", Message: "original technical finding"}, Decision: "CONFIRM", EffectiveSeverity: "P3", Reason: "latest technical reason"}}
+	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
+		t.Run(string(action), func(t *testing.T) {
+			input := semanticInput()
+			input.Validation = nil
+			input.RequirementDocument.Content = "Confirmed requirement"
+			input.Handler = "engine.review.worker.v2"
+			if action == review.StartReadiness {
+				input.Handler = "engine.readiness.plan.v5"
+			}
+			input.Review = &protocol.WorkerReviewInput{Action: action, RequirementRevision: "current-issued-revision", AuthorizationID: "private-round-authorization"}
+			baseline, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input.Review.SettledFindings = settled
+			before, _ := json.Marshal(input.Review)
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{"settledFindings", "finding-original-stable", "settled-original-revision", "original acceptance", "original normal path", "original actual error", "original finding message", "requirements.md:5", "DISMISS", "original user disposition reason", "finding-technical-stable", "technical-original-revision", "original technical finding", "CONFIRM", "latest technical reason", "effectiveSeverity", "P3", "not proof of completed repair", "premise remains unchanged", "Do not return or regenerate"} {
+				if !strings.Contains(material.Prompt, required) {
+					t.Fatalf("settled semantic fact missing: %s", required)
+				}
+			}
+			for _, forbidden := range []string{"private-finding-digest", "private-technical-digest", "private-round-authorization", "current-issued-revision"} {
+				if strings.Contains(material.Prompt, forbidden) {
+					t.Fatalf("prompt exposed mechanical identity: %s", forbidden)
+				}
+			}
+			if !reflect.DeepEqual(material.ResultSchema, baseline.ResultSchema) {
+				t.Fatal("settled input changed semantic result schema")
+			}
+			after, _ := json.Marshal(material.Input.Review)
+			if !bytes.Equal(before, after) {
+				t.Fatal("render changed original typed review facts")
+			}
+			var reopened protocol.WorkerInput
+			raw, _ := json.Marshal(material.Input)
+			if err := json.Unmarshal(raw, &reopened); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := Render(reopened, catalog)
+			if err != nil || resumed.Prompt != material.Prompt || !reflect.DeepEqual(resumed.ResultSchema, material.ResultSchema) {
+				t.Fatal("serialized material rerender changed current semantic facts", err)
+			}
+		})
+	}
+}
+
 func TestInterruptionPromptKeepsOnlySemanticFeedback(t *testing.T) {
 	input := semanticInput()
 	input.Pending.AttemptID = "current-attempt"
@@ -49,7 +105,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.repair.verify.v2", "engine.qa.design.v5", "engine.readiness.plan.v4"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.repair.verify.v2", "engine.qa.design.v5", "engine.readiness.plan.v5"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -58,7 +114,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 			if handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{FinalCandidate: &coverage.ValidationCandidate{Identity: "issued-candidate"}, VerificationCases: []string{"new"}}
 			}
-			if handler == "engine.readiness.plan.v4" {
+			if handler == "engine.readiness.plan.v5" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			}
@@ -66,7 +122,7 @@ func TestActionMaterialUsesSemanticResultFields(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, forbidden := range []string{"报告实际修改的精确路径", "提交原 `DevelopmentEvidence`", "保留 affectedCases 及逐项 caseRuns", "返回语义字段（mode", "`test` =", "返回的 `manifest.sharedSteps`", "`granularity_review`"} {
+			for _, forbidden := range []string{"报告实际修改的精确路径", "提交原 `DevelopmentEvidence`", "保留 affectedCases 及逐项 caseRuns", "返回语义字段（mode", "`test` =", "返回的 `manifest.sharedSteps`", "`granularity_review`", "Read-only VCS inspection remains permitted."} {
 				if strings.Contains(material.Prompt, forbidden) {
 					t.Fatalf("action requests a removed result field: %s", forbidden)
 				}
@@ -83,23 +139,23 @@ func TestChildMaterialsCarryConfirmedResponsibilityWithoutNarrowingRequirement(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v5", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v6", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "attempt"
 			input.RequirementDocument.Content = "Complete confirmed requirement, including sibling and merge obligations."
 			input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
-			if handler == "engine.gate.v2" {
+			if handler == "engine.gate.v3" {
 				input.Validation.Gate = &protocol.GateInput{Gate: "implementation-quality-gate"}
 			}
 			if handler == "engine.validation.observation.v2" {
 				input.Validation.Observation = &protocol.ObservationInput{}
 			}
-			if handler == "engine.repair.v5" || handler == "engine.repair.verify.v2" {
+			if handler == "engine.repair.v6" || handler == "engine.repair.verify.v2" {
 				input.Validation.Repair = &protocol.RepairInput{}
 			}
-			if handler == "engine.repair.v5" {
+			if handler == "engine.repair.v6" {
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 			}
@@ -142,7 +198,7 @@ func TestMaterialProvidesBoundRequirementReaderWithoutChangingIssuedInput(t *tes
 	}
 	for _, handler := range []string{"engine.review.worker.v2", "engine.qa.design.v5"} {
 		t.Run(handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: document}
 			if handler == "engine.review.worker.v2" {
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
 			} else {
@@ -212,7 +268,7 @@ func TestQADesignMaterialSelectsOnlyCurrentModeRules(t *testing.T) {
 }
 
 func TestReadinessUsesOneOrdinaryGateChoiceOrder(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}, Gates: []prompts.PromptDefinition{{ID: "quality"}}}
 	material, err := Render(input, catalog)
 	if err != nil {
@@ -233,7 +289,7 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.gate.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.gate.v3", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -268,7 +324,7 @@ func TestMaterialKeepsRoleEvidenceWithoutExposingOtherDuties(t *testing.T) {
 			if context.Validation.Workspace != nil || context.Validation.Binding.Task != (protocol.WorkBinding{}).Task {
 				t.Fatal("role received a physical workspace or dispatch binding")
 			}
-			if handler == "engine.gate.v2" {
+			if handler == "engine.gate.v3" {
 				if !reflect.DeepEqual(context.Validation.Gate, v.Gate) || len(context.Validation.Manifest.Cases) != 0 || len(context.Validation.ExecutionFacts) != 0 {
 					t.Fatal("gate lost its native range or received QA content")
 				}
@@ -290,14 +346,14 @@ func TestMaterialKeepsDevelopmentFeedbackWithoutTransportBindings(t *testing.T) 
 		t.Fatal(err)
 	}
 	result := protocol.WorkerResult{SourceResult: "opaque-source", ActionID: "opaque-action", Provider: "opaque-provider", PayloadDigest: "opaque-payload", Digest: "opaque-digest", Outcome: "FAILED", InterruptionReason: "original execution interruption", InvalidReason: "original result rejection", Validation: &protocol.ValidationResult{Binding: protocol.WorkBinding{WaveID: "opaque-wave"}, Status: "CONTINUE", Development: &protocol.DevelopmentEvidence{Summary: "author text contains actionId and opaque-user-body", RemainingWork: "finish the original behavior", Paths: []string{"app.go"}, Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"criterion": "original evidence"}, Handoff: "original handoff"}}}}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.Pending.AttemptID = "attempt"
 			input.RequirementDocument.Content = "Confirmed requirement"
 			input.Validation.Development = &protocol.DevelopmentInput{Result: &result, Dependencies: map[string]protocol.WorkerResult{"batch": result}}
-			if handler == "engine.repair.v5" {
+			if handler == "engine.repair.v6" {
 				input.Validation.Repair = &protocol.RepairInput{Result: &result, MemberResults: []protocol.WorkerResult{result}}
 				input.AvailableRouteCandidates = catalog.RouteCandidates()
 				input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
@@ -379,15 +435,15 @@ func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.validation.observation.v2", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
 			input.RequirementDocument.Content = "Confirmed complete requirement"
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v4" {
+			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v5" {
 				input.Validation = nil
 				action := review.ProductReview
-				if handler == "engine.readiness.plan.v4" {
+				if handler == "engine.readiness.plan.v5" {
 					action = review.StartReadiness
 				}
 				input.Review = &protocol.WorkerReviewInput{Action: action}
@@ -395,14 +451,14 @@ func TestSharedReviewerMaterialIncludesGateRulesOnlyForGate(t *testing.T) {
 			if handler == "engine.validation.observation.v2" {
 				input.Validation.Observation = &protocol.ObservationInput{}
 			}
-			if handler == "engine.gate.v2" {
+			if handler == "engine.gate.v3" {
 				input.Validation.Gate = &protocol.GateInput{Gate: "implementation-quality-gate"}
 			}
 			material, err := Render(input, catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(material.Prompt, "## 门审材料") != (handler == "engine.gate.v2") || strings.Contains(material.Prompt, "独立 QA 的用例正文、执行证据及新编结构测试不作门判据") != (handler == "engine.gate.v2") {
+			if strings.Contains(material.Prompt, "## 门审材料") != (handler == "engine.gate.v3") || strings.Contains(material.Prompt, "独立 QA 的用例正文、执行证据及新编结构测试不作门判据") != (handler == "engine.gate.v3") {
 				t.Fatal("gate-only contract was missing or leaked into another action", handler)
 			}
 			for _, shared := range []string{"## 范围与实证", "## 严重度与发现证据", "正常操作或常见失误复现", "不存在范围内 P0/P1 时结论为 PASS"} {
@@ -514,6 +570,96 @@ func TestQAReviewMaterialKeepsCommonPreparationAndCurrentModeDuties(t *testing.T
 	}
 }
 
+func TestQAReviewMaterialProjectsInheritedIDs(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
+		t.Run(string(mode), func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = "engine.qa.review.rationale.v2"
+			input.RequirementDocument.Content = "Complete confirmed requirement"
+			v := input.Validation
+			v.Manifest.Binding.ReviewKind = mode
+			v.Manifest.Cases = append(v.Manifest.Cases, coverage.AcceptanceCase{CaseID: "retained", Oracle: "retained oracle", SharedSteps: []string{"setup"}})
+			v.Manifest.SharedSteps = append(v.Manifest.SharedSteps, coverage.SharedStep{ID: "pending-setup", Procedure: "current setup"})
+			v.Manifest.Edges = []coverage.CoverageEdge{{ReviewKind: mode, SourceID: "alpha", PointID: "one", CaseID: "new"}, {ReviewKind: mode, SourceID: "beta", PointID: "two", CaseID: "prior"}, {ReviewKind: mode, SourceID: "beta", PointID: "one", CaseID: "retained"}}
+			v.Contract.Manifests = []coverage.AcceptanceManifest{v.Manifest}
+			v.ReviewBase = "approved-review-base"
+			v.ReviewArtifact = &protocol.CandidateEvidence{Identity: "current-artifact", Digest: "current-artifact-digest", Paths: []string{"cases.json"}}
+			v.RevisionInstruction = &protocol.QARevisionInstruction{Decision: protocol.RecordedDecision{RequestID: "accepted-revision-request"}, Request: protocol.ValidationRequest{Kind: "REVISE", AffectedCases: []string{"new"}}}
+			v.AffectedCases = []string{"new"}
+			v.AcceptedSuggestions = []protocol.QASuggestion{{ID: "accepted-suggestion", Message: "current revision obligation"}}
+			v.InheritableReviews = []coverage.ReviewDecision{{ID: "prior", Status: coverage.StatusPass, Reason: "prior reviewer accepted reason"}, {ID: "retained", Status: coverage.StatusPass, Reason: "retained reviewer accepted reason"}}
+			v.InheritableSharedReviews = []coverage.ReviewDecision{{ID: "setup", Status: coverage.StatusPass, Reason: "prior shared reviewer accepted reason"}}
+			before, _ := json.Marshal(input)
+			material, err := Render(input, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
+			var context struct {
+				Validation map[string]json.RawMessage `json:"validation"`
+			}
+			if err := json.Unmarshal([]byte(raw), &context); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range map[string][]string{"inheritableReviews": {"prior", "retained"}, "inheritableSharedReviews": {"setup"}} {
+				var ids []string
+				if err := json.Unmarshal(context.Validation[name], &ids); err != nil || !slices.Equal(ids, want) {
+					t.Fatalf("inherited location list changed: %s %s %v", name, context.Validation[name], err)
+				}
+			}
+			for _, forbidden := range []string{"prior reviewer accepted reason", "retained reviewer accepted reason", "prior shared reviewer accepted reason"} {
+				if strings.Contains(material.Prompt, forbidden) {
+					t.Fatal("prompt repeated an inherited judgment", forbidden)
+				}
+			}
+			original, _ := json.Marshal(v)
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(original, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact"} {
+				var actual, expected any
+				if err := json.Unmarshal(context.Validation[name], &actual); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(fields[name], &expected); err != nil || !reflect.DeepEqual(actual, expected) {
+					t.Fatal("complete review context changed", name, err)
+				}
+			}
+			after, _ := json.Marshal(material.Input)
+			current, _ := json.Marshal(input)
+			schema, err := ResultSchema(input)
+			if err != nil || !bytes.Equal(before, after) || !bytes.Equal(before, current) || !reflect.DeepEqual(material.ResultSchema, schema) {
+				t.Fatal("prompt projection changed issued input or result schema", err)
+			}
+			properties := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+			for name, want := range map[string]int{"sourceDecisions": 2, "pointDecisions": 2, "caseDecisions": 1, "sharedStepDecisions": 1} {
+				field := properties[name].(map[string]any)
+				if field["minItems"] != want || field["maxItems"] != want {
+					t.Fatal("schema changed the current judgment responsibility", name)
+				}
+			}
+			value := CaseReview{SourceDecisions: []*Decision{{Status: coverage.StatusPass, Reason: "current alpha coverage"}, {Status: coverage.StatusPass, Reason: "current beta coverage"}}, PointDecisions: []*Decision{{Status: coverage.StatusPass, Reason: "current first point"}, {Status: coverage.StatusPass, Reason: "current second point"}}, CaseDecisions: []*Decision{{Status: coverage.StatusPass, Reason: "current case"}}, SharedStepDecisions: []*Decision{{Status: coverage.StatusPass, Reason: "current shared step"}}}
+			result := decodeSemantic(t, material.Input, value).Validation.Review
+			for i, prior := range v.InheritableReviews {
+				prior.Inherited = true
+				if !reflect.DeepEqual(result.CaseDecisions[i+1], prior) {
+					t.Fatal("decoder changed the original inherited case judgment")
+				}
+			}
+			prior := v.InheritableSharedReviews[0]
+			prior.Inherited = true
+			if !reflect.DeepEqual(result.SharedStepDecisions[0], prior) {
+				t.Fatal("decoder changed the original inherited shared judgment")
+			}
+		})
+	}
+}
+
 func TestRoleMaterialRejectsMissingSelectedRules(t *testing.T) {
 	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
 	if err != nil {
@@ -576,4 +722,167 @@ func TestRepairComparisonReceivesOnlyIssuedCaseRules(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestQAExecutionMaterialContainsOnlyCurrentCaseWork(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"comparison", "commands", "no-comparison"} {
+		t.Run(scenario, func(t *testing.T) {
+			input := semanticInput()
+			input.Handler = "engine.qa.execution.v3"
+			input.RequirementDocument.Content = "Complete confirmed requirement"
+			input.Pending.AttemptID = "current-attempt"
+			v := input.Validation
+			v.Manifest.Cases = []coverage.AcceptanceCase{
+				{CaseID: "done", Oracle: "retained oracle"},
+				{CaseID: "ready", Oracle: "ready oracle", SharedSteps: []string{"shared-ready"}},
+				{CaseID: "missing", Oracle: "missing oracle", SharedSteps: []string{"shared-missing"}},
+				{CaseID: "inherited", Oracle: "inherited oracle"},
+			}
+			v.Manifest.SharedSteps = []coverage.SharedStep{
+				{ID: "shared-missing", Procedure: "prepare missing"},
+				{ID: "shared-ready", Procedure: "prepare ready"},
+				{ID: "unrelated", Procedure: "unrelated preparation"},
+			}
+			v.RequiredCases = []string{"done", "ready", "missing"}
+			v.PendingCases = []string{"ready", "missing", "inherited"}
+			v.ExecutionFacts = []protocol.ExecutionFact{comparisonMaterialFact("done"), comparisonMaterialFact("ready"), comparisonMaterialFact("inherited")}
+			v.Completed = []coverage.ExecutionRecord{{CaseID: "done", Comparison: "retained judgment"}}
+			v.Inherited = []coverage.ExecutionRecord{{CaseID: "inherited", Comparison: "inherited judgment"}}
+			want := "ready"
+			if scenario == "commands" {
+				v.CommandCases = []string{"missing"}
+				want = "missing"
+			} else if scenario == "no-comparison" {
+				v.PendingCases = nil
+				want = ""
+			}
+			material, projection := comparisonMaterial(t, input, catalog)
+			if want == "" {
+				if len(projection.Validation.Manifest.Cases) != 0 || len(projection.Validation.RequiredCases) != 0 || len(projection.Validation.PendingCases) != 0 || len(projection.Validation.ExecutionFacts) != 0 {
+					t.Fatal("completed comparison received case work")
+				}
+			} else {
+				if !slices.Equal(projection.Validation.RequiredCases, []string{want}) || !slices.Equal(projection.Validation.PendingCases, []string{want}) {
+					t.Fatal("current IDs disagree with the issued responsibility")
+				}
+				index := slices.IndexFunc(v.Manifest.Cases, func(item coverage.AcceptanceCase) bool { return item.CaseID == want })
+				if !reflect.DeepEqual(projection.Validation.Manifest.Cases, v.Manifest.Cases[index:index+1]) {
+					t.Fatal("current oracle or shared references changed")
+				}
+				if len(projection.Validation.Manifest.SharedSteps) != 1 || projection.Validation.Manifest.SharedSteps[0].Procedure != "prepare "+want {
+					t.Fatal("comparison did not select its original shared preparation")
+				}
+			}
+			if scenario == "comparison" {
+				if len(projection.Validation.ExecutionFacts) != 1 || projection.Validation.ExecutionFacts[0].CaseID != want || !strings.Contains(material.Prompt, "ready native output") {
+					t.Fatal("current native facts were lost")
+				}
+			} else if len(projection.Validation.ExecutionFacts) != 0 {
+				t.Fatal("command preparation or completed comparison received execution facts")
+			}
+			if !slices.Equal(projection.Validation.CommandCases, v.CommandCases) {
+				t.Fatal("command preparation changed its original order")
+			}
+			for _, absent := range []string{"retained oracle", "retained judgment", "done native output", "inherited oracle", "inherited judgment", "inherited native output", "unrelated preparation"} {
+				if strings.Contains(material.Prompt, absent) {
+					t.Fatal("comparison received unrelated case material", absent)
+				}
+			}
+			if scenario == "commands" && strings.Contains(material.Prompt, "ready oracle") || scenario == "comparison" && strings.Contains(material.Prompt, "missing oracle") {
+				t.Fatal("command preparation and comparison duties leaked into each other")
+			}
+		})
+	}
+}
+
+func TestRepairComparisonMaterialContainsOnlyVerificationCasesAcrossModes(t *testing.T) {
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := semanticInput()
+	input.Handler = "engine.repair.verify.v2"
+	input.RequirementDocument.Content = "Complete confirmed requirement"
+	input.Pending.AttemptID = "current-attempt"
+	v := input.Validation
+	v.Repair = &protocol.RepairInput{
+		VerificationCases: []string{"current"},
+		MemberResults:     []protocol.WorkerResult{{Validation: &protocol.ValidationResult{Development: &protocol.DevelopmentEvidence{Summary: "unrelated member summary", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"criterion": "unrelated development DoD"}, Handoff: "unrelated development handoff"}}}}},
+	}
+	v.Contract.Manifests = nil
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
+		v.Contract.Manifests = append(v.Contract.Manifests, coverage.AcceptanceManifest{
+			Binding: coverage.ManifestBinding{ReviewKind: mode},
+			Cases: []coverage.AcceptanceCase{
+				{CaseID: "done", Oracle: "unrelated retained oracle"},
+				{CaseID: "current", Oracle: string(mode) + " current oracle", SharedSteps: []string{"preparation"}},
+			},
+			SharedSteps: []coverage.SharedStep{{ID: "preparation", Procedure: string(mode) + " current preparation"}, {ID: "unrelated", Procedure: "unrelated shared preparation"}},
+		})
+	}
+	v.Contract.Manifests = append(v.Contract.Manifests, coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "other", Oracle: "unrelated mode oracle"}}})
+	v.ExecutionFacts = []protocol.ExecutionFact{comparisonMaterialFact("done"), comparisonMaterialFact("current")}
+	material, projection := comparisonMaterial(t, input, catalog)
+	if len(projection.Validation.Contract.Manifests) != 2 {
+		t.Fatal("verification lost a matching mode or retained an unrelated manifest")
+	}
+	for index, manifest := range projection.Validation.Contract.Manifests {
+		original := v.Contract.Manifests[index]
+		if manifest.Binding != original.Binding || !reflect.DeepEqual(manifest.Cases, original.Cases[1:]) || !reflect.DeepEqual(manifest.SharedSteps, original.SharedSteps[:1]) {
+			t.Fatal("verification changed a matching mode's oracle or shared preparation")
+		}
+	}
+	if !slices.Equal(projection.Validation.Repair.VerificationCases, v.Repair.VerificationCases) || len(projection.Validation.ExecutionFacts) != 1 || !strings.Contains(material.Prompt, "current native output") {
+		t.Fatal("verification lost issued cases or their original facts")
+	}
+	for _, absent := range []string{"unrelated retained oracle", "unrelated shared preparation", "unrelated mode oracle", "done native output", "unrelated member summary", "unrelated development DoD", "unrelated development handoff"} {
+		if strings.Contains(material.Prompt, absent) {
+			t.Fatal("verification received unrelated responsibility", absent)
+		}
+	}
+}
+
+func comparisonMaterialFact(id string) protocol.ExecutionFact {
+	return protocol.ExecutionFact{CaseID: id, Operations: []protocol.ExecutionOperationFact{{
+		Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Source: "case", Operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"fixture-tool", id}}}},
+		Evidence:   protocol.CheckEvidence{StdoutText: id + " native output", Invocation: "fixture-tool " + id},
+	}}}
+}
+
+func comparisonMaterial(t *testing.T, input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material, protocol.WorkerInput) {
+	t.Helper()
+	before, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := Render(input, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Split(strings.Split(material.Prompt, "[Action input]\n")[1], "\n\n[Dispatch]")[0]
+	var projection protocol.WorkerInput
+	if err := json.Unmarshal([]byte(raw), &projection); err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(input)
+	if err != nil || !bytes.Equal(before, after) || !reflect.DeepEqual(material.Input, input) || !reflect.DeepEqual(material.ResultSchema, schema) {
+		t.Fatal("prompt projection changed issued facts or canonical schema", err)
+	}
+	var recovered protocol.WorkerInput
+	if err := json.Unmarshal(before, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := Render(recovered, catalog)
+	if err != nil || !reflect.DeepEqual(material, replayed) {
+		t.Fatal("recovery changed comparison material", err)
+	}
+	return material, projection
 }

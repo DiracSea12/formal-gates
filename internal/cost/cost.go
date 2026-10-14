@@ -44,14 +44,8 @@ type DispatchCost struct {
 	TotalInputTokens     int64  `json:"totalInputTokens"`
 	Source               string `json:"source"` // "transcript" | "unavailable"
 	Reason               string `json:"reason,omitempty"`
-	// Codex retains the exact source and native task timing on this same entry.
-	TranscriptPath string      `json:"transcriptPath,omitempty"`
-	Timing         *TaskTiming `json:"timing,omitempty"`
 }
 
-// TaskTiming is the active model-task wall time, including tool waits. Start
-// and completion identify the outer boundaries; separate-turn idle is excluded.
-type TaskTiming = host.TaskTiming
 type Usage = host.Usage
 
 // Record adds the dispatch entry to the run ledger and accumulates the run

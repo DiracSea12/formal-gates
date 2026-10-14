@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"formal-gates/internal/settings"
-	"io"
 	"io/fs"
 	"slices"
 	"strconv"
@@ -22,12 +21,6 @@ import (
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 )
-
-// ackStore defers persistence until the selected actions, attempts and state
-// can be committed in one protocol transaction.
-type ackStore struct{}
-
-func (ackStore) PersistIssued(decision.IssuedSet) error { return nil }
 
 // DispatchClaim 在派发签出落账时建立宿主侧 lifecycle 绑定（runID/actionID/
 // identity/provider）：identity 是回执声明的宿主 agent 实际派发身份，
@@ -64,15 +57,14 @@ type Config struct {
 // persistence 四段协议提交」事务（CAS + 指纹重验由 persistence 承担）。
 // 引擎不缓存内存态，一切以磁盘权威投影为准。
 type Engine struct {
-	store   *persistence.Store
-	cfg     Config
-	collect func() (string, error)
+	store       *persistence.Store
+	cfg         Config
+	observation *Observation
+	sourceFacts decision.Observation
 }
 
-// New 构造 Engine。collect 是外部事实指纹收集函数，nil 表示本引擎不依赖外部事实——空观察本身有确定指纹
-// （decision 空 Observation 的 canonical digest），显式使用它而不是跳过
-// 校验，保持每次写入都走完整指纹纪律。
-func New(store *persistence.Store, cfg Config, collect func() (string, error)) (*Engine, error) {
+// New binds the persistent state owner and the workflow configuration.
+func New(store *persistence.Store, cfg Config) (*Engine, error) {
 	if store == nil {
 		return nil, fmt.Errorf("protocol: nil store")
 	}
@@ -85,29 +77,15 @@ func New(store *persistence.Store, cfg Config, collect func() (string, error)) (
 	if cfg.Capacity < 0 {
 		return nil, fmt.Errorf("protocol: config Capacity %d invalid", cfg.Capacity)
 	}
-	if collect == nil {
-		collect = func() (string, error) {
-			return emptyObservationDigest()
-		}
+	if err := ValidateDefinitionConditions(cfg.Definition); err != nil {
+		return nil, err
 	}
 	bindings, err := bindInternalSteps(cfg.Definition, cfg.Registry, cfg.InternalSteps)
 	if err != nil {
 		return nil, err
 	}
 	cfg.InternalSteps = bindings
-	return &Engine{store: store, cfg: cfg, collect: collect}, nil
-}
-
-// emptyObservationDigest 返回空观察的确定指纹（无外部事实也是一种
-// 可复核的观察结果）。
-func emptyObservationDigest() (string, error) {
-	return decision.Observation{}.Digest()
-}
-
-// ObserveFingerprint 调用引擎的指纹收集，供调用方在提交前获取期望值
-// （写事务将重验它）。
-func (e *Engine) ObserveFingerprint() (string, error) {
-	return e.collect()
+	return &Engine{store: store, cfg: cfg}, nil
 }
 
 // load 读取当前 (revision, state)。状态文件不存在归一化为 (0, nil, nil)
@@ -126,7 +104,7 @@ func (e *Engine) load() (uint64, *State, error) {
 	}
 	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的
 	// phase 在读取侧即可区分拒绝。
-	if err := verifyReviewIntegrity(&state, e.cfg.Definition); err != nil {
+	if err := verifyReviewIntegrity(&state); err != nil {
 		return 0, nil, err
 	}
 	if err := state.verifySliceReceipt(); err != nil {
@@ -140,21 +118,12 @@ func (e *Engine) load() (uint64, *State, error) {
 	return snap.Revision, &state, nil
 }
 
-// Init 落盘初始权威状态（revision 1）。view 经 decision.NewState 构造
-// （版本与 phase 已校验）；provider 是本 run 绑定的宿主 provider 身份，
-// 非空必填——后续一切携带 provider 的事件/回执与之精确比对，不同即
-// PROVIDER_MISMATCH 硬拒绝、不降级 default。已存在状态时
-// 拒绝且零变化。
-func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
-	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil, "", "", nil)
-}
-
-// InitWithMetadata is the façade bootstrap variant.  It preserves Init's
-// original signature for protocol callers while persisting run identity and
-// the typed pre-start intake confirmation in the same authoritative state
-// write. sliceStart 非 nil 时是 child run 启动：继承事实与继承拓扑在首次
-// 状态写入一并落账（与受理 phase 同点），不存在无继承事实的 child 中间态。
-func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
+// InitWithMetadata 落盘初始权威状态（revision 1），在同一次写入绑定
+// provider、run 身份、受理确认与初始 snapshot。provider 必须非空；
+// 后续事件与回执按该身份精确配对。已存在状态时拒绝且零变化。
+// sliceStart 非 nil 时，child 继承事实与拓扑一并落账。
+func (e *Engine) InitWithMetadata(view *decision.State, provider string, input Observation, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
+	e = e.observing(input)
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
 	}
@@ -185,17 +154,15 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFinger
 		topology := copyTopology(sliceStart.Topology)
 		state.Topology = &topology
 	}
-	_, err := e.commit(state, 0, expectedFingerprint)
+	_, err := e.commit(state, 0, input)
 	return err
 }
 
 // RecordIntakeReceipt persists the first-drive receipt exactly once.  A
 // matching existing receipt is idempotent; a different receipt is rejected so
 // a run can never acquire a second or altered intake confirmation.
-func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, expectedFingerprint string) (uint64, error) {
-	if strings.TrimSpace(expectedFingerprint) == "" {
-		return 0, fmt.Errorf("protocol: intake receipt: expected fingerprint is required")
-	}
+func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, input Observation) (uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return 0, err
@@ -214,7 +181,7 @@ func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, expectedFingerprint 
 	}
 	receipt.Revision = revision + 1
 	state.IntakeReceipt = &receipt
-	return e.commit(state, revision, expectedFingerprint)
+	return e.commit(state, revision, input)
 }
 
 func sameIntakeConfirmation(a, b IntakeConfirmationReceipt) bool {
@@ -244,17 +211,22 @@ func equalIntakeArtifacts(a, b []IntakeArtifact) bool {
 // 即 CAS 值；指纹写入前后各重验一次）。提交前在同一事务内评估 run
 // phase 门控（条件可从持久账本重算）并做账本完整性校验——条件不满足
 // 时静默留置，账本/phase 与投影不一致则拒绝写入。
-func (e *Engine) commit(state *State, expectedRevision uint64, expectedFingerprint string) (uint64, error) {
-	revision, _, err := e.commitEffects(state, expectedRevision, expectedFingerprint, nil)
+func (e *Engine) commit(state *State, expectedRevision uint64, input Observation) (uint64, error) {
+	revision, _, err := e.commitEffects(state, expectedRevision, input, nil)
 	return revision, err
 }
 
 // commitEffects 是一切携业务后果事务的唯一提交点：落账前先过事务收尾
 // 单点（transactionEpilogue），并把收尾补位签发的 action ID 回传给调用方。
 // 提交事件的完整 acceptance 随同一事务保存；非事件调用传 nil。
-func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFingerprint string, event *EventRecord) (uint64, []string, error) {
-	refill, err := e.transactionEpilogue(state, expectedRevision+1, expectedFingerprint)
+func (e *Engine) commitEffects(state *State, expectedRevision uint64, input Observation, event *EventRecord) (uint64, []string, error) {
+	e = e.observing(input)
+	e.attachObservedReceipts(state, expectedRevision+1)
+	refill, err := e.transactionEpilogue(state, expectedRevision+1, input)
 	if err != nil {
+		return 0, nil, err
+	}
+	if err := e.recordRetiredDispatchCosts(state, expectedRevision); err != nil {
 		return 0, nil, err
 	}
 	state.retireTaskMessages()
@@ -265,7 +237,7 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 	if err := state.advanceReviewPhases(); err != nil {
 		return 0, nil, err
 	}
-	if err := verifyReviewIntegrity(state, e.cfg.Definition); err != nil {
+	if err := verifyReviewIntegrity(state); err != nil {
 		return 0, nil, err
 	}
 	if err := state.verifySliceReceipt(); err != nil {
@@ -275,10 +247,14 @@ func (e *Engine) commitEffects(state *State, expectedRevision uint64, expectedFi
 		event.Acceptance.Refill = append(event.Acceptance.Refill, refill...)
 		state.Events[event.Acceptance.EventID] = *event
 	}
+	fingerprint, err := e.observation.Facts.Digest()
+	if err != nil {
+		return 0, nil, err
+	}
 	res, err := e.store.Save(persistence.Transaction{
 		ExpectedRevision:    expectedRevision,
-		ExpectedFingerprint: expectedFingerprint,
-		CollectFingerprint:  e.collect,
+		ExpectedFingerprint: fingerprint,
+		CollectFingerprint:  e.observation.Fingerprint,
 		Content:             state,
 	})
 	if err != nil {
@@ -311,7 +287,7 @@ func (e *Engine) releaseUpstreamVoidIfReleasable(state *State) error {
 // 一次判定＋一次扫描——屏障在位时不收尾（挂起事实保持持有）；屏障不在
 // 位时统一执行挂起的失效路由、挂起的 intent 清算与 frontier settle、挂
 // 起配对扫描与容量补位。返回补位签发的 action ID。
-func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, input Observation) ([]string, error) {
 	if len(state.RequirementRevisions) > 1 {
 		entry := state.RequirementRevisions[len(state.RequirementRevisions)-1]
 		if entry.StateRevision == nextRevision && len(entry.Children) > 0 {
@@ -330,6 +306,9 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 		state.routingReleasedCapacity = false
 		return nil, nil
 	}
+	if _, err := e.advanceNodeContinuation(state, nextRevision); err != nil {
+		return nil, err
+	}
 	if _, err := e.advanceValidation(state, nextRevision); err != nil {
 		return nil, err
 	}
@@ -342,7 +321,7 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	if err != nil {
 		return nil, err
 	}
-	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, expectedFingerprint)
+	paired, pairedRefills := e.pairSuspendedResults(state, nextRevision, input)
 	if err := e.advanceRecoveries(state, nextRevision); err != nil {
 		return nil, err
 	}
@@ -357,7 +336,7 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, expected
 	if !heldRouted && !heldSettled && paired == 0 && !releasedCapacity {
 		return nil, nil
 	}
-	issued, err := e.refill(state, nextRevision, expectedFingerprint)
+	issued, err := e.refill(state, nextRevision, input)
 	if err != nil {
 		// 补位失败不否决已合法的落账：留痕后由下一次提交重试。
 		state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
@@ -440,35 +419,6 @@ type Snapshot struct {
 	State    *State
 }
 
-// MarshalJSON keeps the report-facing snapshot contract stable: Snapshot's
-// exported fields are addressed as Revision/State, and the State fields are
-// addressed with their exported names for consumers that inspect a report
-// without knowing the persistence wire tags.
-func (s Snapshot) MarshalJSON() ([]byte, error) {
-	var state map[string]json.RawMessage
-	if s.State != nil {
-		encoded, err := json.Marshal(s.State)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(encoded, &state); err != nil {
-			return nil, err
-		}
-		upper := make(map[string]json.RawMessage, len(state))
-		for key, value := range state {
-			if key == "" {
-				continue
-			}
-			upper[strings.ToUpper(key[:1])+key[1:]] = value
-		}
-		state = upper
-	}
-	return json.Marshal(struct {
-		Revision uint64                     `json:"Revision"`
-		State    map[string]json.RawMessage `json:"State"`
-	}{Revision: s.Revision, State: state})
-}
-
 // Load 读取当前权威投影（未初始化时 NOT_INITIALIZED 拒绝）。
 func (e *Engine) Load() (Snapshot, error) {
 	revision, state, err := e.load()
@@ -486,7 +436,18 @@ func (e *Engine) Load() (Snapshot, error) {
 // live dispatches retain their actual task identity, including replacement tasks.
 func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.State {
 	view := s.State
+	view.OperatorFacts = slices.Clone(view.OperatorFacts)
 	view.Suspended = pipelineEnabled(s, compiled) && s.dualReviewPass() && !s.validationRequirementCurrent() || !s.parentReviewReady() || s.requirementChangePending() || s.abortRequested() || s.Phase == runtime.PhaseFinalizingCleanup && s.pendingControl() || s.Phase == runtime.PhaseSliceReady || s.Phase == runtime.PhasePreparing || s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && len(s.SliceChildren) == 0
+	for actionID, receipt := range s.SpawnReceipts {
+		if receipt.Status != SpawnStatusUnknown || !s.liveDispatch(actionID) {
+			continue
+		}
+		plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(s.lifecycleMatches(receipt.Correlation))})
+		if plan.Action == RecoveryOperator {
+			view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: actionID, Value: plan.Detail})
+		}
+	}
+	slices.SortFunc(view.OperatorFacts, func(a, b decision.Fact) int { return strings.Compare(a.Key, b.Key) })
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
 		if !ask.Resolved {
@@ -587,12 +548,28 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 	s.projectRetryTasks(&view, compiled)
 	s.projectValidationBoundary(&view, compiled)
 	s.projectResourceBoundary(&view, compiled, validationTasks)
+	// Replacement waits for its original execution, independently of capacity.
+	for id, obsolete := range s.ObsoleteActions {
+		if _, _, live := s.workerActionTarget(id); !live {
+			continue
+		}
+		replacement, _ := s.requirementWorkReplacement(obsolete.Task)
+		if replacement == obsolete.Task {
+			continue
+		}
+		tasks := view.RequiredTasks[replacement.Step]
+		for i := range tasks {
+			if tasks[i].Task == replacement {
+				tasks[i].BlockedBy = decision.WaitTasksInFlight
+			}
+		}
+	}
 	return view
 }
 
 func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	view := state.decisionView(e.cfg.Definition)
-	plan, err := decision.Decide(&view, decision.Observation{}, e.cfg.Definition)
+	plan, err := decision.Decide(&view, e.facts(), e.cfg.Definition)
 	if err == nil {
 		state.abortPlan(plan, e.cfg.Definition)
 	}
@@ -602,7 +579,8 @@ func (e *Engine) decide(state *State) (*decision.Plan, error) {
 // Plan returns the deterministic next boundary for the current state without
 // writing.  Façades use it for read-only `next`/`status` projections and for
 // validating a plan before issuing work.
-func (e *Engine) Plan() (*decision.Plan, uint64, error) {
+func (e *Engine) Plan(input Observation) (*decision.Plan, uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return nil, 0, err
@@ -621,11 +599,11 @@ func (e *Engine) Plan() (*decision.Plan, uint64, error) {
 // standard Decide → SelectIssued cycle until an external boundary (or
 // Complete) is reached.  No external event is accepted here; callers must use
 // Submit for receipts, decisions and observations.
-func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, error) {
-	if strings.TrimSpace(expectedFingerprint) == "" {
-		return nil, 0, fmt.Errorf("protocol: drive: expected fingerprint is required")
-	}
+func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
+	base := e
+	costObserved := false
 	for {
+		e = base.observing(input)
 		revision, state, err := e.load()
 		if err != nil {
 			return nil, 0, err
@@ -633,6 +611,35 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		if state == nil {
 			return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 		}
+		if !costObserved && e.cfg.CostSource != nil {
+			costObserved = true
+			costChanged := false
+			ids := []string{}
+			for id := range state.StagedResults {
+				if receipt := state.SpawnReceipts[id]; inflightWitnessReceipt(receipt.Status) && state.liveDispatch(id) {
+					if _, _, current := state.workerActionTarget(id); current {
+						ids = append(ids, id)
+					}
+				}
+			}
+			slices.Sort(ids)
+			for _, id := range ids {
+				before, recorded := state.costLedger().Dispatches[id]
+				if e.dispatchCostHeld(state, id) {
+					continue
+				}
+				after, observed := state.costLedger().Dispatches[id]
+				costChanged = costChanged || recorded != observed || before != after
+			}
+			if costChanged {
+				if _, err := e.commit(state, revision, input); err != nil {
+					return nil, revision, err
+				}
+				continue
+			}
+		}
+
+		attached := e.attachObservedReceipts(state, revision+1)
 		advanced, err := e.advanceValidation(state, revision+1)
 		if err != nil {
 			return nil, revision, err
@@ -644,8 +651,8 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return nil, revision, err
 		}
-		if advanced || len(state.Completed) != completed || e.reconcileReviewGrantAsks(state) {
-			if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+		if attached || advanced || len(state.Completed) != completed || e.reconcileReviewGrantAsks(state) {
+			if _, err := e.commit(state, revision, input); err != nil {
 				return nil, revision, err
 			}
 			continue
@@ -667,7 +674,7 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 				if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
 					return nil, revision, err
 				}
-				if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+				if _, err := e.commit(state, revision, input); err != nil {
 					return nil, revision, err
 				}
 				continue
@@ -676,7 +683,7 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		case decision.KindWait:
 			return plan, revision, nil
 		case decision.KindReady:
-			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))}, expectedFingerprint)
+			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: max(0, e.cfg.Capacity-len(state.PendingActions))}, input)
 			if err != nil {
 				var rejected *RejectedError
 				if errors.As(err, &rejected) && rejected.Code == CodeGuardAllowanceBlocked && state.hasPendingBudgetAsk() {
@@ -699,10 +706,8 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 // CompleteAll deterministically settles every compiled step and moves the run
 // to TERMINAL.  It is used only by the lightweight façade route, whose
 // acceptance contract has no external worker/host actions.
-func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
-	if strings.TrimSpace(expectedFingerprint) == "" {
-		return Snapshot{}, fmt.Errorf("protocol: complete all: expected fingerprint is required")
-	}
+func (e *Engine) CompleteAll(input Observation) (Snapshot, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return Snapshot{}, err
@@ -714,6 +719,9 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 	// Complete must not advance revision or rewrite the state document.
 	if state.Phase == runtime.PhaseTerminal {
 		return e.Load()
+	}
+	if err := state.errWriteBarrier("completion"); err != nil {
+		return Snapshot{}, err
 	}
 	// Compiled steps are ordered by deterministic ordinal, not necessarily by
 	// the author's slice order. Repeatedly settle the currently eligible set so
@@ -750,7 +758,7 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 			return Snapshot{}, err
 		}
 	}
-	if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+	if _, err := e.commit(state, revision, input); err != nil {
 		return Snapshot{}, err
 	}
 	return e.Load()
@@ -763,7 +771,8 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 // Attempt 时 DUPLICATE_ACTION 拒绝且零变化。签出集为空且 Expected 无
 // 新增条目时零状态变化、不经提交（原样返回当前 revision）；retainExpected
 // 有增量属状态变化，照常提交。
-func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expectedFingerprint string) (decision.IssuedSet, uint64, error) {
+func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, input Observation) (decision.IssuedSet, uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return nil, 0, err
@@ -785,8 +794,12 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
 	expectedCount := len(state.Expected)
+	snapshot, err := e.sourceFacts.Digest()
+	if err != nil {
+		return nil, 0, err
+	}
 	state.retainExpected(plan.Next.Ready)
-	issued, err = state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
+	issued, err = state.issueInto(issued, revision+1, snapshot, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}
@@ -798,7 +811,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	if len(issued) == 0 && len(state.Expected) == expectedCount {
 		return issued, revision, nil
 	}
-	commitRevision, err := e.commit(state, revision, expectedFingerprint)
+	commitRevision, err := e.commit(state, revision, input)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -807,8 +820,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 
 // validatePlan rebuilds the canonical decision for the current authoritative
 // state and compares the full plan identity before any task ledger mutation.
-// The observation input is the same explicit empty Observation used by callers; the
-// persistence fingerprint is bound separately to each Attempt as Snapshot.
+// The plan binds the complete operation observation used by Decide.
 func (e *Engine) validatePlan(state *State, plan *decision.Plan) (PlanIdentity, error) {
 	if plan == nil {
 		return PlanIdentity{}, fmt.Errorf("protocol: issue: nil plan")
@@ -849,7 +861,11 @@ func identityOfPlan(plan *decision.Plan) (PlanIdentity, error) {
 // reviewSeriesOf 返回编译定义中步骤声明的审查系列身份（未标记为零值）：
 // 签发点据此把系列身份落进 PendingAction（签发时事实，不从定义即时推导）。
 func (e *Engine) reviewSeriesOf(stepID authoring.StepID) review.Action {
-	for _, step := range e.cfg.Definition.Steps {
+	return reviewSeriesOf(e.cfg.Definition, stepID)
+}
+
+func reviewSeriesOf(cd *compiler.CompiledDefinition, stepID authoring.StepID) review.Action {
+	for _, step := range cd.Steps {
 		if step.Header.ID != stepID {
 			continue
 		}
@@ -954,7 +970,7 @@ func (s *State) eachSeriesLiveDispatch(seriesOf func(authoring.StepID) review.Ac
 // ＋留痕），但派发本身不因此落定——新的合法结果仍可对账入账，直到某个结
 // 果真正落账或派发退位。
 func (s *State) liveDispatch(dispatchID string) bool {
-	if _, pending := s.PendingActions[dispatchID]; pending {
+	if _, _, current := s.workerActionTarget(dispatchID); current {
 		return true
 	}
 	receipt, receipted := s.SpawnReceipts[dispatchID]
@@ -1116,7 +1132,8 @@ func (record EventRecord) Replay(ev Event) (Acceptance, error) {
 //	校验与变更 → persistence 四段协议提交
 //
 // 一切拒绝都发生在提交之前：零状态变化（被拒事件不进台账）。
-func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error) {
+func (e *Engine) Submit(ev Event, input Observation) (Acceptance, error) {
+	e = e.observing(input)
 	if err := ev.Validate(); err != nil {
 		return Acceptance{}, err
 	}
@@ -1140,12 +1157,12 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
 	}
 	if state.Phase == runtime.PhasePreparing {
-		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil {
+		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil {
 			return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "preparing child has no business control authority"}
 		}
 	}
 	nextRevision := revision + 1
-	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, expectedFingerprint)
+	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, input)
 	if reject != nil {
 		return Acceptance{}, reject
 	}
@@ -1155,7 +1172,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		mutated = state
 	}
 	record := EventRecord{Digest: digest, Acceptance: acceptance}
-	if _, _, err := e.commitEffects(mutated, revision, expectedFingerprint, &record); err != nil {
+	if _, _, err := e.commitEffects(mutated, revision, input, &record); err != nil {
 		return Acceptance{}, err
 	}
 	return record.Acceptance, nil
@@ -1164,7 +1181,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 // admit 按事件 kind 做接纳校验并落账变更，返回接纳回执。nextRevision
 // 是本事务将要提交到的 revision（CAS 保证其精确性），freshness token
 // 与 Attempt ID 都以它派生。
-func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
+func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevision uint64, input Observation) (Acceptance, *State, bool, error) {
 	// 修订屏障（Phase A）的处置表是唯一屏障检查点：观察类照常、
 	// WORKER_RESULT 持久隔离、其余决定拒绝。表外不存在第二套屏障逻辑。
 	if state.requirementChangePending() {
@@ -1182,12 +1199,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 	}
 	// 事务收尾（挂起配对扫描、延迟补发、held 失效路由与 settle、容量补
 	// 位）在唯一提交点 commitEffects——各分支不做。
-	return e.admitEvent(ev, digest, state, revision, nextRevision, expectedFingerprint)
+	return e.admitEvent(ev, digest, state, revision, nextRevision, input)
 }
 
 // admitEvent 按事件 kind 做接纳校验与落账（屏障处置表之后）。补配对属
 // 事务收尾（见 admit），各分支不做。
-func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, *State, bool, error) {
+func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nextRevision uint64, input Observation) (Acceptance, *State, bool, error) {
 	if state.abortRequested() && (ev.Kind == KindRequestControl || ev.Kind == KindDecide || ev.Kind == KindOperatorObservation && ev.Observation.Validation != nil) {
 		cleanupRecovery := false
 		if ev.Kind == KindDecide {
@@ -1201,7 +1218,18 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 	switch ev.Kind {
 	case KindRequestControl:
 		if ev.Request.Control == ControlRecovery {
-			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "control is not supported as a public request: " + string(ev.Request.Control)}
+			if ev.Request.Handoff == nil {
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "control is not supported as a public request: " + string(ev.Request.Control)}
+			}
+			requestID, err := e.admitDevelopmentHandoff(state, ev.Request.Handoff, nextRevision)
+			if err != nil {
+				return Acceptance{}, nil, false, err
+			}
+			return Acceptance{
+				EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
+				Revision: nextRevision, RequestID: requestID, ActionID: ev.Request.Handoff.ActionID,
+				FreshnessToken: freshnessToken(nextRevision, RequestID(requestID)),
+			}, state, true, nil
 		}
 		if ev.Request.Request != "" {
 			return e.bindRequirementPackage(state, ev, revision, nextRevision)
@@ -1234,7 +1262,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.Request.Control == ControlReset {
 			preview := state.ResetPreview()
-			preview.Work = e.requirementWork(state)
+			preview.Work = state.requirementWork(e.cfg.Definition)
 			if ev.resetPreview != nil {
 				preview.RequirementRevision = ev.resetPreview.RequirementRevision
 				preview.Intake = ev.resetPreview.Intake
@@ -1244,6 +1272,22 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 			ask.Reset = &preview
 			ask.Options = []AskOption{{ID: "proceed", Label: "Reset with this exact preservation and cleanup preview"}, {ID: "decline", Label: "Keep the current run"}}
+		}
+		if ev.Request.Control == ControlContinueNode {
+			r := ev.Request.Continuation
+			parents := []Snapshot{}
+			if ev.nodeParent != nil {
+				parents = append(parents, *ev.nodeParent)
+			}
+			preview, err := e.nodeContinuationPreview(state, r.Target, revision, parents...)
+			if err != nil || r.StateRevision != revision || r.PreviewDigest != preview.Digest {
+				return Acceptance{}, nil, false, validationError("节点继续预览已过期，请读取当前目标和影响")
+			}
+			ask.Continuation = &preview
+			ask.Options = []AskOption{{ID: "approve", Label: "从所选业务节点继续，确认展示的处置"}, {ID: "decline", Label: "保留当前流程"}}
+			if preview.To.Unavailable != "" {
+				ask.Options = []AskOption{{ID: "decline", Label: preview.To.Unavailable}}
+			}
 		}
 		if ev.Request.Control == ControlValidation {
 			value, err := e.acceptValidationRequest(state, ev.Request.Validation, nextRevision)
@@ -1323,6 +1367,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, err
 			}
 		}
+		if ask.Control == ControlContinueNode || ev.Decide.Continuation != nil {
+			if err := e.acceptNodeContinuation(state, ask, ev.Decide, ev.nodeParent); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
 		if reviewControl(ask.Control) || ev.Decide.Review != nil {
 			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide); err != nil {
 				return Acceptance{}, nil, false, err
@@ -1332,7 +1381,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 在落决定前执行确认登记与重走范围变换；非该控制携此载荷一律
 		// schema 拒绝。
 		if ask.Control == ControlRequestRequirementChange || ev.Decide.Requirement != nil {
-			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, expectedFingerprint, ev.requirementDocument); err != nil {
+			if err := e.admitRequirementDecision(state, ask, requestID, ev.Decide, nextRevision, input, ev.requirementDocument); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -1351,7 +1400,15 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		state.PendingAsks[requestID] = ask
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
-			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset,
+			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset, Continuation: ev.Decide.Continuation,
+		}
+		if ask.Control == ControlContinueNode && ev.Decide.Choice == "approve" {
+			for id, pending := range state.PendingAsks {
+				if id != requestID && pending.Control == ControlContinueNode && !pending.Resolved {
+					pending.Resolved = true
+					state.PendingAsks[id] = pending
+				}
+			}
 		}
 		// Keep the request record after settlement so its request ID, step binding,
 		// options, and resolved state remain independently inspectable. Decisions
@@ -1366,7 +1423,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 				return Acceptance{}, nil, false, err
 			}
-			issued, err := e.refill(state, nextRevision, expectedFingerprint)
+			issued, err := e.refill(state, nextRevision, input)
 			if err != nil {
 				return Acceptance{}, nil, false, err
 			}
@@ -1421,7 +1478,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// SpawnReceipt 接纳：provider 与 run 绑定精确比对；
 		// 已有同 actionID 回执时按 payload digest 判定——逐字节重发幂等
 		// （不重复回执效果，新 event ID 仍占台账），字节不同硬拒绝。
-		// 首到回执在 pending action 存在时
+		// 首到回执按在途或 terminal 后仍等待结果的原签发身份
 		// 落账（声明签发态）；SPAWNED 同时配对暂存的 result-before-
 		// receipt（同一事务内完成接纳与补位签发）。
 		if err := state.checkProvider(ev.Spawn.Provider); err != nil {
@@ -1453,7 +1510,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				Revision: revision, ActionID: actionID,
 			}, nil, false, nil
 		}
-		pending, known := state.PendingActions[actionID]
+		pending, _, known := state.workerActionTarget(actionID)
 		if !known {
 			return Acceptance{}, nil, false, &RejectedError{
 				Code:   CodeUnknownAction,
@@ -1495,7 +1552,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 派发签出即建立 lifecycle dispatch 绑定（注入 claim 回调）：SPAWNED 回
 		// 执的 correlation 即宿主报告的 agent 身份（host 事件按它配对——绑定
 		// identity 不可变，须以真实身份绑定）。UNKNOWN 回执的 correlation 只是
-		// 追踪键，claim 延后至 ReconcileUnknownReceipt 唯一匹配 attach 时以解析
+		// 追踪键，claim 延后至唯一匹配 attach 时以解析
 		// 出的真实身份建立；零/多匹配不 claim（计量来源诚实 UNAVAILABLE）。
 		// sidecar 写失败只降级该派发的计量来源，不否决回执落账。
 		if e.cfg.ClaimDispatch != nil && ev.Spawn.Status == SpawnStatusSpawned {
@@ -1507,13 +1564,8 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				})
 			}
 		}
-		state.verifyLifecycleCorrelation(ev.Spawn.Correlation, nextRevision)
 		if ev.Spawn.Status == SpawnStatusUnknown {
-			plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(state.lifecycleMatches(ev.Spawn.Correlation))})
-			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{
-				ActionID: actionID, Class: plan.Class, Action: plan.Action,
-				Detail: plan.Detail, LifecycleMatches: plan.LifecycleMatches, Revision: nextRevision,
-			})
+			plan := e.reconcileUnknownReceipt(state, actionID, nextRevision)
 			acceptance.RecoveryAction = string(plan.Action)
 		}
 		if _, waiting := state.StagedResults[actionID]; waiting && ev.Spawn.Status == SpawnStatusSpawned {
@@ -1538,7 +1590,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		if err := state.checkProvider(ev.Result.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), "", revision, nextRevision, expectedFingerprint)
+		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), "", revision, nextRevision, input)
 		if err != nil {
 			return Acceptance{}, nil, false, err
 		}
@@ -1710,7 +1762,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		state.HostActionReceipts[actionID] = receipt
 		// 恢复执行的 EXECUTED 回执是执行证据：在目标任务的 Attempt 账本同点
-		// 位计入一次执行（公开 ResumeAgent 与恢复决定共用本计数点）。
+		// 位计入一次执行。
 		if receipt.Status == HostActionStatusExecuted && intent.Operation == HostActionResumeAgent && intent.Resume != nil {
 			state.accountResumeExecution(intent.Resume.WorkerActionID)
 		}
@@ -1744,8 +1796,8 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// lifecycle 事件只写 observation buffer（不改 workflow 投影）：
 		// provider 精确比对；逐字节重发（payload digest 命中）不重复
 		// buffer 效果，新 event ID 仍占台账；
-		// 本事件补齐 start/stop 配对且 identity 被 SpawnReceipt correlation
-		// 认领时落账已验证配对；stop 没有先行 start 则不是合法 observation。
+		// receipt 对账从原事件按 correlation/identity 计算 start/stop 配对；
+		// stop 没有先行 start 则不是合法 observation。
 		if err := state.checkProvider(ev.Lifecycle.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
@@ -1771,7 +1823,6 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			Provider: ev.Lifecycle.Provider, Correlation: ev.Lifecycle.Correlation, Identity: ev.Lifecycle.Identity,
 			Event: ev.Lifecycle.Event, Digest: payloadDigest,
 		})
-		state.verifyLifecycleCorrelation(ev.Lifecycle.Correlation, nextRevision)
 		status := "ACCEPTED"
 		if !state.lifecycleClaimed(ev.Lifecycle.Correlation) {
 			status = "BUFFERED"
@@ -1829,11 +1880,11 @@ func (s *State) issuedRevisionOf(actionID string) uint64 {
 // floor 比对（pre-floor 派发按声明终止并重签发）、result-before-receipt
 // 暂存（先校验审查身份与授权）与回执配对后的完整内容接纳。返回接纳回执与是
 // 否落账变更。
-func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID, requestID string, revision, nextRevision uint64, expectedFingerprint string) (Acceptance, bool, error) {
+func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *WorkerResultPayload, eventID, requestID string, revision, nextRevision uint64, input Observation) (Acceptance, bool, error) {
 	payloadDigest := resultPayloadDigest(result)
 	if existing, seen := state.Results[actionID]; seen {
 		if existing.Digest != payloadDigest {
-			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v4" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v5") {
+			if existing.Validation != nil && (state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.development.batch.v5" || state.validationRole(existing.Validation.Binding.Task, e.cfg.Definition) == "engine.repair.v6") {
 				for _, prior := range state.RecoverableResults[actionID] {
 					if prior.Digest == payloadDigest {
 						return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: "DUPLICATE", Revision: revision, ActionID: actionID}, false, nil
@@ -1888,7 +1939,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		}
 	}
 	if result.Review != nil {
-		if _, err := state.reviewAdmission(result.Review, actionID, state.issuedRevisionOf(actionID)); err != nil {
+		if err := state.reviewAdmission(result.Review, actionID, state.issuedRevisionOf(actionID)); err != nil {
 			return Acceptance{}, false, err
 		}
 	}
@@ -1931,7 +1982,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 				detail += " by requirement decision " + requestID
 			}
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: actionID, Task: receipt.Task, Detail: detail, Revision: nextRevision})
-			refill, err := e.completeResult(state, workerResultRecord(result), nextRevision, expectedFingerprint)
+			refill, err := e.completeResult(state, workerResultRecord(result), nextRevision, input)
 			if err != nil {
 				return Acceptance{}, false, err
 			}
@@ -1942,12 +1993,15 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 			return Acceptance{EventID: eventID, Kind: string(KindWorkerResult), Status: status, Revision: nextRevision, ActionID: actionID, Refill: refill}, true, nil
 		}
 		record := workerResultRecord(result)
+		preparedReview, preparedValidation, err := e.prepareResult(state, record, receipt.Task, nextRevision)
+		if err != nil {
+			return Acceptance{}, false, err
+		}
 		if record.Review != nil {
-			updated, err := e.prepareReviewResult(state, record.Review, actionID)
-			if err != nil {
-				return Acceptance{}, false, err
-			}
-			state.ReviewSeries = updated
+			state.ReviewSeries = preparedReview
+		}
+		if preparedValidation != nil {
+			state.Validation = preparedValidation
 		}
 		state.Results[actionID] = record
 		detail := "late result reconciled against the terminal task"
@@ -1972,7 +2026,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return Acceptance{}, false, err
 		}
-		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
+		refill, refillErr := e.refill(state, nextRevision, input)
 		if refillErr != nil {
 			return Acceptance{}, false, refillErr
 		}
@@ -2000,7 +2054,7 @@ func (e *Engine) admitWorkerResultRecord(state *State, actionID string, result *
 	if e.dispatchCostHeld(state, actionID) {
 		return state.stageWorkerResult(record, eventID, revision, nextRevision, false, StatusCostPending)
 	}
-	refill, err := e.completeResult(state, record, nextRevision, expectedFingerprint)
+	refill, err := e.completeResult(state, record, nextRevision, input)
 	if err != nil {
 		return Acceptance{}, false, err
 	}
@@ -2065,7 +2119,7 @@ func (e *Engine) terminateSupersededDispatch(state *State, actionID string, mark
 // 尚无入账结果的条目逐个经唯一接纳核心补配对。仍被顺序门拦住的条目
 // 保持挂起（下一次开门迁移再试）；任何失败经快照恢复零半套账。本函
 // 数只由事务收尾单点调用（屏障在位时收尾不调）。
-func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expectedFingerprint string) (int, []string) {
+func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, input Observation) (int, []string) {
 	if len(state.StagedResults) == 0 {
 		return 0, nil
 	}
@@ -2101,7 +2155,7 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 				continue
 			}
 			payload := workerResultPayloadOf(state.StagedResults[actionID])
-			pairAcceptance, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, "", nextRevision, nextRevision, expectedFingerprint)
+			pairAcceptance, _, err := e.admitWorkerResultRecord(state, actionID, payload, "pair:"+actionID, "", nextRevision, nextRevision, input)
 			if err != nil {
 				*state = *snapshot
 				if isSequenceGate(err) {
@@ -2135,7 +2189,56 @@ func (e *Engine) pairSuspendedResults(state *State, nextRevision uint64, expecte
 	}
 }
 
-func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+// prepareResult executes the issued step's result predicate through the review
+// and validation content owners. Failure-only transport results keep their
+// declared recovery domain; the predicate does not require a PASS conclusion.
+func (e *Engine) prepareResult(state *State, record WorkerResult, key runtime.TaskKey, nextRevision uint64) (review.Set, *Validation, error) {
+	for _, step := range e.cfg.Definition.Steps {
+		if step.Header.ID != key.Step {
+			continue
+		}
+		for _, ref := range step.IO.Postconditions {
+			if ref.ID != reviewResultPredicate {
+				continue
+			}
+			if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && record.FailureClass == authoring.FailureTransientEngine {
+				if record.Validation == nil {
+					return review.Set{}, nil, nil
+				}
+				if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v3" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
+					return review.Set{}, nil, validationError("runtime progress requires a QA execution checkpoint")
+				}
+				next, err := e.prepareValidationResult(state, record, nextRevision)
+				if err != nil {
+					return review.Set{}, nil, validationReject(err)
+				}
+				return review.Set{}, next, nil
+			}
+			if record.Outcome == OutcomePass && state.reviewSeriesBooked(review.Action(step.Payload.(compiler.CompiledAgentStep).ReviewSeries)) && record.Review == nil {
+				return review.Set{}, nil, &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "signed review duty requires review evidence"}
+			}
+			var preparedReview review.Set
+			if record.Review != nil {
+				var err error
+				preparedReview, err = e.prepareReviewResult(state, record.Review, record.ActionID)
+				if err != nil {
+					return review.Set{}, nil, err
+				}
+			}
+			if record.FailureClass == "" && state.validationRole(key, e.cfg.Definition) != "" {
+				next, err := e.prepareValidationResult(state, record, nextRevision)
+				if err != nil {
+					return review.Set{}, nil, validationReject(err)
+				}
+				return preparedReview, next, nil
+			}
+			return preparedReview, nil, nil
+		}
+	}
+	return review.Set{}, nil, &RejectedError{Code: CodeGuardBlockedBug, Detail: fmt.Sprintf("step %s has no implemented result predicate", key.Step)}
+}
+
+func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision uint64, input Observation) ([]string, error) {
 	if !state.prewaveDispatchCurrent(record.ActionID, e.cfg.Definition) {
 		return nil, e.retirePrewaveResult(state, record)
 	}
@@ -2145,39 +2248,20 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", record.InvalidReason, record, nextRevision)
 	}
 	class := record.FailureClass
-	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && class == authoring.FailureTransientEngine {
-		if record.Validation != nil {
-			if state.validationRole(key, e.cfg.Definition) != "engine.qa.execution.v3" || !record.Validation.Checkpoint || record.Validation.Execution == nil {
-				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "runtime progress requires a QA execution checkpoint", record, nextRevision)
-			}
-			next, err := e.prepareValidationResult(state, record, nextRevision)
-			if err != nil {
-				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", err.Error(), record, nextRevision)
-			}
-			state.Validation = next
+	preparedReview, preparedValidation, err := e.prepareResult(state, record, key, nextRevision)
+	if err != nil {
+		if rejected, ok := err.(*RejectedError); ok && (rejected.Code == CodeReviewEvidenceRejected || rejected.Code == CodeValidationEvidenceRejected) {
+			return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", rejected.Detail, record, nextRevision)
 		}
+		return nil, err
+	}
+	if preparedValidation != nil {
+		state.Validation = preparedValidation
+	}
+	if e.businessTask(key) && record.Outcome == OutcomeRuntimeError && class == authoring.FailureTransientEngine {
 		return nil, state.endInvalidAttempt(record.ActionID, OutcomeRuntimeError, "worker reported runtime error", record, nextRevision)
 	}
-	if record.Outcome == OutcomePass && state.reviewSeriesBooked(pending.ReviewSeries) && record.Review == nil {
-		return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", "signed review duty requires review evidence", record, nextRevision)
-	}
-	var preparedReview review.Set
-	if record.Review != nil {
-		var err error
-		preparedReview, err = e.prepareReviewResult(state, record.Review, record.ActionID)
-		if err != nil {
-			if rejected, ok := err.(*RejectedError); ok && rejected.Code == CodeReviewEvidenceRejected {
-				return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", rejected.Detail, record, nextRevision)
-			}
-			return nil, err
-		}
-	}
 	if class == "" && state.validationRole(key, e.cfg.Definition) != "" {
-		next, err := e.prepareValidationResult(state, record, nextRevision)
-		if err != nil {
-			return nil, state.endInvalidAttempt(record.ActionID, "REJECTED_INVALID_RESULT", err.Error(), record, nextRevision)
-		}
-		state.Validation = next
 		if record.Validation != nil && len(record.Validation.QACommands) > 0 {
 			intents, err := e.qaCommandIntents(state, *record.Validation, nextRevision)
 			if err != nil {
@@ -2190,7 +2274,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 		if record.Validation != nil && record.Validation.Checkpoint {
 			return nil, nil
 		}
-		if role := state.validationRole(key, e.cfg.Definition); role == "engine.development.batch.v4" || role == "engine.repair.v5" && record.Validation.Development != nil || record.Validation != nil && record.Validation.Status == "CONTINUE" {
+		if role := state.validationRole(key, e.cfg.Definition); role == "engine.development.batch.v5" || role == "engine.repair.v6" && record.Validation.Development != nil || record.Validation != nil && record.Validation.Status == "CONTINUE" {
 			if previous, ok := state.Results[record.ActionID]; ok {
 				state.RecoverableResults[record.ActionID] = append(state.RecoverableResults[record.ActionID], previous)
 			}
@@ -2256,7 +2340,7 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 		return nil, err
 	}
-	return e.refill(state, nextRevision, expectedFingerprint)
+	return e.refill(state, nextRevision, input)
 }
 
 // applyFailedSpawnRouting 执行一条 FAILED spawn 回执的失败路由：瞬态重试
@@ -2380,7 +2464,7 @@ func (s *State) terminalizeTask(key runtime.TaskKey) error {
 // IssueFromPlan 完全相同的签发语义）。修订屏障（Phase A）期间静默扣发：
 // 触发本函数的回执/结果/决定事件本身合法且必须接纳，被冻结的只是"从中
 // 继续签发新任务"这一步——屏障解除后的下一次提交会补进。
-func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint string) ([]string, error) {
+func (e *Engine) refill(state *State, nextRevision uint64, input Observation) ([]string, error) {
 	if state.abortRequested() {
 		return nil, nil
 	}
@@ -2410,7 +2494,11 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
 	}
-	issued, err = state.issueInto(issued, nextRevision, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
+	snapshot, err := e.sourceFacts.Digest()
+	if err != nil {
+		return nil, err
+	}
+	issued, err = state.issueInto(issued, nextRevision, snapshot, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}
@@ -2430,112 +2518,6 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 		ids = append(ids, action.ActionID)
 	}
 	return ids, nil
-}
-
-// ExecuteHostAction is the adapter-operation convenience entry for the closed
-// HostAction union. The operation must be registered and its parameters must
-// satisfy the configured schema before any intent is persisted.
-func (e *Engine) ExecuteHostAction(operation authoring.OperationID, params any, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	return e.executeHostAction(operation, params, "", expectedFingerprint)
-}
-
-// ExecuteHostActionWithCorrelation is the harness/adapter form that binds a
-// known transport correlation into the durable intent. ExecuteHostAction keeps
-// the field empty when the host chooses the correlation only after execution.
-func (e *Engine) ExecuteHostActionWithCorrelation(operation authoring.OperationID, params any, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	return e.executeHostAction(operation, params, correlation, expectedFingerprint)
-}
-
-func (e *Engine) executeHostAction(operation authoring.OperationID, params any, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	if operation == "" {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeFreeCommandForm, Detail: "host action requires an operation reference; free command forms do not exist"}
-	}
-	revision, state, err := e.load()
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	if state == nil {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
-	}
-	intent, err := e.prepareAdapterIntent(state, revision+1, operation, params, correlation)
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	return e.persistHostAction(state, revision, intent, expectedFingerprint)
-}
-
-// ResumeAgent persists a RESUME_AGENT intent bound to a current worker Attempt.
-func (e *Engine) ResumeAgent(workerActionID, identity, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	return e.issueAgentHostAction(HostActionResumeAgent, workerActionID, identity, "", "", expectedFingerprint)
-}
-
-// TerminateAgent persists a TERMINATE_AGENT intent bound to a current worker
-// Attempt. A non-empty reason is part of the durable typed payload.
-func (e *Engine) TerminateAgent(workerActionID, identity, reason, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	return e.TerminateAgentWithCorrelation(workerActionID, identity, reason, "", expectedFingerprint)
-}
-
-// TerminateAgentWithCorrelation binds a caller-established lifecycle transport
-// correlation, for hosts that fix the correlation before execution instead of
-// generating it when the intent is issued.
-func (e *Engine) TerminateAgentWithCorrelation(workerActionID, identity, reason, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	if strings.TrimSpace(reason) == "" {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "TERMINATE_AGENT reason is empty"}
-	}
-	return e.issueAgentHostAction(HostActionTerminateAgent, workerActionID, identity, reason, correlation, expectedFingerprint)
-}
-
-func (e *Engine) issueAgentHostAction(operation HostActionOperation, workerActionID, identity, reason, correlation, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	if operation != HostActionResumeAgent && operation != HostActionTerminateAgent {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeFreeCommandForm, Detail: fmt.Sprintf("agent host action operation %q is invalid", operation)}
-	}
-	if strings.TrimSpace(identity) == "" {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "agent host action identity is empty"}
-	}
-	revision, state, err := e.load()
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	if state == nil {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
-	}
-	if operation == HostActionResumeAgent {
-		if blocked := e.guardEffectBudget(state, workerActionID, revision+1); blocked != nil {
-			// 落 Ask 后提交（Ask 即进展），再以可区分错误拒绝本次效果创建。
-			if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
-				return HostActionIntent{}, 0, err
-			}
-			return HostActionIntent{}, 0, blocked
-		}
-	}
-	intent, err := e.agentHostIntent(state, operation, workerActionID, identity, reason, correlation, revision+1)
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	return e.persistHostAction(state, revision, intent, expectedFingerprint)
-}
-
-func (e *Engine) persistHostAction(state *State, revision uint64, intent HostActionIntent, expectedFingerprint string) (HostActionIntent, uint64, error) {
-	if state.abortRequested() && intent.Operation != HostActionTerminateAgent && (intent.Adapter == nil || intent.Adapter.Operation != "op.cleanup") {
-		return HostActionIntent{}, 0, validationError("run abort permits only outstanding effect reconciliation")
-	}
-	// Submit 之外的落账路径同样只经处置表：屏障在位时新的 HostAction
-	// intent 属"停止新的权威写入"而被拒绝。
-	if state.requirementChangePending() {
-		if err := state.admitInCurrentState(Event{}, true); err != nil {
-			return HostActionIntent{}, 0, err
-		}
-	}
-	if _, exists := state.PendingHostActions[intent.ActionID]; exists {
-		return HostActionIntent{}, 0, &RejectedError{Code: CodeDuplicateAction, Detail: fmt.Sprintf("host action %q already exists", intent.ActionID)}
-	}
-
-	state.PendingHostActions[intent.ActionID] = intent
-	commitRevision, err := e.commit(state, revision, expectedFingerprint)
-	if err != nil {
-		return HostActionIntent{}, 0, err
-	}
-	return intent, commitRevision, nil
 }
 
 // schemaForOperation resolves the operation and its schema only from the
@@ -2624,16 +2606,7 @@ func validateAdapterPayload(schema authoring.SchemaID, label string, value map[s
 	decode := func(target any) error {
 		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(target); err != nil {
-			return err
-		}
-		if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
-			if err == nil {
-				return errors.New("trailing JSON data")
-			}
-			return err
-		}
-		return nil
+		return dec.Decode(target)
 	}
 	var decodeErr error
 	switch schema {
@@ -2719,23 +2692,6 @@ func (s *State) lifecycleClaimed(correlation string) bool {
 		}
 	}
 	return false
-}
-
-// verifyLifecycleCorrelation records every paired identity for a claimed
-// correlation. Keeping identities distinct makes zero/one/multiple matching
-// evidence representable without trusting caller-supplied candidate lists.
-func (s *State) verifyLifecycleCorrelation(correlation string, revision uint64) {
-	if correlation == "" || !s.lifecycleClaimed(correlation) {
-		return
-	}
-	for _, identity := range s.lifecycleMatches(correlation) {
-		if _, verified := s.LifecycleVerified[identity]; verified {
-			continue
-		}
-		s.LifecycleVerified[identity] = LifecycleVerification{
-			Correlation: correlation, Identity: identity, Provider: s.RunProvider, Revision: revision,
-		}
-	}
 }
 
 func (s *State) hasLifecycleEvent(identity, event string) bool {
@@ -2846,7 +2802,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return HostActionIntent{}, err
 			}
-			expected, ready := state.nextCheckParameters(p.SourceActionID, e.cfg.Definition)
+			expected, ready := state.nextCheckParameters(p.SourceActionID)
 			if p.Repair != nil {
 				expected, ready = state.nextRepairCheckParameters(p.Repair.Task, e.cfg.Definition)
 			} else if p.QA != nil {
@@ -2933,7 +2889,7 @@ func (e *Engine) prepareAdapterIntent(state *State, nextRevision uint64, operati
 // order. Independent non-QA work still fills available total capacity.
 func (e *Engine) selectIssued(state *State, plan *decision.Plan, admission decision.Admission) (decision.IssuedSet, error) {
 	if state.Settings == nil || plan.Next.Ready == nil {
-		return decision.SelectIssued(plan, admission, ackStore{})
+		return decision.SelectIssued(plan, admission)
 	}
 	admission.Capacity = min(admission.Capacity, max(0, e.cfg.Capacity-len(state.PendingActions)))
 	slots := state.Settings.Values.QACapacity
@@ -2955,5 +2911,5 @@ func (e *Engine) selectIssued(state *State, plan *decision.Plan, admission decis
 		ready.Tasks = append(ready.Tasks, task)
 	}
 	copy.Next.Ready = &ready
-	return decision.SelectIssued(&copy, admission, ackStore{})
+	return decision.SelectIssued(&copy, admission)
 }

@@ -66,7 +66,8 @@ func (s *State) childRequirementDecision(childID string) (*ConfirmedRevision, *C
 // SyncParentRequirement is used under the facade's parent→child write window by
 // normal submission and Drive recovery. It applies the same requirement handler
 // as local confirmations, without inventing a second child user decision.
-func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string) error {
+func (e *Engine) SyncParentRequirement(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -82,7 +83,7 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 		return validationError("child creation origin differs from its master")
 	}
 	if _, aborted := parent.AbortDecision(); aborted {
-		return e.CancelChild(parent, expectedFingerprint)
+		return e.CancelChild(parent, input)
 	}
 	changed := false
 	pending := false
@@ -116,13 +117,12 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 				if parent.validationRequirementCurrent() {
 					document = parent.Validation.Document.Content
 				}
-				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint, document); err != nil {
+				if err := e.admitRequirementDecision(s, ask, entry.RequestID, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, input, document); err != nil {
 					return err
 				}
 				if choice.ReceiptDisposition == RequirementWorkRedo {
-					s.SliceReceipt = nil
-					if s.Phase == runtime.PhaseSliceReady {
-						s.Phase = runtime.PhaseDevelopmentParallel
+					if err := s.reopenSliceCheckpoint(); err != nil {
+						return err
 					}
 				}
 				if choice.CandidateDisposition == RequirementWorkRedo && s.Validation != nil {
@@ -134,7 +134,7 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 		} else if s.SliceChild.ParentChange != nil && s.SliceChild.ParentChange.Pending {
 			s.SliceChild.ParentChange = nil
 			changed = true
-			e.replayQuarantinedResults(s, "parent-change-declined", revision+1, expectedFingerprint)
+			e.replayQuarantinedResults(s, "parent-change-declined", revision+1, input)
 		}
 	}
 	if !pending && !s.resetPending() && s.Phase != runtime.PhaseSliceReady && parent.validationRequirementCurrent() && parent.RequirementRevision() == s.RequirementRevision() && s.Validation != nil && !s.validationRequirementCurrent() {
@@ -150,7 +150,7 @@ func (e *Engine) SyncParentRequirement(parent *State, expectedFingerprint string
 		changed = true
 	}
 	if changed {
-		_, err = e.commit(s, revision, expectedFingerprint)
+		_, err = e.commit(s, revision, input)
 	}
 	return err
 }

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -19,24 +18,13 @@ func TestAcquirePathMutualExclusionAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := ""
-	if runtime.GOOS == "windows" {
-		want = "0"
-	}
-	if string(contents) != want {
-		t.Fatalf("new lock contents = %q, want %q", contents, want)
-	}
 	_, err = AcquirePath(path, "test")
 	var held *LockHeldError
 	if !errors.As(err, &held) || held.Operation != "test" || held.Path != path {
 		t.Fatalf("second lock error = %v", err)
 	}
 	unlock()
-	// 释放即关闭描述符：锁文件持久保留（永不删除），锁本身立即可再
+	// 普通释放即关闭描述符：锁文件保留，锁本身立即可再
 	// 次获取。
 	after, err := os.Stat(path)
 	if err != nil {
@@ -44,6 +32,13 @@ func TestAcquirePathMutualExclusionAndRelease(t *testing.T) {
 	}
 	if !os.SameFile(before, after) {
 		t.Fatal("release replaced the lock file")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contents) != 0 {
+		t.Fatalf("new lock contents = %q, want empty", contents)
 	}
 	second, err := AcquirePath(path, "test")
 	if err != nil {

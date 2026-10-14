@@ -1,8 +1,6 @@
 package lifecycle
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"formal-gates/internal/host"
@@ -22,7 +20,7 @@ func TestNativeLifecycleRetainsBoundIdentityAcrossRepeatedObservations(t *testin
 				t.Fatal(err)
 			}
 			start, err := VerifyDispatch(root, "run", "dispatch")
-			if err != nil || start.Outcome != Rejected || !start.StartObserved || start.StopObserved {
+			if err != nil || start.Outcome != Rejected || !start.StartObserved || start.StopObserved || start.Diagnostic != "missing matching stop event" {
 				t.Fatal(start, err)
 			}
 			for range 2 {
@@ -62,7 +60,7 @@ func TestNativeLifecycleRequiresOriginalBinding(t *testing.T) {
 		t.Fatal("different provider accepted")
 	}
 	got, err := VerifyDispatch(root, "run", "dispatch")
-	if err != nil || got.StartObserved || got.StopObserved || got.Outcome != Rejected {
+	if err != nil || got.StartObserved || got.StopObserved || got.Outcome != Rejected || got.Diagnostic != "missing matching start and stop event" {
 		t.Fatal(got, err)
 	}
 }
@@ -86,36 +84,6 @@ func TestRunLifecycleActiveMarkerEndsIdempotently(t *testing.T) {
 	ids, err = ActiveRunIDs(root)
 	if err != nil || len(ids) != 0 {
 		t.Fatal(ids, err)
-	}
-}
-
-func TestLifecycleReadsSupportedInterruptionRecords(t *testing.T) {
-	for _, separate := range []bool{false, true} {
-		root := t.TempDir()
-		if err := BindDispatchWithProvider(root, "run", "dispatch", "identity", host.Claude); err != nil {
-			t.Fatal(err)
-		}
-		if err := ObserveNativeStart(root, "run", "dispatch", host.Claude, "identity"); err != nil {
-			t.Fatal(err)
-		}
-		path := runEventPath(root, "run", "dispatch", eventStop)
-		if separate {
-			path = interruptionReasonPath(root, "run", "dispatch")
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(`{"provider":"claude-code","event":"subagent_stop","identity":"identity","reason":"HTTP 503 overloaded"}`), 0600); err != nil {
-			t.Fatal(err)
-		}
-		reason, err := DispatchInterruptionReason(root, "run", "dispatch")
-		if err != nil || reason != "HTTP 503 overloaded" {
-			t.Fatal(reason, err)
-		}
-		got, err := VerifyDispatch(root, "run", "dispatch")
-		if separate && (err != nil || got.Outcome != Interrupted || !got.StartObserved || got.StopObserved) {
-			t.Fatal(got, err)
-		}
 	}
 }
 

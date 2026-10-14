@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Worktree is the native registration, rather than a directory-existence claim.
@@ -170,7 +171,7 @@ func (p *Provider) workingTreeEntries() (map[string]string, error) {
 	for _, path := range pending {
 		target := materialPath(p.root, path)
 		info, err := os.Lstat(target)
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
 			delete(current, path)
 			continue
 		}
@@ -180,6 +181,11 @@ func (p *Provider) workingTreeEntries() (map[string]string, error) {
 		if info.IsDir() {
 			current[path] = working[path]
 			continue
+		}
+		for descendant := range current {
+			if strings.HasPrefix(descendant, path+"/") {
+				delete(current, descendant)
+			}
 		}
 		value := nativeEntry{Kind: "file"}
 		if working[path] != "" {

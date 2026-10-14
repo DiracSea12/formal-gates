@@ -8,6 +8,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/requirement"
 )
 
 // A repair plan belongs to the original worker result. Tasks and dependency
@@ -151,6 +152,14 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		if work.plan != nil || work.task != s.replacementFold(work.wave.Repair.Task) {
 			return validationError("only the original repair worker can freeze its plan")
 		}
+		if err := s.validatePlanRequirementCoverage(p.GranularityReview, false); err != nil {
+			return err
+		}
+		for _, point := range s.repairInput(work.task).RequiredPoints {
+			if !slices.ContainsFunc(p.GranularityReview.Batches, func(batch DevelopmentBatch) bool { return slices.Contains(batch.RequirementPoints, point.ID) }) {
+				return validationError("repair plan omits an original required point: " + point.ID)
+			}
+		}
 		if err := ValidateRepairPlan(p.GranularityReview, p.Development != nil); err != nil {
 			return err
 		}
@@ -170,9 +179,22 @@ func (s *State) acceptRepairResult(record WorkerResult) error {
 		if err := validateDevelopmentCompletion(*work.batch, p.Development); err != nil {
 			return err
 		}
+	} else {
+		if p.Development.Completion != nil {
+			return validationError("standalone repair has no batch completion contract")
+		}
+		required := s.repairInput(work.task).RequiredPoints
+		if err := validateImplementedPoints(requirement.PointIDs(required), p.Development.RequirementResults); err != nil {
+			return err
+		}
 	}
 	if err := s.validateRepairEvidence(*p.Development, false); err != nil {
 		return err
+	}
+	if p.Binding.PureP2 && len(p.Development.AffectedCases) == 0 {
+		if err := ValidateRepairEvidence(work.wave.Coverage.Manifests, *p.Development, true); err != nil {
+			return err
+		}
 	}
 	s.Validation.DevelopmentSnapshot, s.Validation.AuthoringWorkspace = "", ""
 	s.Validation.Candidate = nil
@@ -348,7 +370,7 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 		if member.result != nil {
 			if _, _, frozen := s.repairSource(member.task); !frozen {
 				r := s.taskResource(member.task, cd)
-				return CandidateParameters{Stage: "DEVELOPMENT", RepairTask: &member.task, SourceTasks: []runtime.TaskKey{member.task}, Paths: slices.Clone(member.result.Validation.Development.Paths), Base: r.Identity, WorkspaceID: r.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}, true
+				return CandidateParameters{Stage: "DEVELOPMENT", RepairTask: &member.task, SourceTasks: []runtime.TaskKey{member.task}, Paths: s.candidateSourcePaths(member.result.Validation.Development.Paths), Base: r.Identity, WorkspaceID: r.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}, true
 			}
 		}
 	}
@@ -396,10 +418,13 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 }
 
 func (s *State) repairCompleted(w *ValidationWave, cd *compiler.CompiledDefinition) bool {
+	hasComparisonCases := false
 	for _, member := range s.repairMembers(w) {
-		if s.developmentResultRecord(member.task) == nil {
+		result := s.developmentResultRecord(member.task)
+		if result == nil {
 			return false
 		}
+		hasComparisonCases = hasComparisonCases || len(result.Validation.Development.AffectedCases) > 0
 		if s.NativeRoot != "" {
 			if _, _, integrated := s.repairFinalSource(member); !integrated {
 				return false
@@ -410,7 +435,14 @@ func (s *State) repairCompleted(w *ValidationWave, cd *compiler.CompiledDefiniti
 		}
 	}
 	if verification := s.repairVerificationWork(w, cd); verification != nil {
-		return verification.result != nil
+		if verification.result != nil {
+			return true
+		}
+		if hasComparisonCases {
+			return false
+		}
+		context, current := s.repairComparisonContext(verification.task, cd)
+		return current && len(context.affected) == 0 && s.repairComparisonReady(context, cd)
 	}
 	return true
 }
@@ -480,7 +512,7 @@ func (s *State) ensureRepairGates(cd *compiler.CompiledDefinition) bool {
 			source = intent.ActionID
 		}
 		for _, gate := range s.repairGates(work) {
-			task := s.replacementFold(pipelineTask(cd, "engine.gate.v2", repairGateScope(source, gate)))
+			task := s.replacementFold(pipelineTask(cd, "engine.gate.v3", repairGateScope(source, gate)))
 			if work.wave.Repair.Targets == nil {
 				work.wave.Repair.Targets = map[string]*ValidationTarget{}
 			}
@@ -572,7 +604,8 @@ func (s *State) repairGateInput(b WorkBinding) *GateInput {
 			candidate.Digest = proof.Digest
 			owned = slices.Clone(proof.GateView.TestOwnedPaths)
 		}
-		return &GateInput{Gate: target.Gate, BaseSnapshot: w.Candidate.Identity, Candidate: candidate, TestOwnedPaths: owned}
+		_, batches := s.gateRequirementContext(b)
+		return &GateInput{Batches: batches, Gate: target.Gate, BaseSnapshot: w.Candidate.Identity, Candidate: candidate, TestOwnedPaths: owned}
 	}
 	return nil
 }

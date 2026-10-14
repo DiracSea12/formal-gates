@@ -157,7 +157,7 @@ func TestSemanticReentryMessageSelectsOriginalBytesForRunAndWorker(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := originalPayloadPaths(directory)
+	paths, err := facade.OriginalPayloadPaths(directory)
 	if err != nil || len(paths) != 1 {
 		t.Fatal(paths, err)
 	}
@@ -219,5 +219,117 @@ func TestSemanticReentryProgressUsesCompleteOriginalOutputAsCursor(t *testing.T)
 			t.Fatal("original cursor lost identity, revision, result boundary or changed authority", out.String())
 		}
 		t.Logf("machine=%v complete original output reused revision %d without rewriting cursor or state", machine, cursor.Revision)
+	}
+}
+
+func TestNativeSemanticArgumentsUseOriginalParserBeforeSelection(t *testing.T) {
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	run := filepath.Join(root, facade.EngineNamespace, "writer-exclusive")
+	job := filepath.Join(run, "jobs", "original")
+	if err := os.MkdirAll(job, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(job, "interaction-pending.json"), `[{"connection":1,"method":"session/request_permission","options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"}],"request_id":"41","status":"pending"},{"connection":1,"method":"session/request_permission","options":[{"optionId":"reject-once","name":"Reject","kind":"reject_once"}],"request_id":"42","status":"pending"}]`)
+	var out, stderr bytes.Buffer
+	call := func(args ...string) int {
+		t.Helper()
+		out.Reset()
+		stderr.Reset()
+		code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr})
+		t.Logf("argv=%q exit=%d stdout=%q stderr=%q", args, code, out.String(), stderr.String())
+		return code
+	}
+	empty := t.TempDir()
+	before := snapshotEngineRunTree(t, root, "writer-exclusive")
+	for _, command := range []string{"show", "respond"} {
+		if code := call("native", command, "--root", empty, "--help"); code != 0 || !strings.Contains(out.String(), "Usage of native "+command) || stderr.Len() != 0 {
+			t.Fatal("help selected a run before parsing", code, out.String(), stderr.String())
+		}
+	}
+	if code := call("native", "--help"); code != 0 || !strings.Contains(out.String(), "show|respond") {
+		t.Fatal("native group help failed", code, out.String(), stderr.String())
+	}
+	if entries, err := os.ReadDir(empty); err != nil || len(entries) != 0 {
+		t.Fatal("help wrote to an empty project", entries, err)
+	}
+	if code := call("native", "show", "--root", empty, "--not-a-flag"); code == 0 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatal("run selection masked the parser error", code, stderr.String())
+	}
+	for _, args := range [][]string{
+		{"native", "show", "--root", empty, "--root", root},
+		{"native", "show", "-root", root},
+	} {
+		if code := call(args...); code != 0 || !strings.Contains(out.String(), "Allow once") || !strings.Contains(out.String(), "Reject") {
+			t.Fatal("root selection disagreed with standard parser", code, out.String(), stderr.String())
+		}
+	}
+	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+		t.Fatal("help, parser rejection or native display wrote run state")
+	}
+	if code := call("native", "respond", "--root", root, "--question", "1", "--question", "2", "--choice", "1"); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var preview struct {
+		Question map[string]any `json:"question"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Question["request_id"] != "42" {
+		t.Fatal("candidate disagreed with parsed question", preview, err)
+	}
+	first, err := nativeRequestPayloadDirectory(run, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := nativeRequestPayloadDirectory(run, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPaths, err := facade.OriginalPayloadPaths(filepath.Join(first, "decisions"))
+	if err != nil || len(firstPaths) != 0 {
+		t.Fatal("last question candidate was saved under the first request", firstPaths, err)
+	}
+	secondPaths, err := facade.OriginalPayloadPaths(filepath.Join(second, "decisions"))
+	if err != nil || len(secondPaths) != 1 {
+		t.Fatal("last question has no original candidate", secondPaths, err)
+	}
+	var candidate struct {
+		Directory string         `json:"directory"`
+		Pending   map[string]any `json:"pending"`
+		Selection map[string]any `json:"selection"`
+	}
+	if err := readJSONFileInto(secondPaths[0], &candidate); err != nil || candidate.Pending["request_id"] != "42" || candidate.Pending["connection"] != float64(1) || candidate.Selection["choice"] != float64(1) || filepath.Base(candidate.Directory) != "original" {
+		t.Fatal("saved original binding changed", candidate, err)
+	}
+	answerPath := filepath.Join(job, "interaction-answer.json")
+	before = snapshotEngineRunTree(t, root, "writer-exclusive")
+	for _, args := range [][]string{
+		{"native", "respond", "--root", root, "--question", "2", "--confirm=false"},
+		{"native", "respond", "--root", root, "--question", "2", "--decision", "1", "unexpected-positional"},
+	} {
+		if code := call(args...); code == 0 {
+			t.Fatal("nonconfirmation or positional input accepted", args, out.String())
+		}
+		if _, err := os.Stat(answerPath); !os.IsNotExist(err) {
+			t.Fatal("invalid input delivered an answer", err)
+		}
+		if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+			t.Fatal("invalid input modified the original request or candidate")
+		}
+	}
+	if code := call("native", "respond", "-root", root, "-question", "1", "-question", "2", "-decision", "1"); code != 0 {
+		t.Fatal("original numeric decision did not confirm", stderr.String())
+	}
+	var answer map[string]any
+	if err := readJSONFileInto(answerPath, &answer); err != nil || answer["request_id"] != "42" || answer["option"] != "reject-once" {
+		t.Fatal("confirmation consumed the wrong original request", answer, err)
+	}
+	if err := os.Remove(answerPath); err != nil {
+		t.Fatal(err)
+	}
+	if code := call("native", "respond", "-decision-file", secondPaths[0]); code != 0 {
+		t.Fatal("exact original candidate integration failed", stderr.String())
+	}
+	if err := readJSONFileInto(answerPath, &answer); err != nil || answer["request_id"] != "42" || answer["option"] != "reject-once" {
+		t.Fatal("raw candidate integration lost its original binding", answer, err)
 	}
 }

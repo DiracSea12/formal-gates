@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/requirement"
 	"slices"
 )
 
@@ -131,6 +132,7 @@ func (s *State) repairReady(w *repairWork) bool {
 
 // RepairInput carries the original problem evidence, not only lookup IDs.
 type RepairInput struct {
+	RequiredPoints    []requirement.Point           `json:"requiredPoints,omitempty"`
 	Checks            []CheckEvidence               `json:"checks,omitempty"`
 	Result            *WorkerResult                 `json:"result,omitempty"`
 	VerificationPaths []string                      `json:"verificationPaths,omitempty"`
@@ -250,6 +252,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 			}
 			return 0
 		})
+		input.RequiredPoints = s.repairRequirementPoints(input)
 		return input
 	}
 	return nil

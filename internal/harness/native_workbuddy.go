@@ -1,8 +1,10 @@
 package harness
 
 import (
+	"bufio"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -13,42 +15,93 @@ import (
 	"formal-gates/internal/settings"
 )
 
-var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit}
+var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit, usageTranscript: workbuddyUsageTranscript}
 
 func workbuddyCaptureBinding() (map[string]any, error) {
-	return workbuddyConfiguredBinding(settings.Values{})
+	native, sources := map[string]string{}, map[string]string{}
+	if err := workbuddyResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return workbuddyConfiguredBinding(settings.Values{Native: native})
 }
-func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) {
+
+func workbuddyResolvePaths(native, sources map[string]string) error {
+	config := settings.Values{Native: native}
 	executable := config.NativeString("workbuddyExecutable")
 	path, err := exec.LookPath(executable)
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
 	if err != nil && executable == "codebuddy" && runtime.GOOS == "darwin" {
 		path = "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
 		_, err = os.Stat(path)
+		executableSource = "platform default"
 	}
 	if err != nil {
-		return nil, &blockedError{message: "WORKBUDDY_UNAVAILABLE: configured native CLI is unavailable"}
+		return &blockedError{message: "WORKBUDDY_UNAVAILABLE: configured native CLI is unavailable"}
 	}
 	home := config.NativeString("workbuddyHome")
-	if home == "" {
+	homeSource := "configured"
+	explicitHome := home != ""
+	if !explicitHome {
 		home, err = os.UserHomeDir()
 		if err != nil {
-			return nil, err
+			return err
+		}
+		homeSource = "HOME"
+		if runtime.GOOS == "windows" {
+			homeSource = "USERPROFILE"
 		}
 	}
 	home = resolveNativePath(home)
-	nativeHome := os.Getenv("WORKBUDDY_CONFIG_DIR")
-	if nativeHome == "" || config.NativeString("workbuddyHome") != "" {
-		nativeHome = filepath.Join(home, ".workbuddy")
+	nativeHome := native["workbuddyConfigRoot"]
+	rootSource := "workbuddyHome"
+	if nativeHome == "" {
+		if !explicitHome {
+			nativeHome = os.Getenv("WORKBUDDY_CONFIG_DIR")
+			if nativeHome != "" {
+				rootSource = "WORKBUDDY_CONFIG_DIR"
+			}
+		}
+		if nativeHome == "" {
+			nativeHome = filepath.Join(home, ".workbuddy")
+		}
 	}
 	nativeHome = resolveNativePath(nativeHome)
 	product := config.NativeString("workbuddyProductConfig")
+	productSource := "configured"
 	if product == "" {
 		product = os.Getenv("ACC_PRODUCT_CONFIG_PATH")
+		productSource = "ACC_PRODUCT_CONFIG_PATH"
 	}
 	if product == "" {
 		product = filepath.Join(nativeHome, "cache", "acc-product-config-v3.json")
+		productSource = "workbuddyConfigRoot"
 	}
-	product = resolveNativePath(product)
+	for name, value := range map[string]string{
+		"workbuddyExecutable": resolveNativePath(path), "workbuddyHome": home,
+		"workbuddyConfigRoot": nativeHome, "workbuddyProductConfig": resolveNativePath(product),
+	} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{
+		"workbuddyExecutable": executableSource, "workbuddyHome": homeSource,
+		"workbuddyConfigRoot": rootSource, "workbuddyProductConfig": productSource,
+	} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
+}
+
+func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) {
+	path, home := config.Native["workbuddyExecutable"], config.Native["workbuddyHome"]
+	nativeHome, product := config.Native["workbuddyConfigRoot"], config.Native["workbuddyProductConfig"]
+	if path == "" || home == "" || nativeHome == "" || product == "" {
+		return nil, &blockedError{message: "WORKBUDDY_CONFIG: frozen native paths required"}
+	}
 	if info, e := os.Stat(home); e != nil || !info.IsDir() {
 		return nil, &blockedError{message: "WORKBUDDY_CONFIG: native home unavailable"}
 	}
@@ -59,7 +112,7 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 	if runtime.GOOS == "windows" {
 		environment["USERPROFILE"] = home
 	}
-	binding, err := buildCaptureBinding("workbuddy", map[string]any{"executable": resolveNativePath(path)})
+	binding, err := buildCaptureBinding("workbuddy", map[string]any{"executable": path})
 	if err != nil {
 		return nil, err
 	}
@@ -106,9 +159,9 @@ func workbuddyVerifySource(directory string, source any) error {
 	return nil
 }
 func workbuddyExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
-	return streamExecute(workbuddyStream, request, directory, probe, services...)
+	return streamExecute(workbuddyStream, request, directory, probe)
 }
-func workbuddyReconcile(directory string, process any) (map[string]any, error) {
+func workbuddyReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	if original, err := readJSONFile(filepath.Join(directory, "native-source.json")); err == nil {
 		defer workbuddyCleanup(textOf(getOf(original, "nativeWorkspace")))
 	}
@@ -124,11 +177,11 @@ func workbuddyArguments(request any, directory, executable, workspace string, en
 	identity, _ := getOf(request, "identity").(string)
 	resume := identity != ""
 	if resume {
-		present, err := workbuddySessionRecordAvailable(environment["CODEBUDDY_CONFIG_DIR"], identity)
+		record, err := workbuddySessionRecordPath(environment["CODEBUDDY_CONFIG_DIR"], identity)
 		if err != nil {
 			return nil, "", err
 		}
-		if !present {
+		if record == "" {
 			return nil, "", &sessionUnavailableError{blockedError: blockedError{message: "WORKBUDDY_RECOVERY: native session record is unavailable"}, identity: identity, method: "session/store"}
 		}
 	}
@@ -242,29 +295,120 @@ func workbuddyInvocationCleanup(directory string) error {
 	return nil
 }
 
-func workbuddySessionRecordAvailable(configRoot, identity string) (bool, error) {
+func workbuddySessionRecordPath(configRoot, identity string) (string, error) {
 	if !filepath.IsAbs(configRoot) || identity == "" || filepath.Base(identity) != identity {
-		return false, &blockedError{message: "WORKBUDDY_RECOVERY: native config root and exact session identity required"}
+		return "", &blockedError{message: "WORKBUDDY_RECOVERY: native config root and exact session identity required"}
 	}
 	entries, err := os.ReadDir(filepath.Join(configRoot, "projects"))
 	if os.IsNotExist(err) {
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	matches := 0
+	match := ""
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(configRoot, "projects", entry.Name(), identity+".jsonl"))
+		path := filepath.Join(configRoot, "projects", entry.Name(), identity+".jsonl")
+		info, err := os.Stat(path)
 		if err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			matches++
+			if match != "" {
+				return "", &blockedError{message: "WORKBUDDY_RECOVERY: native session identity is ambiguous across project stores"}
+			}
+			match = path
 		}
 	}
-	if matches > 1 {
-		return false, &blockedError{message: "WORKBUDDY_RECOVERY: native session identity is ambiguous across project stores"}
+	return match, nil
+}
+
+// The print UUID is the SDK item ID. The original session's usage keeps the
+// cache classification that the print AssistantMessage does not carry.
+func workbuddyUsageTranscript(directory string, request map[string]any, identity string, assistantIDs []string) (string, error) {
+	path := filepath.Join(directory, "native-usage.json")
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
 	}
-	return matches == 1, nil
+	root := textOf(getOf(getOf(getOf(request, "binding"), "environment"), "CODEBUDDY_CONFIG_DIR"))
+	record, err := workbuddySessionRecordPath(root, identity)
+	if err != nil {
+		return "", err
+	}
+	if record == "" {
+		return "", fmt.Errorf("workbuddy native usage record unavailable")
+	}
+	file, err := os.Open(record)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	wanted := map[string]bool{}
+	for _, id := range assistantIDs {
+		if id == "" {
+			return "", fmt.Errorf("workbuddy assistant UUID unavailable")
+		}
+		wanted[id] = false
+	}
+	projected := []any{}
+	reader := bufio.NewReaderSize(file, 64*1024)
+	for {
+		line, readErr := readNativeLine(reader)
+		if line != "" {
+			raw, err := decodeNativeJSON([]byte(line))
+			if err != nil {
+				return "", err
+			}
+			item := objectOrEmpty(raw)
+			id := textOf(item["id"])
+			if _, selected := wanted[id]; selected {
+				wanted[id] = true
+				data := objectOrEmpty(item["providerData"])
+				if usage, ok := data["usage"].(map[string]any); ok {
+					values := map[string]any{"usage": workbuddyUsageFields(usage)}
+					if raw, ok := data["rawUsage"].(map[string]any); ok {
+						values["rawUsage"] = workbuddyUsageFields(raw)
+					}
+					projected = append(projected, map[string]any{"id": id, "session_id": identity, "providerData": values})
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return "", readErr
+			}
+			break
+		}
+	}
+	for _, found := range wanted {
+		if !found {
+			return "", fmt.Errorf("workbuddy assistant UUID absent from native usage record")
+		}
+	}
+	if err := writeAtomicJSON(path, projected); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func workbuddyUsageFields(value map[string]any) map[string]any {
+	result := nativePickParams(value, "inputTokens", "outputTokens", "prompt_tokens", "cache_read_input_tokens", "cacheReadInputTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "prompt_cache_write_tokens")
+	for _, key := range []string{"inputTokensDetails", "prompt_tokens_details"} {
+		if details, present := value[key]; present {
+			if items, ok := details.([]any); ok {
+				filtered := []any{}
+				for _, item := range items {
+					filtered = append(filtered, nativePickParams(objectOrEmpty(item), "cached_tokens"))
+				}
+				result[key] = filtered
+			} else if item, ok := details.(map[string]any); ok {
+				result[key] = nativePickParams(item, "cached_tokens")
+			} else {
+				result[key] = details
+			}
+		}
+	}
+	return result
 }

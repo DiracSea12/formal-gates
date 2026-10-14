@@ -13,7 +13,6 @@ package definition
 
 import (
 	"fmt"
-	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -22,7 +21,7 @@ import (
 // Version 是 definition 版本信封。内容为完整拓扑
 // （definitions/workflow.json）；changed bytes 必须 bump。identity_gen.go
 // 的 WorkflowDefinitionVersion 与其同源。
-const Version authoring.DefinitionVersion = "22"
+const Version authoring.DefinitionVersion = "25"
 
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
@@ -34,20 +33,19 @@ var (
 		id     authoring.HandlerID
 		runner authoring.RunnerKind
 	}{
-		{"engine.entry.parse", authoring.RunnerEngineLocal},
+		{"engine.entry.registered", authoring.RunnerEngineLocal},
 		{"engine.children.prepare", authoring.RunnerEngineLocal},
 		{"engine.children.publish", authoring.RunnerEngineLocal},
-		{"engine.entry.persist", authoring.RunnerDurableActivity},
 		{"engine.review.worker.v2", authoring.RunnerAgentWorker},
-		{"engine.readiness.plan.v4", authoring.RunnerAgentWorker},
+		{"engine.readiness.plan.v5", authoring.RunnerAgentWorker},
 
-		{"engine.development.batch.v4", authoring.RunnerAgentWorker},
+		{"engine.development.batch.v5", authoring.RunnerAgentWorker},
 		{"engine.qa.design.v5", authoring.RunnerAgentWorker},
 		{"engine.qa.review.rationale.v2", authoring.RunnerAgentWorker},
 		{"engine.qa.execution.v3", authoring.RunnerAgentWorker},
 		{"engine.validation.observation.v2", authoring.RunnerAgentWorker},
-		{"engine.gate.v2", authoring.RunnerAgentWorker},
-		{"engine.repair.v5", authoring.RunnerAgentWorker},
+		{"engine.gate.v3", authoring.RunnerAgentWorker},
+		{"engine.repair.v6", authoring.RunnerAgentWorker},
 		{"engine.repair.verify.v2", authoring.RunnerAgentWorker},
 		{"engine.merge.resolve.v3", authoring.RunnerAgentWorker},
 		{"engine.candidate.review-range", authoring.RunnerHostAdapter},
@@ -57,10 +55,8 @@ var (
 	}
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
-	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
 	workflowSchemas    = []authoring.SchemaID{"schema.candidate.review-range", "schema.workspace", "schema.cleanup", "schema.check"}
 	workflowOperations = []authoring.OperationID{"op.candidate", "op.workspace", "op.cleanup", "op.check"}
-	workflowAskKinds   = []authoring.AskKindID{}
 )
 
 // Registry 返回注册了定义引用的全部封闭 ID 的 registry；条目不携带实现。
@@ -75,17 +71,11 @@ func Registry() *compiler.Registry {
 	for _, id := range workflowPredicates {
 		must(id, reg.RegisterPredicate(id))
 	}
-	for _, id := range workflowReconciles {
-		must(id, reg.RegisterReconciler(id))
-	}
 	for _, id := range workflowSchemas {
 		must(id, reg.RegisterSchema(id))
 	}
 	for _, id := range workflowOperations {
 		must(id, reg.RegisterOperation(id))
-	}
-	for _, id := range workflowAskKinds {
-		must(id, reg.RegisterAskKind(id))
 	}
 	return reg
 }
@@ -93,47 +83,40 @@ func Registry() *compiler.Registry {
 // Workflow 经 authoring constructor 构造定义表。每次调用产生全新实例；
 // 表内容是编译期常量，constructor 失败只可能是本表自身缺陷，直接 panic。
 func Workflow() *compiler.Definition {
-	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), ioWith(),
-		authoring.LocalSpec{Handler: "engine.entry.parse"})
-	must("entry.parse", err)
-	persist, err := authoring.NewDurableStep(header("entry.persist", "entry", "entry.parse"),
-		ioWith("entry.parse"), authoring.DurableSpec{
-			Handler: "engine.entry.persist", Idempotency: authoring.IdempotencyDeterministicInput,
-			Reconcile: "reconcile.entry.persist", Timeout: 30 * time.Second,
-			Retry: authoring.RetryPolicy{MaxAttempts: 3, Backoff: 2 * time.Second},
-		})
-	must("entry.persist", err)
-	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.persist"),
-		reviewIOWith("entry.persist"), authoring.AgentSpec{
+	registered, err := authoring.NewLocalStep(header("entry.registered", "entry"), typedIO(),
+		authoring.LocalSpec{Handler: "engine.entry.registered"})
+	must("entry.registered", err)
+	review, err := authoring.NewAgentStep(header("review.worker", "review", "entry.registered"),
+		reviewIO(), authoring.AgentSpec{
 			Handler: "engine.review.worker.v2", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: 0,
 		})
 	must("review.worker", err)
 	// Readiness includes the structured granularity proposal for route confirmation.
 	readiness, err := authoring.NewAgentStep(header("review.readiness", "review", "review.worker"),
-		reviewIOWith("review.worker"), authoring.AgentSpec{
-			Handler: "engine.readiness.plan.v4", Reason: authoring.ReasonIndependentReview,
+		reviewIO(), authoring.AgentSpec{
+			Handler: "engine.readiness.plan.v5", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesStartReadiness, Timeout: 0,
 		})
 	must("review.readiness", err)
-	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "review.readiness"), ioWith("review.readiness"), authoring.LocalSpec{Handler: "engine.children.prepare"})
+	prepare, err := authoring.NewLocalStep(header("children.prepare", "children", "review.readiness"), typedIO(), authoring.LocalSpec{Handler: "engine.children.prepare"})
 	must("children.prepare", err)
-	workspace, err := authoring.NewHostActionStep(header("children.workspace", "children", "children.prepare"), ioWith("children.prepare"), authoring.HostActionSpec{Handler: "engine.workspace", Boundary: authoring.BoundaryExternalCapability, Operation: "op.workspace", Schema: "schema.workspace", Timeout: time.Minute})
+	workspace, err := authoring.NewHostActionStep(header("children.workspace", "children", "children.prepare"), typedIO(), authoring.HostActionSpec{Handler: "engine.workspace", Boundary: authoring.BoundaryExternalCapability, Operation: "op.workspace", Schema: "schema.workspace", Timeout: 0})
 	must("children.workspace", err)
-	publish, err := authoring.NewLocalStep(header("children.publish", "children", "children.workspace"), ioWith("children.workspace"), authoring.LocalSpec{Handler: "engine.children.publish"})
+	publish, err := authoring.NewLocalStep(header("children.publish", "children", "children.workspace"), typedIO(), authoring.LocalSpec{Handler: "engine.children.publish"})
 	must("children.publish", err)
-	steps := []authoring.Step{parse, persist, review, readiness, prepare, workspace, publish}
+	steps := []authoring.Step{registered, review, readiness, prepare, workspace, publish}
 	for _, spec := range []struct {
 		id, handler string
 		reason      authoring.NonProgrammableReason
 	}{
-		{"development.worker", "engine.development.batch.v4", authoring.ReasonCreativeImplementation},
+		{"development.worker", "engine.development.batch.v5", authoring.ReasonCreativeImplementation},
 		{"qa.design", "engine.qa.design.v5", authoring.ReasonSemanticJudgment},
 		{"qa.review", "engine.qa.review.rationale.v2", authoring.ReasonIndependentReview},
 		{"qa.execution", "engine.qa.execution.v3", authoring.ReasonSemanticJudgment},
 		{"validation.observation", "engine.validation.observation.v2", authoring.ReasonSemanticJudgment},
-		{"validation.gate", "engine.gate.v2", authoring.ReasonIndependentReview},
-		{"development.repair", "engine.repair.v5", authoring.ReasonCreativeImplementation},
+		{"validation.gate", "engine.gate.v3", authoring.ReasonIndependentReview},
+		{"development.repair", "engine.repair.v6", authoring.ReasonCreativeImplementation},
 		{"repair.verification", "engine.repair.verify.v2", authoring.ReasonSemanticJudgment},
 		{"merge.resolve", "engine.merge.resolve.v3", authoring.ReasonCreativeImplementation},
 	} {
@@ -141,19 +124,19 @@ func Workflow() *compiler.Definition {
 		if spec.reason == authoring.ReasonIndependentReview {
 			payload.ReviewSeries = authoring.ReviewSeriesUnaffiliated
 		}
-		step, err := authoring.NewAgentStep(header(spec.id, "validation", "review.readiness"), reviewIOWith("review.readiness"), payload)
+		step, err := authoring.NewAgentStep(header(spec.id, "validation", "review.readiness"), reviewIO(), payload)
 		must(spec.id, err)
 		steps = append(steps, step)
 	}
-	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryExternalCapability, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: time.Minute})
+	candidate, err := authoring.NewHostActionStep(header("candidate.materialize", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: "engine.candidate.review-range", Boundary: authoring.BoundaryExternalCapability, Operation: "op.candidate", Schema: "schema.candidate.review-range", Timeout: 0})
 	must("candidate.materialize", err)
 	steps = append(steps, candidate)
 	for _, name := range []string{"workspace", "cleanup"} {
-		step, err := authoring.NewHostActionStep(header(name+".materialize", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: authoring.HandlerID("engine." + name), Boundary: authoring.BoundaryExternalCapability, Operation: authoring.OperationID("op." + name), Schema: authoring.SchemaID("schema." + name), Timeout: time.Minute})
+		step, err := authoring.NewHostActionStep(header(name+".materialize", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: authoring.HandlerID("engine." + name), Boundary: authoring.BoundaryExternalCapability, Operation: authoring.OperationID("op." + name), Schema: authoring.SchemaID("schema." + name), Timeout: 0})
 		must(name, err)
 		steps = append(steps, step)
 	}
-	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), ioWith("review.readiness"), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 0})
+	check, err := authoring.NewHostActionStep(header("check.execute", "validation", "review.readiness"), typedIO(), authoring.HostActionSpec{Handler: "engine.check", Boundary: authoring.BoundaryExternalCapability, Operation: "op.check", Schema: "schema.check", Timeout: 0})
 	must("check.execute", err)
 	steps = append(steps, check)
 	return &compiler.Definition{Version: Version, EntryNode: entryNode, Steps: steps}
@@ -180,22 +163,14 @@ func header(id, node string, deps ...string) authoring.Header {
 	}
 }
 
-// ioWith 构造合法共享 IO 段：每个依赖步骤恰好一个 typed input binding
-// （inputs 集合 == dependencies 集合是 compiler 强制的不变量）。
-func ioWith(bindings ...string) authoring.IO {
-	inputs := make([]authoring.InputBinding, 0, len(bindings))
-	for _, b := range bindings {
-		inputs = append(inputs, authoring.InputBinding{
-			From: authoring.StepID(b), OutputField: "out", ToField: "in",
-		})
-	}
-	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+// typedIO 构造共享输入输出 codec 引用。
+func typedIO() authoring.IO {
+	return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 }
 
-// reviewIOWith 在 ioWith 之上加两条审查 agent 步共用的后置谓词引用
-// （agent 步必填的 worker result 合同）。
-func reviewIOWith(bindings ...string) authoring.IO {
-	review := ioWith(bindings...)
+// reviewIO 构造 agent 步的 codec 与 worker result 后置谓词引用。
+func reviewIO() authoring.IO {
+	review := typedIO()
 	review.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	return review
 }

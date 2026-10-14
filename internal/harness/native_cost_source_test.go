@@ -1,11 +1,13 @@
 package harness
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/cost"
@@ -15,10 +17,10 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript string) (facade.WorkerMaterial, string) {
+func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript string, configured ...map[string]any) (facade.WorkerMaterial, string) {
 	t.Helper()
 	stateDir := filepath.Join(root, facade.EngineNamespace, "run")
-	input := protocol.WorkerInput{Handler: "engine.gate.v2", RunID: "run", Provider: provider, Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", RunID: "run", Provider: provider, Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +53,11 @@ func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript str
 		}
 	}
 	request := map[string]any{"provider": provider, "workspace": root, "read_only": true, "schema": schema, "engine": map[string]any{"root": root, "runId": "run", "workerMaterial": ref, "resumeActionId": ""}}
+	if len(configured) > 0 {
+		for key, value := range configured[0] {
+			request[key] = value
+		}
+	}
 	write(filepath.Join(directory, "native-request.json"), request)
 	if transcript == "" {
 		transcript = filepath.Join(directory, "native-events.jsonl")
@@ -212,5 +219,146 @@ func TestManagedCostSourcesRetainKnownUsageAcrossUnavailableInvocations(t *testi
 				}
 			})
 		}
+	}
+}
+
+func workbuddyMeteredNativeJob(t *testing.T, root, invocation, id string, usage, rawUsage map[string]any) string {
+	t.Helper()
+	initialization := map[string]any{"type": "system", "subtype": "init", "session_id": "session", "uuid": "init", "cwd": root, "model": "selected-model"}
+	printUsage := map[string]any{"input_tokens": usage["inputTokens"], "output_tokens": usage["outputTokens"]}
+	if rawUsage != nil {
+		printUsage["cache_read_input_tokens"] = rawUsage["cache_read_input_tokens"]
+		printUsage["cache_creation_input_tokens"] = rawUsage["cache_creation_input_tokens"]
+	} else {
+		var cached int
+		for _, detail := range listOf(usage["inputTokensDetails"]) {
+			cached += intOf(getOf(detail, "cached_tokens"))
+		}
+		printUsage["cache_read_input_tokens"] = cached
+	}
+	events := []any{initialization, map[string]any{"type": "assistant", "uuid": id, "session_id": "session", "message": map[string]any{"usage": printUsage}}, map[string]any{"type": "result", "subtype": "success", "uuid": "result-" + id, "session_id": "session", "is_error": false}}
+	var stream []byte
+	for _, event := range events {
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream = append(stream, append(body, '\n')...)
+	}
+	configRoot := filepath.Join(root, "native-config")
+	_, directory := meteredNativeJob(t, root, "workbuddy", invocation, string(bytes.TrimSuffix(stream, []byte{10})), "", map[string]any{"binding": map[string]any{"environment": map[string]any{"CODEBUDDY_CONFIG_DIR": configRoot}}})
+	store := filepath.Join(configRoot, "projects", "original-project")
+	if err := os.MkdirAll(store, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]any{"usage": usage}
+	if rawUsage != nil {
+		data["rawUsage"] = rawUsage
+	}
+	file, err := os.OpenFile(filepath.Join(store, "session.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(file).Encode(map[string]any{"id": id, "type": "message", "role": "assistant", "providerData": data, "content": []any{map[string]any{"type": "text", "text": "unrelated SDK context"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-source.json"), map[string]any{"sessionId": "session", "workspace": root, "nativeWorkspace": root, "selection": streamSelection(initialization), "process": map[string]any{"exit_code": 0, "error": ""}}); err != nil {
+		t.Fatal(err)
+	}
+	source, err := streamObserve(workbuddyStream, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func TestManagedWorkBuddyCostSourcesUseInvocationSDKUsageAndSharedRecovery(t *testing.T) {
+	root := t.TempDir()
+	normalized := map[string]any{"inputTokens": 100, "outputTokens": 7, "inputTokensDetails": []any{map[string]any{"cached_tokens": 40}}}
+	first := workbuddyMeteredNativeJob(t, root, "one", "native-first", normalized, nil)
+	second := workbuddyMeteredNativeJob(t, root, "two", "native-next", map[string]any{"inputTokens": 4, "outputTokens": 5, "inputTokensDetails": []any{}}, map[string]any{"input_tokens": 4, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 3})
+	workbuddyMeteredNativeJob(t, root, "replay", "native-first", normalized, nil)
+	if err := lifecycle.BindDispatchWithProvider(root, "run", "action", "session", "workbuddy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeCompletion(root, "run", "action", "workbuddy", "session"); err != nil {
+		t.Fatal(err)
+	}
+	bridge := facade.CostSourceBridge(root, "run", NativeResultEvidence)
+	ref := protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: "workbuddy", Correlation: "session"}
+	for range 2 {
+		got := bridge(ref)
+		want := cost.Usage{InputCacheMissTokens: 64, InputCacheHitTokens: 41, OutputTokens: 12}
+		if got.State != protocol.CostSourceReady || got.Usage != want {
+			t.Fatalf("invocation SDK source=%#v want=%+v", got, want)
+		}
+	}
+	projection, err := os.ReadFile(filepath.Join(first, "native-usage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(projection, []byte("native-next")) || bytes.Contains(projection, []byte("unrelated SDK context")) {
+		t.Fatalf("usage projection copied other invocation/body: %s", projection)
+	}
+	receipt, err := os.ReadFile(filepath.Join(second, "source.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(second, "source.json")); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := workbuddyReconcile(second, map[string]any{"exit_code": 0, "error": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := canonicalBody(recovered)
+	if err != nil || !bytes.Equal(encoded, receipt) {
+		t.Fatalf("recovery changed source bytes: %s != %s (%v)", encoded, receipt, err)
+	}
+	// The selected original evidence remains valid after the mutable session is gone.
+	if err := os.RemoveAll(filepath.Join(root, "native-config")); err != nil {
+		t.Fatal(err)
+	}
+	got := bridge(ref)
+	if got.State != protocol.CostSourceReady || got.Usage != (cost.Usage{InputCacheMissTokens: 64, InputCacheHitTokens: 41, OutputTokens: 12}) {
+		t.Fatalf("original usage evidence lost source qualification: %#v", got)
+	}
+}
+
+func TestWorkBuddyMissingSDKUsageRetainsSourceReason(t *testing.T) {
+	root := t.TempDir()
+	directory := workbuddyMeteredNativeJob(t, root, "one", "native-first", map[string]any{"inputTokens": 100, "outputTokens": 7, "inputTokensDetails": []any{}}, nil)
+	if err := os.Remove(filepath.Join(directory, "native-usage.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "native-config")); err != nil {
+		t.Fatal(err)
+	}
+	source, err := streamObserve(workbuddyStream, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := getOf(getOf(source, "usage_evidence"), "unavailableReason")
+	if source["transcript"] != nil || textOf(reason) == "" {
+		t.Fatalf("missing SDK source fabricated usage or lost reason: %#v", source)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.BindDispatchWithProvider(root, "run", "action", "session", "workbuddy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeCompletion(root, "run", "action", "workbuddy", "session"); err != nil {
+		t.Fatal(err)
+	}
+	resolved := facade.CostSourceBridge(root, "run", NativeResultEvidence)(protocol.CostSourceRef{RunID: "run", ActionID: "action", Provider: "workbuddy", Correlation: "session"})
+	if resolved.State != protocol.CostSourceUnavailable || !strings.Contains(resolved.Reason, textOf(reason)) {
+		t.Fatalf("missing SDK reason did not reach original cost owner: %#v", resolved)
 	}
 }

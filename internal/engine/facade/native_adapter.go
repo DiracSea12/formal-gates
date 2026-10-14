@@ -94,7 +94,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 			if _, owned := os.Stat(filepath.Join(directory, "owner")); owned == nil {
 				event, eventErr := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:UNKNOWN:"+id), id, operation, state.RunProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
 				if eventErr == nil {
-					_, eventErr = f.engine.Submit(event, emptyFingerprint())
+					_, eventErr = f.engine.Submit(event, protocol.Observation{})
 				}
 				return false, errors.Join(err, eventErr)
 			}
@@ -106,7 +106,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 		if operation == "op.check" && evidence.observedEffect {
 			return false, nil
 		}
-		if (aborted || state.ResetPending()) && operation != "op.cleanup" {
+		if (aborted || state.ResetPending() || state.NodeContinuationWithdraws(intent) || state.WorkspaceMirrorSuperseded(intent, f.definition)) && operation != "op.cleanup" {
 			var observed protocol.HostActionObservation
 			if params.Promotion != nil {
 				prefix, err := f.promotionPrefix(*params.Promotion)
@@ -121,7 +121,11 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 				}
 				observed.Resource = &resource
 			}
-			_, _, err := f.engine.ReconcileHostAction(id, observed.Digest(), false, false, emptyFingerprint(), observed)
+			input := protocol.Observation{}
+			if observed.Promotion != nil {
+				input = f.promotionObservation(*observed.Promotion, f.observePromotion)
+			}
+			_, _, err := f.engine.ReconcileHostAction(id, observed.Digest(), false, false, input, observed)
 			return err == nil, err
 		}
 		return false, nil
@@ -134,7 +138,7 @@ func (f *Facade) completeNativeIntent(state *protocol.State, intent protocol.Hos
 	if err != nil {
 		return false, err
 	}
-	_, err = f.engine.Submit(event, emptyFingerprint())
+	_, err = f.engine.Submit(event, evidence.observation)
 	return err == nil, err
 }
 
@@ -162,7 +166,12 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 		resource = s.NativeResources[p.WorkspaceID]
 		integration, integrationBase = p.Integration, p.Base
 	}
-	if resource.ID == "" || s.NativeResources[resource.ID] != resource {
+	registered := s.NativeResources[resource.ID]
+	resourceMatches := registered == resource
+	if intent.Adapter.Operation == "op.workspace" {
+		resourceMatches = protocol.SameWorkspaceInput(registered, resource)
+	}
+	if resource.ID == "" || !resourceMatches {
 		return protocol.ResourceObservation{}, fmt.Errorf("native observation has no original registered resource")
 	}
 	o := protocol.ResourceObservation{ParametersDigest: intent.PayloadDigest, Resource: resource}
@@ -192,11 +201,6 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 			if err != nil {
 				return o, err
 			}
-			entries, err := native.IndexEntries()
-			if err != nil {
-				return o, err
-			}
-
 			observation, err := native.ObserveIntegration(integrationBase, integration.Incoming)
 			if err != nil {
 				return o, err
@@ -205,7 +209,7 @@ func (f *Facade) observeResource(s *protocol.State, intent protocol.HostActionIn
 			if native.Name() == "git" {
 				mergeHead = observation.Lineage
 			}
-			o.Merge = &protocol.IntegrationEvidence{Prefix: integrationBase, Incoming: integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: entries}
+			o.Merge = &protocol.IntegrationEvidence{Prefix: integrationBase, Incoming: integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: observation.Entries}
 
 		} else {
 			prefix, err = observeNativePrefix(native)
@@ -225,6 +229,7 @@ type nativeResult struct {
 	// A precise native effect can precede its local ref or workspace finish.
 	// This observation never admits a receipt or authorizes another writer.
 	observedEffect bool
+	observation    protocol.Observation
 	Workspace      *protocol.WorkspaceEvidence
 	Candidate      *protocol.CandidateEvidence
 	Cleanup        *protocol.WorkspaceCleanupReceipt
@@ -290,7 +295,7 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 		}
 		event, receiptErr := protocol.NewAdapterHostActionReceiptEvent(protocol.EventID("native:"+status+":"+intent.ActionID), intent.ActionID, intent.Adapter.Operation, s.RunProvider, intent.Correlation, intent.PayloadDigest, status, class, map[string]any{})
 		if receiptErr == nil {
-			_, receiptErr = f.engine.Submit(event, emptyFingerprint())
+			_, receiptErr = f.engine.Submit(event, protocol.Observation{})
 		}
 		err = errors.Join(executionErr, observationErr, receiptErr)
 	}()
@@ -303,8 +308,9 @@ func (f *Facade) nativeEvidence(s *protocol.State, intent protocol.HostActionInt
 		if err := decodeNativeParams(intent, &p); err != nil {
 			return nativeResult{}, false, err
 		}
-		r, ok := s.NativeResources[p.Resource.ID]
-		if !ok || r != p.Resource {
+		r := p.Resource
+		registered, ok := s.NativeResources[r.ID]
+		if !ok || !protocol.SameWorkspaceInput(registered, r) {
 			return nativeResult{}, false, fmt.Errorf("workspace intent is not the registered resource")
 		}
 		exists, err := f.observeWorktree(r.Path, r.Source, r.Handle)
@@ -566,9 +572,9 @@ func (f *Facade) injectRequirements(s *protocol.State, p protocol.WorkspaceParam
 		if err == nil && requirementContentRevision(existing) == revision {
 			continue
 		}
-		if err == nil && !(isRequirement && p.Resource.Role == "candidate" && p.Resource.Source == s.RequirementAssemblySource()) {
-			// Committed candidate content remains authoritative when development also
-			// owns an intake artifact such as a source file.
+		if err == nil && !isRequirement {
+			// Committed content remains authoritative for development-owned intake
+			// artifacts. The formal requirement is bound to its issued revision.
 			entry, entryErr := f.vcs.At(p.Resource.Path, p.Resource.Handle).Entry("HEAD", artifact.Path)
 			if entryErr != nil {
 				return false, entryErr

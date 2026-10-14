@@ -3,7 +3,6 @@ package facade
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +26,13 @@ import (
 )
 
 func testReceipt() IntakeConfirmationReceipt {
+	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	return IntakeConfirmationReceipt{
 		Source:            DefaultIntakeSource,
 		Authority:         DefaultIntakeAuthority,
 		Transport:         DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument))),
-		Artifacts:        []IntakeArtifact{{Path: "requirements.md", Revision: fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))}},
+		RequirementSource: "requirements.md", RequirementRevision: revision,
+		Artifacts:        []IntakeArtifact{{Path: "requirements.md", Revision: revision}},
 		SolutionRevision: "solution-rev", SolutionDigest: "sha256:solution",
 	}
 }
@@ -114,15 +114,35 @@ func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 	receipt := testReceipt()
 	receipt.RequirementRevision = ""
 	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-		RunID:            "invalid-intake",
+		RunID: "invalid-intake", Route: "lightweight",
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
-	if err == nil || err.Error() == "" || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
+	if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
 		t.Fatalf("invalid receipt error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(statErr) {
 		t.Fatalf("invalid receipt created engine namespace: %v", statErr)
+	}
+}
+
+func TestStartRequiresExplicitRouteBeforeRunWrite(t *testing.T) {
+	for _, route := range []string{"", " "} {
+		t.Run(fmt.Sprintf("route=%q", route), func(t *testing.T) {
+			root := t.TempDir()
+			admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
+			for attempt := 0; attempt < 2; attempt++ {
+				f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
+					RunID: "explicit-route", Route: route, IntakeConfirmationReceipt: testReceipt(),
+				}, Admission: admission})
+				if err == nil || !strings.Contains(err.Error(), "route is required; choose regular or lightweight") || f != nil || run.RunID != "" {
+					t.Fatalf("missing route started a run: %+v %v", run, err)
+				}
+				if _, err := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(err) {
+					t.Fatalf("missing route wrote run files: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -318,10 +338,10 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	if err != nil {
 		t.Fatalf("intake digest: %v", err)
 	}
-	if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, emptyFingerprint()); err != nil {
+	if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, protocol.Observation{}); err != nil {
 		t.Fatalf("record intake receipt: %v", err)
 	}
-	if _, err := f.engine.CompleteAll(emptyFingerprint()); err != nil {
+	if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
 		t.Fatalf("complete engine: %v", err)
 	}
 	run, err := f.project()
@@ -381,13 +401,11 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	}
 }
 
-func TestIntakeDigestCanonicalizesArtifactOrderAndIgnoresTimestamps(t *testing.T) {
+func TestIntakeDigestCanonicalizesArtifactOrderAndBindsAuthorityAndTransport(t *testing.T) {
 	left := testReceipt()
 	left.Artifacts = append(left.Artifacts, IntakeArtifact{Path: "design.md", Revision: "design-rev"})
-	left.ConfirmedAt = "2026-01-01T00:00:00Z"
 	right := left
 	right.Artifacts = []IntakeArtifact{{Path: "design.md", Revision: "design-rev"}, {Path: "requirements.md", Revision: left.RequirementRevision}}
-	right.ConfirmedAt = "2027-01-01T00:00:00Z"
 	a, err := IntakeDigest(left)
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +415,7 @@ func TestIntakeDigestCanonicalizesArtifactOrderAndIgnoresTimestamps(t *testing.T
 		t.Fatal(err)
 	}
 	if a != b {
-		t.Fatalf("canonical digest differs by artifact order/timestamp: %s vs %s", a, b)
+		t.Fatalf("canonical digest differs by artifact order: %s vs %s", a, b)
 	}
 	changedAuthority := left
 	changedAuthority.Authority = IntakeAuthority("other-driver")
@@ -429,21 +447,16 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "design.md"), solution, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	revision := func(data []byte) string {
-		sum := sha256.Sum256(data)
-		return hex.EncodeToString(sum[:])
+	preview, err := PrepareIntake(root, "requirements.md", "design.md", nil, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	receipt := IntakeConfirmationReceipt{
-		Source: DefaultIntakeSource, Authority: DefaultIntakeAuthority, Transport: DefaultIntakeTransport,
-		RequirementSource: "./requirements.md", RequirementRevision: revision(requirement),
-		Artifacts: []IntakeArtifact{
-			{Path: "./requirements.md", Revision: revision(requirement)},
-			{Path: "design.md", Revision: revision(solution)},
-		},
-		SolutionRevision: revision(solution), SolutionDigest: "sha256:" + revision(solution),
-	}
+	receipt := preview.IntakeCandidate
+	receipt.RequirementSource = "./requirements.md"
+	receipt.Artifacts[0], receipt.Artifacts[1] = receipt.Artifacts[1], receipt.Artifacts[0]
+	receipt.Artifacts[0].Path = "./requirements.md"
 	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
-		RunID: "canonical-artifacts", DefinitionSource: DefaultDefinitionSource,
+		RunID: "canonical-artifacts", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
@@ -487,7 +500,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	}
 	receipt.SolutionDigest = "sha256:" + fmt.Sprintf("%064d", 0)
 	_, _, err = Start(StartOptions{Root: badRoot, ArtifactRoot: badRoot, Request: StartRequest{
-		RunID: "bad-solution-digest", DefinitionSource: DefaultDefinitionSource,
+		RunID: "bad-solution-digest", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, badRoot, "target-1", "sha256:package", DefaultProvider)})
 	if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
@@ -514,7 +527,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
+	engine, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 4})
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
@@ -528,10 +541,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 		Artifacts:        []protocol.IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 		SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 	}
-	fp, err := engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
-	}
+	fp := protocol.Observation{}
 	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -542,6 +552,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 		root: root, runID: runID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"),
 		store: store, engine: engine, envelope: Envelope{}, definition: cd, capacity: 4, admission: *admission,
 	}
+	// 预建 promotion 锁文件：生产的等待式开锁不自建文件（正常由 Start 建立）。
 	release, err := coordination.AcquirePath(f.promotionLockPath(), promotionLockDescription)
 	if err != nil {
 		t.Fatal(err)
@@ -552,8 +563,8 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 
 // TestFacadeProjectsThePendingRequirementAsk：修订屏障在位时，未决需求变
 // 化 Ask 即 run 的当前外部边界——Show/Status/Next 呈 ask 面与确认包而不
-// 报错，Drive 冻结签发也不报错（等待用户而非错误）；Ask 解决后投影恢复
-// 常规边界。
+// 报错，Drive 冻结签发也不报错（等待用户而非错误）；放弃后断言屏障解除
+// 与需求确认包投影消失。
 func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 	f := newEngineRouteFacade(t, "pending-ask-face")
 	pkg := protocol.RequirementDecisionPackage{
@@ -600,7 +611,7 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 	if driven.PendingRequirementAsk == nil {
 		t.Fatal("drive during the barrier lost the ask face")
 	}
-	// 放弃变更：屏障解除，投影恢复常规边界。
+	// 放弃变更：断言屏障解除、确认包投影消失。
 	token, err := f.Freshness("req-face-ask")
 	if err != nil {
 		t.Fatalf("freshness: %v", err)

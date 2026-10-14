@@ -43,7 +43,7 @@ func nativeToolFixture(t *testing.T) (string, string) {
 
 func callWorkspace(t *testing.T, tools *nativeWorkspaceTools, args string) map[string]any {
 	t.Helper()
-	value, err := tools.call(json.RawMessage(args))
+	value, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(args))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,13 +68,13 @@ func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
 		t.Fatal(list)
 	}
 	copy := json.RawMessage(`{"action":"copy","listing":1,"entry":2,"targetListing":1,"targetEntry":1,"name":"copy.bin"}`)
-	if _, err := tools.call(copy); err != nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, copy); err != nil {
 		t.Fatal(err)
 	}
 	if copied, err := os.ReadFile(filepath.Join(workspace, "destination", "copy.bin")); err != nil || !bytes.Equal(copied, body) {
 		t.Fatalf("copied original bytes: %x %v", copied, err)
 	}
-	if _, err := tools.call(copy); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, copy); err == nil {
 		t.Fatal("repeated copy overwrote its existing target")
 	}
 	continued := filepath.Join(filepath.Dir(directory), "continued")
@@ -99,10 +99,10 @@ func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "original.bin")); !os.IsNotExist(err) {
 		t.Fatal("move left its original source", err)
 	}
-	if _, err := resumed.call(json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"directory-copy"}`)); err == nil {
+	if _, err := resumed.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"directory-copy"}`)); err == nil {
 		t.Fatal("file transfer recursively copied a directory")
 	}
-	if _, err := resumed.call(json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"written.bin","content":"model bytes"}`)); err == nil {
+	if _, err := resumed.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"copy","listing":1,"entry":1,"name":"written.bin","content":"model bytes"}`)); err == nil {
 		t.Fatal("file transfer accepted model-supplied bytes")
 	}
 }
@@ -165,7 +165,7 @@ func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
 	if listing["listing"] != 3 || len(recovered.facts[0].Paths) != 1 || recovered.facts[0].RequestDigest != tools.requestDigest {
 		t.Fatalf("published facts overwritten: %v %+v", listing, recovered.facts)
 	}
-	if _, err := recovered.call(json.RawMessage(`{"action":"replace","read":2,"from":1,"to":1,"content":"stale"}`)); err == nil {
+	if _, err := recovered.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"replace","read":2,"from":1,"to":1,"content":"stale"}`)); err == nil {
 		t.Fatal("changed file reused stale read bytes")
 	}
 }
@@ -266,11 +266,11 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	callWorkspace(t, readTools, `{"action":"list"}`)
-	if _, err := readTools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"unauthorized"}`)); err == nil {
+	if _, err := readTools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"extra.txt","content":"unauthorized"}`)); err == nil {
 		t.Fatal("read-only action wrote a file")
 	}
 	for _, action := range []string{"copy", "move"} {
-		if _, err := readTools.call(json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil {
+		if _, err := readTools.invoke(nativeWorkspaceTool, json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil {
 			t.Fatalf("read-only action allowed %s", action)
 		}
 	}
@@ -280,11 +280,11 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "withdrawn"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tools.call(json.RawMessage(`{"action":"create","name":"extra.txt","content":"late"}`)); err == nil || !strings.Contains(err.Error(), "withdrawn") {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"create","name":"extra.txt","content":"late"}`)); err == nil || !strings.Contains(err.Error(), "withdrawn") {
 		t.Fatalf("withdrawn action bypassed original admission: %v", err)
 	}
 	for _, action := range []string{"copy", "move"} {
-		if _, err := tools.call(json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil || !strings.Contains(err.Error(), "withdrawn") {
+		if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(fmt.Sprintf(`{"action":%q,"listing":1,"entry":1,"name":"extra.txt"}`, action))); err == nil || !strings.Contains(err.Error(), "withdrawn") {
 			t.Fatalf("withdrawn action allowed %s: %v", action, err)
 		}
 	}
@@ -301,7 +301,7 @@ func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *tes
 	}
 	objectOrEmpty(request)["read_only"] = true
 	materialPath := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
-	if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: protocol.WorkerInput{Handler: "engine.gate.v2", Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}}}}); err != nil {
+	if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Pending: protocol.PendingAction{ActionID: "issued-action"}, Validation: &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
@@ -424,7 +424,7 @@ func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
 	if row["entry"] != nil || row["baseText"] != nil || row["text"] != nil {
 		t.Fatal("comparison duplicates file content", row)
 	}
-	if _, err := tools.call(json.RawMessage(`{"action":"comparison","base":"different"}`)); err == nil {
+	if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"comparison","base":"different"}`)); err == nil {
 		t.Fatal("model supplied a mechanical snapshot reference")
 	}
 }
@@ -451,7 +451,7 @@ func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(
 	errors := make(chan error, 2)
 	for _, tools := range []*nativeWorkspaceTools{first, second} {
 		go func(tools *nativeWorkspaceTools) {
-			value, err := tools.call(json.RawMessage(`{"action":"list"}`))
+			value, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"list"}`))
 			if err != nil {
 				errors <- err
 				return
@@ -647,7 +647,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 	if err := os.Symlink(owned, filepath.Join(workspace, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []string{"engine.gate.v2", "engine.qa.review.rationale.v2"} {
+	for _, role := range []string{"engine.gate.v3", "engine.qa.review.rationale.v2"} {
 		t.Run(role, func(t *testing.T) {
 			owner := t.TempDir()
 			directory := filepath.Join(owner, "call")
@@ -655,7 +655,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				t.Fatal(err)
 			}
 			validation := &protocol.ValidationInput{Workspace: &protocol.NativeResource{Path: workspace}}
-			if role == "engine.gate.v2" {
+			if role == "engine.gate.v3" {
 				validation.Gate = &protocol.GateInput{BaseSnapshot: base, Candidate: coverage.ValidationCandidate{Identity: head}, TestOwnedPaths: []string{owned}}
 			} else {
 				validation.ReviewBase = base
@@ -692,7 +692,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				return value, false
 			}
 			searched, failed := rpc(map[string]any{"action": "search", "query": "QA case"})
-			if failed || (len(listOf(searched["matches"])) == 0) != (role == "engine.gate.v2") {
+			if failed || (len(listOf(searched["matches"])) == 0) != (role == "engine.gate.v3") {
 				t.Fatal("search violates the original test-owned role boundary", role, searched)
 			}
 			comparison, failed := rpc(map[string]any{"action": "comparison"})
@@ -711,7 +711,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			if ownedRow == nil {
 				t.Fatal("owned path identity disappeared", comparison)
 			}
-			if role == "engine.gate.v2" {
+			if role == "engine.gate.v3" {
 				if len(ownedRow) != 3 || ownedRow["testOwned"] != true {
 					t.Fatalf("gate comparison leaks owned body or metadata: %v", ownedRow)
 				}
@@ -731,11 +731,11 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				t.Fatal("owned parent directory hidden")
 			}
 			entry := objectOrEmpty(listOf(checks["entries"])[0])
-			if role == "engine.gate.v2" && entry["testOwned"] != true {
+			if role == "engine.gate.v3" && entry["testOwned"] != true {
 				t.Fatal("listing lost exclusion ownership", entry)
 			}
 			_, failed = rpc(map[string]any{"action": "read", "listing": checks["listing"], "entry": entry["entry"]})
-			if failed != (role == "engine.gate.v2") {
+			if failed != (role == "engine.gate.v3") {
 				t.Fatal("owned read violates role boundary", role, failed)
 			}
 			ordinary, failed := rpc(map[string]any{"action": "read", "listing": listing["listing"], "entry": entries["developer_test.txt"]["entry"]})
@@ -743,7 +743,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				t.Fatal("ordinary developer tests not readable", ordinary)
 			}
 			_, failed = rpc(map[string]any{"action": "read", "listing": listing["listing"], "entry": entries["alias"]["entry"]})
-			if failed != (role == "engine.gate.v2") {
+			if failed != (role == "engine.gate.v3") {
 				t.Fatal("resolved owned alias violates role boundary", role)
 			}
 			tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
@@ -751,7 +751,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, directErr := tools.path(owned, true)
-			if (directErr != nil) != (role == "engine.gate.v2") {
+			if (directErr != nil) != (role == "engine.gate.v3") {
 				t.Fatal("direct owned path violates role boundary")
 			}
 			facts := append([]nativeToolFact(nil), tools.facts...)
@@ -764,7 +764,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 			}
 			directory = continued
 			_, failed = rpc(map[string]any{"action": "read", "listing": checks["listing"], "entry": entry["entry"]})
-			if failed != (role == "engine.gate.v2") {
+			if failed != (role == "engine.gate.v3") {
 				t.Fatal("resumed owned read violates role boundary")
 			}
 			resumed, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
@@ -776,7 +776,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 					t.Fatal("resume changed published fact identity")
 				}
 			}
-			if role == "engine.gate.v2" {
+			if role == "engine.gate.v3" {
 				for _, fact := range resumed.facts {
 					if bytes.Contains(fact.Content, []byte("QA case body")) {
 						t.Fatal("gate location facts contain QA body")
@@ -840,7 +840,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	for _, fact := range resumed.facts {
 		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
 	}
-	input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","test":{"read":%d,"symbol":2}}],"coverage":[]}`, originalRead))
 	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
 	if err != nil {
@@ -855,13 +855,15 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 	if qaCase.TestRef != "sample_test.go::TestChosen" {
 		t.Fatal("result used another read's symbol table", qaCase.TestRef)
 	}
-	operations, err := coverage.ResolveCaseOperations(workspace, qaCase)
-	if err != nil || len(operations) != 1 {
+	if err := coverage.ValidateGoTestReference(workspace, qaCase.TestRef); err != nil {
+		t.Fatal("selected test declaration is invalid", err)
+	}
+	operation, err := coverage.GoTestOperation(qaCase.TestRef)
+	if err != nil {
 		t.Fatal("selected test cannot execute", err)
 	}
-	operation := operations[0]
 	cmd := exec.Command(operation.Operation.Argv[0], operation.Operation.Argv[1:]...)
-	cmd.Dir = operation.Directory
+	cmd.Dir = filepath.Join(workspace, operation.Directory)
 	output, err := cmd.CombinedOutput()
 	if err != nil || coverage.GoTestExecutionResult(output, operation.GoTestName) != "pass" {
 		t.Fatalf("original selected test did not actually pass: %v\n%s", err, output)
@@ -894,7 +896,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 	material.Input.Scope = &protocol.WorkerScope{Owner: "slice-2", AcceptanceOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge"}}
 	originalScope := material.Input.Scope
 	os.WriteFile(filepath.Join(workspace, "requirements.md"), []byte("unconfirmed edits"), 0600)
-	for _, handler := range []string{"engine.development.batch.v4", "engine.gate.v2", "engine.validation.observation.v2", "engine.repair.v5", "engine.repair.verify.v2"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.gate.v3", "engine.validation.observation.v2", "engine.repair.v6", "engine.repair.verify.v2"} {
 		t.Run(handler, func(t *testing.T) {
 			material.Input.Handler = handler
 			if err := writeAtomicJSON(path, material); err != nil {
@@ -915,7 +917,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 			if !reflect.DeepEqual(partial["lines"], []string{"完整确认正文。\n"}) {
 				t.Fatalf("wrong original line range: %v", partial)
 			}
-			if _, err := tools.call(json.RawMessage(`{"action":"requirement","from":2,"to":9}`)); err == nil {
+			if _, err := tools.invoke(nativeWorkspaceTool, json.RawMessage(`{"action":"requirement","from":2,"to":9}`)); err == nil {
 				t.Fatal("out-of-range original read accepted")
 			}
 		})

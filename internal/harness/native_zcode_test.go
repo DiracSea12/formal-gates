@@ -9,8 +9,10 @@ package harness
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -240,7 +242,7 @@ func TestZcodeBundledCatalogueAndEnvironment(t *testing.T) {
 	}
 
 	// The pinned catalogue is read back from the binding environment.
-	if got := zcodePinnedCatalogue(map[string]any{"environment": map[string]any{
+	if got := zcodePinnedCatalogue(map[string]any{"cataloguePinned": true, "environment": map[string]any{
 		zcodeBuiltinCatalogueEnv: "/tmp/elsewhere.json"}}); got != "/tmp/elsewhere.json" {
 		t.Fatalf("pinned = %q", got)
 	}
@@ -266,7 +268,7 @@ func zcodeTestCatalogue(t *testing.T, revision string) string {
 }
 
 // zcodeTestStore writes the host credential store with the given key order.
-// The values are opaque here and are never read by the adapter.
+// Each API-key entry names an active account; unrelated keys remain unchanged.
 func zcodeTestStore(t *testing.T, keys []string) string {
 	t.Helper()
 	data := t.TempDir()
@@ -279,6 +281,17 @@ func zcodeTestStore(t *testing.T, keys []string) string {
 		if index > 0 {
 			body.WriteString(",")
 		}
+		if strings.HasPrefix(key, "account-provider:coding-plan:") && strings.HasSuffix(key, ":api-key") {
+			provider, account, found := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(key, "account-provider:coding-plan:"), ":api-key"), ":account:")
+			if !found {
+				t.Fatal("account fixture key has no identity", key)
+			}
+			identity, err := json.Marshal(account)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body.WriteString(`"account-provider:` + provider + `:identity":` + string(identity) + `,`)
+		}
 		body.WriteString(`"` + key + `":"cipher-text"`)
 	}
 	body.WriteString("}")
@@ -287,6 +300,49 @@ func zcodeTestStore(t *testing.T, keys []string) string {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func zcodeTestCredentialHelper(t *testing.T) {
+	t.Helper()
+	source, err := os.ReadFile(zcodeCredentialHelper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper, err := zcodeCredentialHelperPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, readErr := os.ReadFile(helper)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, source, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if readErr == nil {
+			if err := os.WriteFile(helper, previous, 0600); err != nil {
+				t.Error(err)
+			}
+		} else if err := os.Remove(helper); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+// zcodeTestAccountClient uses the bound Node executable and the package's real
+// credential reader. Its store uses the same native path as request auth.
+func zcodeTestAccountClient(t *testing.T, data string) *zcodeClient {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	zcodeTestCredentialHelper(t)
+	return &zcodeClient{executable: resolveNativePath(node), hostData: data, environment: map[string]string{"HOME": data, "ZCODE_DATA_BASE_DIR": data, zcodeCredentialHelperEnv: filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)}}
 }
 
 // TestZcodeBuiltinProviderRevision pins the revision format: the catalogue's
@@ -362,18 +418,18 @@ func TestZcodeAccountRulesAndProvisioning(t *testing.T) {
 		"account-provider:coding-plan:p9:account:u9:api-key",
 	})
 	t.Setenv("ZCODE_DATA_BASE_DIR", data)
-	provisioned, err := zcodeProvisionedAccountProviders(catalogue)
+	provisioned, err := zcodeProvisionedAccountProviders(catalogue, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Document order, api-key shape only, catalogue-declared only, deduped.
+	// Active identities in document order, each with its exact declared credential.
 	if len(provisioned) != 2 || provisioned[0] != "p2" || provisioned[1] != "p1" {
 		t.Fatalf("provisioned = %v", provisioned)
 	}
 
 	// No store at all: empty, never a refusal.
 	t.Setenv("ZCODE_DATA_BASE_DIR", t.TempDir())
-	if provisioned, err = zcodeProvisionedAccountProviders(catalogue); err != nil || len(provisioned) != 0 {
+	if provisioned, err = zcodeProvisionedAccountProviders(catalogue, zcodeTestAccountClient(t, zcodeHostDataDirectory())); err != nil || len(provisioned) != 0 {
 		t.Fatalf("absent store = %v %v", provisioned, err)
 	}
 
@@ -387,7 +443,7 @@ func TestZcodeAccountRulesAndProvisioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ZCODE_DATA_BASE_DIR", broken)
-	_, err = zcodeProvisionedAccountProviders(catalogue)
+	_, err = zcodeProvisionedAccountProviders(catalogue, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err == nil || err.Error() != "ZCODE_ACCOUNT_CONFIG: cannot read the host credential store "+
 		filepath.Join(broken, ".zcode", "v2", "credentials.json") {
 		t.Fatalf("broken store: %v", err)
@@ -396,7 +452,7 @@ func TestZcodeAccountRulesAndProvisioning(t *testing.T) {
 		[]byte("[1]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = zcodeProvisionedAccountProviders(catalogue)
+	_, err = zcodeProvisionedAccountProviders(catalogue, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err == nil || err.Error() != "ZCODE_ACCOUNT_CONFIG: the host credential store is not an index: "+
 		filepath.Join(broken, ".zcode", "v2", "credentials.json") {
 		t.Fatalf("non-index store: %v", err)
@@ -419,7 +475,7 @@ func TestZcodeAccountProviderConfiguration(t *testing.T) {
 	base := "zcode-builtin:7:" + zcodePathHash(t, resolved)
 
 	// No request, no host plan: the store's own order.
-	overlay, err := zcodeAccountProviderConfiguration(catalogue, nil)
+	overlay, err := zcodeAccountProviderConfiguration(catalogue, nil, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +496,7 @@ func TestZcodeAccountProviderConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay, err = zcodeAccountProviderConfiguration(catalogue, wanted)
+	overlay, err = zcodeAccountProviderConfiguration(catalogue, wanted, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +508,7 @@ func TestZcodeAccountProviderConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay, err = zcodeAccountProviderConfiguration(catalogue, other)
+	overlay, err = zcodeAccountProviderConfiguration(catalogue, other, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +522,7 @@ func TestZcodeAccountProviderConfiguration(t *testing.T) {
 		0o644); err != nil {
 		t.Fatal(err)
 	}
-	overlay, err = zcodeAccountProviderConfiguration(catalogue, nil)
+	overlay, err = zcodeAccountProviderConfiguration(catalogue, nil, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,9 +532,165 @@ func TestZcodeAccountProviderConfiguration(t *testing.T) {
 
 	// A host with nothing provisioned stays empty.
 	t.Setenv("ZCODE_DATA_BASE_DIR", t.TempDir())
-	overlay, err = zcodeAccountProviderConfiguration(catalogue, nil)
+	overlay, err = zcodeAccountProviderConfiguration(catalogue, nil, zcodeTestAccountClient(t, zcodeHostDataDirectory()))
 	if err != nil || overlay != nil {
 		t.Fatalf("empty host = %v %v", overlay, err)
+	}
+}
+
+func TestZcodeAccountProvisioningFollowsActiveIdentity(t *testing.T) {
+	catalogue := zcodeTestCatalogue(t, "7")
+	data := t.TempDir()
+	client := zcodeTestAccountClient(t, data)
+	store := client.environment[zcodeCredentialHelperEnv]
+	if err := os.MkdirAll(filepath.Dir(store), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, document, credential string
+	}{
+		{"login", `{"account-provider:p1:identity":"old@example.test","account-provider:coding-plan:p1:account:old%40example.test:api-key":"old-credential"}`, "old-credential"},
+		{"account-switch", `{"account-provider:p1:identity":"current@example.test","account-provider:coding-plan:p1:account:old%40example.test:api-key":"old-credential","account-provider:coding-plan:p1:account:current%40example.test:api-key":"current-credential"}`, "current-credential"},
+		{"logout", `{"account-provider:coding-plan:p1:account:old%40example.test:api-key":"old-credential"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(store, []byte(tc.document), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if got := zcodeRequestAuth(client.executable, "p1", "", client.environment); got != tc.credential {
+				t.Fatalf("native current-account credential = %q, want %q", got, tc.credential)
+			}
+			configuration, err := zcodeAccountProviderConfiguration(catalogue, nil, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.credential == "" {
+				if configuration != nil {
+					t.Fatalf("logged-out retained key granted account availability: %v", configuration)
+				}
+			} else if !valuesEqual(getOf(configuration, "providers"), []any{"p1"}) || !valuesEqual(getOf(getOf(getOf(getOf(configuration, "configuration"), "providers"), "p1"), "access"), map[string]any{"type": zcodeAccountAccessType, "entitled": true}) {
+				t.Fatalf("current account is missing from the overlay: %v", configuration)
+			}
+		})
+	}
+}
+
+// TestZcodeAccountProvisioningFollowsDesktopLogin pins the OAuth account
+// source a desktop login leaves behind: no identity entry exists, the current
+// account is the active family's user_info id -- one exact retained key, never
+// the first or last one -- and the overlay and the runtime-headers answer
+// spend that one account's credential. Skipped when node is absent.
+func TestZcodeAccountProvisioningFollowsDesktopLogin(t *testing.T) {
+	catalogue := zcodeTestCatalogue(t, "7")
+	nativeHome := t.TempDir()
+	t.Setenv("ZCODE_CREDENTIAL_SECRET", "")
+	t.Setenv(zcodeCredentialHelperEnv, "")
+	client := zcodeTestAccountClient(t, nativeHome)
+	store := client.environment[zcodeCredentialHelperEnv]
+	if err := os.MkdirAll(filepath.Dir(store), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := strings.Join([]string{"zcode-credential-fallback", runtime.GOOS, nativeHome, account.Username}, ":")
+	login := func(current string) map[string]string {
+		return map[string]string{
+			"oauth:active_provider": zcodeTestEncrypt(t, secret, "zhipu"),
+			"oauth:zhipu:user_info": zcodeTestEncrypt(t, secret,
+				`{"id": "`+current+`", "username": "someone", "displayName": "Someone"}`),
+			"account-provider:coding-plan:p1:account:u-a:api-key": zcodeTestEncrypt(t, secret, "credential-a"),
+			"account-provider:coding-plan:p1:account:u-b:api-key": zcodeTestEncrypt(t, secret, "credential-b"),
+			"account-provider:coding-plan:p1:account:u-c:api-key": zcodeTestEncrypt(t, secret, "credential-c"),
+		}
+	}
+	write := func(entries map[string]string) {
+		t.Helper()
+		raw, err := json.Marshal(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The current id addresses its own retained key; the id sits between two
+	// other retained accounts, so neither the first nor the last key is taken.
+	write(login("u-b"))
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", client.environment); got != "credential-b" {
+		t.Fatalf("desktop current-account credential = %q", got)
+	}
+	configuration, err := zcodeAccountProviderConfiguration(catalogue, nil, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration == nil || !valuesEqual(getOf(configuration, "providers"), []any{"p1"}) {
+		t.Fatalf("desktop login is missing from the overlay: %v", configuration)
+	}
+	// The runtime-headers answer spends the same account's credential, from
+	// the family the request itself carries.
+	reply, err := client.respond(zcodeRuntimeHeadersMethod, map[string]any{
+		"providerId":    "p1",
+		"accountAccess": map[string]any{"type": "zhipu-account", "accountType": "zhipu", "mode": "coding-plan", "entitled": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.status != "provider-runtime-headers-applied" ||
+		getOf(getOf(getOf(reply.payload, "result"), "requestAuth"), "apiKey") != "credential-b" {
+		t.Fatalf("runtime headers = %v %v", reply, err)
+	}
+	// The request carries no family and no identity entry names the account:
+	// no credential is spent.
+	reply, err = client.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "p1"})
+	if err != nil || reply.status != "provider-runtime-headers-unavailable" {
+		t.Fatalf("an uncarried family spent a credential: %v %v", reply, err)
+	}
+
+	// A current id without its own retained key borrows no other account's.
+	write(login("u-d"))
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", client.environment); got != "" {
+		t.Fatalf("a keyless account id spent another account's credential: %q", got)
+	}
+
+	// A login switch moves the current account to another retained key.
+	write(login("u-a"))
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", client.environment); got != "credential-a" {
+		t.Fatalf("desktop switched-account credential = %q", got)
+	}
+
+	// The active login belongs to another account system: this provider keeps
+	// no credential and the retained keys grant nothing.
+	other := login("u-b")
+	other["oauth:active_provider"] = zcodeTestEncrypt(t, secret, "zai")
+	write(other)
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", client.environment); got != "" {
+		t.Fatalf("another family's login spent a credential: %q", got)
+	}
+	if configuration, err = zcodeAccountProviderConfiguration(catalogue, nil, client); err != nil || configuration != nil {
+		t.Fatalf("another family's login granted account availability: %v %v", configuration, err)
+	}
+
+	// The login records are gone: retained keys alone grant nothing.
+	write(map[string]string{
+		"account-provider:coding-plan:p1:account:u-a:api-key": zcodeTestEncrypt(t, secret, "credential-a"),
+		"account-provider:coding-plan:p1:account:u-b:api-key": zcodeTestEncrypt(t, secret, "credential-b"),
+		"account-provider:coding-plan:p1:account:u-c:api-key": zcodeTestEncrypt(t, secret, "credential-c"),
+	})
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", client.environment); got != "" {
+		t.Fatalf("a logged-out store spent a credential: %q", got)
+	}
+	if configuration, err = zcodeAccountProviderConfiguration(catalogue, nil, client); err != nil || configuration != nil {
+		t.Fatalf("a logged-out store granted account availability: %v %v", configuration, err)
+	}
+
+	// Only the bound environment can read the login's records.
+	write(login("u-b"))
+	unbound := map[string]string{"ZCODE_DATA_BASE_DIR": nativeHome, zcodeCredentialHelperEnv: store}
+	if got := zcodeRequestAuth(client.executable, "p1", "zhipu", unbound); got != "" {
+		t.Fatal("parent environment silently decrypted another native environment")
 	}
 }
 
@@ -746,7 +958,7 @@ func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	z := &zcodeClient{executable: node, directory: directory}
+	z := &zcodeClient{executable: node, directory: directory, environment: map[string]string{zcodeCredentialHelperEnv: store}}
 	reply, err := z.respond(zcodeRuntimeHeadersMethod, map[string]any{"providerId": "p1"})
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,7 @@ var goldenPhaseEdges = []PhaseEdge{
 	{PhaseRepair, PhaseMainlineIntegration},
 	{PhaseRepair, PhaseSnapshotReady},
 	{PhaseRepair, PhaseTerminal},
+	{PhaseSliceReady, PhaseDevelopmentParallel},
 	{PhaseSliceReady, PhaseFinalizingCleanup},
 	{PhaseSliceReady, PhaseTerminal},
 	{PhaseSnapshotReady, PhaseFinalizingCleanup},
@@ -82,6 +84,8 @@ func TestPhaseTransitionsExhaustive(t *testing.T) {
 				}
 			} else if err == nil || PhaseCanTransition(from, to) {
 				t.Errorf("PhaseTransition(%s -> %s) accepted illegal edge", from, to)
+			} else if !strings.Contains(err.Error(), "illegal phase transition") {
+				t.Errorf("PhaseTransition(%s -> %s) error = %q, want illegal phase transition", from, to, err.Error())
 			}
 		}
 	}

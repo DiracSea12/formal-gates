@@ -27,6 +27,7 @@ func (s *State) allowanceFaces() (engineAllowance, ownerCost, tokenCap string) {
 // 必跑用例）、已用/剩余轮数、dispatch signature/TaskKey 与需求/快照/wave 上下文。
 type repairAskFace struct {
 	Members []repairAskMember
+	History []repairAskHistory
 
 	RequirementRevision string
 	DevelopmentSnapshot string
@@ -54,6 +55,22 @@ type repairAskTarget struct {
 	Gate          string
 	Status        string
 	RequiredCases []string
+}
+
+// repairAskHistory projects original validation and repair evidence without
+// treating a historical result as a current completion or changing its binding.
+type repairAskHistory struct {
+	Wave                string
+	RequirementRevision string
+	Generation          uint64
+	Candidate           coverage.ValidationCandidate
+	WaveScope           string
+	Status              string
+	Counted             bool
+	Targets             []repairAskTarget
+	Repair              *ValidationRepair
+	Results             []WorkerResult
+	Checks              []CheckEvidence
 }
 
 func (s *State) validationRequestBasis(r ValidationRequest) json.RawMessage {
@@ -154,6 +171,13 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 	}
 	if s.Validation != nil {
 		face.DevelopmentSnapshot = s.Validation.DevelopmentSnapshot
+		for i := range s.Validation.Waves {
+			prior := &s.Validation.Waves[i]
+			if prior.ID == work.wave.ID {
+				break
+			}
+			face.History = append(face.History, s.repairHistory(prior))
+		}
 		for _, key := range sortedTargetKeys(work.wave) {
 			target := work.wave.Targets[key]
 			face.Targets = append(face.Targets, repairAskTarget{
@@ -169,6 +193,79 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 		face.DispatchActionID = attempt.ActionID
 	}
 	return face
+}
+
+func (s *State) repairHistory(w *ValidationWave) repairAskHistory {
+	history := repairAskHistory{
+		Wave: w.ID, RequirementRevision: w.RequirementRevision, Generation: w.Generation,
+		Candidate: w.Candidate, WaveScope: string(w.Scope), Status: w.Status,
+		Counted: w.Counted, Repair: w.Repair,
+	}
+	targets := w.controlTargets()
+	slices.SortFunc(targets, func(a, b *ValidationTarget) int {
+		return strings.Compare(a.Task.String(), b.Task.String())
+	})
+	results := map[string]WorkerResult{}
+	for _, target := range targets {
+		history.Targets = append(history.Targets, repairAskTarget{
+			Task: target.Task.String(), Kind: target.Kind, Mode: string(target.Mode),
+			Gate: target.Gate, Status: target.Status, RequiredCases: target.RequiredCases,
+		})
+		if result, ok := s.Results[target.ResultAction]; ok {
+			results[result.ActionID] = result
+		}
+	}
+	for action, result := range s.Results {
+		v := result.Validation
+		if v != nil && v.Binding.WaveID == w.ID && (v.Development != nil || v.GranularityReview != nil) {
+			results[action] = result
+		}
+	}
+	actions := make([]string, 0, len(results))
+	for action := range results {
+		actions = append(actions, action)
+	}
+	slices.Sort(actions)
+	for _, action := range actions {
+		history.Results = append(history.Results, results[action])
+	}
+	type recordedCheck struct {
+		action, id string
+		evidence   CheckEvidence
+	}
+	var checks []recordedCheck
+	for action, receipt := range s.HostActionReceipts {
+		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
+			continue
+		}
+		intent, known := s.hostIntent(action)
+		if !known {
+			continue
+		}
+		parameters, err := checkParameters(intent)
+		result, recorded := results[parameters.SourceActionID]
+		if err != nil || !recorded || result.Validation == nil || result.Validation.Development == nil {
+			continue
+		}
+		var evidence CheckEvidence
+		if err := decodeAdapterValues(receipt, &evidence); err != nil {
+			continue
+		}
+		checks = append(checks, recordedCheck{action, parameters.Check.ID, evidence})
+	}
+	slices.SortFunc(checks, func(a, b recordedCheck) int {
+		if order := strings.Compare(a.evidence.SourceActionID, b.evidence.SourceActionID); order != 0 {
+			return order
+		}
+		if order := strings.Compare(a.id, b.id); order != 0 {
+			return order
+		}
+		return strings.Compare(a.action, b.action)
+	})
+	for _, check := range checks {
+		history.Checks = append(history.Checks, check.evidence)
+	}
+	return history
 }
 
 // rebindValidationAsks binds every unresolved validation Ask to the committed
@@ -342,8 +439,6 @@ func (e *Engine) acceptValidationRequest(s *State, r *ValidationRequest, nextRev
 		copy.Binding = WorkBinding{RequirementRevision: w.RequirementRevision, Generation: w.Generation, Candidate: w.Candidate.Identity, WaveID: w.ID}
 	}
 	copy, _ = s.validationOffer(copy)
-	copy.Summary = s.validationRequestBasis(copy)
-	copy.Digest = digestOfCanonical(copy.Summary)
 	copy.StateRevision = nextRevision
 	if copy.Kind == "THAW" || copy.Kind == "QA_ARTIFACT_REPAIR" || copy.Kind == "VALIDATION_DETAIL_DISPOSITION" && slices.Contains(copy.Remedies, "QA_ARTIFACT_REPAIR") {
 		if !slices.Contains([]string{"REQUIREMENT_MEANING", "EXTERNAL_BEHAVIOR", "SUCCESS_FAILURE_CRITERIA", "CASE_EXECUTABILITY"}, copy.Category) {

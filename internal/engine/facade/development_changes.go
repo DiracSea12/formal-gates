@@ -46,7 +46,14 @@ func (f *Facade) RequestWorkerHandoff(worker int, reason string) (Run, error) {
 		release()
 		return Run{}, fmt.Errorf("handoff worker is not one of the current workers")
 	}
-	_, err = f.engine.RequestDevelopmentHandoff(ids[worker-1], reason, snap.Revision, emptyFingerprint())
+	event := protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{
+		Control: protocol.ControlRecovery, Handoff: &protocol.DevelopmentHandoffRequest{ActionID: ids[worker-1], Reason: reason},
+	}}
+	event.ID = protocol.EventID("handoff:" + controlDigest(struct {
+		Run   string
+		Event protocol.Event
+	}{snap.State.RunID, event}))
+	_, err = f.engine.Submit(event, protocol.Observation{})
 	release()
 	if err != nil {
 		return Run{}, err

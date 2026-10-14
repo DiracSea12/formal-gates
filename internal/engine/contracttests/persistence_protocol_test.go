@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -53,7 +52,7 @@ func protocolSave(t *testing.T, store *persistence.Store, revision uint64, conte
 	return result
 }
 
-func protocolEngine(t *testing.T, collect func() (string, error)) *protocol.Engine {
+func protocolEngine(t *testing.T, collect func() (string, error)) (*protocol.Engine, protocol.Observation) {
 	t.Helper()
 	store := protocolStore(t, t.TempDir(), nil)
 	compiled, err := compiler.Compile(definition.Workflow(), definition.Registry())
@@ -64,7 +63,7 @@ func protocolEngine(t *testing.T, collect func() (string, error)) *protocol.Engi
 		Definition: compiled,
 		Registry:   definition.Registry(),
 		Capacity:   2,
-	}, collect)
+	})
 	if err != nil {
 		t.Fatalf("protocol.New: %v", err)
 	}
@@ -72,15 +71,16 @@ func protocolEngine(t *testing.T, collect func() (string, error)) *protocol.Engi
 	if err != nil {
 		t.Fatalf("decision.NewState: %v", err)
 	}
-	if err := engine.Init(view, protocolProvider, protocolFingerprint); err != nil {
-		t.Fatalf("Engine.Init: %v", err)
+	input := protocolObservation(collect)
+	if err := engine.InitWithMetadata(view, protocolProvider, input, "", "", nil, "", "", nil); err != nil {
+		t.Fatalf("Engine.InitWithMetadata: %v", err)
 	}
-	return engine
+	return engine, input
 }
 
-func protocolSubmit(t *testing.T, engine *protocol.Engine, event protocol.Event) protocol.Acceptance {
+func protocolSubmit(t *testing.T, engine *protocol.Engine, input protocol.Observation, event protocol.Event) protocol.Acceptance {
 	t.Helper()
-	acceptance, err := engine.Submit(event, protocolFingerprint)
+	acceptance, err := engine.Submit(event, input)
 	if err != nil {
 		t.Fatalf("Submit %s: %v", event.ID, err)
 	}
@@ -105,9 +105,9 @@ func protocolRejectionCode(t *testing.T, err error) string {
 	return rejected.Code
 }
 
-// Every envelope identity field is a pre-write fence. Missing and mismatched
-// values must be classified before fingerprint collection or protocol writes.
-func TestEngineEnvelopeIdentityRejectsEveryFieldBeforeWrite(t *testing.T) {
+// The five base envelope identity fields are pre-write fences. Missing and
+// mismatched values must be classified before fingerprint collection or protocol writes.
+func TestEngineBaseEnvelopeIdentityRejectsEachFieldBeforeWrite(t *testing.T) {
 	seedDir := t.TempDir()
 	seedStore := protocolStore(t, seedDir, nil)
 	stableCollect := func() (string, error) { return protocolFingerprint, nil }
@@ -338,8 +338,8 @@ func TestEngineFailureRoutingIsClosedAndNonAgentByDefault(t *testing.T) {
 }
 
 // Provider and Attempt bindings fence every unified admission family before
-// ledger mutation. Rejections across receipt, result, task, lifecycle, and
-// HostAction paths must leave the same revision and state projection.
+// ledger mutation. Rejections across receipt, result, task, and lifecycle
+// paths must leave the same revision and state projection.
 func TestEngineProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 	fixture, err := testkit.NewProtocolFixture(t.TempDir())
 	if err != nil {
@@ -353,15 +353,6 @@ func TestEngineProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 		t.Fatalf("issued actions = %d, want 1", len(issued))
 	}
 	action := issued[0]
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatalf("ObserveFingerprint host action: %v", err)
-	}
-	intent, _, err := fixture.Engine.ExecuteHostAction(
-		"op.fan.transport", map[string]any{"stage": "protocol"}, fingerprint)
-	if err != nil {
-		t.Fatalf("ExecuteHostAction: %v", err)
-	}
 	before, err := fixture.Engine.Load()
 	if err != nil {
 		t.Fatalf("Load before rejected events: %v", err)
@@ -387,12 +378,6 @@ func TestEngineProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLifecycleEventEvent: %v", err)
 	}
-	hostReceipt, err := protocol.NewHostActionReceiptEvent(
-		"protocol-wrong-provider-host-receipt", intent.ActionID, intent.Adapter.Operation,
-		"wrong-provider", "host-correlation", intent.PayloadDigest, protocol.HostActionStatusExecuted)
-	if err != nil {
-		t.Fatalf("NewHostActionReceiptEvent: %v", err)
-	}
 	cases := []struct {
 		name  string
 		event protocol.Event
@@ -402,15 +387,14 @@ func TestEngineProviderAndAttemptRejectionsAreZeroWrite(t *testing.T) {
 		{"result provider", result, protocol.CodeProviderMismatch},
 		{"task attempt", task, protocol.CodeStaleAttempt},
 		{"lifecycle provider", lifecycle, protocol.CodeProviderMismatch},
-		{"host receipt provider", hostReceipt, protocol.CodeProviderMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fingerprint, err := fixture.Engine.ObserveFingerprint()
+			observedInput, err := fixture.VCS.Observe()
 			if err != nil {
-				t.Fatalf("ObserveFingerprint: %v", err)
+				t.Fatalf("Fingerprint: %v", err)
 			}
-			if _, err := fixture.Engine.Submit(tc.event, fingerprint); err == nil {
+			if _, err := fixture.Engine.Submit(tc.event, observedInput); err == nil {
 				t.Fatalf("event %s was accepted", tc.event.ID)
 			} else if code := protocolRejectionCode(t, err); code != tc.code {
 				t.Fatalf("event %s rejection = %s, want %s", tc.event.ID, code, tc.code)
@@ -627,7 +611,7 @@ func TestEngineRecoveryQuarantinesStagedEnvelopeMismatch(t *testing.T) {
 func TestEngineReplaySkipsFingerprintRevalidation(t *testing.T) {
 	collectCalls := 0
 	var collectErr error
-	engine := protocolEngine(t, func() (string, error) {
+	engine, input := protocolEngine(t, func() (string, error) {
 		collectCalls++
 		if collectErr != nil {
 			return "", collectErr
@@ -639,14 +623,16 @@ func TestEngineReplaySkipsFingerprintRevalidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
-	first := protocolSubmit(t, engine, request)
+	first := protocolSubmit(t, engine, input, request)
 	before, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load before replay: %v", err)
 	}
 	callsBeforeReplay := collectCalls
 	collectErr = errors.New("external facts unavailable")
-	replayed, err := engine.Submit(request, "sha256:obsolete-caller-fingerprint")
+	replayInput := input
+	replayInput.Facts = decision.Observation{Facts: []decision.Fact{{Source: decision.SourceFile, Key: "protocol-fixture", Value: "sha256:obsolete-caller-fingerprint"}}}
+	replayed, err := engine.Submit(request, replayInput)
 	if err != nil {
 		t.Fatalf("same-event replay revalidated external facts: %v", err)
 	}
@@ -669,19 +655,19 @@ func TestEngineReplaySkipsFingerprintRevalidation(t *testing.T) {
 // This rotates revision-bound freshness, and the occupied ID can never be
 // reused for different canonical bytes.
 func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
-	engine := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
+	engine, input := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
 	request, err := protocol.NewRequestEvent("protocol-freshness-request", protocol.ControlAbort,
 		protocol.AskOption{ID: "keep", Label: "keep"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
-	protocolSubmit(t, engine, request)
+	protocolSubmit(t, engine, input, request)
 	firstLifecycle, err := protocol.NewLifecycleEventEvent(
 		"protocol-lifecycle-first", protocolProvider, "protocol-agent", protocol.LifecycleStart)
 	if err != nil {
 		t.Fatalf("NewLifecycleEventEvent: %v", err)
 	}
-	protocolSubmit(t, engine, firstLifecycle)
+	protocolSubmit(t, engine, input, firstLifecycle)
 	token, err := engine.Freshness("protocol-freshness-request")
 	if err != nil {
 		t.Fatalf("Freshness: %v", err)
@@ -695,7 +681,7 @@ func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLifecycleEventEvent duplicate: %v", err)
 	}
-	duplicateAcceptance := protocolSubmit(t, engine, duplicate)
+	duplicateAcceptance := protocolSubmit(t, engine, input, duplicate)
 	if duplicateAcceptance.Status != "DUPLICATE" || duplicateAcceptance.Revision != before.Revision+1 {
 		t.Fatalf("payload duplicate acceptance = %+v", duplicateAcceptance)
 	}
@@ -717,7 +703,7 @@ func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLifecycleEventEvent conflicting: %v", err)
 	}
-	if _, err := engine.Submit(conflicting, protocolFingerprint); err == nil {
+	if _, err := engine.Submit(conflicting, input); err == nil {
 		t.Fatal("occupied duplicate event ID accepted different payload")
 	} else if code := protocolRejectionCode(t, err); code != protocol.CodeDuplicateEventMismatch {
 		t.Fatalf("occupied ID conflict code = %s", code)
@@ -727,7 +713,7 @@ func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecideEvent: %v", err)
 	}
-	if _, err := engine.Submit(decide, protocolFingerprint); err == nil {
+	if _, err := engine.Submit(decide, input); err == nil {
 		t.Fatal("payload duplicate did not rotate freshness")
 	} else if code := protocolRejectionCode(t, err); code != protocol.CodeStaleFreshness {
 		t.Fatalf("stale decision code = %s", code)
@@ -741,7 +727,7 @@ func TestEngineNewEventIDDuplicatePayloadIsDurablyOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecideEvent fresh: %v", err)
 	}
-	accepted := protocolSubmit(t, engine, freshDecide)
+	accepted := protocolSubmit(t, engine, input, freshDecide)
 	if accepted.Status != "ACCEPTED" {
 		t.Fatalf("decision after payload duplicate = %+v", accepted)
 	}
@@ -779,11 +765,11 @@ func TestEngineUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSpawnReceiptEvent: %v", err)
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint: %v", err)
+		t.Fatalf("Fingerprint: %v", err)
 	}
-	if acceptance, err := fixture.Engine.Submit(unknown, fingerprint); err != nil {
+	if acceptance, err := fixture.Engine.Submit(unknown, observedInput); err != nil {
 		t.Fatalf("submit UNKNOWN receipt: %v", err)
 	} else if acceptance.RecoveryAction != string(protocol.RecoveryOperator) {
 		t.Fatalf("UNKNOWN receipt initial route = %+v", acceptance)
@@ -795,13 +781,13 @@ func TestEngineUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 		{"protocol-unrelated-lifecycle-start", protocol.LifecycleStart},
 		{"protocol-unrelated-lifecycle-stop", protocol.LifecycleStop},
 	} {
-		fingerprint, err = fixture.Engine.ObserveFingerprint()
+		observedInput, err = fixture.VCS.Observe()
 		if err != nil {
-			t.Fatalf("ObserveFingerprint unrelated lifecycle: %v", err)
+			t.Fatalf("Fingerprint unrelated lifecycle: %v", err)
 		}
 		if _, err := fixture.Engine.Submit(
 			protocolLifecycleEvent(t, lifecycle.id, "protocol-unrelated-agent", lifecycle.name),
-			fingerprint,
+			observedInput,
 		); err != nil {
 			t.Fatalf("submit unrelated lifecycle %s: %v", lifecycle.name, err)
 		}
@@ -810,11 +796,11 @@ func TestEngineUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load before unrelated reconciliation: %v", err)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint reconcile: %v", err)
+		t.Fatalf("Fingerprint reconcile: %v", err)
 	}
-	plan, _, err := fixture.Engine.ReconcileUnknownReceipt(actionID, fingerprint)
+	plan, _, err := fixture.Engine.ReconcileUnknownReceipt(actionID, observedInput)
 	if err != nil {
 		t.Fatalf("reconcile unrelated lifecycle evidence: %v", err)
 	}
@@ -842,22 +828,22 @@ func TestEngineUnknownReceiptRequiresMatchingLifecycleEvidence(t *testing.T) {
 		{"protocol-matching-lifecycle-start", protocol.LifecycleStart},
 		{"protocol-matching-lifecycle-stop", protocol.LifecycleStop},
 	} {
-		fingerprint, err = fixture.Engine.ObserveFingerprint()
+		observedInput, err = fixture.VCS.Observe()
 		if err != nil {
-			t.Fatalf("ObserveFingerprint matching lifecycle: %v", err)
+			t.Fatalf("Fingerprint matching lifecycle: %v", err)
 		}
 		if _, err := fixture.Engine.Submit(
 			protocolLifecycleEvent(t, lifecycle.id, "protocol-expected-agent", lifecycle.name),
-			fingerprint,
+			observedInput,
 		); err != nil {
 			t.Fatalf("submit matching lifecycle %s: %v", lifecycle.name, err)
 		}
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint matching reconcile: %v", err)
+		t.Fatalf("Fingerprint matching reconcile: %v", err)
 	}
-	plan, _, err = fixture.Engine.ReconcileUnknownReceipt(actionID, fingerprint)
+	plan, _, err = fixture.Engine.ReconcileUnknownReceipt(actionID, observedInput)
 	if err != nil {
 		t.Fatalf("reconcile matching lifecycle evidence: %v", err)
 	}
@@ -901,11 +887,11 @@ func TestEngineRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 	}
 	pending := before.State.PendingActions[actionID]
 	attempt := before.State.Attempts[pending.Task]
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint: %v", err)
+		t.Fatalf("Fingerprint: %v", err)
 	}
-	plan, _, err := fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{}, fingerprint)
+	plan, _, err := fixture.Engine.RecoverAttempt(actionID, protocol.Interruption{}, observedInput)
 	if err != nil {
 		t.Fatalf("RecoverAttempt: %v", err)
 	}
@@ -945,11 +931,11 @@ func TestEngineRecoveryAskPreservesCurrentAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecideEvent: %v", err)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint decision: %v", err)
+		t.Fatalf("Fingerprint decision: %v", err)
 	}
-	if acceptance, err := fixture.Engine.Submit(decisionEvent, fingerprint); err != nil {
+	if acceptance, err := fixture.Engine.Submit(decisionEvent, observedInput); err != nil {
 		t.Fatalf("submit recovery decision: %v", err)
 	} else if acceptance.Status != "ACCEPTED" {
 		t.Fatalf("recovery decision acceptance = %+v", acceptance)
@@ -1133,7 +1119,7 @@ func TestEngineFingerprintChangesDistinguishRejectedAndCommittedWrites(t *testin
 // acceptance untouched.
 func TestEngineSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	collectCalls := 0
-	engine := protocolEngine(t, func() (string, error) {
+	engine, input := protocolEngine(t, func() (string, error) {
 		collectCalls++
 		return protocolFingerprint, nil
 	})
@@ -1142,7 +1128,7 @@ func TestEngineSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestEvent first: %v", err)
 	}
-	protocolSubmit(t, engine, first)
+	protocolSubmit(t, engine, input, first)
 	before, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load before conflicting replay: %v", err)
@@ -1153,7 +1139,7 @@ func TestEngineSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestEvent conflicting: %v", err)
 	}
-	if _, err := engine.Submit(conflicting, protocolFingerprint); err == nil {
+	if _, err := engine.Submit(conflicting, input); err == nil {
 		t.Fatal("same event ID with different digest was accepted")
 	} else if code := protocolRejectionCode(t, err); code != protocol.CodeDuplicateEventMismatch {
 		t.Fatalf("conflicting replay code = %s", code)
@@ -1170,17 +1156,17 @@ func TestEngineSameEventIDDifferentDigestIsZeroWrite(t *testing.T) {
 	}
 }
 
-// Freshness is revision-bound. A real typed Operator observation rotates the
-// token; the stale decision is rejected without ledger mutation, while a
-// decision using the re-fetched token is accepted.
+// Freshness is revision-bound. A correlated lifecycle event rotates the token;
+// the stale decision is rejected without ledger mutation, while a decision
+// using the re-fetched token is accepted.
 func TestEngineInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
-	engine := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
+	engine, input := protocolEngine(t, func() (string, error) { return protocolFingerprint, nil })
 	request, err := protocol.NewRequestEvent("protocol-stale-request", protocol.ControlAbort,
 		protocol.AskOption{ID: "cancel", Label: "Keep running"})
 	if err != nil {
 		t.Fatalf("NewRequestEvent: %v", err)
 	}
-	protocolSubmit(t, engine, request)
+	protocolSubmit(t, engine, input, request)
 	staleToken, err := engine.Freshness("protocol-stale-request")
 	if err != nil {
 		t.Fatalf("Freshness before observation: %v", err)
@@ -1188,9 +1174,9 @@ func TestEngineInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	observation, err := protocol.NewCorrelatedLifecycleEvent(
 		"protocol-operator-observation", protocolProvider, "protocol-rotation", "protocol-identity", protocol.LifecycleStart)
 	if err != nil {
-		t.Fatalf("NewOperatorObservationEvent: %v", err)
+		t.Fatalf("NewCorrelatedLifecycleEvent: %v", err)
 	}
-	protocolSubmit(t, engine, observation)
+	protocolSubmit(t, engine, input, observation)
 	beforeStale, err := engine.Load()
 	if err != nil {
 		t.Fatalf("Load before stale decision: %v", err)
@@ -1204,7 +1190,7 @@ func TestEngineInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecideEvent stale: %v", err)
 	}
-	if _, err := engine.Submit(staleDecision, protocolFingerprint); err == nil {
+	if _, err := engine.Submit(staleDecision, input); err == nil {
 		t.Fatal("stale freshness token was accepted")
 	} else if code := protocolRejectionCode(t, err); code != protocol.CodeStaleFreshness {
 		t.Fatalf("stale decision code = %s", code)
@@ -1229,7 +1215,7 @@ func TestEngineInterveningCommitInvalidatesFreshnessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDecideEvent fresh: %v", err)
 	}
-	if acceptance := protocolSubmit(t, engine, freshDecision); acceptance.Status != "ACCEPTED" {
+	if acceptance := protocolSubmit(t, engine, input, freshDecision); acceptance.Status != "ACCEPTED" {
 		t.Fatalf("fresh decision acceptance = %+v", acceptance)
 	}
 }
@@ -1259,14 +1245,14 @@ func TestEngineConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestEvent second: %v", err)
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint: %v", err)
+		t.Fatalf("Fingerprint: %v", err)
 	}
 	events := []protocol.Event{first, second}
 	results := testkit.SubmitConcurrently(
-		func() (protocol.Acceptance, error) { return fixture.Engine.Submit(first, fingerprint) },
-		func() (protocol.Acceptance, error) { return fixture.Engine.Submit(second, fingerprint) },
+		func() (protocol.Acceptance, error) { return fixture.Engine.Submit(first, observedInput) },
+		func() (protocol.Acceptance, error) { return fixture.Engine.Submit(second, observedInput) },
 	)
 	initialSuccesses := 0
 	for index, submitErr := range results {
@@ -1279,7 +1265,7 @@ func TestEngineConcurrentSubmitConvergesWithoutLostUpdate(t *testing.T) {
 		if !errors.As(submitErr, &conflict) && !errors.As(submitErr, &held) {
 			t.Fatalf("concurrent submit %d error = %v", index, submitErr)
 		}
-		if _, retryErr := fixture.Engine.Submit(events[index], fingerprint); retryErr != nil {
+		if _, retryErr := fixture.Engine.Submit(events[index], observedInput); retryErr != nil {
 			t.Fatalf("retry concurrent submit %d: %v", index, retryErr)
 		}
 	}
@@ -1374,375 +1360,17 @@ func TestEngineResultBeforeReceiptSurvivesRestartAndSettlesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSpawnReceiptEvent duplicate: %v", err)
 	}
-	fingerprint, err := restarted.Engine.ObserveFingerprint()
+	observedInput, err := restarted.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint duplicate: %v", err)
+		t.Fatalf("Fingerprint duplicate: %v", err)
 	}
 	beforeDuplicate := settled.Revision
-	acceptance, err := restarted.Engine.Submit(duplicate, fingerprint)
+	acceptance, err := restarted.Engine.Submit(duplicate, observedInput)
 	if err != nil {
 		t.Fatalf("submit duplicate SpawnReceipt: %v", err)
 	}
 	if acceptance.Status != "DUPLICATE" || acceptance.Revision != beforeDuplicate+1 {
 		t.Fatalf("duplicate SpawnReceipt acceptance = %+v", acceptance)
-	}
-}
-
-// HostAction side effects are preceded by a durable intent. An UNKNOWN
-// receipt may wait, enter Operator, or reconcile as fulfilled, but none of
-// those paths may execute the side effect a second time.
-func TestEngineHostActionUnknownReconcilesWithoutReexecution(t *testing.T) {
-	fixture, err := testkit.NewProtocolFixture(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewProtocolFixture: %v", err)
-	}
-	if _, err := fixture.PrepareReady(); err != nil {
-		t.Fatalf("PrepareReady: %v", err)
-	}
-	fixture.Faults.Arm(persistence.FaultHostCommitAfter)
-	intent, err := fixture.Host.Execute(
-		"op.fan.transport", map[string]any{"stage": "protocol-host-action"})
-	if !errors.Is(err, testkit.ErrInjected) || intent.ActionID == "" {
-		t.Fatalf("Host.Execute response loss intent=%+v err=%v", intent, err)
-	}
-	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("host side-effect calls = %d, want 1", fixture.Host.ActionCalls(intent.ActionID))
-	}
-	afterExecute, err := fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("Load after response loss: %v", err)
-	}
-	if _, pending := afterExecute.State.PendingHostActions[intent.ActionID]; !pending {
-		t.Fatal("host side effect ran without a durable pending intent")
-	}
-	unknown, err := fixture.Host.Receipt(intent, protocol.HostActionStatusUnknown)
-	if err != nil {
-		t.Fatalf("UNKNOWN HostAction receipt: %v", err)
-	}
-	if unknown.RecoveryAction != string(protocol.RecoveryReconcile) {
-		t.Fatalf("UNKNOWN receipt acceptance = %+v", unknown)
-	}
-
-	waitPlan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:not-yet", false, false)
-	if err != nil || waitPlan.Action != protocol.RecoveryWait {
-		t.Fatalf("unfulfilled reconciliation = %+v err=%v", waitPlan, err)
-	}
-	operatorPlan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:conflict", false, true)
-	if err != nil || operatorPlan.Action != protocol.RecoveryOperator {
-		t.Fatalf("conflicting reconciliation = %+v err=%v", operatorPlan, err)
-	}
-	fulfilledPlan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:fulfilled", true, false)
-	if err != nil || fulfilledPlan.Action != protocol.RecoveryReconcile {
-		t.Fatalf("fulfilled reconciliation = %+v err=%v", fulfilledPlan, err)
-	}
-	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("reconciliation repeated host side effect %d times", fixture.Host.ActionCalls(intent.ActionID))
-	}
-	settled, err := fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("Load reconciled state: %v", err)
-	}
-	if _, pending := settled.State.PendingHostActions[intent.ActionID]; pending {
-		t.Fatal("fulfilled reconciliation left HostAction pending")
-	}
-	effect, reconciled := settled.State.ReconciledEffects[intent.ActionID]
-	if !reconciled || effect.Status != "FULFILLED" || effect.ObservationDigest != "sha256:fulfilled" {
-		t.Fatalf("reconciled effect = %+v reconciled=%v", effect, reconciled)
-	}
-	if receipt := settled.State.HostActionReceipts[intent.ActionID]; receipt.Status != "RECONCILED" {
-		t.Fatalf("reconciled HostAction receipt = %+v", receipt)
-	}
-
-	replayed, err := fixture.Host.Reconcile(intent.ActionID, "sha256:fulfilled", true, false)
-	if err != nil || replayed.Action != protocol.RecoveryReconcile {
-		t.Fatalf("reconciliation replay = %+v err=%v", replayed, err)
-	}
-	afterReplay, err := fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("Load after reconciliation replay: %v", err)
-	}
-	if afterReplay.Revision != settled.Revision || fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("reconciliation replay changed revision/calls: revision %d -> %d, calls=%d",
-			settled.Revision, afterReplay.Revision, fixture.Host.ActionCalls(intent.ActionID))
-	}
-}
-
-func protocolConcreteBindingDefinition(t *testing.T) *compiler.CompiledDefinition {
-	t.Helper()
-	version := definition.Version
-	header := func(id string, deps ...authoring.StepID) authoring.Header {
-		return authoring.Header{ID: authoring.StepID(id), NodeID: "binding", Dependencies: deps, DefinitionVersion: version}
-	}
-	input := func() authoring.IO {
-		return authoring.IO{
-			InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-			Inputs: []authoring.InputBinding{{From: "entry.parse", OutputField: "out", ToField: "in"}},
-		}
-	}
-	parse, err := authoring.NewLocalStep(header("entry.parse"), authoring.IO{
-		InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-	}, authoring.LocalSpec{Handler: "engine.entry.parse"})
-	if err != nil {
-		t.Fatalf("binding parse step: %v", err)
-	}
-	newAsk := func(id string) authoring.HumanAskStep {
-		step, err := authoring.NewHumanAskStep(header(id, "entry.parse"), authoring.HumanAskSpec{
-			AskKind: "decision", RequestSchema: "schema.ask.decision.request",
-			ResponseSchema: "schema.ask.decision.response", FreshnessTTL: time.Minute,
-		})
-		if err != nil {
-			t.Fatalf("binding ask step %s: %v", id, err)
-		}
-		return step
-	}
-	newHost := func(id string) authoring.HostActionStep {
-		step, err := authoring.NewHostActionStep(header(id, "entry.parse"), input(), authoring.HostActionSpec{
-			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-			Operation: "op.fan.transport", Schema: "schema.candidate.review-range", Timeout: time.Minute,
-		})
-		if err != nil {
-			t.Fatalf("binding host step %s: %v", id, err)
-		}
-		return step
-	}
-	compiled, err := compiler.Compile(&compiler.Definition{
-		Version: version, EntryNode: "binding",
-		Steps: []authoring.Step{parse, newAsk("ask.one"), newAsk("ask.two"), newHost("host.one"), newHost("host.two")},
-	}, definition.Registry())
-	if err != nil {
-		t.Fatalf("binding definition: %v", err)
-	}
-	return compiled
-}
-
-func protocolInitializeBindingFixture(t *testing.T) *testkit.ProtocolFixture {
-	t.Helper()
-	compiled := protocolConcreteBindingDefinition(t)
-	fixture, err := testkit.NewProtocolFixtureWithDefinition(t.TempDir(), compiled, definition.Registry(), 4)
-	if err != nil {
-		t.Fatalf("binding fixture: %v", err)
-	}
-	view, err := decision.NewState(compiled.Version, runtime.PhaseIntakeRegistered)
-	if err != nil {
-		t.Fatalf("binding state: %v", err)
-	}
-	if err := view.CompleteStep("entry.parse", compiled); err != nil {
-		t.Fatalf("complete binding entry: %v", err)
-	}
-	if err := fixture.Initialize(view, "fake-host"); err != nil {
-		t.Fatalf("initialize binding fixture: %v", err)
-	}
-	return fixture
-}
-
-// A reconciled UNKNOWN HostAction is a successful completion fact. It must
-// advance the concrete frontier step and let the normal settle/refill path
-// continue without executing the side effect again.
-func TestEngineReconciledHostActionAdvancesFrontier(t *testing.T) {
-	fixture, err := testkit.NewProtocolFixture(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewProtocolFixture: %v", err)
-	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
-	if err != nil {
-		t.Fatalf("decision.NewState: %v", err)
-	}
-	for _, id := range []authoring.StepID{"entry.parse", "entry.persist", "fan.split"} {
-		if err := view.CompleteStep(id, fixture.Definition); err != nil {
-			t.Fatalf("complete %s: %v", id, err)
-		}
-	}
-	if err := fixture.Initialize(view, "fake-host"); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "reconciled"})
-	if err != nil {
-		t.Fatalf("execute HostAction: %v", err)
-	}
-	if intent.Step != "fan.transport" {
-		t.Fatalf("HostAction intent step = %q, want fan.transport", intent.Step)
-	}
-	if _, err := fixture.Host.Receipt(intent, protocol.HostActionStatusUnknown); err != nil {
-		t.Fatalf("UNKNOWN receipt: %v", err)
-	}
-	plan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:fulfilled", true, false)
-	if err != nil {
-		t.Fatalf("reconcile HostAction: %v", err)
-	}
-	if plan.Action != protocol.RecoveryReconcile {
-		t.Fatalf("reconcile plan = %+v", plan)
-	}
-	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
-		t.Fatalf("HostAction side effects = %d, want 1", fixture.Host.ActionCalls(intent.ActionID))
-	}
-	snapshot, err := fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load reconciled state: %v", err)
-	}
-	completed := map[authoring.StepID]bool{}
-	for _, id := range snapshot.State.Completed {
-		completed[id] = true
-	}
-	for _, id := range []authoring.StepID{"fan.transport", "fan.slice", "fan.join"} {
-		if !completed[id] {
-			t.Fatalf("reconciled frontier did not complete %s: %v", id, snapshot.State.Completed)
-		}
-	}
-	if _, pending := snapshot.State.PendingHostActions[intent.ActionID]; pending {
-		t.Fatal("reconciled HostAction intent remained pending")
-	}
-	if receipt := snapshot.State.HostActionReceipts[intent.ActionID]; receipt.Status != protocol.HostActionStatusReconciled || receipt.Step != "fan.transport" {
-		t.Fatalf("reconciled HostAction receipt = %+v", receipt)
-	}
-	if _, refilled := snapshot.State.PendingActions["act:review/review.worker"]; !refilled {
-		t.Fatalf("reconciled frontier did not refill the next available action: %+v", snapshot.State.PendingActions)
-	}
-}
-
-// Each Ask decision and each repeated-operation HostAction receipt must settle
-// only the concrete step that owns its durable binding.
-func TestEngineSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
-	fixture := protocolInitializeBindingFixture(t)
-	submit := func(event protocol.Event) protocol.Acceptance {
-		t.Helper()
-		fingerprint, err := fixture.Engine.ObserveFingerprint()
-		if err != nil {
-			t.Fatalf("observe binding fingerprint: %v", err)
-		}
-		acceptance, err := fixture.Engine.Submit(event, fingerprint)
-		if err != nil {
-			t.Fatalf("submit %s: %v", event.ID, err)
-		}
-		return acceptance
-	}
-	requestOne, err := protocol.NewRequestEvent("binding-request-one", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
-	if err != nil {
-		t.Fatalf("request one: %v", err)
-	}
-	submit(requestOne)
-	requestTwo, err := protocol.NewRequestEvent("binding-request-two", protocol.ControlAbort, protocol.AskOption{ID: "cancel", Label: "Keep running"})
-	if err != nil {
-		t.Fatalf("request two: %v", err)
-	}
-	submit(requestTwo)
-	snapshot, err := fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load bound asks: %v", err)
-	}
-	if snapshot.State.PendingAsks[string(requestOne.ID)].Step != "ask.one" || snapshot.State.PendingAsks[string(requestTwo.ID)].Step != "ask.two" {
-		t.Fatalf("ask bindings = %+v", snapshot.State.PendingAsks)
-	}
-	tokenOne, err := fixture.Engine.Freshness(protocol.RequestID(requestOne.ID))
-	if err != nil {
-		t.Fatalf("freshness one: %v", err)
-	}
-	decideOne, err := protocol.NewDecideEvent("binding-decision-one", protocol.RequestID(requestOne.ID), tokenOne, "cancel")
-	if err != nil {
-		t.Fatalf("decision one: %v", err)
-	}
-	submit(decideOne)
-	snapshot, err = fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load after first decision: %v", err)
-	}
-	completed := func(id authoring.StepID) bool {
-		for _, done := range snapshot.State.Completed {
-			if done == id {
-				return true
-			}
-		}
-		return false
-	}
-	firstAsk, firstAskPending := snapshot.State.PendingAsks[string(requestOne.ID)]
-	secondAsk, secondAskPending := snapshot.State.PendingAsks[string(requestTwo.ID)]
-	if !firstAskPending || !firstAsk.Resolved || !secondAskPending || secondAsk.Resolved ||
-		!completed("ask.one") || completed("ask.two") || snapshot.State.Decisions[string(requestOne.ID)].Step != "ask.one" {
-		t.Fatalf("first decision settled wrong Ask steps: asks=%+v completed=%v decisions=%+v", snapshot.State.PendingAsks, snapshot.State.Completed, snapshot.State.Decisions)
-	}
-	tokenTwo, err := fixture.Engine.Freshness(protocol.RequestID(requestTwo.ID))
-	if err != nil {
-		t.Fatalf("freshness two: %v", err)
-	}
-	decideTwo, err := protocol.NewDecideEvent("binding-decision-two", protocol.RequestID(requestTwo.ID), tokenTwo, "cancel")
-	if err != nil {
-		t.Fatalf("decision two: %v", err)
-	}
-	submit(decideTwo)
-	snapshot, err = fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load after second decision: %v", err)
-	}
-	if snapshot.State.Decisions[string(requestTwo.ID)].Step != "ask.two" {
-		t.Fatalf("second decision binding = %+v", snapshot.State.Decisions[string(requestTwo.ID)])
-	}
-	firstAsk, firstAskPending = snapshot.State.PendingAsks[string(requestOne.ID)]
-	secondAsk, secondAskPending = snapshot.State.PendingAsks[string(requestTwo.ID)]
-	if !firstAskPending || !firstAsk.Resolved || !secondAskPending || !secondAsk.Resolved {
-		t.Fatalf("resolved Ask records = first=%+v/%v second=%+v/%v", firstAsk, firstAskPending, secondAsk, secondAskPending)
-	}
-	for _, id := range []authoring.StepID{"ask.one", "ask.two"} {
-		found := false
-		for _, done := range snapshot.State.Completed {
-			if done == id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("second decision did not settle %s: %v", id, snapshot.State.Completed)
-		}
-	}
-
-	firstIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "first"})
-	if err != nil {
-		t.Fatalf("first repeated operation: %v", err)
-	}
-	if firstIntent.Step != "host.one" {
-		t.Fatalf("first operation binding = %q, want host.one", firstIntent.Step)
-	}
-	if _, err := fixture.Host.Receipt(firstIntent, protocol.HostActionStatusExecuted); err != nil {
-		t.Fatalf("first operation receipt: %v", err)
-	}
-	snapshot, err = fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load after first operation: %v", err)
-	}
-	isCompleted := func(id authoring.StepID) bool {
-		for _, done := range snapshot.State.Completed {
-			if done == id {
-				return true
-			}
-		}
-		return false
-	}
-	if !isCompleted("host.one") || isCompleted("host.two") {
-		t.Fatalf("first operation settled wrong HostAction steps: %v", snapshot.State.Completed)
-	}
-	secondIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"stage": "second"})
-	if err != nil {
-		t.Fatalf("second repeated operation: %v", err)
-	}
-	if secondIntent.Step != "host.two" {
-		t.Fatalf("second operation binding = %q, want host.two", secondIntent.Step)
-	}
-	if _, err := fixture.Host.Receipt(secondIntent, protocol.HostActionStatusExecuted); err != nil {
-		t.Fatalf("second operation receipt: %v", err)
-	}
-	snapshot, err = fixture.Engine.Load()
-	if err != nil {
-		t.Fatalf("load after second operation: %v", err)
-	}
-	for _, id := range []authoring.StepID{"host.one", "host.two"} {
-		found := false
-		for _, done := range snapshot.State.Completed {
-			if done == id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("second operation did not settle %s: %v", id, snapshot.State.Completed)
-		}
 	}
 }
 
@@ -1769,7 +1397,7 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	startFingerprint, err := fixture.Engine.ObserveFingerprint()
+	startFingerprint, err := fixture.VCS.Observe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1786,13 +1414,13 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if err := fixture.VCS.Write("bindings/snapshot.txt", []byte("changed")); err != nil {
 		t.Fatalf("change fake VCS snapshot: %v", err)
 	}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint recovery: %v", err)
+		t.Fatalf("Fingerprint recovery: %v", err)
 	}
 	plan, _, err := fixture.Engine.RecoverAttempt(oldActionID, protocol.Interruption{
 		Class: authoring.FailureTransientEngine,
-	}, fingerprint)
+	}, observedInput)
 	if err != nil {
 		t.Fatalf("RecoverAttempt: %v", err)
 	}
@@ -1819,11 +1447,11 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := fixture.Engine.Submit(stop, fingerprint); err != nil {
+		if _, err := fixture.Engine.Submit(stop, observedInput); err != nil {
 			t.Fatal(err)
 		}
 		event := protocol.Event{ID: "replacement-terminated", Kind: protocol.KindHostActionReceipt, HostAction: &protocol.HostActionReceiptPayload{ActionID: intent.ActionID, Operation: intent.Operation, Provider: "fake-host", Correlation: intent.Correlation, PayloadDigest: intent.PayloadDigest, Status: protocol.HostActionStatusExecuted, LifecycleEvidence: &protocol.LifecycleEvidence{Identity: "replacement-session", Event: protocol.LifecycleStop}}}
-		if _, err := fixture.Engine.Submit(event, fingerprint); err != nil {
+		if _, err := fixture.Engine.Submit(event, observedInput); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1844,7 +1472,8 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if _, pending := replaced.State.PendingActions[currentAttempt.ActionID]; !pending {
 		t.Fatal("replacement action is not pending")
 	}
-	if currentAttempt.Bindings.Snapshot != fingerprint || currentAttempt.Bindings.Task != oldPending.Task || currentAttempt.Bindings.Responsibility != "fake-host" {
+	sampleDigest, _ := observedInput.Facts.Digest()
+	if currentAttempt.Bindings.Snapshot != sampleDigest || currentAttempt.Bindings.Task != oldPending.Task || currentAttempt.Bindings.Responsibility != "fake-host" {
 		t.Fatalf("replacement bindings = %+v", currentAttempt.Bindings)
 	}
 	obsolete, retired := replaced.State.ObsoleteActions[oldActionID]
@@ -1860,11 +1489,11 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkerResultEvent late: %v", err)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint late result: %v", err)
+		t.Fatalf("Fingerprint late result: %v", err)
 	}
-	acceptance, err := fixture.Engine.Submit(late, fingerprint)
+	acceptance, err := fixture.Engine.Submit(late, observedInput)
 	if err != nil {
 		t.Fatalf("submit late result: %v", err)
 	}
@@ -1890,15 +1519,22 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkerResultEvent duplicate: %v", err)
 	}
-	fingerprint, err = fixture.Engine.ObserveFingerprint()
+	observedInput, err = fixture.VCS.Observe()
 	if err != nil {
-		t.Fatalf("ObserveFingerprint duplicate late result: %v", err)
+		t.Fatalf("Fingerprint duplicate late result: %v", err)
 	}
-	duplicateAcceptance, err := fixture.Engine.Submit(duplicate, fingerprint)
+	duplicateAcceptance, err := fixture.Engine.Submit(duplicate, observedInput)
 	if err != nil {
 		t.Fatalf("submit duplicate late result: %v", err)
 	}
 	if duplicateAcceptance.Status != "OBSOLETE_RESULT" || duplicateAcceptance.Revision != afterLate.Revision+1 {
 		t.Fatalf("duplicate late result acceptance = %+v", duplicateAcceptance)
 	}
+}
+
+func protocolObservation(read func() (string, error)) protocol.Observation {
+	facts := func(value string) decision.Observation {
+		return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceFile, Key: "protocol-fixture", Value: value}}}
+	}
+	return protocol.Observation{Facts: facts(protocolFingerprint), Read: func() (decision.Observation, error) { value, err := read(); return facts(value), err }}
 }

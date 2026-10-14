@@ -12,9 +12,9 @@ import (
 )
 
 func TestDevelopmentContinuationPreservesSemanticProgress(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(role, func(t *testing.T) {
-			input := protocol.WorkerInput{RunID: "run", Provider: "host", Handler: role, Pending: protocol.PendingAction{ActionID: "edit", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "batch"}}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Provider: "host", Handler: role, Pending: protocol.PendingAction{ActionID: "edit", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "batch"}}}}
 			schema, err := ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -39,7 +39,7 @@ func TestDevelopmentContinuationPreservesSemanticProgress(t *testing.T) {
 				t.Fatal(err)
 			}
 			prior := &protocol.WorkerResult{ActionID: "edit", Digest: "accepted-partial", Outcome: protocol.OutcomePass, Validation: result.Validation}
-			if role == "engine.development.batch.v4" {
+			if role == "engine.development.batch.v5" {
 				input.Validation.Development.Result = prior
 			} else {
 				input.Validation.Repair = &protocol.RepairInput{Result: prior}
@@ -71,8 +71,8 @@ func TestDevelopmentContinuationPreservesSemanticProgress(t *testing.T) {
 			}
 		})
 	}
-	for _, role := range []string{"engine.qa.design.v5", "engine.qa.execution.v3", "engine.gate.v2", "engine.repair.verify.v2"} {
-		input := protocol.WorkerInput{Handler: role, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	for _, role := range []string{"engine.qa.design.v5", "engine.qa.execution.v3", "engine.gate.v3", "engine.repair.verify.v2"} {
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: role, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 		raw, _ := json.Marshal(DevelopmentContinuation{Summary: "progress", RemainingWork: "pending"})
 		if _, err := DecodeResultWithPaths(input, "partial", raw, "original", []string{}); err == nil {
 			t.Fatalf("admitted continuation for %s", role)

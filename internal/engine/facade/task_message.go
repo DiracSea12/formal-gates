@@ -24,7 +24,7 @@ func (f *Facade) QueueWorkerMessage(worker int, text string) (protocol.TaskMessa
 	if worker < 1 || worker > len(ids) {
 		return protocol.TaskMessage{}, fmt.Errorf("message worker is not one of the current workers")
 	}
-	return f.engine.QueueTaskMessage(ids[worker-1], text, snap.Revision, emptyFingerprint())
+	return f.engine.QueueTaskMessage(ids[worker-1], text, snap.Revision, protocol.Observation{})
 }
 
 // Message delivery resolves the supervisor's original issued material. It never
@@ -71,7 +71,7 @@ func PendingNativeMessage(directory, identity string, begin bool) (*protocol.Tas
 		return nil, err
 	}
 	defer release()
-	return f.engine.ClaimTaskMessage(ref.ActionID, ref.AttemptID, identity, emptyFingerprint(), begin)
+	return f.engine.ClaimTaskMessage(ref.ActionID, ref.AttemptID, identity, protocol.Observation{}, begin)
 }
 func RecordNativeMessage(directory string, message protocol.TaskMessage) error {
 	f, ref, err := nativeMessageOwner(directory, message.Identity)
@@ -86,7 +86,7 @@ func RecordNativeMessage(directory string, message protocol.TaskMessage) error {
 		return err
 	}
 	defer release()
-	return f.engine.RecordTaskMessage(message, emptyFingerprint())
+	return f.engine.RecordTaskMessage(message, protocol.Observation{})
 }
 
 func workerActionOrder(inputs map[string]protocol.WorkerInput) []string {

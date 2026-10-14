@@ -118,8 +118,9 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 			} else if change.Condition != 0 {
 				condition := item.AcceptanceConditions[change.Condition-1]
 				at := condition.Line - 1
+				end := span.conditionEnds[change.Condition-1]
 				if change.RemoveCondition {
-					lines = spliceLines(lines, at, at+1, "")
+					lines = spliceLines(lines, at, end, "")
 					expected[change.Item-1].AcceptanceConditions = append(append([]FrozenAcceptanceCondition(nil), item.AcceptanceConditions[:change.Condition-1]...), item.AcceptanceConditions[change.Condition:]...)
 				} else {
 					replacement := *change.Acceptance
@@ -127,7 +128,8 @@ func RenderSemanticChange(path string, data []byte, change SemanticChange) ([]by
 					if acceptancePattern.FindStringSubmatch(originalText) == nil && strings.HasPrefix(replacement, "AC-") {
 						replacement = condition.ID + "：" + replacement
 					}
-					lines[at] = replaceSemanticText(lines[at], condition.Text, replacement)
+					firstText := strings.SplitN(condition.Text, "\n", 2)[0]
+					lines = spliceLines(lines, at, end, replaceSemanticText(lines[at], firstText, replacement))
 				}
 			}
 			if change.Requirement != nil {

@@ -255,8 +255,6 @@ func realRepo(t *testing.T) *Provider {
 	run("init")
 	run("config", "user.email", "engine-vcs@example.invalid")
 	run("config", "user.name", "Engine VCS Test")
-	// 与 canary 真仓夹具同款约定：忽略运行期临时目录，使 TrackAll 不把运行期
-	// 产物纳入候选提交。
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/tmp/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +294,11 @@ func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
 	if err := p.VerifyReady(); err == nil {
 		t.Fatal("untracked deliverable did not block readiness")
 	}
-	// track+commit：把工作区变更全部纳入候选提交。
-	if err := p.TrackAll(); err != nil {
+	paths, err := p.ChangedPaths()
+	if err != nil || len(paths) != 1 || paths[0] != "deliverable.go" {
+		t.Fatalf("changed paths = %v, %v", paths, err)
+	}
+	if err := p.Track(paths); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Commit("candidate work"); err != nil {
@@ -313,15 +314,19 @@ func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
 	if n, err := p.CommitCount(base, head); err != nil || n != 1 {
 		t.Fatalf("count = %d, %v", n, err)
 	}
-	names, err := p.DiffNames(base, head)
-	if err != nil || len(names) != 1 || names[0] != "deliverable.go" {
-		t.Fatalf("diff names = %v, %v", names, err)
+	changes, err := p.Changes(base, head)
+	if err != nil || len(changes) != 1 || changes[0].Path != "deliverable.go" {
+		t.Fatalf("native changes = %v, %v", changes, err)
 	}
 	// 追加第二个提交后区间为 2；squash 压回 1 且最终树不变（差异面为空）。
 	if err := os.WriteFile(filepath.Join(p.Root(), "deliverable.go"), []byte("package main // touched\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.TrackAll(); err != nil {
+	paths, err = p.ChangedPaths()
+	if err != nil || len(paths) != 1 || paths[0] != "deliverable.go" {
+		t.Fatalf("changed paths = %v, %v", paths, err)
+	}
+	if err := p.Track(paths); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Commit("second commit"); err != nil {

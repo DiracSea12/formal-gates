@@ -24,7 +24,8 @@ type OwnerCostBinding struct {
 // BindCostSources 在受理时把 owner 计量绑定与项目级 token cap 配置一次写入
 // 同一权威 state（单一 writer 经既有提交点；token cap「配置读取、持久化」归接
 // 线）。只在 bootstrap 调用：已绑定或 run 已推进时拒绝，防止运行中改写来源。
-func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expectedFingerprint string) error {
+func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, input Observation) error {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -47,7 +48,7 @@ func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expect
 		state.OwnerOverlapped = owner.Overlapped
 	}
 	state.TokenCapMaxTokens = tokenCap
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 
@@ -57,7 +58,8 @@ func (e *Engine) BindCostSources(owner OwnerCostBinding, tokenCap *int64, expect
 // engine peer 时，facade 经本入口补写 peer。
 // 写入走 engine 自有事务＋CAS；直改 peer 的 state.json 文件会破坏持久化完整
 // 性，禁止。
-func (e *Engine) MarkOwnerOverlapped(expectedFingerprint string) error {
+func (e *Engine) MarkOwnerOverlapped(input Observation) error {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -69,14 +71,15 @@ func (e *Engine) MarkOwnerOverlapped(expectedFingerprint string) error {
 		return nil
 	}
 	state.OwnerOverlapped = true
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 
 // RecordOwnerCost 把 owner 终态差值记入 cost 投影（幂等：Owner 已在即零变化返
 // 回，AC-052）。差值的量取（transcript I/O）归 facade，本入口只落账；只作终态
 // 报告，不参与 in-flight guard。
-func (e *Engine) RecordOwnerCost(entry cost.OwnerCost, expectedFingerprint string) error {
+func (e *Engine) RecordOwnerCost(entry cost.OwnerCost, input Observation) error {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -91,7 +94,7 @@ func (e *Engine) RecordOwnerCost(entry cost.OwnerCost, expectedFingerprint strin
 		return nil
 	}
 	cost.RecordOwner(state.costLedger(), entry)
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 

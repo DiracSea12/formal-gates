@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -28,6 +26,17 @@ func workflowRunView(run facade.Run) map[string]any {
 		view["summaryPath"] = run.SummaryPath
 	}
 	view["availableActions"] = run.AvailableActions
+	if len(run.BusinessNodes) != 0 {
+		nodes := []map[string]any{}
+		for i, n := range run.BusinessNodes {
+			nodes = append(nodes, map[string]any{"node": i + 1, "kind": n.Kind, "mode": n.Mode, "gate": n.Gate, "batch": n.Batch, "label": n.Label, "missing": n.Missing, "unavailable": n.Unavailable})
+		}
+		view["businessNodes"] = nodes
+	}
+	if run.NodeContinuation != nil {
+		v := run.NodeContinuation
+		view["continuation"] = map[string]any{"from": v.Preview.FromPhase, "to": v.Preview.To, "status": v.Status, "reason": v.Receipt.Continuation.Reason}
+	}
 	workers := []map[string]any{}
 	ids := []string{}
 	for id := range run.WorkerMaterials {
@@ -74,6 +83,10 @@ func workflowRunView(run facade.Run) map[string]any {
 			options = append(options, map[string]any{"choice": choice, "label": option.Label})
 		}
 		question := map[string]any{"ask": index + 1, "control": ask.Control, "options": options}
+		if ask.Continuation != nil {
+			p := ask.Continuation
+			question["continuation"] = map[string]any{"from": p.FromPhase, "to": p.To, "missing": p.To.Missing, "work": p.Work, "effects": p.Effects}
+		}
 		if len(ask.RouteGates) != 0 {
 			question["gates"] = numberedChoices(ask.RouteGates)
 		}
@@ -106,11 +119,18 @@ func workflowRunView(run facade.Run) map[string]any {
 func workflowControlRunViews(runs []facade.Run) map[string]map[string]any {
 	views := make(map[string]map[string]any, len(runs))
 	number := 0
+	nodeNumber := 0
 	for _, run := range runs {
 		view := workflowRunView(run)
 		for _, question := range view["questions"].([]map[string]any) {
 			number++
 			question["ask"] = number
+		}
+		if nodes, ok := view["businessNodes"].([]map[string]any); ok {
+			for _, node := range nodes {
+				nodeNumber++
+				node["node"] = nodeNumber
+			}
 		}
 		views[run.RunID] = view
 	}
@@ -192,6 +212,9 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	}
 	run["questions"] = questions
 	view := map[string]any{"input": candidate.Input, "run": run}
+	if candidate.ReviewDelta != nil {
+		view["reviewDelta"] = candidate.ReviewDelta
+	}
 	if candidate.DevelopmentPlan != nil {
 		view["proposal"] = candidate.DevelopmentPlan.Proposal
 		view["planDigest"] = candidate.DevelopmentPlan.Confirmation.Digest
@@ -251,25 +274,8 @@ func printCurrentWorkflowConsumption(streams IO, f *facade.Facade, value workflo
 		children[run.RunID] = child
 	}
 	value.Run, value.Children = runs[0], children
-	return printWorkflowView(streams, value, false, executionErr, runs)
-}
-
-func printWorkflowView(streams IO, value workflowConsumption, machine bool, executionErr error, runs []facade.Run) (int, error) {
-	if machine {
-		return printWorkflowConsumption(streams, value, executionErr)
-	}
 	views := workflowControlRunViews(runs)
-	if code, err := printJSON(streams.Stdout, workflowConsumptionView(value, views)); err != nil {
-		return code, err
-	}
-	if executionErr != nil {
-		fmt.Fprintln(streams.Stderr, executionErr)
-		if errors.Is(executionErr, context.Canceled) {
-			return 130, nil
-		}
-		return 1, nil
-	}
-	return 0, nil
+	return printWorkflowConsumption(streams, workflowConsumptionView(value, views), executionErr)
 }
 
 func workflowProgressView(progress facade.Progress, run facade.Run) map[string]any {

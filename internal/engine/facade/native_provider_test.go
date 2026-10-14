@@ -178,6 +178,96 @@ func reopenNativeProviderDriver(t *testing.T, d *validationDriver, name string, 
 	d.f.vcs = vcs.NewNative(d.f.root, name, runner).At(state.NativeRoot, state.NativeHandle)
 }
 
+// Startup metadata and persisted state carry the selected native provider into
+// reopened workspace planning and creation on real repositories.
+func TestRegularStartPersistsSelectedVCS(t *testing.T) {
+	for _, name := range []string{"git", "svn", "p4"} {
+		t.Run(name, func(t *testing.T) {
+			var root, base, requirement string
+			var runner vcs.Runner
+			if name == "git" {
+				root = nativeFixtureDirectory(t)
+				base = snapshotRepoCommits(t, root)[0]
+				requirement = "requirements.md"
+			} else {
+				root, base, runner = nativeProviderFixture(t, name)
+				requirement = ".gates/requirements.md"
+			}
+			preview, err := PrepareIntake(root, requirement, "", nil, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
+			inputs := []string{name, strings.ToUpper(name)}
+			if name == "git" {
+				inputs = append([]string{""}, inputs...)
+			}
+			for i, input := range inputs {
+				runID := fmt.Sprintf("selected-%s-%d", name, i)
+				f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: admission, Request: StartRequest{VCS: input, RunID: runID, Route: "regular", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
+				if err != nil {
+					t.Fatalf("start with VCS %q: %v", input, err)
+				}
+				request, err := f.request()
+				if err != nil || request.VCS != name || f.vcs.Name() != name || request.BaseSnapshot != base {
+					t.Fatalf("persisted request for VCS %q: %+v, %v; provider %s", input, request, err, f.vcs.Name())
+				}
+				statePath := filepath.Join(f.stateDir, "state.json")
+				body, err := os.ReadFile(statePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var persisted struct {
+					Content protocol.State `json:"content"`
+				}
+				if err := json.Unmarshal(body, &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if persisted.Content.VCSName != name || persisted.Content.NativeVCS() != name || persisted.Content.BaseSnapshot != base {
+					t.Fatalf("persisted native identity for VCS %q: %s %s %s", input, persisted.Content.VCSName, persisted.Content.NativeVCS(), persisted.Content.BaseSnapshot)
+				}
+				reopened, err := Open(root, runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := reopened.engine.Load()
+				if err != nil || snapshot.State.VCSName != name || reopened.vcs.Name() != name {
+					t.Fatalf("reopen VCS %q: %+v, %v", input, snapshot, err)
+				}
+				handle := vcs.PlanWorkspace(snapshot.State.NativeVCS(), base, runID, "candidate")
+				if handle.Source != base || name == "svn" && handle.URL == "" || name == "p4" && (handle.Client == "" || handle.Depot == "") {
+					t.Fatalf("workspace handle for VCS %q: %+v", input, handle)
+				}
+				workspace := filepath.Join(nativeFixtureDirectory(t), "candidate-"+runID)
+				if err := reopened.vcs.CreateWorkspace(workspace, base, "formal-gates workspace "+runID, handle); err != nil {
+					t.Fatalf("create reopened VCS %q workspace: %v", input, err)
+				}
+				identity, exists, err := reopened.vcs.ObservedWorkspace(workspace, base, "formal-gates workspace "+runID, handle)
+				if err != nil || !exists || identity == "" {
+					t.Fatalf("native copy lineage for VCS %q: %s %t %v", input, identity, exists, err)
+				}
+				t.Logf("input VCS=%q request/state/reopened provider=%s handle=%+v", input, name, handle)
+			}
+		})
+	}
+}
+
+func TestLightweightStartDoesNotSelectNativeVCS(t *testing.T) {
+	root := t.TempDir()
+	f, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "SVN", RunID: "lightweight", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := f.request()
+	if err != nil || request.VCS != "SVN" || f.vcs != nil {
+		t.Fatalf("lightweight selected a native provider: %+v %v", request, err)
+	}
+	reopened, err := Open(root, f.runID)
+	if err != nil || reopened.vcs != nil {
+		t.Fatalf("reopened lightweight native provider: %+v %v", reopened, err)
+	}
+}
+
 func nativeIncompleteState(t *testing.T, d *validationDriver, operation string) protocol.HostActionIntent {
 	t.Helper()
 	state := driverState(t, d)
@@ -209,7 +299,7 @@ func nativeIncompleteState(t *testing.T, d *validationDriver, operation string) 
 
 func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	t.Helper()
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	design, qi := d.action("engine.qa.design.v5")
 	if len(d.run.PendingActions) != 2 {
 		t.Fatal("development and blackbox design are not concurrent")
@@ -261,7 +351,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		t.Fatal("blackbox/whitebox/quality did not issue together")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v2" {
+		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v3" {
 			if _, err := (vcs.ExecRunner{}).Run(input.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +361,7 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 		var id string
 		var input protocol.ValidationInput
 		for action, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v2" {
+			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v3" {
 				id, input = action, in
 				break
 			}
@@ -531,7 +621,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command removal"}})
 			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 			d.drive()
-			action, input := d.action("engine.development.batch.v4")
+			action, input := d.action("engine.development.batch.v5")
 			if err := os.Remove(filepath.Join(input.Workspace.Path, "unused.txt")); err != nil {
 				t.Fatal(err)
 			}
@@ -550,7 +640,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 					t.Fatalf("frozen snapshot retained deleted content: %q %v", entry, err)
 				}
 			}
-			gate, gateInput := d.action("engine.gate.v2")
+			gate, gateInput := d.action("engine.gate.v3")
 			if _, err := (vcs.ExecRunner{}).Run(gateInput.Workspace.Path, "go", "test", "-timeout=0", "-buildvcs=false", "./..."); err != nil {
 				t.Fatal(err)
 			}
@@ -877,6 +967,81 @@ func TestSVNPromotionRejectsForeignWorkingChanges(t *testing.T) {
 	}
 	if err := native.VerifyReady(); err == nil {
 		t.Fatal("ordinary mixed revision was accepted without its signed continuation")
+	}
+}
+
+func TestSVNCompletedPromotionAcceptsNextWorkingInput(t *testing.T) {
+	root, base, runner := nativeProviderFixture(t, "svn")
+	native := vcs.NewNative(root, "svn", runner)
+	baseRevision, err := runner.Run(root, "svn", "info", "--show-item", "revision", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(root, "svn", "propset", "custom:delivery", "changed", root); err != nil {
+		t.Fatal(err)
+	}
+	message := "formal-gates delivery completed operation"
+	runner.interruptDelivery = true
+	if err := native.Commit(message); err == nil || !runner.lost {
+		t.Fatal("actual committed SVN response loss not reached")
+	}
+	runner.interruptDelivery = false
+	observed, found, err := native.ObservedCommit(base, message)
+	if err != nil || !found {
+		t.Fatal("original operation not found", err)
+	}
+	if err := native.Synchronize(observed); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := native.TreeDigest(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := protocol.CandidateParameters{Stage: "PROMOTION", WorkspaceID: "candidate", Promotion: &protocol.PromotionParameters{SourceWorkspace: "source", Source: observed, SourceDigest: digest, TargetRoot: root, TargetBase: base, TargetStart: protocol.PromotionObservation{Head: base}, Message: message}}
+	intent := protocol.HostActionIntent{ActionID: "delivery", PayloadDigest: "parameters"}
+	f := &Facade{vcs: native}
+	path := filepath.Join(root, ".gates", "requirements.md")
+	input := validationDocument + "\n\n"
+	if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := runner.synchronizations
+	var observation protocol.Observation
+	for _, mayWrite := range []bool{false, true} {
+		invoked := false
+		result, complete, err := f.nativePromotionEvidence(&protocol.State{}, intent, params, mayWrite, &invoked)
+		if err != nil || !complete || result.Candidate == nil || invoked {
+			t.Fatalf("completed operation denied by next input: %+v %t %v", result, complete, err)
+		}
+		want := protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: "svn", SourceWorkspace: "source", Source: observed, SourceDigest: digest, TargetRoot: root, TargetBase: base, TargetStart: params.Promotion.TargetStart, Final: observed, FinalDigest: digest}
+		if !reflect.DeepEqual(result.Candidate.Promotion, &want) || result.Candidate.ParametersDigest != intent.PayloadDigest || result.Candidate.WorkspaceID != params.WorkspaceID || result.Candidate.Identity != observed || result.Candidate.Digest != digest {
+			t.Fatal("receipt did not retain the original complete operation")
+		}
+		observation = result.observation
+		actual, err := observation.Fingerprint()
+		expected, digestErr := observation.Facts.Digest()
+		if err != nil || digestErr != nil || actual != expected {
+			t.Fatal("completed observation does not reread its sampled sources", err, digestErr)
+		}
+	}
+	if runner.synchronizations != before || len(runner.deliverySubmissions) != 1 {
+		t.Fatal("late receipt repeated a completed native effect")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != input {
+		t.Fatal("late receipt changed the next working input", err)
+	}
+	if _, err := runner.Run(root, "svn", "update", "-r", baseRevision, filepath.Join(root, "app.go")); err != nil {
+		t.Fatal(err)
+	}
+	head, err := native.Resolve()
+	if err != nil || head != observed {
+		t.Fatal("mixed node probe changed the observed root", err)
+	}
+	actual, err := observation.Fingerprint()
+	expected, digestErr := observation.Facts.Digest()
+	if err != nil || digestErr != nil || actual == expected {
+		t.Fatal("completion observation failed to bind the actual node synchronization", err, digestErr)
 	}
 }
 

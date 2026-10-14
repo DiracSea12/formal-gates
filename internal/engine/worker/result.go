@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -29,6 +30,7 @@ type Repair struct {
 	Summary           string       `json:"summary,omitempty"`
 	AffectedCases     []int        `json:"affectedCases,omitempty"`
 	GranularityReview *Granularity `json:"granularityReview,omitempty"`
+	Requirements      []string     `json:"requirements,omitempty"`
 }
 type Design struct {
 	DesignManifest
@@ -48,7 +50,13 @@ type ExecutionInterruption struct {
 	Findings           []Finding      `json:"findings,omitempty"`
 }
 type Gate struct {
-	Findings []Finding `json:"findings"`
+	Findings     []Finding             `json:"findings"`
+	Requirements []RequirementDecision `json:"requirements,omitempty"`
+}
+type RequirementDecision struct {
+	Status   string `json:"status"`
+	Evidence string `json:"evidence"`
+	Findings []int  `json:"findings,omitempty"`
 }
 type ConflictResolution struct {
 	Summary string `json:"summary"`
@@ -84,6 +92,7 @@ type Batch struct {
 	StateBoundary string         `json:"stateBoundary"`
 	Risk          string         `json:"risk"`
 	DoD           []Criterion    `json:"dod"`
+	Requirements  []int          `json:"requirements,omitempty"`
 	Checks        []Check        `json:"checks,omitempty"`
 	Rollback      string         `json:"rollback"`
 	Recovery      string         `json:"recovery"`
@@ -154,8 +163,9 @@ type RouteProposal struct {
 	Selected []int  `json:"selected,omitempty"`
 }
 type Completion struct {
-	DoD     []string `json:"dod"`
-	Handoff string   `json:"handoff"`
+	DoD          []string `json:"dod"`
+	Handoff      string   `json:"handoff"`
+	Requirements []string `json:"requirements,omitempty"`
 }
 type Review struct {
 	GranularityReview *Granularity `json:"granularityReview,omitempty"`
@@ -205,6 +215,8 @@ type decodedValidation struct {
 	Execution           *Execution
 	Checkpoint          bool
 	Findings            []Finding
+	Requirements        []RequirementDecision
+	RequirementEvidence []string
 }
 type Suggestion struct {
 	Severity string `json:"severity"`
@@ -328,7 +340,7 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	} else if value.Validation != nil {
 		proposed = value.Validation.GranularityReview
 	}
-	completed := input.Handler == "engine.repair.v5" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
+	completed := input.Handler == "engine.repair.v6" && value.Validation != nil && value.Validation.Development != nil && value.Validation.Development.Completion != nil
 	value.Granularity, err = DecodeGranularity(input, proposed, paths, locationFacts, completed)
 	if err != nil {
 		return protocol.Event{}, err
@@ -390,7 +402,24 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 		body := protocol.ValidationResult{Status: v.Status, GranularityReview: value.Granularity, Resolution: v.Resolution, Development: development(v.Development), Checkpoint: v.Checkpoint, Findings: items}
 		body.Binding = issued.Binding
 		body.QACommands = v.QACommands
+		if input.Handler == "engine.gate.v3" {
+			body.RequirementResults, err = assembleRequirementDecisions(input.RequirementPoints, v.Requirements, len(items))
+			if err != nil {
+				return protocol.Event{}, err
+			}
+		}
 		if body.Development != nil {
+			if body.GranularityReview != nil && len(v.RequirementEvidence) > 0 {
+				return protocol.Event{}, fmt.Errorf("batch repair evidence belongs to its completion")
+			}
+			if input.Handler == "engine.repair.v6" && completionBatch(input) == nil && body.GranularityReview == nil && v.Status != "CONTINUE" {
+				body.Development.RequirementResults, err = assemblePointEvidence(requirement.PointIDs(standaloneRepairPoints(input)), v.RequirementEvidence)
+				if err != nil {
+					return protocol.Event{}, err
+				}
+			} else if len(v.RequirementEvidence) > 0 {
+				return protocol.Event{}, fmt.Errorf("batch repair evidence belongs to its completion")
+			}
 			batch := completionBatch(input)
 			if batch == nil && body.GranularityReview != nil && len(body.GranularityReview.Batches) == 1 {
 				batch = &body.GranularityReview.Batches[0]
@@ -692,8 +721,29 @@ func DecodeResultWithFacts(input protocol.WorkerInput, eventID protocol.EventID,
 	return event, event.Validate()
 }
 
+const OutputCodec authoring.CodecID = "codec.any.out"
+
+// ValidateDefinition binds agent I/O references to the existing worker union.
+func ValidateDefinition(cd *compiler.CompiledDefinition) error {
+	if err := protocol.ValidateDefinitionConditions(cd); err != nil {
+		return err
+	}
+	for _, step := range cd.Steps {
+		if _, agent := step.Payload.(compiler.CompiledAgentStep); !agent {
+			continue
+		}
+		if step.IO.InputCodec != protocol.WorkerInputCodec || step.IO.OutputCodec != OutputCodec {
+			return fmt.Errorf("worker step %s has unsupported codecs %s/%s", step.Header.ID, step.IO.InputCodec, step.IO.OutputCodec)
+		}
+	}
+	return nil
+}
+
 // semanticRole selects the original typed semantic body for schema and decoding.
 func semanticRole(input protocol.WorkerInput) (any, error) {
+	if input.InputCodec != protocol.WorkerInputCodec || input.OutputCodec != OutputCodec {
+		return nil, fmt.Errorf("worker result has unsupported codecs %s/%s", input.InputCodec, input.OutputCodec)
+	}
 	if input.Review != nil {
 		return &Review{}, nil
 	}
@@ -701,9 +751,9 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return nil, fmt.Errorf("worker result schema lacks typed role")
 	}
 	switch input.Handler {
-	case "engine.development.batch.v4":
+	case "engine.development.batch.v5":
 		return &Development{}, nil
-	case "engine.repair.v5":
+	case "engine.repair.v6":
 		return &Repair{}, nil
 	case "engine.merge.resolve.v3":
 		return &ConflictResolution{}, nil
@@ -723,7 +773,7 @@ func semanticRole(input protocol.WorkerInput) (any, error) {
 		return &ObservationJudgments{}, nil
 	case "engine.repair.verify.v2":
 		return &Execution{}, nil
-	case "engine.gate.v2":
+	case "engine.gate.v3":
 		return &Gate{}, nil
 	default:
 		return nil, fmt.Errorf("worker result schema has no role %s", input.Handler)
@@ -748,7 +798,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		return decodedResult{}, "", err
 	}
 	if _, present := fields["remainingWork"]; present {
-		if input.Validation == nil || input.Handler != "engine.development.batch.v4" && input.Handler != "engine.repair.v5" {
+		if input.Validation == nil || input.Handler != "engine.development.batch.v5" && input.Handler != "engine.repair.v6" {
 			return decodedResult{}, "", fmt.Errorf("only development and repair can continue unfinished work")
 		}
 		var partial DevelopmentContinuation
@@ -810,6 +860,7 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 		case *Development:
 			v.Development = body
 		case *Repair:
+			v.RequirementEvidence = body.Requirements
 			v.GranularityReview = body.GranularityReview
 			v.RepairAffectedCases = body.AffectedCases
 			if fields["summary"] != nil || fields["completion"] != nil || fields["affectedCases"] != nil {
@@ -851,7 +902,11 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 				if len(operations) == 0 {
 					return result, "", fmt.Errorf("a missing invocation requires actual operations")
 				}
-				v.QACommands = append(v.QACommands, protocol.QACaseOperations{CaseID: input.Validation.CommandCases[index], Operations: operations})
+				command := protocol.QACaseOperations{CaseID: input.Validation.CommandCases[index], Operations: operations}
+				if len(input.Validation.CommandSources) > 0 && strings.HasPrefix(input.Validation.CommandSources[index], "shared:") {
+					command.Source = input.Validation.CommandSources[index]
+				}
+				v.QACommands = append(v.QACommands, command)
 			}
 			v.Checkpoint = true
 		case *ExecutionJudgments:
@@ -860,11 +915,12 @@ func decodeRoleBody(input protocol.WorkerInput, raw []byte, locationFacts ...[]L
 			v.RepairVerification = body
 		case *Gate:
 			v.Status, v.Findings = findingStatus(body.Findings), body.Findings
+			v.Requirements = body.Requirements
 		}
 	} else {
 		return result, "", fmt.Errorf("worker result lacks issued typed role")
 	}
-	if input.Handler == "engine.repair.v5" && fields["completion"] != nil && fields["granularityReview"] != nil {
+	if input.Handler == "engine.repair.v6" && fields["completion"] != nil && fields["granularityReview"] != nil {
 		var plan struct {
 			Batches []map[string]json.RawMessage `json:"batches"`
 		}
@@ -984,10 +1040,10 @@ func developmentSource(input protocol.WorkerInput) *protocol.WorkerResult {
 	if input.Validation == nil {
 		return nil
 	}
-	if input.Handler == "engine.development.batch.v4" && input.Validation.Development != nil {
+	if input.Handler == "engine.development.batch.v5" && input.Validation.Development != nil {
 		return input.Validation.Development.Result
 	}
-	if input.Handler == "engine.repair.v5" && input.Validation.Repair != nil {
+	if input.Handler == "engine.repair.v6" && input.Validation.Repair != nil {
 		return input.Validation.Repair.Result
 	}
 	return nil

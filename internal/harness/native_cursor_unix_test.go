@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/settings"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -404,7 +405,7 @@ func newCursorScenario(t *testing.T, uuid, model, effort string, readOnly bool) 
 		bound[k] = v
 	}
 	binding["environment"] = bound
-	schema, err := worker.ResultSchema(protocol.WorkerInput{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}})
+	schema, err := worker.ResultSchema(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1014,7 +1015,7 @@ func TestCursorOriginalInvocationCarriesSavedStore(t *testing.T) {
 			delete(s.request, "model")
 			delete(s.request, "reasoning_effort")
 			materialPath := filepath.Join(filepath.Dir(action), "material.json")
-			input := protocol.WorkerInput{Handler: "engine.gate.v2", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 			if err := writeAtomicJSON(materialPath, worker.Material{ReadOnly: true, Input: input}); err != nil {
 				t.Fatal(err)
 			}
@@ -1207,5 +1208,214 @@ func TestCursorFreshConfigPathIdentity(t *testing.T) {
 				t.Fatal("native peer did not persist actual completion")
 			}
 		})
+	}
+}
+
+func TestCursorPathFreezePreservesIndependentRootsAndSiblingProofs(t *testing.T) {
+	root := resolveNativePath(t.TempDir())
+	marker := filepath.Join(root, "executed")
+	fixture := func(name string) (string, map[string]string) {
+		t.Helper()
+		bin := filepath.Join(root, name, "bin")
+		if err := os.MkdirAll(bin, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"cursor-agent", "node", "index.js"} {
+			if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf executed > '"+marker+"'\nexit 91\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return bin, map[string]string{"HOME": filepath.Join(root, name, "home"), "CURSOR_CONFIG_DIR": filepath.Join(root, name, "config"), "CURSOR_DATA_DIR": filepath.Join(root, name, "data"), "NODE_COMPILE_CACHE": filepath.Join(root, name, "cache"), "AGENT_CLI_CREDENTIAL_STORE": "file"}
+	}
+	aBin, aEnv := fixture("a")
+	bBin, bEnv := fixture("b")
+	bEnv["AGENT_CLI_CREDENTIAL_STORE"] = "memory"
+	link := filepath.Join(root, "linked-bin")
+	if err := os.Symlink(aBin, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", link)
+	for key, value := range aEnv {
+		t.Setenv(key, value)
+	}
+	cap := int64(4000)
+	effective := settings.Effective{Values: settings.Values{Native: map[string]string{"workbuddyExecutable": "/missing/unselected", "zcodeExecutable": "/missing/unselected"}, Model: "chosen", ReasoningEffort: "high", Capacity: 3, QACapacity: 2, TokenCap: &cap}, Sources: map[string]string{"cursorExecutable": "default", "cursorHome": "default", "model": "project-config"}, Files: []string{"project-config"}}
+	frozen, err := settings.Freeze("cursor", effective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantValues := effective.Values
+	wantValues.Native = frozen.Values.Native
+	if !reflect.DeepEqual(frozen.Values, wantValues) || !reflect.DeepEqual(frozen.Files, effective.Files) || frozen.Sources["model"] != "project-config" || frozen.Values.Native["workbuddyExecutable"] != "/missing/unselected" || frozen.Values.Native["zcodeExecutable"] != "/missing/unselected" {
+		t.Fatal("freeze changed common settings or unselected paths", frozen)
+	}
+	body, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored settings.Effective
+	if err := json.Unmarshal(body, &restored); err != nil || !reflect.DeepEqual(restored, frozen) {
+		t.Fatal("persisted fields differ", restored, err)
+	}
+	for key, source := range map[string]string{"cursorExecutable": "PATH", "cursorHome": "HOME", "cursorConfigRoot": "CURSOR_CONFIG_DIR", "cursorDataRoot": "CURSOR_DATA_DIR", "cursorCompileCache": "NODE_COMPILE_CACHE", "cursorCredentialStore": "AGENT_CLI_CREDENTIAL_STORE"} {
+		if restored.Sources[key] != source {
+			t.Fatal("wrong path source", key, restored.Sources)
+		}
+	}
+	t.Setenv("PATH", bBin)
+	for key, value := range bEnv {
+		t.Setenv(key, value)
+	}
+	var original map[string]any
+	for i := 0; i < 2; i++ {
+		binding, err := NativeBinding("cursor", restored.Values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLaunch := map[string]any{"executable": filepath.Join(aBin, "cursor-agent"), "node": filepath.Join(aBin, "node"), "script": filepath.Join(aBin, "index.js")}
+		wantEnv := map[string]any{}
+		for key, value := range aEnv {
+			wantEnv[key] = value
+		}
+		if !reflect.DeepEqual(binding["launch"], wantLaunch) || !reflect.DeepEqual(binding["environment"], wantEnv) {
+			t.Fatal("binding followed B", binding)
+		}
+		if original != nil && !reflect.DeepEqual(original, binding) {
+			t.Fatal("binding changed frozen paths", binding)
+		}
+		original = binding
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("mapper or binding executed CLI", err)
+	}
+	for _, missing := range []string{"cursorExecutable", "cursorHome", "cursorConfigRoot", "cursorDataRoot", "cursorCompileCache", "cursorCredentialStore"} {
+		native := map[string]string{}
+		for key, value := range restored.Values.Native {
+			native[key] = value
+		}
+		delete(native, missing)
+		if _, err := NativeBinding("cursor", settings.Values{Native: native}); err == nil || !strings.Contains(err.Error(), "frozen native paths required") {
+			t.Fatal("missing carrier discovered late", missing, err)
+		}
+	}
+	for _, name := range []string{"cursor-agent", "node", "index.js"} {
+		if err := os.WriteFile(filepath.Join(aBin, name), []byte("changed "+name), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := cursorValidateBinding(original); err == nil {
+			t.Fatal("changed sibling/executable accepted", name)
+		}
+		updated, err := NativeBinding("cursor", restored.Values)
+		if err != nil || reflect.DeepEqual(updated["files"], original["files"]) {
+			t.Fatal("new invocation failed current proofs", updated, err)
+		}
+		original = updated
+	}
+	fresh, err := settings.Freeze("cursor", effective)
+	if err != nil || fresh.Values.Native["cursorExecutable"] != filepath.Join(bBin, "cursor-agent") || fresh.Values.Native["cursorHome"] != bEnv["HOME"] || fresh.Values.Native["cursorConfigRoot"] != bEnv["CURSOR_CONFIG_DIR"] || fresh.Values.Native["cursorDataRoot"] != bEnv["CURSOR_DATA_DIR"] || fresh.Values.Native["cursorCompileCache"] != bEnv["NODE_COMPILE_CACHE"] || fresh.Values.Native["cursorCredentialStore"] != "memory" {
+		t.Fatal("fresh freeze failed B negative control", fresh, err)
+	}
+	maintenance, err := cursorCaptureBinding()
+	if err != nil || getOf(maintenance["launch"], "executable") != filepath.Join(bBin, "cursor-agent") || getOf(maintenance["environment"], "CURSOR_CONFIG_DIR") != bEnv["CURSOR_CONFIG_DIR"] {
+		t.Fatal("maintenance did not use mapper", maintenance, err)
+	}
+	for key, value := range bEnv {
+		if os.Getenv(key) != value {
+			t.Fatal("global environment changed", key)
+		}
+	}
+}
+
+func TestCursorPathFreezePreservesHomeXDGAndCredentialPrecedence(t *testing.T) {
+	root := resolveNativePath(t.TempDir())
+	executable := filepath.Join(root, "cursor-agent")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 91\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	home, explicit, config, data, cache, xdg := filepath.Join(root, "home"), filepath.Join(root, "explicit"), filepath.Join(root, "config"), filepath.Join(root, "data"), filepath.Join(root, "cache"), filepath.Join(root, "xdg")
+	t.Setenv("HOME", home)
+	defaultCache := func(home string) string {
+		if runtime.GOOS == "darwin" {
+			return filepath.Join(home, "Library", "Caches", "cursor-compile-cache")
+		}
+		return filepath.Join(home, ".cache", "cursor-compile-cache")
+	}
+	for _, tc := range []struct{ name, home, config, data, cache, xdg, store, wantConfig, configSource string }{
+		{"environment", "", config, data, cache, xdg, "file", config, "CURSOR_CONFIG_DIR"},
+		{"xdg", "", "", "", "", xdg, "memory", filepath.Join(xdg, "cursor"), "XDG_CONFIG_HOME"},
+		{"default", "", "", "", "", "", "unknown", filepath.Join(home, ".cursor"), "cursorHome"},
+		{"explicit", explicit, config, data, cache, xdg, "", filepath.Join(explicit, ".cursor"), "cursorHome"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range map[string]string{"CURSOR_CONFIG_DIR": tc.config, "CURSOR_DATA_DIR": tc.data, "NODE_COMPILE_CACHE": tc.cache, "XDG_CONFIG_HOME": tc.xdg, "AGENT_CLI_CREDENTIAL_STORE": tc.store} {
+				t.Setenv(key, value)
+			}
+			effective := settings.Effective{Values: settings.Values{Native: map[string]string{"cursorExecutable": executable, "cursorHome": tc.home}}, Sources: map[string]string{"cursorExecutable": "project-config", "cursorHome": "default"}}
+			if tc.home != "" {
+				effective.Sources["cursorHome"] = "home-config"
+			}
+			frozen, err := settings.Freeze("cursor", effective)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantHome, wantData, wantCache, wantStore := home, tc.data, tc.cache, tc.store
+			if tc.home != "" {
+				wantHome = tc.home
+			}
+			if wantData == "" || tc.home != "" {
+				wantData = filepath.Join(wantHome, ".cursor")
+			}
+			if wantCache == "" || tc.home != "" {
+				wantCache = defaultCache(wantHome)
+			}
+			if wantStore != "file" && wantStore != "memory" {
+				wantStore = "default"
+			}
+			want := map[string]string{"cursorExecutable": executable, "cursorHome": wantHome, "cursorConfigRoot": tc.wantConfig, "cursorDataRoot": wantData, "cursorCompileCache": wantCache, "cursorCredentialStore": wantStore}
+			if !reflect.DeepEqual(frozen.Values.Native, want) || frozen.Sources["cursorConfigRoot"] != tc.configSource || frozen.Sources["cursorExecutable"] != "project-config" || (tc.home != "" && frozen.Sources["cursorHome"] != "home-config") {
+				t.Fatal("path precedence/source differs", frozen, want)
+			}
+		})
+	}
+}
+
+func TestCursorPathFreezeProbeConsumesRestoredEnvironment(t *testing.T) {
+	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
+	executable := textOf(getOf(getOf(s.request["binding"], "launch"), "executable"))
+	t.Setenv("PATH", filepath.Dir(executable))
+	s.peer.Environment["AGENT_CLI_CREDENTIAL_STORE"] = "file"
+	for key, value := range s.peer.Environment {
+		t.Setenv(key, value)
+	}
+	frozen, err := settings.Freeze("cursor", settings.Effective{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored settings.Effective
+	if err := json.Unmarshal(body, &restored); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"HOME", "CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "NODE_COMPILE_CACHE", "PATH"} {
+		t.Setenv(key, filepath.Join(t.TempDir(), "changed"))
+	}
+	t.Setenv("AGENT_CLI_CREDENTIAL_STORE", "memory")
+	for i := 0; i < 2; i++ {
+		binding, err := NativeBinding("cursor", restored.Values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.request["binding"], s.request["probe"] = binding, true
+		s.save(t)
+		report, err := cursorExecute(s.request, s.directory, true)
+		if err != nil || report["model_calls"] != 0 {
+			t.Fatal("probe lost frozen environment", report, err)
+		}
+	}
+	if cursorCalls(t, s) != 0 {
+		t.Fatal("probe allocated or prompted session")
 	}
 }

@@ -23,7 +23,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 		for _, reopen := range []bool{false, true} {
 			t.Run(choice+map[bool]string{false: "/normal", true: "/reopen"}[reopen], func(t *testing.T) {
 				d := newValidationDriver(t, "blackbox", "quality")
-				id, input := d.action("engine.development.batch.v4")
+				id, input := d.action("engine.development.batch.v5")
 				d.receipt(id)
 				original := d.run.Attempts[input.Binding.Task]
 				started, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
@@ -52,7 +52,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 					if request == "" {
 						t.Fatal("normal user-action failure has no recovery Ask")
 					}
-					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED"}, emptyFingerprint())
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED"}, protocol.Observation{})
 					if err != nil || plan.RequestID != request {
 						t.Fatalf("explicit recovery did not reuse the failure request: %+v %v", plan, err)
 					}
@@ -68,7 +68,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 						t.Fatal("failure lost original evidence")
 					}
 				} else {
-					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{}, emptyFingerprint())
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{}, protocol.Observation{})
 					if err != nil || plan.Action != protocol.RecoveryAsk {
 						t.Fatalf("expected actual recovery Ask: %+v %v", plan, err)
 					}
@@ -185,13 +185,13 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			id, in := d.action("engine.development.batch.v4")
+			id, in := d.action("engine.development.batch.v5")
 			d.receipt(id)
 			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 			d.submit(start)
 			original := d.run.Attempts[in.Binding.Task]
 			for used := 1; used <= 2; used++ {
-				plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+				plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -203,7 +203,7 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 					t.Fatal(err)
 				}
 				wire, _ := json.Marshal(before)
-				repeat, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+				repeat, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
 				if err != nil || repeat.RequestID != plan.RequestID {
 					t.Fatalf("pending effect was replaced: %+v %v", repeat, err)
 				}
@@ -285,7 +285,7 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 				t.Fatalf("recovery changed allowance or attempt identity: original=%+v continued=%+v", original, continued)
 			}
 			// 预算通道的 retry 授权一次性：再次到达边界后的第二个 retry 决定被拒。
-			if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint()); err != nil {
+			if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			shown, err := d.f.Show()
@@ -355,7 +355,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 					d.drive()
 				} else {
 					var err error
-					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+					plan, _, err = d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -414,7 +414,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	events := []protocol.Event{}
-	for _, role := range []string{"engine.development.batch.v4", "engine.qa.design.v5"} {
+	for _, role := range []string{"engine.development.batch.v5", "engine.qa.design.v5"} {
 		id, _ := d.action(role)
 		d.receipt(id)
 		events = append(events, protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native failure:" + id, InterruptionReason: "native configuration requires attention"}})
@@ -466,7 +466,7 @@ func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 
 func TestWorkerRecoveryCarryKeepsOriginalAskAndWork(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	id, in := d.action("engine.development.batch.v4")
+	id, in := d.action("engine.development.batch.v5")
 	d.receipt(id)
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "USER_ACTION_REQUIRED", PayloadDigest: "native unavailable configuration", InterruptionReason: "native configuration requires attention"}})
 	var request string

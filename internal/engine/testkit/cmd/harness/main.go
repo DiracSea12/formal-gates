@@ -1,6 +1,4 @@
-// Command harness is the installed test-only protocol driver. It stays
-// outside cmd/formal-gates so workflow drive/submit cannot become public write
-// paths of the stable CLI.
+// Command harness drives the test-only protocol scenarios in an isolated project.
 package main
 
 import (
@@ -15,7 +13,7 @@ import (
 func main() {
 	var options testkit.HarnessOptions
 	flag.StringVar(&options.ProjectRoot, "project-root", os.Getenv("FORMAL_GATES_TEST_PROJECT"), "isolated test project root")
-	flag.StringVar(&options.Scenario, "scenario", "smoke", "scenario: smoke, initialize, load, envelope, envelope-write, revision-sequence, submit-request, submit-decision, submit-worker, submit-spawn, submit-lifecycle, submit-operator, idempotency, freshness, concurrent-submit, cas, fingerprint, fault, recover, lock-recovery, host-action, reconcile-host-action, lifecycle, interruption, unknown-receipt, result-before-receipt, capacity-refill, invalid-events, terminal, query-terminal, terminal-replay, next-sequence, failure-routing, definition-declaredness, receipt-file, wait-user-action, or full")
+	flag.StringVar(&options.Scenario, "scenario", "smoke", "scenario: smoke, initialize, load, envelope, envelope-write, revision-sequence, submit-request, submit-decision, submit-worker, submit-spawn, submit-lifecycle, submit-operator, idempotency, freshness, concurrent-submit, cas, fault, recover, lock-recovery, lifecycle, interruption, unknown-receipt, result-before-receipt, capacity-refill, invalid-events, terminal, query-terminal, terminal-replay, next-sequence, failure-routing, definition-declaredness, or wait-user-action")
 	flag.StringVar(&options.EventID, "event-id", "", "caller-owned event ID")
 	flag.StringVar(&options.ActionID, "action-id", "", "issued action ID")
 	flag.StringVar(&options.RequestID, "request-id", "", "pending request ID")
@@ -38,25 +36,10 @@ func main() {
 	flag.StringVar(&options.DefinitionFixture, "definition-fixture", "", "workflow definition fixture for declaredness scenarios")
 	flag.StringVar(&options.Declared, "declared", "", "declaredness override: true/false or declared/undeclared")
 	flag.StringVar(&options.Declaredness, "declaredness", "", "alias for --declared")
-	flag.StringVar(&options.ReceiptFile, "receipt-file", "", "JSON HostAction receipt file")
-	flag.StringVar(&options.Prepare, "prepare", "", "prepare a receipt template: adapter or terminate")
-	flag.StringVar(&options.Template, "template", "", "path for a prepared receipt template")
-	var bindTemplatePath string
-	flag.StringVar(&bindTemplatePath, "bind-template", "", "write a receipt template for the current pending HostAction")
-	flag.BoolVar(&options.Continue, "continue", false, "continue a registered fixture-driven scenario after recovery")
 	flag.Uint64Var(&options.ExpectedRevision, "expected-revision", 0, "caller-observed revision for CAS scenarios")
 	flag.IntVar(&options.Capacity, "capacity", 0, "scenario admission capacity")
 	flag.StringVar(&options.LifecycleMatches, "lifecycle-matches", "", "unknown receipt lifecycle match count")
-	flag.StringVar(&options.Fact, "fact", "", "reconciliation fact observed")
-	flag.StringVar(&options.Expected, "expected", "", "reconciliation expected fact")
-	flag.StringVar(&options.Conflict, "conflict", "", "reconciliation conflict boolean")
-	flag.StringVar(&options.Operation, "operation", "", "registered adapter operation for host-action scenarios")
-	flag.StringVar(&options.Params, "params", "", "structured JSON object for the registered adapter operation")
 	flag.Parse()
-	if bindTemplatePath != "" {
-		options.BindTemplate = true
-		options.Template = bindTemplatePath
-	}
 
 	if options.ProjectRoot == "" {
 		fatal(fmt.Errorf("project root is required"))

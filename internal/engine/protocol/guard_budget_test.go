@@ -33,7 +33,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: definition.Registry(), Capacity: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		}},
 	}
 	qaTask := pipelineTask(cd, "engine.qa.execution.v3", "wave-1:BLACKBOX")
-	gateTask := pipelineTask(cd, "engine.gate.v2", "wave-1:quality")
+	gateTask := pipelineTask(cd, "engine.gate.v3", "wave-1:quality")
 	state.Validation = &Validation{
 		RequirementRevision: "rev-1", Generation: 0,
 		Sets:     map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Version: "case-v1", Status: "FROZEN"}},
@@ -156,7 +156,7 @@ func TestGuardIssuanceBlocksUnbackedTask(t *testing.T) {
 	cd := engine.cfg.Definition
 	// 伪造一个不在任何 wave/plan/set 中的 repair 任务：唯一 repair 来源是
 	// wave.Repair（adjudication 完成、收齐后建立），本状态没有。
-	rogue := pipelineTask(cd, "engine.repair.v5", "sha256:rogue-candidate")
+	rogue := pipelineTask(cd, "engine.repair.v6", "sha256:rogue-candidate")
 	gate := engine.guardIssuanceGate(state)
 	err := gate(decision.IssuedSet{{ActionID: "act:rogue", Task: rogue, Step: rogue.Step}})
 	var rejected *RejectedError
@@ -251,7 +251,7 @@ func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
 func TestGuardBlocksOutOfPlanBatchScope(t *testing.T) {
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
-	rogue := pipelineTask(cd, "engine.development.batch.v4", "plan:unconfirmed:batch-rogue")
+	rogue := pipelineTask(cd, "engine.development.batch.v5", "plan:unconfirmed:batch-rogue")
 	gate := engine.guardIssuanceGate(state)
 	err := gate(decision.IssuedSet{{ActionID: "act:dev-rogue", Task: rogue, Step: rogue.Step}})
 	var rejected *RejectedError
@@ -273,7 +273,7 @@ func TestGuardBlocksOutOfPlanBatchScope(t *testing.T) {
 func TestGuardBlockedBugOnMisalignedLedger(t *testing.T) {
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
-	rogue := pipelineTask(cd, "engine.repair.v5", "sha256:rogue-candidate")
+	rogue := pipelineTask(cd, "engine.repair.v6", "sha256:rogue-candidate")
 	state.DispatchBindings["act:rogue"] = WorkBinding{Task: rogue, WaveID: "wave-1"}
 	_, err := engine.deriveGuardBudget(state)
 	var rejected *RejectedError
@@ -326,9 +326,7 @@ func TestGuardBudgetLoadBoundaryRejectsTamperedProjection(t *testing.T) {
 
 // TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger：恢复换新
 // （NEW_ATTEMPT，绑定/责任变化的新计划槽位）仍经派发 guard——治理任务换新
-// 必须在授权 basis 内，且其执行计数续在同一 TaskKey 的 Attempt 账本
-// （IssueFromPlan/refill/ResumeAgent/RecoveryNewAttempt/HostAction retry 五入
-// 口共用同一 guard/Attempt 计数）。
+// 必须在授权 basis 内，且其执行计数续在同一 TaskKey 的 Attempt 账本。
 func TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger(t *testing.T) {
 	engine, state, qaTask := guardedFunnelFixture(t)
 	state.PendingActions["act:qa-1"] = PendingAction{ActionID: "act:qa-1", Task: qaTask, Step: string(qaTask.Step), AttemptID: "att:qa-1"}
@@ -363,7 +361,7 @@ func TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger(t *testing.T) {
 	}
 	// 计划外且已入账（SpawnReceipt 在账）的治理任务＝账目无法对齐：换新以
 	// BLOCKED_BUG 零派发终止（issued 事实经 provenance 归类失败）。
-	rogue := pipelineTask(engine.cfg.Definition, "engine.development.batch.v4", "plan:rogue:rogue")
+	rogue := pipelineTask(engine.cfg.Definition, "engine.development.batch.v5", "plan:rogue:rogue")
 	state.PendingActions["act:rogue"] = PendingAction{ActionID: "act:rogue", Task: rogue, Step: string(rogue.Step), AttemptID: "att:rogue"}
 	state.Attempts[rogue] = Attempt{ID: "att:rogue", Attempts: 0, MaxAttempts: 2, Business: true,
 		IssuedAction: decision.IssuedAction{ActionID: "act:rogue", Task: rogue, Step: rogue.Step},
@@ -403,7 +401,7 @@ func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	w := &state.Validation.Waves[0]
-	gateTask := pipelineTask(cd, "engine.gate.v2", "wave-1:quality")
+	gateTask := pipelineTask(cd, "engine.gate.v3", "wave-1:quality")
 	for _, target := range w.Targets {
 		if target.Kind == "GATE" {
 			target.Status = "FAIL"
@@ -418,7 +416,7 @@ func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P2", AcceptedRevision: 2}},
 	}
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v6", "native-1"), Problems: []string{"problem-1"}}
 	// 返修已签发（签发代数在账）。
 	state.DispatchBindings["act:repair-1"] = WorkBinding{Task: w.Repair.Task, WaveID: w.ID, Candidate: "native-1", Generation: 1}
 	state.DispatchIssueRevisions["act:repair-1"] = 8
@@ -490,7 +488,7 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 	// 收齐且裁决完成后：finding 指向 problem、有效义务与唯一 repair TaskKey
 	// 进入 basis（预授权 repair 机械加入，未签发也占槽）。
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v6", "native-1"), Problems: []string{"problem-1"}}
 	state.Validation.Findings["finding-1"] = &ValidationFinding{
 		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", AcceptedRevision: 2}},
@@ -609,7 +607,7 @@ func guardRepairFixture(t *testing.T) (*Engine, *State) {
 		}
 	}
 	w.Status = "REPAIR"
-	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v5", "native-1"), Problems: []string{"problem-1"}}
+	w.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v6", "native-1"), Problems: []string{"problem-1"}}
 	state.Validation.Findings["finding-1"] = &ValidationFinding{
 		ID: "finding-1", WaveID: w.ID, Target: gateTaskKeyOf(w),
 		History: []FindingResolution{{Decision: "NEW", ProblemID: "problem-1", Severity: "P1", Reason: "broken normal path", AcceptedRevision: 2}},
@@ -669,8 +667,9 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fingerprint, _ := (decision.Observation{}).Digest()
 	revision, err := store.Save(persistence.Transaction{
-		ExpectedFingerprint: fingerprintOf(t, engine), CollectFingerprint: engine.ObserveFingerprint, Content: state,
+		ExpectedFingerprint: fingerprint, CollectFingerprint: (Observation{}).Fingerprint, Content: state,
 	})
 	if err != nil {
 		t.Fatalf("persist fixture: %v", err)
@@ -682,12 +681,12 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	}
 	reopened, err := New(mustStoreAt(t, dir), Config{InternalSteps: fixtureInternalSteps(),
 		Definition: engine.cfg.Definition, Registry: engine.cfg.Registry, Capacity: 4,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp := fingerprintOf(t, reopened)
-	plan, _, err := reopened.Plan()
+	observedInput := Observation{}
+	plan, _, err := reopened.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +701,7 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	if !ready {
 		t.Fatalf("fixture did not reach a governed Ready candidate: %+v", plan.Next)
 	}
-	_, _, err = reopened.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp)
+	_, _, err = reopened.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	var rejected *RejectedError
 	if !errors.As(err, &rejected) || rejected.Code != CodeGuardBlockedBug {
 		t.Fatalf("issue = %v, want BLOCKED_BUG", err)
@@ -732,11 +731,11 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		}
 	}
 	must(reg.RegisterHandler("engine.funnel.parse", authoring.RunnerEngineLocal))
-	must(reg.RegisterHandler("engine.development.batch.v4", authoring.RunnerAgentWorker))
+	must(reg.RegisterHandler("engine.development.batch.v5", authoring.RunnerAgentWorker))
 	must(reg.RegisterHandler("engine.qa.execution.v3", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.funnel.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -745,26 +744,24 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "funnel", Dependencies: ds, DefinitionVersion: "1"}
 	}
 	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-		Postconditions: []authoring.PredicateRef{{ID: "pred.funnel.post"}}}
+		Postconditions: []authoring.PredicateRef{{ID: reviewResultPredicate}}}
 	parse, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.funnel.parse"})
 	must(err)
 	agent := func(id, handler string) authoring.Step {
 		spec := authoring.AgentSpec{Handler: authoring.HandlerID(handler), Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
-		if handler == "engine.development.batch.v4" {
+		if handler == "engine.development.batch.v5" {
 			spec.Reason = authoring.ReasonCreativeImplementation
 		}
-		withDeps := io
-		withDeps.Inputs = []authoring.InputBinding{{From: "prep.parse", OutputField: "out", ToField: "in"}}
-		step, err := authoring.NewAgentStep(header(id, "prep.parse"), withDeps, spec)
+		step, err := authoring.NewAgentStep(header(id, "prep.parse"), io, spec)
 		must(err)
 		return step
 	}
 	cd, err := compiler.Compile(&compiler.Definition{
 		Version: "1", EntryNode: "funnel",
-		Steps: []authoring.Step{parse, agent("development.worker", "engine.development.batch.v4"), agent("qa.execution", "engine.qa.execution.v3")},
+		Steps: []authoring.Step{parse, agent("development.worker", "engine.development.batch.v5"), agent("qa.execution", "engine.qa.execution.v3")},
 	}, reg)
 	must(err)
-	engine, err := New(mustStoreAt(t, t.TempDir()), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStoreAt(t, t.TempDir()), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

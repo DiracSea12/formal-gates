@@ -20,10 +20,10 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+			if _, err = engine.Submit(request, Observation{}); err != nil {
 				t.Fatal(err)
 			}
-			plan, _, err := engine.Plan()
+			plan, _, err := engine.Plan(Observation{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -39,7 +39,7 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 			if len(state.QuarantinedResults) != 1 || len(state.Results) != 0 || state.ReviewSeries.ProductReview.Effective.Status != "PENDING" {
 				t.Fatal("barrier result advanced the review")
 			}
-			engine, err = New(mustStore(t, dir), engine.cfg, nil)
+			engine, err = New(mustStore(t, dir), engine.cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,14 +54,14 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 					t.Fatal(err)
 				}
 				before := stateBytesOf(t, dir)
-				if _, err = engine.Submit(unbound, fingerprintOf(t, engine)); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
+				if _, err = engine.Submit(unbound, Observation{}); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
 					t.Fatal("unbound package was executed or changed state")
 				}
 				update, err := NewRequirementPackageEvent("prepare-package", "begin-change", token, payload.packageView())
 				if err != nil {
 					t.Fatal(err)
 				}
-				accepted, err := engine.Submit(update, fingerprintOf(t, engine))
+				accepted, err := engine.Submit(update, Observation{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -74,14 +74,14 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 					t.Fatal(err)
 				}
 				before = stateBytesOf(t, dir)
-				if _, err = engine.Submit(oldToken, fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeStaleFreshness || !bytes.Equal(before, stateBytesOf(t, dir)) {
+				if _, err = engine.Submit(oldToken, Observation{}); err == nil || rejectionCode(t, err) != CodeStaleFreshness || !bytes.Equal(before, stateBytesOf(t, dir)) {
 					t.Fatalf("old confirmation token = %v", err)
 				}
-				engine, err = New(mustStore(t, dir), engine.cfg, nil)
+				engine, err = New(mustStore(t, dir), engine.cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
-				replay, err := engine.Submit(update, fingerprintOf(t, engine))
+				replay, err := engine.Submit(update, Observation{})
 				if err != nil || !reflect.DeepEqual(replay, accepted) || !bytes.Equal(before, stateBytesOf(t, dir)) {
 					t.Fatalf("package replay = %+v, %v", replay, err)
 				}
@@ -100,7 +100,7 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err = engine.Submit(event, fingerprintOf(t, engine)); err != nil {
+			if _, err = engine.Submit(event, Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			state = engine.LoadMustSucceed(t).State
@@ -124,7 +124,7 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 			engine, dir := reviewEngine(t, cd, reg)
 			exhaustProductReviewCapacity(t, engine)
 			redoProductReview(t, engine, "additional-review")
-			plan, _, err := engine.Drive(fingerprintOf(t, engine))
+			plan, _, err := engine.Drive(Observation{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,11 +142,11 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 				t.Fatal("generated grant request lost its complete offer evidence")
 			}
 			before := stateBytesOf(t, dir)
-			engine, err = New(mustStore(t, dir), engine.cfg, nil)
+			engine, err = New(mustStore(t, dir), engine.cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err = engine.Drive(fingerprintOf(t, engine)); err != nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
+			if _, _, err = engine.Drive(Observation{}); err != nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
 				t.Fatal("re-entry changed the same grant Ask")
 			}
 			token, err := engine.Freshness(RequestID(requestID))
@@ -157,7 +157,7 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = engine.Submit(wrong, fingerprintOf(t, engine)); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
+			if _, err = engine.Submit(wrong, Observation{}); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
 				t.Fatal("grant changed the action bound to its Ask")
 			}
 			event, err := NewDecideEvent("decide-grant", RequestID(requestID), token, AskOptionID(choice))
@@ -170,12 +170,12 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			accepted, err := engine.Submit(event, fingerprintOf(t, engine))
+			accepted, err := engine.Submit(event, Observation{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			before = stateBytesOf(t, dir)
-			replay, err := engine.Submit(event, fingerprintOf(t, engine))
+			replay, err := engine.Submit(event, Observation{})
 			if err != nil || !reflect.DeepEqual(replay, accepted) || !bytes.Equal(before, stateBytesOf(t, dir)) {
 				t.Fatal("grant decision replay changed durable state")
 			}
@@ -188,7 +188,7 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 					t.Fatalf("grant did not issue exactly one owed review: %+v", state.PendingActions)
 				}
 			} else {
-				plan, _, err = engine.Drive(fingerprintOf(t, engine))
+				plan, _, err = engine.Drive(Observation{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -212,7 +212,7 @@ func TestReconfirmedContentOwnsFreshReviewGeneration(t *testing.T) {
 	payload := &RequirementDecisionPayload{BaseRevision: revision, CandidateRevision: "rev-1", DeltaDigest: "delta:restore", ImpactDigest: "impact:restore", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationChanged, RedoProductReview: true, Reason: "restore content and request an independent fresh review"}
 	askAndDecideRequirement(t, engine, "restore-original", "proceed", payload)
 	var err error
-	engine, err = New(mustStore(t, dir), engine.cfg, nil)
+	engine, err = New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestRequirementAskExpiresAcrossReconfirmedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+	if _, err = engine.Submit(request, Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	for i, revision := range []string{"rev-2", "rev-1"} {
@@ -251,7 +251,7 @@ func TestRequirementAskExpiresAcrossReconfirmedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := stateBytesOf(t, dir)
-	if _, err = engine.Submit(requirementDecideEvent(t, "earlier-ask", token, "proceed", pending), fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeRequirementAskExpired || !bytes.Equal(before, stateBytesOf(t, dir)) {
+	if _, err = engine.Submit(requirementDecideEvent(t, "earlier-ask", token, "proceed", pending), Observation{}); err == nil || rejectionCode(t, err) != CodeRequirementAskExpired || !bytes.Equal(before, stateBytesOf(t, dir)) {
 		t.Fatalf("reused content refreshed a stale Ask: %v", err)
 	}
 }

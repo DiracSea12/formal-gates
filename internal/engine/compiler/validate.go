@@ -154,34 +154,6 @@ func checkRetryValue(id authoring.StepID, r authoring.RetryPolicy) error {
 	return nil
 }
 
-// checkInputsEqualDeps 强制四个可执行变体的 typed source bindings 集合与
-// 依赖集合精确相等：删除依赖必被拒，且与
-// submit 的 source bindings 校验同源。
-// human/parallel 无共享 IO 段，不适用。
-func checkInputsEqualDeps(cs CompiledStep) error {
-	switch cs.Payload.(type) {
-	case CompiledHumanAskStep, CompiledParallelStep:
-		return nil
-	}
-	deps := make(map[authoring.StepID]bool, len(cs.Header.Dependencies))
-	for _, d := range cs.Header.Dependencies {
-		deps[d] = true
-	}
-	frons := make(map[authoring.StepID]bool, len(cs.IO.Inputs))
-	for _, b := range cs.IO.Inputs {
-		if !deps[b.From] {
-			return invariantError(`step %q: input binding source %q is not a dependency`, cs.Header.ID, b.From)
-		}
-		frons[b.From] = true
-	}
-	for d := range deps {
-		if !frons[d] {
-			return invariantError(`step %q: dependency %q has no typed input binding`, cs.Header.ID, d)
-		}
-	}
-	return nil
-}
-
 // resolveCtx 承载 registry 解析阶段的模式路由：
 //   - "未注册"（closed world not found）：diagnostic 模式记为
 //     MISSING_ENGINE_ADAPTER 诊断并继续编译；正常模式路由为 BLOCKED_BUG；

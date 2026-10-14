@@ -366,14 +366,6 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 	return receipt, nil
 }
 
-func PackageDigest(root string) (string, error) {
-	receipt, err := PackageReceipt(root)
-	if err != nil {
-		return "", err
-	}
-	return receipt.Digest, nil
-}
-
 func fileDigest(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -517,9 +509,6 @@ func commitRegistryRecordsUnlocked(path string, doc RegistryDocument, records []
 		if record.Status == "" {
 			record.Status = "active"
 		}
-		if record.CanonicalPaths == nil {
-			record.CanonicalPaths = map[string]string{}
-		}
 		normalizeRegistryRecord(&record, doc.Epoch)
 		if !validRegistryRecord(record) {
 			return RegistryDocument{}, fmt.Errorf("registry record %q has incomplete or mismatched canonical target/launcher binding", record.ID)
@@ -560,12 +549,12 @@ func admitRegistryUnlocked(path, recordID string) (AdmissionReceipt, error) {
 		receipt.Code, receipt.Reason = "UNREGISTERED_INSTALL", err.Error()
 		return receipt, writeAdmissionReceipt(path, receipt)
 	}
-	return admitRegistryDoc(path, recordID, doc, now, receipt)
+	return admitRegistryDoc(path, recordID, doc, receipt)
 }
 
 // admitRegistryDoc validates records and installed identity from the caller's
 // loaded registry document, writing a rejection receipt on admission failure.
-func admitRegistryDoc(path, recordID string, doc RegistryDocument, now string, receipt AdmissionReceipt) (AdmissionReceipt, error) {
+func admitRegistryDoc(path, recordID string, doc RegistryDocument, receipt AdmissionReceipt) (AdmissionReceipt, error) {
 	for _, record := range doc.Records {
 		if record.ID != recordID {
 			continue

@@ -265,7 +265,7 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 					}
 					d.submit(observed)
 				}
-				if _, _, err := d.f.engine.ReconcileUnknownReceipt(id, emptyFingerprint()); err != nil {
+				if _, _, err := d.f.engine.ReconcileUnknownReceipt(id, protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				d.run, err = d.f.Show()

@@ -42,7 +42,7 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := protocol.WorkerInput{RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker.v2", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "native-worker", Provider: "codex", VCS: "git", Handler: "engine.review.worker.v2", Pending: protocol.PendingAction{ActionID: "review-action", AttemptID: "review-attempt", Task: runtime.TaskKey{Node: "review", Step: "review.worker"}, ReviewSeries: review.ProductReview}, RequirementDocument: doc, Review: &protocol.WorkerReviewInput{Action: review.ProductReview, RequirementRevision: doc.ContentDigest}}
 	material, err := worker.Render(input, catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +93,9 @@ func TestProductionWorkerNativeInputAndCoreResult(t *testing.T) {
 }
 
 func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Pending: protocol.PendingAction{ActionID: "issued"}, Provider: "codex", Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -118,7 +118,7 @@ func TestWorkerRoleSchemasUseNativeStrictTransport(t *testing.T) {
 }
 
 func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.readiness.plan.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +135,7 @@ func TestReadinessNativeTransportPreservesTierContracts(t *testing.T) {
 	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 		t.Run(tier, func(t *testing.T) {
 			plan := nativeWorkerGranularityFixture()
+			plan.Batches[0].Checks = []worker.Check{{Purpose: protocol.CheckFullBuild, Goal: "build the complete project"}, {Purpose: protocol.CheckFullTests, Goal: "run the complete test suite"}}
 			plan.VerificationTier = tier
 			plan.CheckpointReason = ""
 			plan.CheckpointGroups = nil
@@ -185,7 +186,7 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 			binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "r", SolutionRevision: "s"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route", TopologyScope: "topology"}
 			manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "AC", ObservableBehavior: "public behavior", Oracle: "outcome"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Mode: coverage.CaseBlackbox}}, Edges: []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}
 			execution := coverage.ExecutionBinding{RequiredSourcesDigest: "sources", ManifestDigest: "manifest", MapDigest: "map", WhitelistDigest: "whitelist", Candidate: coverage.ValidationCandidate{Identity: "candidate"}, Scope: coverage.ScopeFull, ExpectedCaseIDs: []string{"case"}}
-			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: manifest, ReviewScope: coverage.ScopeFull, SourcePoints: []protocol.SourcePoint{{SourceID: "REQ", PointID: "AC"}}, Execution: &execution, Whitelist: &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}, RequiredCases: []string{"case"}, PendingCases: []string{"case"}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "worker"}, RequirementRevision: "r"}, Manifest: manifest, ReviewScope: coverage.ScopeFull, SourcePoints: []protocol.SourcePoint{{SourceID: "REQ", PointID: "AC"}}, Execution: &execution, Whitelist: &coverage.ApprovedWhitelist{Entries: []coverage.WhitelistEntry{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ", PointID: "AC", CaseID: "case"}}}, RequiredCases: []string{"case"}, PendingCases: []string{"case"}}}
 			input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case", Operations: []protocol.ExecutionOperationFact{{ActionID: "original-op", Parameters: protocol.CheckParameters{QA: &protocol.QACheckParameters{Source: "case:case", Operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"app", ""}}, Directory: "."}}, Evidence: protocol.CheckEvidence{StdoutText: "empty", Tool: "app", Environment: "issued environment"}}}}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
@@ -259,9 +260,9 @@ func TestQANativeTransportPreservesFiniteMachineValues(t *testing.T) {
 
 func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(role, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: role, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -312,9 +313,9 @@ func TestNativeCompletionSchemaPreservesIssuedKeys(t *testing.T) {
 }
 
 func TestNativeValidationStatusPreservesRoleDomains(t *testing.T) {
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3", "engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			schema, err := worker.ResultSchema(input)
 			if err != nil {
 				t.Fatal(err)
@@ -354,7 +355,7 @@ func TestNativeApprovedPlanDeltaUsesOriginalSubmittedFacts(t *testing.T) {
 	plan := canaryLocalPlan(false)
 	plan.Reason = "original plan rationale"
 	plan.Batches[0].Risk = "original risk"
-	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v4", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v5", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}, ApprovedPlan: plan}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)

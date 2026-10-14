@@ -9,34 +9,77 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 func claudeCaptureBinding() (map[string]any, error) {
-	return claudeConfiguredBinding(settings.Values{})
+	native, sources := map[string]string{}, map[string]string{}
+	if err := claudeResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return claudeConfiguredBinding(settings.Values{Native: native})
+}
+
+func claudeResolvePaths(native, sources map[string]string) error {
+	config := settings.Values{Native: native}
+	executable := config.NativeString("claudeExecutable")
+	path, err := exec.LookPath(executable)
+	if err != nil {
+		return &blockedError{message: "CLAUDE_UNAVAILABLE: claude is not on PATH"}
+	}
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
+	home := config.NativeString("claudeHome")
+	explicitHome := home != ""
+	homeSource := "configured"
+	if !explicitHome {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		homeSource = "HOME"
+		if runtime.GOOS == "windows" {
+			homeSource = "USERPROFILE"
+		}
+	}
+	home = resolveNativePath(home)
+	nativeHome := native["claudeConfigRoot"]
+	rootSource := "claudeHome"
+	if nativeHome == "" {
+		if !explicitHome {
+			nativeHome = os.Getenv("CLAUDE_CONFIG_DIR")
+			if nativeHome != "" {
+				rootSource = "CLAUDE_CONFIG_DIR"
+			}
+		}
+		if nativeHome == "" {
+			nativeHome = filepath.Join(home, ".claude")
+		}
+	}
+	for name, value := range map[string]string{"claudeExecutable": resolveNativePath(path), "claudeHome": home, "claudeConfigRoot": resolveNativePath(nativeHome)} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{"claudeExecutable": executableSource, "claudeHome": homeSource, "claudeConfigRoot": rootSource} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
 }
 
 func claudeConfiguredBinding(config settings.Values) (map[string]any, error) {
-	executable, err := exec.LookPath(config.NativeString("claudeExecutable"))
-	if err != nil {
-		return nil, &blockedError{message: "CLAUDE_UNAVAILABLE: claude is not on PATH"}
+	executable, home, nativeHome := config.Native["claudeExecutable"], config.Native["claudeHome"], config.Native["claudeConfigRoot"]
+	if executable == "" || home == "" || nativeHome == "" {
+		return nil, &blockedError{message: "CLAUDE_CONFIG: frozen native paths required"}
 	}
-	binding, err := buildCaptureBinding("claude", map[string]any{"executable": resolveNativePath(executable)})
-	if err != nil {
-		return nil, err
-	}
-	home, err := os.UserHomeDir()
+	binding, err := buildCaptureBinding("claude", map[string]any{"executable": executable})
 	if err != nil {
 		return nil, err
 	}
-	if override := config.NativeString("claudeHome"); override != "" {
-		home = override
-	}
-	nativeHome := os.Getenv("CLAUDE_CONFIG_DIR")
-	if nativeHome == "" || config.NativeString("claudeHome") != "" {
-		nativeHome = filepath.Join(home, ".claude")
-	}
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CLAUDE_CONFIG_DIR": resolveNativePath(nativeHome)}
+	binding["environment"] = map[string]any{"HOME": home, "CLAUDE_CONFIG_DIR": nativeHome}
 	return binding, nil
 }
 
@@ -72,9 +115,9 @@ func claudeCheckSelection(request any, selection map[string]any) error {
 var claudeStream = streamAdapter{provider: "claude", prefix: "CLAUDE", capture: claudeCaptureBinding, probe: claudeProbe, arguments: claudeArguments, selection: streamSelection, checkSelection: claudeCheckSelection, sessionUnavailable: streamSessionUnavailable}
 
 func claudeExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
-	return streamExecute(claudeStream, request, directory, probe, services...)
+	return streamExecute(claudeStream, request, directory, probe)
 }
-func claudeReconcile(directory string, process any) (map[string]any, error) {
+func claudeReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	return streamReconcile(claudeStream, directory, process)
 }
 func claudeProbe(executable, workspace string, environment map[string]string) (map[string]any, error) {
@@ -108,14 +151,7 @@ func claudeArguments(request any, directory, executable, workspace string, envir
 	}
 	configRoot := environment["CLAUDE_CONFIG_DIR"]
 	if configRoot == "" {
-		configRoot = os.Getenv("CLAUDE_CONFIG_DIR")
-		if configRoot == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return nil, "", err
-			}
-			configRoot = filepath.Join(home, ".claude")
-		}
+		return nil, "", &blockedError{message: "CLAUDE_CONFIG: frozen native paths required"}
 	}
 	settings := filepath.Join(configRoot, "settings.json")
 	if _, err := os.Stat(settings); err == nil {

@@ -177,7 +177,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		// 它，必须继承承载旧派发的 auth[1]。
 		invalidateRoundOf(t, engine, "req-inherit-inv-4", fourth)
 		observedStoppedWorker(t, engine, fifth)
-		plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, fingerprintOf(t, engine))
+		plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, Observation{})
 		if err != nil || plan.Action != RecoveryNewAttempt {
 			t.Fatalf("recovery = %+v err=%v", plan, err)
 		}
@@ -209,7 +209,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 		engine, _ := reviewEngine(t, cd, reg)
 		first := issueReady(t, engine)[0]
 		observedStoppedWorker(t, engine, first)
-		plan, _, err := engine.RecoverAttempt(first, Interruption{CauseKnown: true}, fingerprintOf(t, engine))
+		plan, _, err := engine.RecoverAttempt(first, Interruption{CauseKnown: true}, Observation{})
 		if err != nil || plan.Action != RecoveryNewAttempt {
 			t.Fatalf("recovery = %+v err=%v", plan, err)
 		}
@@ -233,14 +233,14 @@ func TestBlockedReviewPlanRejectsIssuanceWithoutWriting(t *testing.T) {
 	base := engine.LoadMustSucceed(t)
 	baseBytes := stateBytesOf(t, dir)
 	for attempt := 0; attempt < 2; attempt++ {
-		plan, _, err := engine.Plan()
+		plan, _, err := engine.Plan(Observation{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if plan.Next.Kind != decision.KindWait {
 			t.Fatalf("blocked review plan = %s, want WAIT", plan.Next.Kind)
 		}
-		issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprintOf(t, engine))
+		issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, Observation{})
 		if err == nil || len(issued) != 0 {
 			t.Fatalf("non-Ready issuance = %+v, %v", issued, err)
 		}

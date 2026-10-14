@@ -2,13 +2,14 @@ package compiler
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
 )
 
 // 本文件覆盖图不变量全分支（compiler 主责的四类拒绝中的图部分：循环/不可达/
-// 缺依赖/join 缺失与覆盖）+ 归一化 + inputs==deps 不变量。
+// 缺依赖/join 缺失与覆盖）+ 归一化。
 // compiler 主责的版本绑定与 registry 完备性分支分别在下面的版本行与
 // matrix_test.go 的路由测试中覆盖。
 
@@ -23,7 +24,7 @@ func mustLocal(h authoring.Header, io authoring.IO, handler authoring.HandlerID)
 // parallelSteps 构建并行组基座：root → split(children) → join(joinDeps)。
 // children/joinStep/joinDeps 是各覆盖分支的观测点。
 func parallelSteps(children []string, joinStep string, joinDeps ...string) []authoring.Step {
-	root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")
+	root := mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse")
 	kids := make([]authoring.StepID, 0, len(children))
 	for _, c := range children {
 		kids = append(kids, authoring.StepID(c))
@@ -40,9 +41,9 @@ func parallelSteps(children []string, joinStep string, joinDeps ...string) []aut
 	var steps []authoring.Step
 	steps = append(steps, root, split)
 	for _, c := range children {
-		steps = append(steps, mustLocal(header(c, "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice"))
+		steps = append(steps, mustLocal(header(c, "fan", "fan.split"), typedIO(), "engine.fan.slice"))
 	}
-	steps = append(steps, mustLocal(header("fan.join", "fan", joinDeps...), ioWith(joinDeps...), "engine.fan.join"))
+	steps = append(steps, mustLocal(header("fan.join", "fan", joinDeps...), typedIO(), "engine.fan.join"))
 	return steps
 }
 
@@ -52,25 +53,25 @@ func defWith(steps ...authoring.Step) *Definition {
 
 // TestGraphRejects 逐分支验证图不变量拒绝，错误信息含具体位置（步骤 ID）。
 func TestGraphRejects(t *testing.T) {
-	orphan := mustLocal(header("island.solo", "island"), ioWith(), "engine.entry.parse")
+	orphan := mustLocal(header("island.solo", "island"), typedIO(), "engine.entry.parse")
 	ghostDep, err := authoring.NewLocalStep(header("entry.ghost", "entry", "ghost"),
-		ioWith("ghost"), authoring.LocalSpec{Handler: "engine.entry.parse"})
+		typedIO(), authoring.LocalSpec{Handler: "engine.entry.parse"})
 	if err != nil {
 		t.Fatalf("ghost dep step: %v", err)
 	}
-	dupParse := mustLocal(header("entry.parse", "entry"), ioWith(), "engine.entry.parse")
-	rootA := mustLocal(header("fan.a", "fan"), ioWith(), "engine.entry.parse")
-	depB := mustLocal(header("entry.b", "entry", "fan.a"), ioWith("fan.a"), "engine.entry.parse")
+	dupParse := mustLocal(header("entry.parse", "entry"), typedIO(), "engine.entry.parse")
+	rootA := mustLocal(header("fan.a", "fan"), typedIO(), "engine.entry.parse")
+	depB := mustLocal(header("entry.b", "entry", "fan.a"), typedIO(), "engine.entry.parse")
 	// 绕过 constructor 的原始结构体：版本不绑定、自引用、零值三行
 	//（constructor 已拦同类问题，这里验证 compiler 二次防线同样拒绝）。
 	unbound := authoring.LocalStep{
 		Header:  authoring.Header{ID: "entry.u", NodeID: "entry", DefinitionVersion: "wf-v2"},
-		IO:      ioWith(),
+		IO:      typedIO(),
 		Handler: "engine.entry.parse",
 	}
 	selfDep := authoring.LocalStep{
 		Header:  authoring.Header{ID: "entry.self", NodeID: "entry", Dependencies: []authoring.StepID{"entry.self"}, DefinitionVersion: goldenVersion},
-		IO:      ioWith(),
+		IO:      typedIO(),
 		Handler: "engine.entry.parse",
 	}
 	anchorSteps := func() []authoring.Step {
@@ -86,9 +87,9 @@ func TestGraphRejects(t *testing.T) {
 		}
 		return []authoring.Step{
 			split,
-			mustLocal(header("fan.s1", "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice"),
-			mustLocal(header("fan.s2", "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice"),
-			mustLocal(header("fan.join", "fan", "fan.s1", "fan.s2"), ioWith("fan.s1", "fan.s2"), "engine.fan.join"),
+			mustLocal(header("fan.s1", "fan", "fan.split"), typedIO(), "engine.fan.slice"),
+			mustLocal(header("fan.s2", "fan", "fan.split"), typedIO(), "engine.fan.slice"),
+			mustLocal(header("fan.join", "fan", "fan.s1", "fan.s2"), typedIO(), "engine.fan.join"),
 		}
 	}
 	joinIsChild := func() []authoring.Step {
@@ -103,8 +104,8 @@ func TestGraphRejects(t *testing.T) {
 		}
 		return steps
 	}
-	cycA := mustLocal(header("cyc.a", "entry", "cyc.b"), ioWith("cyc.b"), "engine.entry.parse")
-	cycB := mustLocal(header("cyc.b", "entry", "cyc.a"), ioWith("cyc.a"), "engine.entry.parse")
+	cycA := mustLocal(header("cyc.a", "entry", "cyc.b"), typedIO(), "engine.entry.parse")
+	cycB := mustLocal(header("cyc.b", "entry", "cyc.a"), typedIO(), "engine.entry.parse")
 	// 缺 child：ghost.c2 在 children 里但表内不存在（parallelSteps 会为每个
 	// child 建步骤，因此单独构建）。
 	missingChild := func() []authoring.Step {
@@ -118,10 +119,10 @@ func TestGraphRejects(t *testing.T) {
 			t.Fatalf("missing child split: %v", err)
 		}
 		return []authoring.Step{
-			mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse"),
+			mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse"),
 			split,
-			mustLocal(header("fan.s1", "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice"),
-			mustLocal(header("fan.join", "fan", "fan.s1"), ioWith("fan.s1"), "engine.fan.join"),
+			mustLocal(header("fan.s1", "fan", "fan.split"), typedIO(), "engine.fan.slice"),
+			mustLocal(header("fan.join", "fan", "fan.s1"), typedIO(), "engine.fan.join"),
 		}
 	}
 	// join 步 == 并行步自身，且 split 的依赖恰为
@@ -129,8 +130,8 @@ func TestGraphRejects(t *testing.T) {
 	// 已拒该组合，绕过构造的原始结构体由 compiler 二次防线拒绝）。
 	selfJoin := func() []authoring.Step {
 		return []authoring.Step{
-			authoring.LocalStep{Header: header("entry.c1", "entry"), IO: ioWith(), Handler: "engine.entry.parse"},
-			authoring.LocalStep{Header: header("entry.c2", "entry"), IO: ioWith(), Handler: "engine.entry.parse"},
+			authoring.LocalStep{Header: header("entry.c1", "entry"), IO: typedIO(), Handler: "engine.entry.parse"},
+			authoring.LocalStep{Header: header("entry.c2", "entry"), IO: typedIO(), Handler: "engine.entry.parse"},
 			authoring.ParallelStep{
 				Header:   header("fan.split", "fan", "entry.c1", "entry.c2"),
 				Children: []authoring.StepID{"entry.c1", "entry.c2"},
@@ -156,20 +157,20 @@ func TestGraphRejects(t *testing.T) {
 			t.Fatalf("split2: %v", err)
 		}
 		return []authoring.Step{
-			mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse"),
+			mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse"),
 			split1, split2,
-			mustLocal(header("fan.a", "fan", "fan.split1", "fan.split2"), ioWith("fan.split1", "fan.split2"), "engine.fan.slice"),
-			mustLocal(header("fan.b", "fan", "fan.split1", "fan.split2"), ioWith("fan.split1", "fan.split2"), "engine.fan.slice"),
-			mustLocal(header("fan.join", "fan", "fan.a", "fan.b"), ioWith("fan.a", "fan.b"), "engine.fan.join"),
+			mustLocal(header("fan.a", "fan", "fan.split1", "fan.split2"), typedIO(), "engine.fan.slice"),
+			mustLocal(header("fan.b", "fan", "fan.split1", "fan.split2"), typedIO(), "engine.fan.slice"),
+			mustLocal(header("fan.join", "fan", "fan.a", "fan.b"), typedIO(), "engine.fan.join"),
 		}
 	}
 	// children 不同但 join 步共享时，仍须拒绝归属歧义。
 	sharedJoin := func() []authoring.Step {
 		mk := func(id, dep string) authoring.Step {
-			return mustLocal(header(id, "fan", dep), ioWith(dep), "engine.fan.slice")
+			return mustLocal(header(id, "fan", dep), typedIO(), "engine.fan.slice")
 		}
 		return []authoring.Step{
-			mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse"),
+			mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse"),
 			authoring.ParallelStep{
 				Header:   header("fan.split1", "fan", "entry.root"),
 				Children: []authoring.StepID{"fan.a", "fan.b"},
@@ -185,7 +186,7 @@ func TestGraphRejects(t *testing.T) {
 			mk("fan.a", "fan.split1"), mk("fan.b", "fan.split1"),
 			mk("fan.c", "fan.split2"), mk("fan.d", "fan.split2"),
 			mustLocal(header("fan.join", "fan", "fan.a", "fan.b", "fan.c", "fan.d"),
-				ioWith("fan.a", "fan.b", "fan.c", "fan.d"), "engine.fan.join"),
+				typedIO(), "engine.fan.join"),
 		}
 	}
 
@@ -207,7 +208,7 @@ func TestGraphRejects(t *testing.T) {
 		{"parallel groups sharing children", sharedChildren(), goldenEntry, `child "fan.a" already claimed by parallel step "fan.split1" (parallel group ownership is exclusive)`},
 		{"parallel groups sharing join", sharedJoin(), goldenEntry, `join step "fan.join" already claimed by parallel step "fan.split1" (parallel group ownership is exclusive)`},
 		{"branch closure", append(parallelSteps([]string{"fan.s1", "fan.s2"}, "fan.join", "fan.s1", "fan.s2"),
-			mustLocal(header("fan.x", "fan", "fan.s1"), ioWith("fan.s1"), "engine.fan.slice")), goldenEntry,
+			mustLocal(header("fan.x", "fan", "fan.s1"), typedIO(), "engine.fan.slice")), goldenEntry,
 			`child "fan.s1" has dependent "fan.x" other than join "fan.join"`},
 		{"parallel without anchor", anchorSteps(), goldenEntry, "fan-out anchor dependency required"},
 		{"duplicate step id", append(goldenSteps(), dupParse), goldenEntry, `duplicate step id "entry.parse"`},
@@ -247,12 +248,12 @@ func TestGraphRejects(t *testing.T) {
 	})
 }
 
-// TestCompileNormalization：依赖/children 去重排序、predicate/input 排序、
+// TestCompileNormalization：依赖/children 去重排序、predicate 排序、
 // 空集合归一化为 nil——即使输入是绕过 constructor 的原始结构体。
 func TestCompileNormalization(t *testing.T) {
-	root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")
-	a := mustLocal(header("entry.a", "entry", "entry.root"), ioWith("entry.root"), "engine.entry.parse")
-	z := mustLocal(header("entry.z", "entry", "entry.root"), ioWith("entry.root"), "engine.entry.parse")
+	root := mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse")
+	a := mustLocal(header("entry.a", "entry", "entry.root"), typedIO(), "engine.entry.parse")
+	z := mustLocal(header("entry.z", "entry", "entry.root"), typedIO(), "engine.entry.parse")
 	merge := authoring.LocalStep{
 		Header: authoring.Header{
 			ID: "entry.merge", NodeID: "entry", DefinitionVersion: goldenVersion,
@@ -263,10 +264,6 @@ func TestCompileNormalization(t *testing.T) {
 			Postconditions: []authoring.PredicateRef{ // 乱序 + 同 ID 否定在前
 				{ID: "pred.b"}, {ID: "pred.a", Negated: true}, {ID: "pred.a"},
 			},
-			Inputs: []authoring.InputBinding{ // 乱序
-				{From: "entry.z", OutputField: "o", ToField: "i2"},
-				{From: "entry.a", OutputField: "o", ToField: "i1"},
-			},
 		},
 		Handler: "engine.entry.parse",
 	}
@@ -276,9 +273,9 @@ func TestCompileNormalization(t *testing.T) {
 		Join:     authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAny},
 		Failure:  authoring.FailurePolicy{Mode: authoring.WaitAll, Escalate: authoring.FailureBusinessReject},
 	}
-	c1 := mustLocal(header("fan.c1", "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice")
-	c2 := mustLocal(header("fan.c2", "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice")
-	join := mustLocal(header("fan.join", "fan", "fan.c1", "fan.c2"), ioWith("fan.c1", "fan.c2"), "engine.fan.join")
+	c1 := mustLocal(header("fan.c1", "fan", "fan.split"), typedIO(), "engine.fan.slice")
+	c2 := mustLocal(header("fan.c2", "fan", "fan.split"), typedIO(), "engine.fan.slice")
+	join := mustLocal(header("fan.join", "fan", "fan.c1", "fan.c2"), typedIO(), "engine.fan.join")
 
 	reg := goldenRegistry(t)
 	for _, p := range []authoring.PredicateID{"pred.a", "pred.b"} {
@@ -295,16 +292,13 @@ func TestCompileNormalization(t *testing.T) {
 		byID[cs.Header.ID] = cs
 	}
 	m := byID["entry.merge"]
-	if want := []authoring.StepID{"entry.a", "entry.z"}; !depsEqual(m, want) {
+	if want := []authoring.StepID{"entry.a", "entry.z"}; !slices.Equal(m.Header.Dependencies, want) {
 		t.Fatalf("dependencies not deduped+sorted: %v", m.Header.Dependencies)
 	}
 	post := m.IO.Postconditions
 	if len(post) != 3 || post[0].ID != "pred.a" || post[0].Negated ||
 		post[1].ID != "pred.a" || !post[1].Negated || post[2].ID != "pred.b" {
 		t.Fatalf("postconditions not sorted (id, non-negated first): %+v", post)
-	}
-	if in := m.IO.Inputs; len(in) != 2 || in[0].From != "entry.a" || in[1].From != "entry.z" {
-		t.Fatalf("inputs not sorted by source: %+v", in)
 	}
 	if root := byID["entry.root"]; root.Header.Dependencies != nil || root.IO.Preconditions != nil {
 		t.Fatalf("empty collections must normalize to nil: %+v", root)
@@ -313,46 +307,4 @@ func TestCompileNormalization(t *testing.T) {
 	if !ok || len(p.Children) != 2 || p.Children[0] != "fan.c1" || p.Children[1] != "fan.c2" {
 		t.Fatalf("children not deduped+sorted: %+v", byID["fan.split"].Payload)
 	}
-}
-
-// depsEqual 报告 compiled 步骤的依赖切片是否与 want 逐项相等。
-func depsEqual(cs CompiledStep, want []authoring.StepID) bool {
-	if len(cs.Header.Dependencies) != len(want) {
-		return false
-	}
-	for i, d := range cs.Header.Dependencies {
-		if d != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestInputsEqualDeps：typed source bindings 集合与依赖集合精确相等
-// （删依赖必被拒，与 submit 的 source bindings 校验同源）。
-func TestInputsEqualDeps(t *testing.T) {
-	t.Run("binding from non-dependency", func(t *testing.T) {
-		root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")
-		other := mustLocal(header("entry.other", "entry"), ioWith(), "engine.entry.parse")
-		io := ioWith("entry.root", "entry.other") // other 不是依赖
-		m, err := authoring.NewLocalStep(header("entry.m", "entry", "entry.root"), io,
-			authoring.LocalSpec{Handler: "engine.entry.parse"})
-		if err != nil {
-			t.Fatalf("construct: %v", err)
-		}
-		_, err = Compile(defWith(root, other, m), goldenRegistry(t))
-		wantErr(t, err, `input binding source "entry.other" is not a dependency`)
-	})
-	t.Run("dependency without binding", func(t *testing.T) {
-		root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")
-		other := mustLocal(header("entry.other", "entry"), ioWith(), "engine.entry.parse")
-		io := ioWith("entry.root") // entry.other 是依赖但无 binding
-		m, err := authoring.NewLocalStep(header("entry.m", "entry", "entry.root", "entry.other"), io,
-			authoring.LocalSpec{Handler: "engine.entry.parse"})
-		if err != nil {
-			t.Fatalf("construct: %v", err)
-		}
-		_, err = Compile(defWith(root, other, m), goldenRegistry(t))
-		wantErr(t, err, `dependency "entry.other" has no typed input binding`)
-	})
 }

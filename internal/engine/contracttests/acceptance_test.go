@@ -11,12 +11,9 @@ import (
 	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
-// canonical encoder 拒绝 nil 和 diagnostic-only marker 定义，并接受
+// canonical encoder 拒绝 diagnostic-only marker 定义，并接受
 // 完整注册的契约夹具与六种步骤类型的协议测试图。
 func TestEncodeAcceptsRegisteredGraphsAndRejectsDiagnosticDefinitions(t *testing.T) {
-	_, err := encoder.Encode(nil)
-	wantErrContaining(t, err, "nil definition")
-
 	res, err := compiler.CompileDiagnostic(fxDefinition(t), fxRegistryWithout(t, "h.s.review"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,8 +76,9 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 		step func(t *testing.T) authoring.Step
 	}{
 		{"dependency edge", func(t *testing.T) authoring.Step {
-			return mkLocalStep(t, fxHeader("s.cost", "n3", "s.join"),
-				fxIO("s.join"), authoring.LocalSpec{Handler: "h.s.cost"})
+			cost := fxCost(t)
+			cost.Header.Dependencies = []authoring.StepID{"s.join"}
+			return cost
 		}},
 		{"join mode", func(t *testing.T) authoring.Step {
 			return mkParallelStep(t, fxHeader("s.fan", "n2", "s.parse"),
@@ -107,13 +105,13 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 				})
 		}},
 		{"timeout", func(t *testing.T) authoring.Step {
-			io := fxIO("s.parse")
+			io := fxIO()
 			io.Postconditions = []authoring.PredicateRef{{ID: "pred.done"}}
 			return mkAgentStep(t, fxHeader("s.review", "n1", "s.parse"), io,
 				authoring.AgentSpec{Handler: "h.s.review", Reason: authoring.ReasonSemanticJudgment, Timeout: 90 * time.Second})
 		}},
 		{"retry policy", func(t *testing.T) authoring.Step {
-			return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO("s.parse"),
+			return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO(),
 				authoring.DurableSpec{
 					Handler: "h.s.persist", Idempotency: authoring.IdempotencyDeterministicInput,
 					Reconcile: "r.persist", Timeout: 30 * time.Second,
@@ -130,7 +128,7 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 				authoring.LocalSpec{Handler: "h.s.parse"})
 		}},
 		{"predicate id", func(t *testing.T) authoring.Step {
-			io := fxIO("s.parse")
+			io := fxIO()
 			io.Postconditions = []authoring.PredicateRef{{ID: "pred.alt"}}
 			return mkAgentStep(t, fxHeader("s.review", "n1", "s.parse"), io,
 				authoring.AgentSpec{Handler: "h.s.review", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute})
@@ -148,13 +146,13 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 					ResponseSchema: "s.resp", FreshnessTTL: 10 * time.Minute})
 		}},
 		{"non-programmable reason", func(t *testing.T) authoring.Step {
-			io := fxIO("s.parse")
+			io := fxIO()
 			io.Postconditions = []authoring.PredicateRef{{ID: "pred.done"}}
 			return mkAgentStep(t, fxHeader("s.review", "n1", "s.parse"), io,
 				authoring.AgentSpec{Handler: "h.s.review", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute})
 		}},
 		{"idempotency strategy", func(t *testing.T) authoring.Step {
-			return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO("s.parse"),
+			return mkDurableStep(t, fxHeader("s.persist", "n0", "s.parse"), fxIO(),
 				authoring.DurableSpec{
 					Handler: "h.s.persist", Idempotency: authoring.IdempotencyTaskKeyScoped,
 					Reconcile: "r.persist", Timeout: 30 * time.Second,
@@ -162,11 +160,9 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 				})
 		}},
 		{"operation id", func(t *testing.T) authoring.Step {
-			return mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
-				authoring.HostActionSpec{
-					Handler: "h.s.dispatch", Boundary: authoring.BoundaryExternalCapability,
-					Operation: "op.alt", Schema: "schema.alt", Timeout: 5 * time.Second,
-				})
+			dispatch := fxDispatch(t)
+			dispatch.Operation = "op.alt"
+			return dispatch
 		}},
 	}
 	for _, row := range rows {
@@ -189,7 +185,7 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 // 走完 compile → encode → decode 全链路，不触碰 compiler core；ordinal 按
 // 拓扑性质自动落位。
 func TestCompilerAcceptsNewBusinessNodeWithoutCoreChange(t *testing.T) {
-	extra := mkLocalStep(t, fxHeader("s.extra", "n3", "s.join"), fxIO("s.join"),
+	extra := mkLocalStep(t, fxHeader("s.extra", "n3", "s.join"), fxIO(),
 		authoring.LocalSpec{Handler: "h.newbiz"})
 	steps := append(fxAllSteps(t), extra)
 
@@ -211,7 +207,7 @@ func TestCompilerAcceptsNewBusinessNodeWithoutCoreChange(t *testing.T) {
 }
 
 // 用例：mutation 删除类拒绝——删除依赖边、join 成员覆盖、步骤表成员、
-// reconcile、retry、版本绑定、input binding、failure policy，compiler 必须
+// reconcile、retry、版本绑定、failure policy，compiler 必须
 // 拒绝（ADR-001 验收 9）。
 func TestCompilerRejectsStructuralMutationDeletions(t *testing.T) {
 	reg := fxRegistry(t)
@@ -222,7 +218,7 @@ func TestCompilerRejectsStructuralMutationDeletions(t *testing.T) {
 	}{
 		{"join loses child coverage", func(t *testing.T) []authoring.Step {
 			join := mkLocalStep(t, fxHeader("s.join", "n2", "s.left"),
-				fxIO("s.left"), authoring.LocalSpec{Handler: "h.s.join"})
+				fxIO(), authoring.LocalSpec{Handler: "h.s.join"})
 			return withStep(fxAllSteps(t), "s.join", join)
 		}, "does not depend on child"},
 		{"step table drops fan child", func(t *testing.T) []authoring.Step {
@@ -253,11 +249,6 @@ func TestCompilerRejectsStructuralMutationDeletions(t *testing.T) {
 			parse := mkLocalStep(t, h, fxIO(), authoring.LocalSpec{Handler: "h.s.parse"})
 			return withStep(fxAllSteps(t), "s.parse", parse)
 		}, "unbound definition version"},
-		{"step loses input binding", func(t *testing.T) []authoring.Step {
-			cost := mkLocalStep(t, fxHeader("s.cost", "n3", "s.join", "s.ask"),
-				fxIO("s.join"), authoring.LocalSpec{Handler: "h.s.cost"})
-			return withStep(fxAllSteps(t), "s.cost", cost)
-		}, "has no typed input binding"},
 		{"fan loses failure policy", func(t *testing.T) []authoring.Step {
 			fan := fxFan(t)
 			fan.Failure.Escalate = ""

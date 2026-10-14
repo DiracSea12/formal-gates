@@ -65,6 +65,212 @@ func addQAOperationReceipt(t *testing.T, s *State, p CheckParameters, stdout str
 	return intent
 }
 
+func TestCommonPreparationWaitsForCompleteConsumerCase(t *testing.T) {
+	s, cd, target := qaOperationState(t)
+	s.currentValidationWave().Scope = coverage.ScopeFull
+	manifest := &s.currentValidationWave().Coverage.Manifests[0]
+	manifest.SharedSteps[0].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf re > prepared"}, {Kind: coverage.OperationShell, Command: "printf ady >> prepared"}}
+	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "cat prepared"}, {Kind: coverage.OperationShell, Command: "cat prepared; exit 7"}}
+	manifest.Cases[1].SharedSteps = []string{"setup"}
+	plans, err := s.qaCheckPlans(target, cd)
+	if err != nil || len(plans) != 7 {
+		t.Fatal("approved shared consumer plans", err)
+	}
+	e := &Engine{cfg: Config{Definition: cd}}
+	first, err := e.prepareAdapterIntent(s, 1, "op.check", plans[0], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PendingHostActions[first.ActionID] = first
+	second, err := e.prepareAdapterIntent(s, 2, "op.check", plans[4], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PendingHostActions[second.ActionID] = second
+	assertBlocked := func(state *State) {
+		t.Helper()
+		if state.qaCheckExecutionReady(second, cd) || state.NativeActionWritable(second, cd) || state.ExecutableHostActions(cd)[second.ActionID].ActionID != "" {
+			t.Fatal("other recipe started before the complete consumer case ended")
+		}
+	}
+	assertBlocked(s)
+	for _, plan := range plans[:3] {
+		addQAOperationReceipt(t, s, plan, "ready", 0)
+		assertBlocked(s)
+	}
+	raw, _ := json.Marshal(s)
+	var restored State
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked(&restored)
+	completed := addQAOperationReceipt(t, &restored, plans[3], "ready", 7)
+	if !restored.NativeActionWritable(second, cd) || restored.ExecutableHostActions(cd)[second.ActionID].ActionID != second.ActionID {
+		t.Fatal("complete negative-exit consumer retained the common environment")
+	}
+	restored.ReconciledEffects = map[string]ReconciledEffect{completed.ActionID: {Intent: &completed, Status: "FULFILLED"}}
+	delete(restored.PendingHostActions, completed.ActionID)
+	if !restored.qaCheckExecutionReady(second, cd) {
+		t.Fatal("reconciled consumer receipt did not release the common environment")
+	}
+	for _, plan := range plans[:4] {
+		if _, done := restored.qaCheckReceipt(plan); !done {
+			t.Fatal("released original operation lost its exact receipt")
+		}
+	}
+	t.Run("repair", func(t *testing.T) {
+		s, cd, target := qaOperationState(t)
+		wave := s.currentValidationWave()
+		wave.Scope = coverage.ScopeFull
+		wave.Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
+		wave.Repair = &ValidationRepair{Task: pipelineTask(cd, "engine.repair.v6", "original-repair")}
+		originalBinding := WorkBinding{Task: wave.Repair.Task, WaveID: wave.ID, WorkspaceID: "repair-edit"}
+		original := WorkerResult{ActionID: "repair-edit", Outcome: OutcomePass, Validation: &ValidationResult{Binding: originalBinding, Status: "PASS", Development: &DevelopmentEvidence{Paths: []string{"app"}, AffectedCases: []string{"case", "complement"}}}}
+		s.Results = map[string]WorkerResult{original.ActionID: original}
+		s.DispatchBindings[original.ActionID] = originalBinding
+		params, _ := normalizeHostActionParams(CandidateParameters{Stage: "CHECK_SOURCE", WorkspaceID: originalBinding.WorkspaceID, SourceTasks: []runtime.TaskKey{originalBinding.Task}, Paths: original.Validation.Development.Paths})
+		freeze := HostActionIntent{ActionID: "repair-source", PayloadDigest: digestOfCanonical(params), Adapter: &AdapterHostAction{Operation: "op.candidate", Params: params}}
+		proof := CandidateEvidence{ParametersDigest: freeze.PayloadDigest, WorkspaceID: originalBinding.WorkspaceID, Identity: "repaired-candidate", Digest: "repaired-tree", Paths: original.Validation.Development.Paths}
+		values, _ := normalizeHostActionParams(proof)
+		s.PendingHostActions[freeze.ActionID] = freeze
+		s.HostActionReceipts[freeze.ActionID] = HostActionReceipt{ActionID: freeze.ActionID, AdapterOperation: "op.candidate", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: values}}
+		binding := s.validationBinding(target.Task, cd)
+		binding.Task = pipelineTask(cd, "engine.repair.verify.v2", "approved-repair-comparison")
+		binding.Candidate, binding.VerificationSource, binding.PureP2 = proof.Identity, original.ActionID, true
+		resource := s.NativeResources[binding.WorkspaceID]
+		resource.Source, resource.Identity = proof.Identity, proof.Identity
+		s.NativeResources[resource.ID] = resource
+		s.DispatchBindings["repair-comparison"] = binding
+		s.RequirementRevisions[0].WorkDecisions = []RequirementWorkDecision{{Work: RequirementWork{Task: binding.Task}, Disposition: RequirementWorkCarry}}
+		context := repairComparison{binding: binding, resource: resource, source: proof, wave: wave, originals: []WorkerResult{original}, paths: original.Validation.Development.Paths, affected: original.Validation.Development.AffectedCases}
+		plans, err := s.repairComparisonPlans(context, cd)
+		if err != nil || len(plans) != 4 {
+			t.Fatal("repair approved shared consumer plans", err)
+		}
+		addQAOperationReceipt(t, s, plans[0], "ready", 0)
+		if recovered, found := s.repairComparisonContext(binding.Task, cd); !found || recovered.binding != binding || recovered.source.Identity != proof.Identity {
+			t.Fatal("original repair receipt did not reconstruct its precise comparison context")
+		}
+		e := &Engine{cfg: Config{Definition: cd}}
+		if _, err := e.prepareAdapterIntent(s, 1, "op.check", plans[2], ""); err == nil {
+			t.Fatal("repair signing bypassed its original consumer receipt")
+		}
+		consumer, err := e.prepareAdapterIntent(s, 1, "op.check", plans[1], "")
+		if err != nil || !s.qaCheckExecutionReady(consumer, cd) {
+			t.Fatal("original repair consumer was not executable", err)
+		}
+		s.PendingHostActions[consumer.ActionID] = consumer
+		addQAOperationReceipt(t, s, plans[1], "ready", 7)
+		second, err := e.prepareAdapterIntent(s, 2, "op.check", plans[2], "")
+		if err != nil {
+			t.Fatal("ended repair consumer did not release the signing frontier", err)
+		}
+		s.PendingHostActions[second.ActionID] = second
+		if !s.qaCheckExecutionReady(second, cd) || !s.NativeActionWritable(second, cd) || s.ExecutableHostActions(cd)[second.ActionID].ActionID == "" {
+			t.Fatal("repair negative-exit consumer did not release its original common environment")
+		}
+	})
+}
+
+func TestPreparationDependenciesKeepIndependentCasesExecutable(t *testing.T) {
+	for _, relation := range []string{"no-preparation", "independent", "different-preparation", "same-content", "private-prefix"} {
+		t.Run(relation, func(t *testing.T) {
+			s, cd, target := qaOperationState(t)
+			s.currentValidationWave().Scope = coverage.ScopeFull
+			manifest := &s.currentValidationWave().Coverage.Manifests[0]
+			manifest.Cases[1].SharedSteps = []string{"setup"}
+			switch relation {
+			case "no-preparation":
+				manifest.Cases[1].SharedSteps = nil
+			case "independent":
+				manifest.SharedSteps[0].Independent = true
+			case "different-preparation", "same-content", "private-prefix":
+				other := manifest.SharedSteps[0]
+				other.ID = "other-preparation"
+				if relation == "different-preparation" {
+					other.Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf other"}}
+				}
+				if relation == "private-prefix" {
+					other.Independent = true
+				}
+				manifest.SharedSteps = append(manifest.SharedSteps, other)
+				manifest.Cases[1].SharedSteps = []string{other.ID}
+				if relation == "private-prefix" {
+					manifest.Cases[1].SharedSteps = append(manifest.Cases[1].SharedSteps, "setup")
+				}
+				s.currentValidationWave().Reviews[0].SharedStepDecisions = append(s.currentValidationWave().Reviews[0].SharedStepDecisions, coverage.ReviewDecision{ID: other.ID, Status: coverage.StatusPass})
+			}
+			plans, err := s.qaCheckPlans(target, cd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &Engine{cfg: Config{Definition: cd}}
+			var intents []HostActionIntent
+			for _, plan := range []CheckParameters{plans[0], plans[2]} {
+				intent, err := e.prepareAdapterIntent(s, uint64(len(intents)+1), "op.check", plan, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				intents = append(intents, intent)
+				s.PendingHostActions[intent.ActionID] = intent
+			}
+			want := relation != "same-content"
+			if s.qaCheckExecutionReady(intents[1], cd) != want || s.NativeActionWritable(intents[1], cd) != want || (s.ExecutableHostActions(cd)[intents[1].ActionID].ActionID != "") != want {
+				t.Fatal("approved preparation relation did not determine launch dependency")
+			}
+			if relation == "private-prefix" {
+				addQAOperationReceipt(t, s, plans[2], "private", 0)
+				common, err := e.prepareAdapterIntent(s, 3, "op.check", plans[3], "")
+				if err != nil || s.qaCheckExecutionReady(common, cd) {
+					t.Fatal("private prefix acquired the later common environment", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCommonPreparationWaitsForUnknownAndReleasesExecutionError(t *testing.T) {
+	s, cd, target := qaOperationState(t)
+	s.currentValidationWave().Scope = coverage.ScopeFull
+	s.currentValidationWave().Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
+	plans, err := s.qaCheckPlans(target, cd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{cfg: Config{Definition: cd}}
+	original, err := e.prepareAdapterIntent(s, 1, "op.check", plans[0], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PendingHostActions[original.ActionID] = original
+	second, err := e.prepareAdapterIntent(s, 2, "op.check", plans[2], "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PendingHostActions[second.ActionID] = second
+	first := addQAOperationReceipt(t, s, plans[0], "", 0)
+	receipt := s.HostActionReceipts[first.ActionID]
+	receipt.Status = HostActionStatusUnknown
+	s.HostActionReceipts[first.ActionID] = receipt
+	if s.qaCheckExecutionReady(second, cd) {
+		t.Fatal("unknown original execution released its common environment")
+	}
+	receipt.Status = HostActionStatusExecuted
+	var evidence CheckEvidence
+	if err := decodeAdapterValues(receipt, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	evidence.Error = "original process ended without complete execution"
+	receipt.AdapterEvidence.Values, _ = normalizeHostActionParams(evidence)
+	s.HostActionReceipts[first.ActionID] = receipt
+	if !s.qaCheckExecutionReady(second, cd) || !s.NativeActionWritable(second, cd) {
+		t.Fatal("ended execution error blocked the other original case")
+	}
+	if _, err := e.prepareAdapterIntent(s, 3, "op.check", plans[1], ""); err == nil {
+		t.Fatal("failed original case continued its consumer")
+	}
+}
+
 func TestQAOperationsPreservePartitionOrderAndReceipts(t *testing.T) {
 	s, cd, target := qaOperationState(t)
 	if s.qaComparisonReady(target, cd) {

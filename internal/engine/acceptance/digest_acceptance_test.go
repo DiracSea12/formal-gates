@@ -1,5 +1,5 @@
-// digest_acceptance_test.go 覆盖两条 digest 判据（对
-// checked-in definitions/workflow.json 的定义源 definition.Workflow()）：
+// digest_acceptance_test.go 对 testkit/workflow 的十步骤、六变体协议图
+// 覆盖两条 digest 判据：
 //
 //  1. 分离：仅"实现侧"（registry 实例/槽位描述）变化，DefinitionDigest 不变；
 //  2. 敏感性：定义语义逐项变异（依赖/policy/reason/schema/handler/join 语义），
@@ -24,7 +24,7 @@ import (
 func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T) {
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 	if canonicalDigest != definition.WorkflowDefinitionDigest {
-		t.Fatalf("canonical digest = %s, want checked-in identity %s", canonicalDigest, definition.WorkflowDefinitionDigest)
+		t.Fatalf("canonical digest = %s, want fixture identity %s", canonicalDigest, definition.WorkflowDefinitionDigest)
 	}
 
 	// 变体一：同一批 HandlerID/封闭 ID 在另一个独立 registry 实例中再注册一次
@@ -79,11 +79,11 @@ func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) 
 	reg := augmentedRegistry(t)
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), reg)
 	if canonicalDigest != definition.WorkflowDefinitionDigest {
-		t.Fatalf("canonical digest = %s, want checked-in identity %s (extra unused registrations must not shift bytes)", canonicalDigest, definition.WorkflowDefinitionDigest)
+		t.Fatalf("canonical digest = %s, want fixture identity %s (extra unused registrations must not shift bytes)", canonicalDigest, definition.WorkflowDefinitionDigest)
 	}
 
 	// renameJoinAnchor 是 join 语义变异：fan-out 的 join 锚点身份改变
-	// （fan.join → fan.join.alt），join policy 引用与下游依赖/binding 同步
+	// （fan.join → fan.join.alt），join policy 引用与下游依赖同步
 	// 迁移——图仍合法，join 锚点语义已不同。
 	renameJoinAnchor := func(d *compiler.Definition) {
 		ji := stepIndex(t, d, "fan.join")
@@ -99,11 +99,6 @@ func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) 
 				cost.Header.Dependencies[i] = "fan.join.alt"
 			}
 		}
-		for i := range cost.IO.Inputs {
-			if string(cost.IO.Inputs[i].From) == "fan.join" {
-				cost.IO.Inputs[i].From = "fan.join.alt"
-			}
-		}
 		d.Steps[ci] = cost
 	}
 
@@ -112,12 +107,18 @@ func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) 
 		mutate func(d *compiler.Definition)
 	}{
 		{"dependency", func(d *compiler.Definition) {
-			// report.cost 增加对 review.worker 的依赖与对应 typed binding。
+			// report.cost 增加对 review.worker 的依赖，图仍可达且无环。
 			i := stepIndex(t, d, "report.cost")
 			s := d.Steps[i].(authoring.LocalStep)
 			s.Header.Dependencies = append(s.Header.Dependencies, "review.worker")
-			s.IO.Inputs = append(s.IO.Inputs, authoring.InputBinding{From: "review.worker", OutputField: "out", ToField: "in"})
 			d.Steps[i] = s
+		}},
+		{"remove reachable dependency", func(d *compiler.Definition) {
+			// report.cost 仍依赖 fan.join，删 ask.decide 边不破坏可达性。
+			i := stepIndex(t, d, "report.cost")
+			if !dropDep(d, i, "ask.decide") {
+				t.Fatal("dependency not found")
+			}
 		}},
 		{"retry policy", func(d *compiler.Definition) {
 			i := stepIndex(t, d, "report.cost")

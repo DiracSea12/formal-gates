@@ -95,7 +95,14 @@ func (s *Store) Recover() (RecoveryReport, error) {
 	}
 	defer unlock()
 
-	current, err = s.readDocument()
+	return s.recoverLocked()
+}
+
+// recoverLocked reconciles the durable transaction while the caller holds
+// installation admission and both state-directory locks. Save uses the
+// reconciled revision as its CAS basis before persisting another intent.
+func (s *Store) recoverLocked() (RecoveryReport, error) {
+	current, err := s.readDocument()
 	if err != nil {
 		return RecoveryReport{}, err
 	}

@@ -59,15 +59,8 @@ type DiagnosticResult struct {
 // MISSING_ENGINE_ADAPTER 不是可执行定义的合法状态，正常 compile 不产出
 // marker，只拒绝。
 func Compile(def *Definition, reg *Registry) (*CompiledDefinition, error) {
-	cd, diags, err := compile(def, reg, false)
-	if err != nil {
-		return nil, err
-	}
-	if len(diags) > 0 {
-		d := diags[0]
-		return nil, blockedBugError(`step %q: MISSING_ENGINE_ADAPTER: %s id %q not registered (closed world); use diagnostic compile for the technical-debt marker`, d.Step, d.Want, d.Ref)
-	}
-	return cd, nil
+	cd, _, err := compile(def, reg, false)
+	return cd, err
 }
 
 // CompileDiagnostic 以开发期 diagnostic-only 模式编译：结构性校验（图不变量、
@@ -136,9 +129,6 @@ func compile(def *Definition, reg *Registry, diagnostic bool) (*CompiledDefiniti
 		if err := validateStepIR(steps[i]); err != nil {
 			return nil, nil, err
 		}
-		if err := checkInputsEqualDeps(steps[i]); err != nil {
-			return nil, nil, err
-		}
 	}
 	rc := &resolveCtx{reg: reg, diagnostic: diagnostic}
 	for i := range steps {
@@ -178,7 +168,7 @@ func materializeStep(def *Definition, s authoring.Step) (CompiledStep, error) {
 			return CompiledStep{}, err
 		}
 		return CompiledStep{Header: h, IO: normalizeIO(v.IO),
-			Payload: CompiledLocalStep{Handler: v.Handler, Timeout: v.Timeout, Retry: v.Retry}}, nil
+			Payload: CompiledLocalStep{Handler: v.Handler, Timeout: v.Timeout, Retry: cloneRetry(v.Retry)}}, nil
 	case authoring.DurableStep:
 		h, err := compiledHeader(def, v.Header, KindDurable, v)
 		if err != nil {
@@ -202,7 +192,7 @@ func materializeStep(def *Definition, s authoring.Step) (CompiledStep, error) {
 		}
 		return CompiledStep{Header: h, IO: normalizeIO(v.IO),
 			Payload: CompiledAgentStep{Handler: v.Handler, Reason: v.Reason,
-				ReviewSeries: v.ReviewSeries, Timeout: v.Timeout, Retry: v.Retry}}, nil
+				ReviewSeries: v.ReviewSeries, Timeout: v.Timeout, Retry: cloneRetry(v.Retry)}}, nil
 	case authoring.HumanAskStep:
 		h, err := compiledHeader(def, v.Header, KindHumanAsk, v)
 		if err != nil {
@@ -230,6 +220,14 @@ func materializeStep(def *Definition, s authoring.Step) (CompiledStep, error) {
 		// 未知实现或 typed-nil 指针（值类型变体的指针不匹配任何 case）。
 		return CompiledStep{}, invariantError("unknown step variant %T", s)
 	}
+}
+
+func cloneRetry(retry *authoring.RetryPolicy) *authoring.RetryPolicy {
+	if retry == nil {
+		return nil
+	}
+	out := *retry
+	return &out
 }
 
 // compiledHeader 构造公共头并做头部级校验：id/nodeId 非空、definition
@@ -277,24 +275,13 @@ func normalizeIDs(self authoring.StepID, what string, in []authoring.StepID) ([]
 	return out, nil
 }
 
-// normalizeIO 拷贝并排序共享 IO 段：pre/postcondition 按（ID，非否定在前），
-// inputs 按（来源步骤，目标字段）。空集归一化为 nil；不 dedup（去重只约定
+// normalizeIO 拷贝并排序共享 IO 段：pre/postcondition 按（ID，非否定在前）。
+// 空集归一化为 nil；不 dedup（去重只约定
 // 作用于依赖与 children）。
 func normalizeIO(io authoring.IO) authoring.IO {
 	out := authoring.IO{InputCodec: io.InputCodec, OutputCodec: io.OutputCodec}
 	out.Preconditions = sortPredicateRefs(io.Preconditions)
 	out.Postconditions = sortPredicateRefs(io.Postconditions)
-	if len(io.Inputs) > 0 {
-		in := make([]authoring.InputBinding, len(io.Inputs))
-		copy(in, io.Inputs)
-		sort.Slice(in, func(i, j int) bool {
-			if in[i].From != in[j].From {
-				return in[i].From < in[j].From
-			}
-			return in[i].ToField < in[j].ToField
-		})
-		out.Inputs = in
-	}
 	return out
 }
 

@@ -12,6 +12,7 @@ import (
 // It supplies contract values rather than asking the host to reconstruct them.
 type ValidationInput struct {
 	CommandCases        []string               `json:"commandCases,omitempty"`
+	CommandSources      []string               `json:"commandSources,omitempty"`
 	RevisionInstruction *QARevisionInstruction `json:"revisionInstruction,omitempty"`
 	Observation         *ObservationInput      `json:"observation,omitempty"`
 	ReviewBase          string                 `json:"reviewBase,omitempty"`
@@ -147,15 +148,20 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		}
 		return input
 	}
-	if role == "engine.gate.v2" {
+	if role == "engine.gate.v3" {
 		input.Gate = s.gateInput(binding, pending.Task)
 	}
-	if role == "engine.development.batch.v4" {
+	if role == "engine.development.batch.v5" {
 		input.Development = s.developmentInput(pending.Task, cd)
 	}
 	c := s.coverageContract(s.Validation.Candidate)
 	switch role {
 	case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
+		source, current := s.issuedPrewaveSources(binding, cd)
+		if !current {
+			return input
+		}
+		c.RequiredSources.Binding = source
 		contract := modeCoverageContract(c, mode)
 		contract.Candidate = nil
 		input.Contract = &contract
@@ -165,7 +171,7 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Repair = s.repairComparisonInput(context)
 			input.ExecutionFacts = s.repairComparisonFacts(context, cd)
 		}
-	case "engine.repair.v5":
+	case "engine.repair.v6":
 		input.Contract = &c
 		input.Repair = s.repairInput(pending.Task)
 		if work := s.repairMember(pending.Task); work != nil {
@@ -206,13 +212,12 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 		input.InheritableSharedReviews = s.inheritableSharedReviews(set)
 	}
 	if role == "engine.qa.design.v5" || role == "engine.qa.review.rationale.v2" {
-		input.Manifest.Binding.RequirementRevision = binding.RequirementRevision
-		input.Contract.RequiredSources.Binding.RequirementRevision = binding.RequirementRevision
+		input.Manifest.Binding.SourceBinding = c.RequiredSources.Binding
 		if binding.RouteScope != "" {
 			input.Manifest = manifestAtRoute(input.Manifest, binding.RouteScope)
 		}
 		for i := range input.Contract.Manifests {
-			input.Contract.Manifests[i].Binding.RequirementRevision = binding.RequirementRevision
+			input.Contract.Manifests[i].Binding.SourceBinding = c.RequiredSources.Binding
 			if binding.RouteScope != "" {
 				input.Contract.Manifests[i] = manifestAtRoute(input.Contract.Manifests[i], binding.RouteScope)
 			}
@@ -232,7 +237,10 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			if target := wave.Targets[pending.Task.String()]; target != nil {
 				input.RequiredCases = slices.Clone(requiredExecutionCases(wave, target, whitelist))
 				input.ExecutionFacts = s.qaExecutionFacts(target, cd)
-				input.CommandCases = s.qaCommandCases(target, cd)
+				for _, missing := range s.qaCommandPlans(target, cd) {
+					input.CommandCases = append(input.CommandCases, missing.QA.CaseID)
+					input.CommandSources = append(input.CommandSources, missing.QA.Source)
+				}
 				input.Inherited, _ = s.executionInheritance(wave, mode, whitelist, input.RequiredCases, target.ScopeReason)
 				if target.Execution != nil {
 					input.Completed = target.Execution.Records

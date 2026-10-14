@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,57 +10,208 @@ import (
 )
 
 func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T) {
-	d := newValidationDriver(t, "blackbox")
-	action, _ := d.action("engine.development.batch.v4")
-	d.receipt(action)
-	before, err := d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending := before.State.PendingActions[action]
-	original := before.State.Attempts[pending.Task]
-	run, err := d.f.RequestWorkerHandoff(workerNumberForAction(d.run, action), "user requests another developer for unfinished work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.run = run
-	ask := askPosition(t, d.run, protocol.ControlRecovery)
-	candidate, err := d.f.PrepareControl(ControlInput{Ask: ask, Choice: "fresh", Reason: "confirm same-host transfer"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, d.run, err = d.f.SubmitControl(candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(d.run.AdapterIntents) == 0 {
-		t.Fatal("handoff bypassed native termination")
-	}
-	reopen, err := Open(d.f.root, d.f.runID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.f = reopen
-	d.drive()
-	d.completeWorkerTerminations()
-	d.drive()
-	after, err := d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	next, exists := after.State.Attempts[pending.Task]
-	if !exists || next.ActionID == action || next.PreviousAction != action || next.Attempts != original.Attempts || next.MaxAttempts != original.MaxAttempts || !reflect.DeepEqual(next.Work, original.Work) {
-		t.Fatalf("handoff changed work/budget: original=%+v next=%+v", original, next)
-	}
-	if after.State.RunProvider != before.State.RunProvider || after.State.Guard.UsedRetries != before.State.Guard.UsedRetries || len(after.State.RejectedResults) != len(before.State.RejectedResults) {
-		t.Fatal("handoff fabricated failure, host change or retry use")
-	}
-	for _, record := range after.State.RecoveryRecords {
-		if record.ActionID == action && record.Class != "" {
-			t.Fatalf("handoff fabricated failure class: %+v", record)
-		}
+	for _, status := range []string{protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
+		t.Run(status, func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox")
+			action, _ := d.action("engine.development.batch.v5")
+			identity := observeWorkerDispatch(d, action, status)
+			d.reopen()
+			before, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := before.State.PendingActions[action]
+			original := before.State.Attempts[pending.Task]
+			reason := "user requests another developer for unfinished work"
+			worker := workerNumberForAction(d.run, action)
+			run, err := d.f.RequestWorkerHandoff(worker, reason)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.run = run
+			requested, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record protocol.EventRecord
+			for id, candidate := range requested.State.Events {
+				if _, existed := before.State.Events[id]; !existed {
+					if record.Acceptance.EventID != "" {
+						t.Fatal("handoff created more than one event")
+					}
+					record = candidate
+				}
+			}
+			event := protocol.Event{ID: protocol.EventID(record.Acceptance.EventID), Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{
+				Control: protocol.ControlRecovery, Handoff: &protocol.DevelopmentHandoffRequest{ActionID: action, Reason: reason},
+			}}
+			digest, err := event.Digest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := record.Acceptance.RequestID
+			token, err := d.f.Freshness(requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantAcceptance := protocol.Acceptance{EventID: string(event.ID), Kind: string(event.Kind), Status: "ACCEPTED", Revision: before.Revision + 1, RequestID: requestID, FreshnessToken: token, ActionID: action}
+			if record.Digest != digest || requestID == "" || !reflect.DeepEqual(record.Acceptance, wantAcceptance) || requested.Revision != before.Revision+1 {
+				t.Fatalf("handoff event record=%+v want=%+v digest=%s", record, wantAcceptance, digest)
+			}
+			if len(requested.State.RecoveryRecords) != len(before.State.RecoveryRecords)+1 {
+				t.Fatal("handoff did not record one recovery")
+			}
+			recovery := requested.State.RecoveryRecords[len(requested.State.RecoveryRecords)-1]
+			wantRecovery := protocol.RecoveryRecord{Handoff: true, ActionID: action, Task: pending.Task, AttemptID: pending.AttemptID, Action: protocol.RecoveryAsk, Detail: reason, Revision: requested.Revision, RequestID: requestID}
+			if !reflect.DeepEqual(recovery, wantRecovery) || !reflect.DeepEqual(requested.State.Cost, before.State.Cost) || !reflect.DeepEqual(requested.State.PendingActions, before.State.PendingActions) || !reflect.DeepEqual(requested.State.Attempts, before.State.Attempts) {
+				t.Fatalf("handoff lost original recovery facts or cost: recovery=%+v want=%+v", recovery, wantRecovery)
+			}
+			wantAsk := protocol.PendingAsk{RequestID: requestID, Control: protocol.ControlRecovery, Options: []protocol.AskOption{{ID: "fresh", Label: "Transfer unfinished work to a new developer on the same host"}, {ID: "abort", Label: "Abort the run"}}}
+			if !reflect.DeepEqual(requested.State.PendingAsks[requestID], wantAsk) {
+				t.Fatalf("handoff offer=%+v", requested.State.PendingAsks[requestID])
+			}
+			currentWorkers := workerActionOrder(requested.State.WorkerInputs(d.f.definition))
+			if worker < 1 || worker > len(currentWorkers) || currentWorkers[worker-1] != action {
+				t.Fatal("handoff changed the selected current worker")
+			}
+			d.reopen()
+			if d.run, err = d.f.RequestWorkerHandoff(worker, reason); err != nil {
+				t.Fatal(err)
+			}
+			replayed, _, err := d.f.Submit(event)
+			if err != nil || !reflect.DeepEqual(replayed, record.Acceptance) {
+				t.Fatalf("handoff replay=%+v err=%v", replayed, err)
+			}
+			conflict := event
+			conflict.Request = &protocol.RequestPayload{Control: protocol.ControlRecovery, Handoff: &protocol.DevelopmentHandoffRequest{ActionID: action, Reason: "a changed reason under the original event ID"}}
+			_, _, err = d.f.Submit(conflict)
+			var rejected *protocol.RejectedError
+			if !errors.As(err, &rejected) || rejected.Code != protocol.CodeDuplicateEventMismatch {
+				t.Fatalf("handoff conflict=%v", err)
+			}
+			unchanged, err := d.f.engine.Load()
+			if err != nil || !reflect.DeepEqual(requested, unchanged) {
+				t.Fatalf("handoff replay, reopen or rejected payload changed state: %v", err)
+			}
+			if d.run, err = d.f.RequestWorkerHandoff(worker, "another user reason for the same unfinished work"); err != nil {
+				t.Fatal(err)
+			}
+			repeated, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if repeated.Revision != requested.Revision+1 || len(repeated.State.Events) != len(requested.State.Events)+1 || !reflect.DeepEqual(repeated.State.PendingAsks, requested.State.PendingAsks) || !reflect.DeepEqual(repeated.State.RecoveryRecords, requested.State.RecoveryRecords) {
+				t.Fatal("new request for the same execution did not bind its event to the original recovery")
+			}
+			ask := askPosition(t, d.run, protocol.ControlRecovery)
+			candidate, err := d.f.PrepareControl(ControlInput{Ask: ask, Choice: "fresh", Reason: "confirm same-host transfer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, d.run, err = d.f.SubmitControl(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status == protocol.SpawnStatusSpawned {
+				if len(d.run.AdapterIntents) == 0 {
+					t.Fatal("handoff bypassed native termination")
+				}
+				terminating, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d.run, err = d.f.RequestWorkerHandoff(worker, "repeat transfer while the original termination receipt is pending"); err != nil {
+					t.Fatal(err)
+				}
+				waiting, err := d.f.engine.Load()
+				if err != nil || !reflect.DeepEqual(waiting.State.PendingHostActions, terminating.State.PendingHostActions) || !reflect.DeepEqual(waiting.State.PendingAsks, terminating.State.PendingAsks) || !reflect.DeepEqual(waiting.State.RecoveryRecords, terminating.State.RecoveryRecords) || !reflect.DeepEqual(waiting.State.Attempts, terminating.State.Attempts) || !reflect.DeepEqual(waiting.State.Cost, terminating.State.Cost) {
+					t.Fatalf("repeated handoff replaced its pending native recovery effect: %v", err)
+				}
+				reopen, err := Open(d.f.root, d.f.runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.f = reopen
+				d.drive()
+				termination := false
+				for _, intent := range d.run.AdapterIntents {
+					if intent.Terminate != nil && intent.Terminate.WorkerActionID == action {
+						termination = true
+						if intent.Terminate.Identity != identity || intent.Terminate.AttemptID != pending.AttemptID {
+							t.Fatalf("termination differs from original observed execution: %+v", intent.Terminate)
+						}
+					}
+				}
+				if !termination {
+					t.Fatal("handoff did not request termination of the original native execution")
+				}
+				d.completeWorkerTerminations()
+			} else {
+				for _, intent := range d.run.AdapterIntents {
+					if intent.Terminate != nil && intent.Terminate.WorkerActionID == action {
+						t.Fatal("handoff repeated termination of the observed stopped native execution")
+					}
+				}
+				stopped := false
+				for _, lifecycle := range before.State.LifecycleEvents {
+					if lifecycle.Identity == identity && lifecycle.Event == protocol.LifecycleStop {
+						stopped = true
+					}
+				}
+				if !stopped {
+					t.Fatal("fresh handoff has no original native stop evidence")
+				}
+				d.reopen()
+			}
+			d.drive()
+			after, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			next, exists := after.State.Attempts[pending.Task]
+			if !exists || next.ActionID == action || next.PreviousAction != action || next.Attempts != original.Attempts || next.MaxAttempts != original.MaxAttempts || !reflect.DeepEqual(next.Work, original.Work) {
+				t.Fatalf("handoff changed work/budget: original=%+v next=%+v", original, next)
+			}
+			if after.State.RunProvider != before.State.RunProvider || after.State.Guard.UsedRetries != before.State.Guard.UsedRetries || len(after.State.RejectedResults) != len(before.State.RejectedResults) {
+				t.Fatal("handoff fabricated failure, host change or retry use")
+			}
+			if before.State.Cost != nil {
+				if after.State.Cost == nil {
+					t.Fatal("handoff discarded historical costs")
+				}
+				for id, entry := range before.State.Cost.Dispatches {
+					if actual, exists := after.State.Cost.Dispatches[id]; !exists || !reflect.DeepEqual(actual, entry) {
+						t.Fatalf("handoff replaced historical dispatch cost %s: %+v", id, actual)
+					}
+				}
+			}
+			replayed, _, err = d.f.Submit(event)
+			if err != nil || !reflect.DeepEqual(replayed, record.Acceptance) {
+				t.Fatalf("accepted handoff could not replay after replacement: %+v %v", replayed, err)
+			}
+			unchanged, err = d.f.engine.Load()
+			if err != nil || !reflect.DeepEqual(after, unchanged) {
+				t.Fatalf("late handoff replay changed state: %v", err)
+			}
+			for index, record := range before.State.RecoveryRecords {
+				if !reflect.DeepEqual(after.State.RecoveryRecords[index], record) {
+					t.Fatal("handoff changed original reconciliation evidence")
+				}
+			}
+			for id, worker := range before.State.PendingActions {
+				if id != action && (after.State.PendingActions[id] != worker || !reflect.DeepEqual(after.State.Attempts[worker.Task], before.State.Attempts[worker.Task])) {
+					t.Fatal("handoff changed an independent unfinished worker")
+				}
+			}
+			for _, record := range after.State.RecoveryRecords[len(before.State.RecoveryRecords):] {
+				if record.ActionID == action && record.Class != "" {
+					t.Fatalf("handoff fabricated failure class: %+v", record)
+				}
+			}
+		})
 	}
 }
+
 func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmation(t *testing.T) {
 	d := newValidationDriver(t, "blackbox")
 	before, err := d.f.Show()
@@ -92,5 +244,84 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 	}
 	if d.run.Review.RequirementRevision != before.Review.RequirementRevision || !reflect.DeepEqual(d.run.Review.Topology, before.Review.Topology) || d.run.Review.Actions[0].EffectiveStatus != before.Review.Actions[0].EffectiveStatus {
 		t.Fatal("replan changed product/source/topology")
+	}
+}
+
+func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
+	d := newValidationDriver(t, "blackbox")
+	developer, _ := d.action("engine.development.batch.v5")
+	qa, _ := d.action("engine.qa.design.v5")
+	d.receipt(qa)
+	for _, request := range []struct{ action, reason string }{
+		{qa, "selected the QA worker by mistake"},
+		{developer, "developer has not started"},
+	} {
+		before, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.f.RequestWorkerHandoff(workerNumberForAction(d.run, request.action), request.reason); err == nil || !strings.Contains(err.Error(), "HANDOFF_BINDING") {
+			t.Fatalf("invalid current handoff accepted: %+v %v", request, err)
+		}
+		after, err := d.f.engine.Load()
+		if err != nil || !reflect.DeepEqual(before, after) {
+			t.Fatalf("rejected handoff changed state: %v", err)
+		}
+	}
+	d.receipt(developer)
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.f.RequestWorkerHandoff(workerNumberForAction(d.run, developer), " "); err == nil || !strings.Contains(err.Error(), "HANDOFF_BINDING") {
+		t.Fatalf("handoff without actual user reason=%v", err)
+	}
+	barrier, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Confirm the complete changed requirement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(before, unchanged) {
+		t.Fatalf("missing reason changed state: %v", err)
+	}
+	d.submit(barrier)
+	frozen, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := protocol.Event{ID: d.eventID(), Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{
+		Control: protocol.ControlRecovery, Handoff: &protocol.DevelopmentHandoffRequest{ActionID: developer, Reason: "transfer while the requirement is being clarified"},
+	}}
+	if _, _, err := d.f.Submit(event); err == nil || !strings.Contains(err.Error(), "HANDOFF_BINDING") {
+		t.Fatalf("requirement barrier admitted handoff: %v", err)
+	}
+	after, err := d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(frozen, after) {
+		t.Fatalf("barrier rejection changed state: %v", err)
+	}
+}
+
+func TestHandoffWaitsForUnknownSpawnIdentity(t *testing.T) {
+	d := newValidationDriver(t, "blackbox")
+	action, _ := d.action("engine.development.batch.v5")
+	worker := workerNumberForAction(d.run, action)
+	unknown, err := protocol.NewSpawnReceiptEvent(d.eventID(), action, d.host(), action, protocol.SpawnStatusUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(unknown)
+	before, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.State.SpawnReceipts[action].Status != protocol.SpawnStatusUnknown {
+		t.Fatal("unknown identity was silently attached")
+	}
+	if _, err := d.f.RequestWorkerHandoff(worker, "transfer a developer whose native identity is unknown"); err == nil || !strings.Contains(err.Error(), "HANDOFF_BINDING") {
+		t.Fatalf("unknown native identity admitted handoff: %v", err)
+	}
+	after, err := d.f.engine.Load()
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("handoff bypassed unknown receipt reconciliation: %v", err)
 	}
 }

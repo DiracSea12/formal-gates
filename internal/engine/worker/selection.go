@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/requirement"
 )
 
 func selectIDs(indices []int, ids []string) ([]string, error) {
@@ -78,6 +79,47 @@ func assembleCompletion(value *Completion, batch *protocol.DevelopmentBatch) (*p
 	result := &protocol.DevelopmentCompletion{DoD: map[string]string{}, Handoff: value.Handoff}
 	for index, item := range batch.DoD {
 		result.DoD[item.ID] = value.DoD[index]
+	}
+	var err error
+	result.RequirementResults, err = assemblePointEvidence(batch.RequirementPoints, value.Requirements)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+func assemblePointEvidence(ids []string, evidence []string) ([]requirement.PointResult, error) {
+	if len(evidence) != len(ids) {
+		return nil, fmt.Errorf("completion must follow the issued requirement-point order")
+	}
+	results := []requirement.PointResult{}
+	for index, id := range ids {
+		if strings.TrimSpace(evidence[index]) == "" {
+			return nil, fmt.Errorf("requirement completion requires actual evidence")
+		}
+		results = append(results, requirement.PointResult{PointID: id, Status: protocol.OutcomePass, Evidence: evidence[index]})
+	}
+	if err := requirement.ValidatePointResults(ids, results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+func assembleRequirementDecisions(points []requirement.Point, values []RequirementDecision, findingCount int) ([]protocol.RequirementDecision, error) {
+	if len(values) != len(points) {
+		return nil, fmt.Errorf("review must follow the issued requirement-point order")
+	}
+	result := []protocol.RequirementDecision{}
+	for index, value := range values {
+		item := protocol.RequirementDecision{PointID: points[index].ID, Status: value.Status, Evidence: value.Evidence}
+		for _, choice := range value.Findings {
+			if choice < 1 || choice > findingCount {
+				return nil, fmt.Errorf("requirement review selects original findings once")
+			}
+			item.FindingIndexes = append(item.FindingIndexes, choice-1)
+		}
+		result = append(result, item)
+	}
+	if err := protocol.ValidateRequirementDecisions(points, result, findingCount); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -173,7 +215,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		if reused {
 			batch = input.ApprovedPlan.Batches[item.Reuse-1]
 			change := *item.changes
-			change.Owner, change.DependsOn, change.Subtasks, change.DoD, change.Checks, change.Artifacts, change.NewArtifacts, change.Route = nil, nil, nil, nil, nil, nil, nil, nil
+			change.Owner, change.DependsOn, change.Subtasks, change.DoD, change.Checks, change.Artifacts, change.NewArtifacts, change.Route, change.Requirements = nil, nil, nil, nil, nil, nil, nil, nil, nil
 			raw, err := json.Marshal(change)
 			if err != nil {
 				return nil, err
@@ -220,6 +262,14 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 				return nil, err
 			}
 		}
+		if !reused || item.changes.Requirements != nil {
+			points := requirement.PointIDs(input.RequirementPoints)
+			batch.RequirementPoints, err = selectIDs(item.Requirements, points)
+			if err != nil {
+				return nil, err
+			}
+			batch.RequirementPoints = requirement.PointIDs(requirement.SelectPoints(input.RequirementPoints, batch.RequirementPoints))
+		}
 		if item.Owner != nil {
 			if *item.Owner < 0 {
 				return nil, fmt.Errorf("owner must be a nonnegative slice choice")
@@ -259,7 +309,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 		}
 		if !reused || item.changes.Checks != nil {
 			batch.Checks = nil
-			if input.Handler == "engine.repair.v5" {
+			if input.Handler == "engine.repair.v6" {
 				for _, check := range input.ApprovedChecks {
 					if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests || check.Purpose == protocol.CheckEdit {
 						batch.Checks = append(batch.Checks, check)
@@ -302,7 +352,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 							return nil, fmt.Errorf("approved command requires its original check selection")
 						}
 					}
-					if selected.Command == "" || input.Handler == "engine.repair.v5" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
+					if selected.Command == "" || input.Handler == "engine.repair.v6" && len(input.ApprovedChecks) > 0 && check.Purpose != "" {
 						return nil, fmt.Errorf("repair full checks come from the confirmed plan; author only new local commands")
 					}
 				}

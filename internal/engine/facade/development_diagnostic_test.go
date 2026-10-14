@@ -49,9 +49,9 @@ func TestFailedDevelopmentBuildCarriesOriginalDiagnosticsToContinuation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, handler := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: handler, Provider: "host",
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: handler, Provider: "host",
 				Pending:             protocol.PendingAction{ActionID: evidence.SourceActionID, AttemptID: "original-attempt"},
 				RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"},
 				Validation:          &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Checks: []protocol.CheckEvidence{evidence}}}}

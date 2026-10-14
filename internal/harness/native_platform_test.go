@@ -30,7 +30,7 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 		t.Logf("registered public capability facts:\n%s", out)
 		return
 	}
-	root, home := t.TempDir(), t.TempDir()
+	root, home := resolveNativePath(t.TempDir()), t.TempDir()
 	binary := filepath.Join(root, "peer")
 	version := 1
 	valueKey := func() string {
@@ -57,7 +57,7 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 		}
 		return value.(map[string]any), nil
 	}
-	descriptor := &host.Descriptor{ID: "native-platform-peer", InstallName: "native-platform-peer", Aliases: []string{"peer-alias"}, Configuration: []host.ConfigField{host.StringConfig("peerExecutable", binary)}, LifecycleRequired: true}
+	descriptor := &host.Descriptor{ID: "native-platform-peer", InstallName: "native-platform-peer", Aliases: []string{"peer-alias"}, Installable: true, Configuration: []host.ConfigField{host.StringConfig("peerExecutable", binary)}, LifecycleRequired: true}
 	descriptor.ReadUsage = func(reader io.Reader) (host.Usage, error) {
 		var value map[string]any
 		if err := json.NewDecoder(reader).Decode(&value); err != nil {
@@ -69,6 +69,14 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 		return host.Usage{InputCacheMissTokens: int64(value["input"].(float64)), OutputTokens: int64(value["output"].(float64))}, nil
 	}
 	implementation := nativeImplementation{
+		resolvePaths: func(native, sources map[string]string) error {
+			path, err := exec.LookPath(native["peerExecutable"])
+			if err != nil {
+				return err
+			}
+			native["peerExecutable"] = resolveNativePath(path)
+			return nil
+		},
 		capture: func() (map[string]any, error) {
 			return capture(settings.Values{Native: map[string]string{"peerExecutable": binary}})
 		}, captureConfigured: capture,
@@ -95,7 +103,7 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 			}
 			return nil
 		},
-		reconcile: func(directory string, process any) (map[string]any, error) {
+		reconcile: func(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 			if !valuesEqual(getOf(process, "exit_code"), 0) {
 				return nil, fmt.Errorf("peer process failed")
 			}
@@ -152,7 +160,11 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 	if err != nil || effective.Values.Native["peerExecutable"] != binary {
 		t.Fatal("public configuration", effective, err)
 	}
-	binding, err := NativeBinding(descriptor.InstallName, effective.Values)
+	frozen, err := settings.Freeze(descriptor.InstallName, effective)
+	if err != nil {
+		t.Fatal("selected native path freeze", err)
+	}
+	binding, err := NativeBinding(descriptor.InstallName, frozen.Values)
 	if err != nil || binding["executable"] != binary {
 		t.Fatal("configured native capture", binding, err)
 	}

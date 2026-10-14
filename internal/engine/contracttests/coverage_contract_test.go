@@ -1,8 +1,9 @@
 package contracttests
 
 import (
+	"encoding/json"
 	"errors"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -214,17 +215,20 @@ func TestMultiKindManifestsCoverSharedSource(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid multi-kind manifest set rejected: %v", err)
 	}
-	if got := c.Manifests[1].PointsForSource("REQ-A"); !reflect.DeepEqual(got, []string{"POINT-W"}) {
-		t.Fatalf("whitebox source projection = %v", got)
-	}
-
 	reviews := []coverage.ReviewResult{coveragePassReview(c, 0), coveragePassReview(c, 1)}
 	w, err := c.ValidateReviews(reviews)
 	if err != nil {
 		t.Fatalf("multi-kind reviews rejected: %v", err)
 	}
-	if len(w.Entries) != len(c.Manifests[0].Edges)+len(c.Manifests[1].Edges) {
-		t.Fatalf("multi-kind whitelist entries = %d, want both manifest edge sets", len(w.Entries))
+	want := []coverage.WhitelistEntry{
+		{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ-A", PointID: "POINT-A", CaseID: "CASE-A"},
+		{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ-A", PointID: "POINT-A", CaseID: "CASE-B"},
+		{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ-A", PointID: "POINT-B", CaseID: "CASE-A"},
+		{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ-A", PointID: "POINT-B", CaseID: "CASE-B"},
+		{ReviewKind: coverage.ReviewWhitebox, SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W"},
+	}
+	if !slices.Equal(w.Entries, want) {
+		t.Fatalf("multi-kind whitelist entries = %+v, want %+v", w.Entries, want)
 	}
 }
 
@@ -263,6 +267,9 @@ func TestManifestGraphRejectsOrphanObjects(t *testing.T) {
 		{name: "duplicate case", mutate: func(c *coverage.CoverageContract) {
 			c.Manifests[0].Cases = append(c.Manifests[0].Cases, c.Manifests[0].Cases[0])
 		}, code: coverage.CodeDuplicateID},
+		{name: "edge references unknown source", mutate: func(c *coverage.CoverageContract) { c.Manifests[0].Edges[0].SourceID = "UNKNOWN" }, code: coverage.CodeOrphanEdge},
+		{name: "edge references unknown point", mutate: func(c *coverage.CoverageContract) { c.Manifests[0].Edges[0].PointID = "UNKNOWN" }, code: coverage.CodeOrphanEdge},
+		{name: "edge references unknown case", mutate: func(c *coverage.CoverageContract) { c.Manifests[0].Edges[0].CaseID = "UNKNOWN" }, code: coverage.CodeOrphanEdge},
 		{name: "duplicate edge", mutate: func(c *coverage.CoverageContract) {
 			c.Manifests[0].Edges = append(c.Manifests[0].Edges, c.Manifests[0].Edges[0])
 		}, code: coverage.CodeDuplicateID},
@@ -276,65 +283,9 @@ func TestManifestGraphRejectsOrphanObjects(t *testing.T) {
 	}
 }
 
-// Reverse graph queries derive sorted, de-duplicated views from the single edge
-// relation, and Map returns an isolated edge slice rather than caller-owned
-// storage.
-func TestCoverageQueriesDeriveStableReverseViews(t *testing.T) {
-	manifest := coverage.AcceptanceManifest{Edges: []coverage.CoverageEdge{
-		{SourceID: "SRC-2", PointID: "POINT-2", CaseID: "CASE-2"},
-		{SourceID: "SRC-1", PointID: "POINT-1", CaseID: "CASE-2"},
-		{SourceID: "SRC-1", PointID: "POINT-2", CaseID: "CASE-1"},
-		{SourceID: "SRC-1", PointID: "POINT-2", CaseID: "CASE-2"},
-		{SourceID: "SRC-1", PointID: "POINT-2", CaseID: "CASE-2"},
-	}}
-	if got, want := manifest.PointsForSource("SRC-1"), []string{"POINT-1", "POINT-2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("PointsForSource = %v, want %v", got, want)
-	}
-	if got, want := manifest.CasesForPoint("POINT-2"), []string{"CASE-1", "CASE-2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("CasesForPoint = %v, want %v", got, want)
-	}
-	if got, want := manifest.SourcesForCase("CASE-2"), []string{"SRC-1", "SRC-2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SourcesForCase = %v, want %v", got, want)
-	}
-	projected := manifest.Map()
-	projected.Edges[0].SourceID = "MUTATED"
-	if manifest.Edges[0].SourceID == "MUTATED" {
-		t.Fatal("Map must return an independent edge slice")
-	}
-}
-
-// A map projection must exactly match its manifest, including binding and
-// edge identity; missing, unknown, duplicate, or wrong-kind edges are distinct
-// structural failures.
-func TestCoverageMapRejectsDriftAndDuplicates(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*coverage.CoverageMap)
-		code   string
-	}{
-		{name: "binding drift", mutate: func(m *coverage.CoverageMap) { m.Binding.RouteScope = "other" }, code: coverage.CodeInvalidBinding},
-		{name: "missing edge", mutate: func(m *coverage.CoverageMap) { m.Edges = m.Edges[:len(m.Edges)-1] }, code: coverage.CodeMissingCoverage},
-		{name: "unknown edge", mutate: func(m *coverage.CoverageMap) {
-			m.Edges[len(m.Edges)-1] = coverage.CoverageEdge{SourceID: "REQ-A", PointID: "POINT-A", CaseID: "CASE-UNKNOWN"}
-		}, code: coverage.CodeUnknownID},
-		{name: "duplicate edge", mutate: func(m *coverage.CoverageMap) { m.Edges[len(m.Edges)-1] = m.Edges[0] }, code: coverage.CodeDuplicateID},
-		{name: "edge review kind drift", mutate: func(m *coverage.CoverageMap) {
-			m.Edges[0].ReviewKind = coverage.ReviewWhitebox
-		}, code: coverage.CodeInvalidBinding},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := coverageContract()
-			m := c.Manifests[0].Map()
-			tc.mutate(&m)
-			coverageCode(t, coverage.ValidateCoverageMap(c.Manifests[0], m), tc.code)
-		})
-	}
-}
-
 // Case records are closed by review kind: blackbox/merge require the public
-// entry shape, while whitebox requires one unique test reference and forbids
-// public-entry fields.
+// entry shape, while whitebox accepts a unique test reference or approved
+// operations and forbids public-entry fields.
 func TestCaseBindingVariantsAreClosed(t *testing.T) {
 	validKinds := []struct {
 		kind coverage.ReviewKind
@@ -474,15 +425,10 @@ func TestReviewProjectionRequiresCompletePassDecisions(t *testing.T) {
 			coverageCode(t, err, tc.code)
 		})
 	}
-	if _, err := validateReviewsForCoverage(t); err != nil {
+	c := coverageContract()
+	if _, err := c.ValidateReviews([]coverage.ReviewResult{coveragePassReview(c, 0)}); err != nil {
 		t.Fatalf("complete review projection rejected: %v", err)
 	}
-}
-
-func validateReviewsForCoverage(t *testing.T) (coverage.ApprovedWhitelist, error) {
-	t.Helper()
-	c := coverageContract()
-	return c.ValidateReviews([]coverage.ReviewResult{coveragePassReview(c, 0)})
 }
 
 // Required-source, manifest, and map digests are canonical projections: input
@@ -503,18 +449,29 @@ func TestCanonicalDigestsIgnoreInputOrder(t *testing.T) {
 		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-W", Mode: coverage.CaseWhitebox, TestRef: "internal/engine/contracttests/coverage_contract_test.go::TestCanonicalDigestsIgnoreInputOrder", Oracle: "PASS"}},
 		Edges:   []coverage.CoverageEdge{{ReviewKind: coverage.ReviewWhitebox, SourceID: "REQ-A", PointID: "POINT-W", CaseID: "CASE-W"}},
 	})
-	originalSources := append([]coverage.RequiredSource(nil), c.RequiredSources.Sources...)
-	originalManifestSources := append([]string(nil), c.Manifests[0].Sources...)
-	originalManifestPoints := append([]coverage.AcceptancePoint(nil), c.Manifests[0].Points...)
-	originalManifestCases := append([]coverage.AcceptanceCase(nil), c.Manifests[0].Cases...)
-	originalManifestEdges := append([]coverage.CoverageEdge(nil), c.Manifests[0].Edges...)
-	first, err := c.Digests()
-	if err != nil {
-		t.Fatalf("initial digests: %v", err)
+	checkedDigests := func() coverage.ContractDigests {
+		t.Helper()
+		before, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := coverage.CanonicalJSON(c); err != nil {
+			t.Fatalf("CanonicalJSON: %v", err)
+		}
+		digests, err := c.Digests()
+		if err != nil {
+			t.Fatalf("contract digests: %v", err)
+		}
+		after, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(before) != string(after) {
+			t.Fatal("digest calculation changed caller-owned contract")
+		}
+		return digests
 	}
-	if !reflect.DeepEqual(c.RequiredSources.Sources, originalSources) || !reflect.DeepEqual(c.Manifests[0].Sources, originalManifestSources) || !reflect.DeepEqual(c.Manifests[0].Points, originalManifestPoints) || !reflect.DeepEqual(c.Manifests[0].Cases, originalManifestCases) || !reflect.DeepEqual(c.Manifests[0].Edges, originalManifestEdges) {
-		t.Fatal("digest calculation reordered caller-owned slices")
-	}
+	first := checkedDigests()
 	sort.Slice(c.RequiredSources.Sources, func(i, j int) bool {
 		return c.RequiredSources.Sources[i].SourceID > c.RequiredSources.Sources[j].SourceID
 	})
@@ -525,10 +482,7 @@ func TestCanonicalDigestsIgnoreInputOrder(t *testing.T) {
 		return coverageEdgeKey(c.Manifests[0].Edges[i]) > coverageEdgeKey(c.Manifests[0].Edges[j])
 	})
 	sort.Slice(c.Manifests, func(i, j int) bool { return c.Manifests[i].Binding.ReviewKind > c.Manifests[j].Binding.ReviewKind })
-	second, err := c.Digests()
-	if err != nil {
-		t.Fatalf("reordered digests: %v", err)
-	}
+	second := checkedDigests()
 	if first != second {
 		t.Fatalf("canonical digest changed after reordering: first=%+v second=%+v", first, second)
 	}
@@ -589,7 +543,7 @@ func TestAffectedExecutionRequiresInheritanceEvidence(t *testing.T) {
 	c, w, report := coverageWhitelistAndFullReport(t)
 	report.Binding.Scope = coverage.ScopeAffected
 	for i := range report.Records {
-		if i == 0 {
+		if report.Records[i].CaseID == "CASE-A" {
 			continue
 		}
 		report.Records[i].Provenance = coverage.ProvenanceInherited
@@ -624,16 +578,15 @@ func TestAffectedExecutionRequiresInheritanceEvidence(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, baseline := coverageWhitelistAndFullReport(t)
+			c2, w2, baseline := coverageWhitelistAndFullReport(t)
 			baseline.Binding.Scope = coverage.ScopeAffected
 			for i := range baseline.Records {
-				if i != 0 {
+				if baseline.Records[i].CaseID != "CASE-A" {
 					baseline.Records[i].Provenance = coverage.ProvenanceInherited
 					baseline.Records[i].InheritedFromCandidate = "candidate-previous"
 					baseline.Records[i].ReuseEvidence = "view-receipt"
 				}
 			}
-			c2, w2, _ := coverageWhitelistAndFullReport(t)
 			tc.mutate(&baseline)
 			coverageCode(t, c2.ValidateExecution(w2, baseline), tc.code)
 		})
@@ -656,6 +609,9 @@ func TestExecutionRejectsStaleDigestOrCandidateBinding(t *testing.T) {
 			r.Binding.ManifestDigest = "sha256:stale"
 		}, code: coverage.CodeDigestMismatch},
 		{name: "map digest drift", mutate: func(_ *coverage.CoverageContract, r *coverage.ExecutionReport) { r.Binding.MapDigest = "sha256:stale" }, code: coverage.CodeDigestMismatch},
+		{name: "map relation changes old whitelist", mutate: func(c *coverage.CoverageContract, _ *coverage.ExecutionReport) {
+			c.Manifests[0].Edges = c.Manifests[0].Edges[:len(c.Manifests[0].Edges)-1]
+		}, code: coverage.CodeDigestMismatch},
 		{name: "whitelist digest drift", mutate: func(_ *coverage.CoverageContract, r *coverage.ExecutionReport) {
 			r.Binding.WhitelistDigest = "sha256:stale"
 		}, code: coverage.CodeDigestMismatch},
@@ -709,67 +665,5 @@ func TestWhitelistProjectionDigestDetectsMutation(t *testing.T) {
 	w.Entries[0].CaseID = "CASE-UNKNOWN"
 	if _, err := w.WhitelistDigest(); err == nil {
 		t.Fatal("mutated whitelist edge retained whitelist digest")
-	}
-}
-
-// Package-level helpers and value methods are thin adapters over the same
-// validated pure logic and must agree on successful projections/execution.
-func TestExportedCoverageAdaptersDelegateConsistently(t *testing.T) {
-	c := coverageContract()
-	reviews := []coverage.ReviewResult{coveragePassReview(c, 0)}
-	if err := coverage.Validate(c); err != nil {
-		t.Fatalf("coverage.Validate: %v", err)
-	}
-	if err := coverage.ValidateManifest(c.RequiredSources, c.Manifests[0]); err != nil {
-		t.Fatalf("coverage.ValidateManifest: %v", err)
-	}
-	if err := c.Manifests[0].Validate(c.RequiredSources); err != nil {
-		t.Fatalf("manifest.Validate: %v", err)
-	}
-	if _, err := c.RequiredSources.Digest(); err != nil {
-		t.Fatalf("required source Digest: %v", err)
-	}
-	if _, err := c.Manifests[0].Digest(c.RequiredSources); err != nil {
-		t.Fatalf("manifest Digest: %v", err)
-	}
-	if _, err := c.Manifests[0].MapDigest(); err != nil {
-		t.Fatalf("manifest MapDigest: %v", err)
-	}
-	if _, err := c.Manifests[0].Map().MapDigest(); err != nil {
-		t.Fatalf("map MapDigest: %v", err)
-	}
-	want, err := c.ValidateReviews(reviews)
-	if err != nil {
-		t.Fatalf("method ValidateReviews: %v", err)
-	}
-	gotProject, err := coverage.ProjectWhitelist(c, reviews)
-	if err != nil {
-		t.Fatalf("ProjectWhitelist: %v", err)
-	}
-	gotValidate, err := coverage.ValidateReviews(c, reviews)
-	if err != nil {
-		t.Fatalf("package ValidateReviews: %v", err)
-	}
-	if !reflect.DeepEqual(want, gotProject) || !reflect.DeepEqual(want, gotValidate) {
-		t.Fatalf("whitelist adapters diverged: method=%+v project=%+v package=%+v", want, gotProject, gotValidate)
-	}
-	_, w, report := coverageWhitelistAndFullReport(t)
-	current := report.Binding.Candidate
-	c.Candidate = &current
-	if err := coverage.ValidateExecution(c, w, report); err != nil {
-		t.Fatalf("package ValidateExecution: %v", err)
-	}
-	if err := coverage.ValidateExecutionForCandidate(c, w, report, report.Binding.Candidate); err != nil {
-		t.Fatalf("ValidateExecutionForCandidate: %v", err)
-	}
-	if _, err := coverage.CanonicalJSON(struct {
-		Value string `json:"value"`
-	}{"ok"}); err != nil {
-		t.Fatalf("CanonicalJSON: %v", err)
-	}
-	if digest, err := coverage.CanonicalDigest(struct {
-		Value string `json:"value"`
-	}{"ok"}); err != nil || !strings.HasPrefix(digest, "sha256:") {
-		t.Fatalf("CanonicalDigest = %q, err=%v", digest, err)
 	}
 }

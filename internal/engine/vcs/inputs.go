@@ -4,12 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 )
 
-// WorkingTreeDigest binds the complete immutable tree and its current native
-// content changes, with the provider's exact runtime exclusions.
+// WorkingTreeDigest binds the immutable tree, native metadata and actual working
+// bytes and modes, with the provider's exact runtime exclusions.
 func (p *Provider) WorkingTreeDigest(base string) (string, error) {
 	entries, err := p.TreeEntries(base)
 	if err != nil {
@@ -25,9 +26,47 @@ func (p *Provider) WorkingTreeDigest(base string) (string, error) {
 		Metadata string
 		Content  []byte
 	}
-	working := make([]workingEntry, 0, len(changes))
+	current := make(map[string]workingEntry, len(entries)+len(changes))
+	for path, metadata := range entries {
+		var mode string
+		if p.name == "git" {
+			mode, _, _ = strings.Cut(metadata, " ")
+			metadata = ""
+		} else {
+			mode = entryMode(metadata)
+		}
+		current[path] = workingEntry{Path: path, Mode: mode, Metadata: metadata}
+	}
 	for _, change := range changes {
-		working = append(working, workingEntry{change.Path, change.Mode, change.Metadata, change.Content})
+		current[change.Path] = workingEntry{Path: change.Path, Mode: change.Mode, Metadata: change.Metadata}
+	}
+	working := make([]workingEntry, 0, len(current))
+	for path, entry := range current {
+		// Root metadata and Git links describe native identities, not file bytes.
+		if path != "." && entry.Mode != "160000" {
+			file := materialPath(p.root, path)
+			info, err := os.Lstat(file)
+			if os.IsNotExist(err) {
+				entry.Mode = "000000"
+			} else if err != nil {
+				return "", err
+			} else if info.IsDir() {
+				entry.Mode = "040000"
+			} else {
+				entry.Mode = "100644"
+				switch {
+				case info.Mode()&os.ModeSymlink != 0:
+					entry.Mode = "120000"
+				case info.Mode()&0111 != 0:
+					entry.Mode = "100755"
+				}
+				entry.Content, err = workingBytes(file)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		working = append(working, entry)
 	}
 	slices.SortFunc(working, func(a, b workingEntry) int { return strings.Compare(a.Path, b.Path) })
 	body, err := json.Marshal(struct {

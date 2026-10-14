@@ -20,11 +20,11 @@ import (
 	"formal-gates/internal/engine/testkit"
 )
 
-// verticalQAReceipt is intentionally independent of the façade package's test
+// workflowIntakeReceipt is intentionally independent of the façade package's test
 // fixture.  The revisions are opaque bindings here because this test does not
 // use ArtifactRoot; artifact byte recomputation is covered by the public
 // façade's ArtifactRoot path.
-func verticalQAReceipt() facade.IntakeConfirmationReceipt {
+func workflowIntakeReceipt() facade.IntakeConfirmationReceipt {
 	return facade.IntakeConfirmationReceipt{
 		Source:              facade.DefaultIntakeSource,
 		Authority:           facade.DefaultIntakeAuthority,
@@ -59,7 +59,7 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	root := t.TempDir()
 	admission := fixtureAdmission(t, root, "sha256:admitted", "target-qa")
 	_, run, err := facade.Start(facade.StartOptions{
-		Root: root, Request: verticalStartRequest("admission-ok", verticalQAReceipt()), Admission: admission,
+		Root: root, Request: verticalStartRequest("admission-ok", workflowIntakeReceipt()), Admission: admission,
 	})
 	if err != nil {
 		t.Fatalf("admitted start: %v", err)
@@ -75,7 +75,6 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	rows := []struct {
 		name   string
 		mutate func(facade.StartRequest, *facade.StartOptions) facade.StartRequest
-		setup  func(*facade.StartOptions)
 		want   string
 	}{
 		{name: "package digest mismatch", mutate: func(req facade.StartRequest, _ *facade.StartOptions) facade.StartRequest {
@@ -103,11 +102,8 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			caseRoot := t.TempDir()
 			options := facade.StartOptions{Root: caseRoot, Admission: fixtureAdmission(t, caseRoot, admission.PackageDigest, admission.InstalledTargetIdentity)}
-			request := row.mutate(verticalStartRequest("reject-"+strings.ReplaceAll(row.name, " ", "-"), verticalQAReceipt()), &options)
+			request := row.mutate(verticalStartRequest("reject-"+strings.ReplaceAll(row.name, " ", "-"), workflowIntakeReceipt()), &options)
 			options.Request = request
-			if row.setup != nil {
-				row.setup(&options)
-			}
 			if _, _, err := facade.Start(options); err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(row.want)) {
 				t.Fatalf("start error = %v, want substring %q", err, row.want)
 			}
@@ -128,13 +124,12 @@ func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	compiled, err := func() (*compiler.CompiledDefinition, error) {
-		return compiler.Compile(definition.Workflow(), definition.Registry())
-	}()
+	compiled, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatalf("compile definition: %v", err)
 	}
-	engine, err := protocol.New(store, protocol.Config{InternalSteps: testkit.InternalSteps(), Definition: compiled, Registry: definition.Registry(), Capacity: 0}, nil)
+	fp := protocol.Observation{}
+	engine, err := protocol.New(store, protocol.Config{InternalSteps: testkit.InternalSteps(), Definition: compiled, Registry: definition.Registry(), Capacity: 0})
 	if err != nil {
 		t.Fatalf("new protocol engine: %v", err)
 	}
@@ -142,11 +137,7 @@ func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new state: %v", err)
 	}
-	confirmation := verticalQAReceipt()
-	fp, err := engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatalf("observe fingerprint: %v", err)
-	}
+	confirmation := workflowIntakeReceipt()
 	if err := engine.InitWithMetadata(view, "engine", fp, "vertical-receipt", "lightweight", &confirmation, "", "", nil); err != nil {
 		t.Fatalf("init with confirmation: %v", err)
 	}
@@ -211,7 +202,7 @@ func TestFacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	runID := "terminal-open-replay"
 	f, _, err := facade.Start(facade.StartOptions{
-		Root: root, Request: verticalStartRequest(runID, verticalQAReceipt()),
+		Root: root, Request: verticalStartRequest(runID, workflowIntakeReceipt()),
 		Admission: fixtureAdmission(t, root, "sha256:pkg", "target"),
 	})
 	if err != nil {
@@ -326,19 +317,19 @@ func TestSubmitFencesUnknownKindAndProviderBeforeWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load baseline: %v", err)
 	}
-	fp, err := fixture.Engine.ObserveFingerprint()
+	observedInput, err := fixture.VCS.Observe()
 	if err != nil {
 		t.Fatalf("observe fingerprint: %v", err)
 	}
 	rogue := protocol.Event{ID: protocol.EventID("qa-rogue"), Kind: protocol.EventKind("USER_WRITE")}
-	if _, err := fixture.Engine.Submit(rogue, fp); err == nil || !strings.Contains(err.Error(), protocol.CodeUnknownEventKind) {
+	if _, err := fixture.Engine.Submit(rogue, observedInput); err == nil || !strings.Contains(err.Error(), protocol.CodeUnknownEventKind) {
 		t.Fatalf("unknown event error = %v, want %s", err, protocol.CodeUnknownEventKind)
 	}
 	worker, err := protocol.NewWorkerResultEvent("qa-provider-mismatch", "act:review/review.worker", "wrong-provider", protocol.OutcomePass, "sha256:payload", "")
 	if err != nil {
 		t.Fatalf("construct provider mismatch event: %v", err)
 	}
-	if _, err := fixture.Engine.Submit(worker, fp); err == nil || !strings.Contains(err.Error(), protocol.CodeProviderMismatch) {
+	if _, err := fixture.Engine.Submit(worker, observedInput); err == nil || !strings.Contains(err.Error(), protocol.CodeProviderMismatch) {
 		t.Fatalf("provider mismatch error = %v, want %s", err, protocol.CodeProviderMismatch)
 	}
 	after, err := fixture.Engine.Load()

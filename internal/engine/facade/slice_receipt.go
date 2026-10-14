@@ -38,7 +38,7 @@ func (f *Facade) acceptSliceReceipt(receipt protocol.SliceReceipt) error {
 	if _, err := f.store.Recover(); err != nil {
 		return err
 	}
-	return f.engine.AcceptSliceReceipt(receipt, emptyFingerprint())
+	return f.engine.AcceptSliceReceipt(receipt, protocol.Observation{})
 }
 
 // discoverSliceReceipts reads only exact claims, never scans for new members.
@@ -70,7 +70,17 @@ func (f *Facade) discoverSliceReceipts(state *protocol.State) error {
 		} else if err != nil {
 			return err
 		}
+		if err := f.engine.RecordChildControl(snapshot.State, protocol.Observation{}); err != nil {
+			return err
+		}
 		receipt := snapshot.State.SliceReceipt
+		if receipt != nil {
+			if node := snapshot.State.NodeContinuation(f.definition); node != nil {
+				copy := *receipt
+				copy.Continuation = &protocol.NodeContinuationAuthority{Decision: node.Receipt, Preview: node.Preview, Event: snapshot.State.Events[node.Receipt.EventID]}
+				receipt = &copy
+			}
+		}
 		if receipt == nil || !state.SliceReceiptCurrent(*receipt) {
 			continue
 		}

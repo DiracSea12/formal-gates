@@ -58,7 +58,7 @@ func TestParentAbortCancelsCurrentAndReplacedChildren(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := master.f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+	if err := master.f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	current = driverState(t, master)

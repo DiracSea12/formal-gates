@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 )
 
 type envelope struct {
@@ -91,25 +88,9 @@ func dispatch(e envelope) (any, error) {
 		if err := StrictDecode(e.Payload, &q); err != nil {
 			return nil, err
 		}
-		value, err := readJSONFile(filepath.Join(q.Directory, "process.json"))
+		alive, err := observeSupervisor(q.Directory, q.RequestDigest, q.Cancel)
 		if err != nil {
 			return nil, err
-		}
-		if textOf(getOf(value, "request_digest")) != q.RequestDigest {
-			return nil, fmt.Errorf("supervisor process differs from its request")
-		}
-		alive := supervisorAlive(q.Directory)
-		if alive && q.Cancel {
-			pid, pgid := intOf(getOf(value, "pid")), intOf(getOf(value, "pgid"))
-			actual, err := nativeProcessGroupID(pid)
-			if err != nil || pgid <= 0 || actual != pgid {
-				return nil, fmt.Errorf("supervisor has no matching process group")
-			}
-			process, err := os.FindProcess(pid)
-			if err != nil {
-				return nil, err
-			}
-			terminateJob(&exec.Cmd{Process: process}, pgid)
 		}
 		return map[string]any{"alive": alive}, nil
 	case "verify-process":

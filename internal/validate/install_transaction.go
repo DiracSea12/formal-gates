@@ -720,21 +720,23 @@ func cleanupAtomicTemps(dir string) {
 	}
 }
 
-func reconcileOuterInstallJournal(registryPath string) error {
+// The returned uninstall fact is consumed only when the current maintenance
+// caller exits; recovery must not retire locks before that caller's business.
+func reconcileOuterInstallJournal(registryPath string) (bool, error) {
 	path := installOuterJournalPath(registryPath)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	var journal outerInstallJournal
 	if err := json.Unmarshal(data, &journal); err != nil {
-		return fmt.Errorf("outer recovery journal is invalid: %w", err)
+		return false, fmt.Errorf("outer recovery journal is invalid: %w", err)
 	}
 	if filepath.Clean(journal.RegistryPath) != filepath.Clean(registryPath) {
-		return fmt.Errorf("outer recovery journal registry mismatch: %s", path)
+		return false, fmt.Errorf("outer recovery journal registry mismatch: %s", path)
 	}
 	if journal.Phase == "committed" {
 		// The committed state is authoritative; only sweep transaction-owned
@@ -750,9 +752,25 @@ func reconcileOuterInstallJournal(registryPath string) error {
 			}
 		}
 		_ = os.RemoveAll(journal.TransactionRoot)
-		return os.Remove(path)
+		return journal.Operation == "uninstall", os.Remove(path)
 	}
-	return restoreOuterJournal(path, journal, true)
+	return false, restoreOuterJournal(path, journal, true)
+}
+
+// retireUnusedInstallLocks is the maintenance caller's final protected action.
+// Registry records remain the sole source of whether the namespace is used.
+func retireUnusedInstallLocks(registryPath string) error {
+	doc, err := LoadRegistry(registryPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && len(doc.Records) != 0 {
+		return nil
+	}
+	if err := coordination.RetirePath(registryLockPath(registryPath)); err != nil {
+		return err
+	}
+	return coordination.RetirePath(installLockPath(registryPath))
 }
 
 func installFault(phase string) error {

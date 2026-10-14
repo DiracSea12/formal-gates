@@ -62,7 +62,7 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				original, err = f.engine.Submit(admitted, emptyFingerprint())
+				original, err = f.engine.Submit(admitted, protocol.Observation{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -73,7 +73,7 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = f.engine.Submit(request, emptyFingerprint()); err != nil {
+				if _, err = f.engine.Submit(request, protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				token, err := f.Freshness(string(request.ID))
@@ -84,10 +84,10 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = f.engine.Submit(decide, emptyFingerprint()); err != nil {
+				if _, err = f.engine.Submit(decide, protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err = f.engine.Drive(emptyFingerprint()); err != nil {
+				if _, _, err = f.engine.Drive(protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				run, err := f.project()

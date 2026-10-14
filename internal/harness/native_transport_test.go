@@ -483,6 +483,40 @@ func TestEvidenceSourceShape(t *testing.T) {
 	}
 }
 
+func TestNativeSourceRejectsToolWorkspaceMismatch(t *testing.T) {
+	directory := nativeSemanticToolFixture(t, map[string]any{"type": "object"})
+	peerSubmitSemantics(directory, map[string]any{"status": "PASS"})
+	writeEvidence(t, directory, `{"sessionId":"s-1","turn":1}`, []string{peerEvent("s-1", "turn/end", map[string]any{"turn": 1, "reason": map[string]any{"kind": "completed"}})})
+	if err := writeSubmittedAnswer(directory); err != nil {
+		t.Fatal(err)
+	}
+	source, err := evidenceSource(directory, "dsh", "s-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextPath := filepath.Join(directory, nativeToolContextFile)
+	context, err := readJSONFile(contextPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectOrEmpty(context)["workspace"] = t.TempDir()
+	if err := writeAtomicJSON(contextPath, context); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := evidenceSource(directory, "dsh", "s-1", nil); err == nil || err.Error() != "native tool context differs from original workspace" {
+		t.Fatalf("source capture accepted different tool workspace: %v", err)
+	}
+	// Keep the file proof valid so semantic validation owns the refusal.
+	proof, err := fileProofOf(contextPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectOrEmpty(source["files"])[nativeToolContextFile] = proof
+	if err := verifyNativeSource(directory, source, "dsh"); err == nil || err.Error() != "native tool context differs from original workspace" {
+		t.Fatalf("source verification accepted different tool workspace: %v", err)
+	}
+}
+
 // proofsOf builds {name: proof} for the given evidence files.
 func proofsOf(t *testing.T, directory string, names []string) map[string]any {
 	t.Helper()

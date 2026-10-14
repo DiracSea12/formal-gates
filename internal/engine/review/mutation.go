@@ -343,25 +343,9 @@ func correctFinding(series *Series, runID, requirementRevision string, candidate
 	return nil
 }
 
-// MarkStale 在外部失效（需求 revision 变化、impact invalidation、carry、
-// adopt-external、普通结果失效）后把双 series 的 effective 刷为 PENDING：
-// 记录来源、revision+1、清空 finding 投影、各自打下游影响标。四本账与计轮
-// 不动；显式 workflow reset 或新 run 才重建额度。
-func MarkStale(set Set, source string) Set {
-	for _, series := range []*Series{&set.ProductReview, &set.StartReadiness} {
-		series.Effective.Status = statusPending
-		series.Effective.Source = source
-		series.Effective.Revision++
-		series.Effective.BlockingFindingIDs = []string{}
-		series.Effective.AdvisoryFindingIDs = []string{}
-		series.Effective.DownstreamImpact = downstreamImpact(series.Action)
-	}
-	return set
-}
-
 // StaleSeries 在用户确认的需求修订重走范围内把单个动作的 series 刷为
-// PENDING：与 MarkStale 同形（来源、revision+1、投影清空、该动作的下游
-// 影响表打标），四本账与计轮不动，并落 freshFloor＝本次决定的 state 代数
+// PENDING：记录来源、revision+1、清空 finding 投影、打该动作的下游影响
+// 标记，四本账与计轮不动，并落 freshFloor＝本次决定的 state 代数
 // ——重走态下的新鲜轮只认签发不早于该代数的派发。不做跨 series 级联
 // ——用户未勾选重走的 series 即明确续用其结论（§7.2.3/§7.2.4"不勾不
 // 失效"），其 PASS 由协议层的 carry 判定继续有效；上游结论被同 revision

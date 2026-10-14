@@ -51,7 +51,7 @@ func TestUninstallRemovesOwnedPayloadsAfterLastSharedInstallation(t *testing.T) 
 	if _, err = Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{release, resource, launcher, second.Targets[0].TargetPath} {
+	for _, path := range []string{release, resource, launcher, second.Targets[0].TargetPath, registryLockPath(registry), installLockPath(registry)} {
 		if _, err = os.Stat(path); err != nil {
 			t.Fatal("shared or remaining installation removed", path, err)
 		}
@@ -69,13 +69,105 @@ func TestUninstallRemovesOwnedPayloadsAfterLastSharedInstallation(t *testing.T) 
 	if _, err = Uninstall(UninstallOptions{Host: "codex", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{second.Targets[0].TargetPath, release, resource, launcher, registry, registry + ".install.json", registry + ".bootstrap.json"} {
+	for _, path := range []string{second.Targets[0].TargetPath, release, resource, launcher, registry, registry + ".install.json", registry + ".bootstrap.json", registryLockPath(registry), installLockPath(registry)} {
 		if _, err = os.Stat(path); !os.IsNotExist(err) {
 			t.Fatal("last owned payload retained", path, err)
 		}
 	}
 	if data, err := os.ReadFile(user); err != nil || !bytes.Equal(data, []byte("user file\n")) {
 		t.Fatal("uninstall changed user content", err)
+	}
+}
+
+func TestCommittedUninstallRecoveryRetiresLocksAtMaintenanceExit(t *testing.T) {
+	for _, operation := range []string{"install", "install-failure", "bootstrap", "bootstrap-failure", "uninstall"} {
+		t.Run(operation, func(t *testing.T) {
+			source := installFixtureSource(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			project := t.TempDir()
+			registry := filepath.Join(home, ".formal-gates", "registry.json")
+			options := InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, Force: true}
+			if _, err := Install(options); err != nil {
+				t.Fatal(err)
+			}
+			options.Host = "codex"
+			if _, err := Install(options); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Uninstall(UninstallOptions{Host: "codex", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
+				t.Fatal(err)
+			}
+			if operation != "bootstrap" {
+				if _, err := Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Reproduce the committed boundary of the completed uninstall: its
+			// namespace facts are final, but its journal and locks await cleanup.
+			transactionRoot := filepath.Join(home, "uninstall-transaction")
+			if err := os.MkdirAll(transactionRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			journal := outerInstallJournal{Operation: "uninstall", RegistryPath: registry, TransactionRoot: transactionRoot, Phase: "committed", CreatedAt: nowReceiptTime()}
+			if err := persistOuterJournal(installOuterJournalPath(registry), journal); err != nil {
+				t.Fatal(err)
+			}
+			locks := []string{registryLockPath(registry), installLockPath(registry)}
+			before := map[string]os.FileInfo{}
+			for _, path := range locks {
+				unlock, err := acquireExclusiveLock(path, "maintenance recovery")
+				if err != nil {
+					t.Fatal(err)
+				}
+				unlock()
+				before[path], err = os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			options.Host = "claude"
+			var err error
+			switch operation {
+			case "install-failure":
+				t.Setenv("FORMAL_GATES_INSTALL_FAULT", "intent")
+				_, err = Install(options)
+			case "bootstrap", "bootstrap-failure":
+				options.Bootstrap = true
+				_, err = Install(options)
+			case "uninstall":
+				_, err = Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry})
+			default:
+				_, err = Install(options)
+			}
+			failed := operation == "install-failure" || operation == "bootstrap-failure"
+			if (err != nil) != failed {
+				t.Fatalf("maintenance result: %v", err)
+			}
+			used := operation == "install" || operation == "bootstrap"
+			for _, path := range locks {
+				after, err := os.Stat(path)
+				if used {
+					if err != nil || !os.SameFile(before[path], after) {
+						t.Fatalf("continuing maintenance retired its lock before business ended: %s (%v)", path, err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("unused recovered namespace retained a lock: %s (%v)", path, err)
+				}
+			}
+			if used {
+				doc, err := LoadRegistry(registry)
+				if err != nil || len(doc.Records) != 1 || doc.Records[0].Host != "claude" {
+					t.Fatalf("continued maintenance did not establish the owning record: %+v (%v)", doc, err)
+				}
+			}
+			for _, path := range []string{transactionRoot, installOuterJournalPath(registry)} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("committed recovery retained its original journal payload: %s (%v)", path, err)
+				}
+			}
+		})
 	}
 }
 

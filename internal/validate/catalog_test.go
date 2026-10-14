@@ -10,12 +10,12 @@ import (
 )
 
 func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
-	root := promptPackage(t, map[string]string{"z-last": "last checks", "a-first": "first checks"})
+	root := promptPackage(t, map[string]string{"z-last": "last checks", "a-first": "first checks", "a-first-child": "child checks"})
 	catalog, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := catalog.GateIDs(), []string{"a-first", "z-last"}; !reflect.DeepEqual(got, want) {
+	if got, want := catalog.Gates, []prompts.PromptDefinition{{ID: "a-first", Content: "first checks"}, {ID: "a-first-child", Content: "child checks"}, {ID: "z-last", Content: "last checks"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("gate order=%v want=%v", got, want)
 	}
 	writeTestFile(t, filepath.Join(root, "gates", "middle.md"), "middle checks\n")
@@ -23,7 +23,7 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := added.GateIDs(), []string{"a-first", "middle", "z-last"}; !reflect.DeepEqual(got, want) {
+	if got, want := added.Gates, []prompts.PromptDefinition{{ID: "a-first", Content: "first checks"}, {ID: "a-first-child", Content: "child checks"}, {ID: "middle", Content: "middle checks"}, {ID: "z-last", Content: "last checks"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("added gate order=%v", got)
 	}
 	if err := os.Remove(filepath.Join(root, "gates", "a-first.md")); err != nil {
@@ -33,7 +33,7 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := removed.GateIDs(), []string{"middle", "z-last"}; !reflect.DeepEqual(got, want) {
+	if got, want := removed.Gates, []prompts.PromptDefinition{{ID: "a-first-child", Content: "child checks"}, {ID: "middle", Content: "middle checks"}, {ID: "z-last", Content: "last checks"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("removed gate order=%v", got)
 	}
 }
@@ -73,8 +73,8 @@ func TestGateDiscoveryIgnoresUnrelatedDirectEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := catalog.GateIDs(), []string{"quality"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("gate IDs=%v want=%v", got, want)
+	if got, want := catalog.Gates, []prompts.PromptDefinition{{ID: "quality", Content: "checks"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gates=%v want=%v", got, want)
 	}
 }
 
@@ -179,7 +179,7 @@ func TestRoleRulesStayPrivateAndBindCatalogAndPackageContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rules := range before.RoleRules {
+	for index, rules := range before.RoleRules {
 		t.Run(rules.ID, func(t *testing.T) {
 			if _, public := before.Action(rules.ID); public {
 				t.Fatal("role payload became a public action")
@@ -202,15 +202,23 @@ func TestRoleRulesStayPrivateAndBindCatalogAndPackageContent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			digest, err := PackageDigest(root)
+			receipt, err := PackageReceipt(root)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if before.CatalogRevision == after.CatalogRevision || inventory.Digest == digest {
-				t.Fatal("role body change escaped catalog/package binding")
+			if inventory.Digest == receipt.Digest {
+				t.Fatal("role body change escaped package binding")
 			}
-			if before.BaseRevision != after.BaseRevision || !reflect.DeepEqual(before.Actions, after.Actions) || !reflect.DeepEqual(before.RouteCandidates(), after.RouteCandidates()) {
-				t.Fatal("private role payload changed shared/action/route identity")
+			wantRules := append([]prompts.PromptDefinition(nil), before.RoleRules...)
+			wantRules[index].Content = rules.Content + "\nAdditional role duty."
+			if !reflect.DeepEqual(after.RoleRules, wantRules) {
+				t.Fatal("catalog did not load the exact changed role payload and unchanged other roles")
+			}
+			if got, ok := after.RoleRule(rules.ID); !ok || got != wantRules[index] {
+				t.Fatal("role lookup did not return the exact changed payload")
+			}
+			if before.Base != after.Base || !reflect.DeepEqual(before.Gates, after.Gates) || !reflect.DeepEqual(before.Actions, after.Actions) || !reflect.DeepEqual(before.RouteCandidates(), after.RouteCandidates()) {
+				t.Fatal("private role payload changed shared/gate/action/route content")
 			}
 			writeTestFile(t, path, rules.Content)
 		})

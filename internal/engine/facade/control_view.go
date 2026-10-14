@@ -95,6 +95,9 @@ func (f *Facade) ControlRuns() ([]Run, error) {
 // PrepareCurrentControl selects only an existing Ask by its displayed number.
 // The original target, request, token and semantic assembly own the candidate.
 func (f *Facade) PrepareCurrentControl(input ControlInput) (ControlCandidate, error) {
+	if input.Node != 0 && input.Request == "" {
+		input.Request = protocol.ControlContinueNode
+	}
 	unlock, err := f.acquireControlReadWindow()
 	if err != nil {
 		return ControlCandidate{}, err
@@ -103,6 +106,20 @@ func (f *Facade) PrepareCurrentControl(input ControlInput) (ControlCandidate, er
 	current, err := f.controlRuns()
 	if err != nil {
 		return ControlCandidate{}, err
+	}
+	if input.Request == protocol.ControlContinueNode {
+		remaining := input.Node
+		for _, item := range current {
+			if remaining > 0 && remaining <= len(item.run.BusinessNodes) {
+				local := input
+				local.Node = remaining
+				candidate, err := item.owner.prepareControl(local, item.run)
+				candidate.Input = input
+				return candidate, err
+			}
+			remaining -= len(item.run.BusinessNodes)
+		}
+		return ControlCandidate{}, fmt.Errorf("业务节点 position %d is outside the current %d choices", input.Node, input.Node-remaining)
 	}
 	if input.Request != "" && (input.Request != protocol.ControlRequestRequirementChange || input.Requirement == nil || input.Ask == 0) {
 		return f.prepareControl(input, current[0].run)

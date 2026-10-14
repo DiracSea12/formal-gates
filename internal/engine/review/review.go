@@ -5,8 +5,7 @@
 // 派生，防篡改校验重算全部投影与身份链。
 //
 // 所有权契约：变换入口（AppendAuthorization、BindDispatch、RecordCandidate、
-// ApplyCorrection）在改写任何账本切片前先把它克隆到本系列，返回的 Set 与
-// 调用方输入不共享可变底层数组——输入 Set 在变换后保持逐字节不变。
+// ApplyCorrection）在改写账本切片前先克隆该切片，使变换不修改输入 Set。
 package review
 
 import (
@@ -233,6 +232,17 @@ type Finding struct {
 	Verification      FindingVerification `json:"verification,omitempty"`
 	Message           string              `json:"message"`
 	Locations         []string            `json:"locations,omitempty"`
+}
+
+// SettledFinding projects an original finding and its current user disposition.
+// It carries no completion claim or separate decision authority.
+type SettledFinding struct {
+	Action              Action  `json:"action"`
+	RequirementRevision string  `json:"requirementRevision"`
+	Finding             Finding `json:"finding"`
+	Decision            string  `json:"decision"`
+	EffectiveSeverity   string  `json:"effectiveSeverity"`
+	Reason              string  `json:"reason"`
 }
 
 // FindingVerification 是发现内容的一部分：五个核实维度各自的自然语言记录。

@@ -61,6 +61,7 @@ func TestControlArgumentsDistinguishAbsentAndExplicitEmptyFields(t *testing.T) {
 	}{
 		{args: []string{"--root", "somewhere"}},
 		{args: []string{"--reason", ""}, provided: true},
+		{args: []string{"--node", "3"}, provided: true, input: facade.ControlInput{Request: protocol.ControlContinueNode, Node: 3}},
 		{args: []string{"--classification", ""}, provided: true, input: facade.ControlInput{Requirement: &facade.RequirementChangeInput{}}},
 		{args: []string{"--validation-kind", ""}, provided: true, input: facade.ControlInput{Validation: &facade.ValidationControlInput{}}},
 	} {

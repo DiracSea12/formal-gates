@@ -7,8 +7,10 @@ package facade
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -88,10 +90,7 @@ func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
 	if _, _, err = d.f.Submit(spawned); err != nil {
 		t.Fatal(err)
 	}
-	fp, err := d.f.engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fp := protocol.Observation{}
 	if _, _, err := d.f.engine.RecoverAttempt(qaID, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, fp); err != nil {
 		t.Fatalf("recover attempt failed: %v", err)
 	}
@@ -234,7 +233,7 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 		t.Fatal("no review dispatch in flight")
 	}
 	d.receipt(first)
-	if _, _, err := d.f.engine.RecoverAttempt(first, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint()); err != nil {
+	if _, _, err := d.f.engine.RecoverAttempt(first, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := d.f.engine.Load()
@@ -311,7 +310,7 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 	}
 	// 同一授权不得解锁第二个被阻恢复：后续瞬态恢复仍零效果＋落自己的 Ask。
 	d.receipt(next)
-	if _, _, err := d.f.engine.RecoverAttempt(next, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint()); err != nil {
+	if _, _, err := d.f.engine.RecoverAttempt(next, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	d.drive()
@@ -339,81 +338,105 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 // 延后至 attach，以 lifecycle 解析出的真实身份建立——sidecar 事件先于绑定到达
 // 时计量仍成立，结果走公开接纳记精确用量。
 func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "unknown-attach", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r, err = f.Drive(); err != nil {
-		t.Fatal(err)
-	}
-	action := ""
-	for id := range r.PendingActions {
-		action = id
-		break
-	}
-	if action == "" {
-		t.Fatal("no dispatch")
-	}
-	unknown, err := protocol.NewSpawnReceiptEvent("spawn-unknown", action, meteredProvider, "corr-track-1", protocol.SpawnStatusUnknown)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = f.Submit(unknown); err != nil {
-		t.Fatal(err)
-	}
-	start, err := protocol.NewCorrelatedLifecycleEvent("lc-start", meteredProvider, "corr-track-1", "agent-9", protocol.LifecycleStart)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = f.Submit(start); err != nil {
-		t.Fatal(err)
-	}
-	stop, err := protocol.NewCorrelatedLifecycleEvent("lc-stop", meteredProvider, "corr-track-1", "agent-9", protocol.LifecycleStop)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = f.Submit(stop); err != nil {
-		t.Fatal(err)
-	}
-	transcript := filepath.Join(root, "agent-nine.jsonl")
-	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":1}}}`})
-	if _, _, err := f.engine.ReconcileUnknownReceipt(action, emptyFingerprint()); err != nil {
-		t.Fatalf("attach failed: %v", err)
-	}
-	completeMeteredSource(t, root, meteredProvider, "agent-9", transcript)
-	snap, err := f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := snap.State.SpawnReceipts[action].LifecycleIdentity; got != "agent-9" {
-		t.Fatalf("attached identity = %q", got)
-	}
-	result, err := protocol.NewReviewWorkerResultEvent("result-attached", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{
-		Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
-		Findings:     []review.Finding{},
-		Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	accepted, _, err := f.Submit(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accepted.Status != "ACCEPTED" {
-		t.Fatalf("result after attach status = %s, want ACCEPTED", accepted.Status)
-	}
-	snap, err = f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := snap.State.Cost.Dispatches[action]
-	if entry.Source != "transcript" || entry.InputCacheMissTokens != 5 || entry.InputCacheHitTokens != 1 || entry.OutputTokens != 2 {
-		t.Fatalf("attached dispatch not metered by its resolved identity: %+v", entry)
+	for _, lifecycleFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lifecycle-first=%t", lifecycleFirst), func(t *testing.T) {
+
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "unknown-attach", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r, err = f.Drive(); err != nil {
+				t.Fatal(err)
+			}
+			action := ""
+			for id := range r.PendingActions {
+				action = id
+				break
+			}
+			if action == "" {
+				t.Fatal("no dispatch")
+			}
+			observe := func() {
+				start, err := protocol.NewCorrelatedLifecycleEvent("lc-start", meteredProvider, "corr-track-1", "agent-9", protocol.LifecycleStart)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err = f.Submit(start); err != nil {
+					t.Fatal(err)
+				}
+				stop, err := protocol.NewCorrelatedLifecycleEvent("lc-stop", meteredProvider, "corr-track-1", "agent-9", protocol.LifecycleStop)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err = f.Submit(stop); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if lifecycleFirst {
+				observe()
+			}
+
+			unknown, err := protocol.NewSpawnReceiptEvent("spawn-unknown", action, meteredProvider, "corr-track-1", protocol.SpawnStatusUnknown)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = f.Submit(unknown); err != nil {
+				t.Fatal(err)
+			}
+			if !lifecycleFirst {
+				observe()
+			}
+
+			transcript := filepath.Join(root, "agent-nine.jsonl")
+			writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":1}}}`})
+
+			completeMeteredSource(t, root, meteredProvider, "agent-9", transcript)
+			snap, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := snap.State.SpawnReceipts[action].LifecycleIdentity; got != "agent-9" {
+				t.Fatalf("attached identity = %q", got)
+			}
+			result, err := protocol.NewReviewWorkerResultEvent("result-attached", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{
+				Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS",
+				Findings:     []review.Finding{},
+				Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, _, err := f.Submit(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if accepted.Status != "ACCEPTED" {
+				t.Fatalf("result after attach status = %s, want ACCEPTED", accepted.Status)
+			}
+			snap, err = f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := snap.State.Cost.Dispatches[action]
+			if entry.Source != "transcript" || entry.InputCacheMissTokens != 5 || entry.InputCacheHitTokens != 1 || entry.OutputTokens != 2 {
+				t.Fatalf("attached dispatch not metered by its resolved identity: %+v", entry)
+			}
+			if replay, _, err := f.Submit(result); err != nil || replay.Status != "ACCEPTED" {
+				t.Fatalf("same result replay = %+v err=%v", replay, err)
+			}
+			after, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after.State.Cost, snap.State.Cost) || after.State.SpawnReceipts[action].LifecycleIdentity != "agent-9" {
+				t.Fatal("replay changed metering or native identity")
+			}
+
+		})
 	}
 }
 
@@ -473,15 +496,39 @@ func budgetAsk(d *validationDriver) PendingAskFace {
 	return PendingAskFace{}
 }
 
-// resumeAndComplete 执行一次公开 ResumeAgent 并提交其 EXECUTED 回执（恢复执
-// 行经 accountResumeExecution 计入承载账本）。
+// resumeAndComplete 接纳原恢复 owner 签发的 RESUME_AGENT；没有在途恢复时，
+// 先记录客观瞬态中断，再按原 RequestID 读取 intent 并提交 EXECUTED 回执。
 func resumeAndComplete(d *validationDriver, action string) error {
 	d.t.Helper()
-	intent, _, err := d.f.engine.ResumeAgent(action, action, emptyFingerprint())
+	snap, err := d.f.engine.Load()
 	if err != nil {
 		return err
 	}
-	ev, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, d.host(), "resume-"+intent.ActionID, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: action, Event: protocol.LifecycleStart})
+	var intent protocol.HostActionIntent
+	for _, pending := range snap.State.PendingHostActions {
+		if pending.Resume != nil && pending.Resume.WorkerActionID == action {
+			intent = pending
+		}
+	}
+	if intent.ActionID == "" {
+		plan, _, err := d.f.engine.RecoverAttempt(action, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
+		if err != nil {
+			return err
+		}
+		snap, err = d.f.engine.Load()
+		if err != nil {
+			return err
+		}
+		for _, pending := range snap.State.PendingHostActions {
+			if pending.Correlation == plan.RequestID {
+				intent = pending
+			}
+		}
+	}
+	if intent.Resume == nil || intent.Resume.WorkerActionID != action || intent.Resume.Identity != action || intent.Correlation == "" {
+		d.t.Fatalf("recovery lost original worker binding: %+v", intent)
+	}
+	ev, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: action, Event: protocol.LifecycleStart})
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -489,57 +536,93 @@ func resumeAndComplete(d *validationDriver, action string) error {
 	return nil
 }
 
-// TestEndedAwaitingResumeCountsAndExhaustsBudget：TASK_PROGRESS TERMINAL 后仍
-// 等待结果的执行（EndedAttempts，PendingActions 已清理）走恢复——EXECUTED 回
-// 执在承载条目的账本计数（Attempts 0→1），有限余量耗尽后第二次恢复被拒并落预
-// 算处置 Ask（恢复准入与恢复记账共用同一任务身份解析）。
+// TestEndedAwaitingResumeCountsAndExhaustsBudget：原恢复 Ask 在任务终态后仍
+// 绑定已终待果条目；EXECUTED 在承载账计数，有限边界只落预算 Ask。
 func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
-	d := newValidationDriver(t, "blackbox")
-	id, input := d.action("engine.qa.design.v5")
-	d.receipt(id)
-	start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.submit(start)
-	progress, err := protocol.NewTaskEvent(d.eventID(), input.Binding.Task, d.run.PendingActions[id].AttemptID, runtime.TaskTerminal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.submit(progress)
-	ended := d.run.EndedAttempts[input.Binding.Task]
-	if !ended.AwaitingResult || ended.Attempts != 0 {
-		t.Fatalf("precondition: ended attempt = %+v", ended)
-	}
-	if err := resumeAndComplete(d, id); err != nil {
-		t.Fatalf("first resume of the ended-awaiting execution blocked: %v", err)
-	}
-	snap, err := d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	counted := snap.State.EndedAttempts[input.Binding.Task]
-	if counted.Attempts != 1 || !counted.AwaitingResult {
-		t.Fatalf("resume execution not counted in the holding ledger: %+v", counted)
-	}
-	if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
-		t.Fatal("second resume accepted after the finite budget was consumed")
-	}
-	shown, err := d.f.Show()
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.run = shown
-	if ask := budgetAsk(d); ask.RequestID == "" {
-		t.Fatal("exhaustion boundary did not land a budget disposition ask")
-	}
-	snap, err = d.f.engine.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	final := snap.State.EndedAttempts[input.Binding.Task]
-	if final.Attempts != 1 || final.MaxAttempts != 2 {
-		t.Fatalf("rejection changed the attempt ledger: %+v", final)
+	for _, used := range []int{0, 1} {
+		t.Run(map[int]string{0: "available", 1: "exhausted"}[used], func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox")
+			id, input := d.action("engine.qa.design.v5")
+			original := d.run.Attempts[input.Binding.Task]
+			d.receipt(id)
+			start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), id, protocol.LifecycleStart)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(start)
+			if used == 1 {
+				if err := resumeAndComplete(d, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "USER_ACTION_REQUIRED"}, protocol.Observation{})
+			if err != nil || plan.Action != protocol.RecoveryAsk {
+				t.Fatalf("original recovery Ask = %+v %v", plan, err)
+			}
+			progress, err := protocol.NewTaskEvent(d.eventID(), input.Binding.Task, original.ID, runtime.TaskTerminal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(progress)
+			ended := d.run.EndedAttempts[input.Binding.Task]
+			if !ended.AwaitingResult || ended.Attempts != used || ended.ID != original.ID || ended.ActionID != id {
+				t.Fatalf("precondition: ended attempt = %+v", ended)
+			}
+			if _, pending := d.run.PendingActions[id]; pending {
+				t.Fatal("terminal task retained its pending action")
+			}
+			token, err := d.f.Freshness(plan.RequestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := protocol.NewDecideEvent(d.eventID(), protocol.RequestID(plan.RequestID), token, "resume")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(decision)
+			snap, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var intent protocol.HostActionIntent
+			for _, pending := range snap.State.PendingHostActions {
+				if pending.Correlation == plan.RequestID {
+					intent = pending
+				}
+			}
+			if used == 0 {
+				expectedInput := input
+				for _, record := range snap.State.RecoveryRecords {
+					if record.RequestID == plan.RequestID {
+						if record.ActionID != id || record.Task != input.Binding.Task || record.AttemptID != original.ID || record.Action != protocol.RecoveryAsk {
+							t.Fatalf("recovery lost original task and attempt: %+v", record)
+						}
+						expectedInput.Interruption = &record
+					}
+				}
+				if expectedInput.Interruption == nil || intent.Resume == nil || intent.Resume.WorkerActionID != id || intent.Resume.AttemptID != original.ID || intent.Resume.Identity != id || intent.Resume.Input == nil || !reflect.DeepEqual(*intent.Resume.Input, expectedInput) {
+					t.Fatalf("ended recovery lost original unfinished input: %+v", intent)
+				}
+				if err := resumeAndComplete(d, id); err != nil {
+					t.Fatalf("first resume of the ended-awaiting execution blocked: %v", err)
+				}
+			} else {
+				if intent.ActionID != "" {
+					t.Fatalf("second resume accepted after the finite budget was consumed: %+v", intent)
+				}
+				if ask := budgetAsk(d); ask.RequestID == "" {
+					t.Fatal("exhaustion boundary did not land a budget disposition ask")
+				}
+			}
+			snap, err = d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			final := snap.State.EndedAttempts[input.Binding.Task]
+			if final.Attempts != 1 || final.MaxAttempts != 2 || !final.AwaitingResult || final.ID != original.ID || final.ActionID != id {
+				t.Fatalf("ended recovery changed the holding ledger: %+v", final)
+			}
+		})
 	}
 }
 
@@ -559,12 +642,21 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 		if err := resumeAndComplete(d, id); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := d.f.engine.ResumeAgent(id, id, emptyFingerprint()); err == nil {
-			t.Fatal("missing exhaustion boundary")
+		if _, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
+			t.Fatal(err)
 		}
 		d.run, err = d.f.Show()
 		if err != nil {
 			t.Fatal(err)
+		}
+		blocked, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, intent := range blocked.State.PendingHostActions {
+			if intent.Operation == protocol.HostActionResumeAgent {
+				t.Fatalf("budget boundary signed a resume: %+v", intent)
+			}
 		}
 		if err := submitDecide(d, budgetAsk(d), "retry", "one bounded retry slot for this task"); err != nil {
 			t.Fatal(err)
@@ -622,12 +714,21 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 		}
 		d.submit(start2)
 		// 换新携带已计执行（2/3）：恢复即触达预算边界，落预算 Ask。
-		if _, _, err := d.f.engine.ResumeAgent(reissued, reissued, emptyFingerprint()); err == nil {
-			t.Fatal("resume of the carried ledger was expected to hit the boundary")
+		if _, _, err := d.f.engine.RecoverAttempt(reissued, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{}); err != nil {
+			t.Fatal(err)
 		}
 		d.run, err = d.f.Show()
 		if err != nil {
 			t.Fatal(err)
+		}
+		blocked, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, intent := range blocked.State.PendingHostActions {
+			if intent.Operation == protocol.HostActionResumeAgent {
+				t.Fatalf("budget boundary signed a resume: %+v", intent)
+			}
 		}
 		if err := submitDecide(d, budgetAsk(d), "retry", "a second extension via the budget channel"); err == nil {
 			t.Fatal("budget retry accepted after the RETRY channel already extended the same task")
@@ -798,8 +899,8 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, pending := range snap.State.PendingActions {
-		if pending.Task == snap.State.DispatchBindings[qa].Task {
+	for pendingID, pending := range snap.State.PendingActions {
+		if input := snap.State.ValidationInputs(d.f.definition)[pendingID]; input.Development != nil && input.Development.Batch.ID == "command" {
 			t.Fatalf("dependent batch issued while the known total was at the cap: %+v", pending)
 		}
 	}
@@ -811,5 +912,250 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 	}
 	if !asked {
 		t.Fatal("the known-total gate at the cap did not land a budget disposition ask")
+	}
+}
+
+func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
+	for _, source := range []string{"PENDING", "READY", "UNAVAILABLE", "READY_BARRIER"} {
+		t.Run(source, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
+				t.Fatal(err)
+			}
+			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err = f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			action := ""
+			for id := range r.PendingActions {
+				action = id
+				break
+			}
+			if action == "" {
+				t.Fatal("no dispatch")
+			}
+			submit := func(ev protocol.Event) {
+				if _, _, err := f.Submit(ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			unknown, err := protocol.NewSpawnReceiptEvent("unknown", action, meteredProvider, "transport-correlation", protocol.SpawnStatusUnknown)
+			if err != nil {
+				t.Fatal(err)
+			}
+			submit(unknown)
+			for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+				ev, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("lc-"+edge), meteredProvider, "transport-correlation", "actual-agent", edge)
+				if err != nil {
+					t.Fatal(err)
+				}
+				submit(ev)
+			}
+			result, err := protocol.NewReviewWorkerResultEvent("result", action, meteredProvider, "sha256:result", protocol.ReviewResultEvidence{Action: review.ProductReview, DispatchID: action, RequirementRevision: testReceipt().RequirementRevision, Status: "PASS", Findings: []review.Finding{}, Verification: review.OperatorVerification{Checks: []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"}, Evidence: "checked the current requirement and exact result"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, _, err := f.Submit(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if accepted.Status != protocol.StatusCostPending {
+				t.Fatalf("missing source not held: %+v", accepted)
+			}
+
+			before, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source == "PENDING" {
+				if _, err = f.Drive(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.Drive(); err != nil {
+					t.Fatal(err)
+				}
+				after, err := f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if before.Revision != after.Revision || len(after.State.Cost.Dispatches) != 0 || len(after.State.Results) != 0 {
+					t.Fatalf("pending source changed accepted facts: before=%+v after=%+v", before, after)
+				}
+				return
+			}
+			if source == "READY_BARRIER" {
+				request, err := protocol.NewRequirementRequestEvent("source-barrier", protocol.RequirementDecisionPackage{CandidateRevision: "sha256:new-document", DeltaDigest: "sha256:clarification", ImpactDigest: "sha256:preserved", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				submit(request)
+			}
+			if source == "UNAVAILABLE" {
+				if err := lifecycle.ObserveNativeCompletion(root, "staged-native-ready", action, meteredProvider, "actual-agent"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				transcript := filepath.Join(root, "native.jsonl")
+				writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":1}}}`})
+				completeMeteredSource(t, root, meteredProvider, "actual-agent", transcript)
+			}
+			resolved := CostSourceBridge(root, "staged-native-ready")(protocol.CostSourceRef{RunID: "staged-native-ready", ActionID: action, Provider: meteredProvider, Correlation: "transport-correlation"})
+			want := protocol.CostSourceReady
+			if source == "UNAVAILABLE" {
+				want = protocol.CostSourceUnavailable
+			}
+			if resolved.State != want {
+				t.Fatalf("native source state=%+v want=%s", resolved, want)
+			}
+
+			r, err = f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source == "READY_BARRIER" {
+				if snap.State.Results[action].Outcome != "" || snap.State.StagedResults[action].PayloadDigest != "sha256:result" || snap.State.ReviewSeries.ProductReview.Completed != 0 {
+					t.Fatal("source observation crossed the requirement barrier")
+				}
+				token, err := f.engine.Freshness("source-barrier")
+				if err != nil {
+					t.Fatal(err)
+				}
+				decision, err := protocol.NewDecideEvent("source-barrier-decision", "source-barrier", token, "abort")
+				if err != nil {
+					t.Fatal(err)
+				}
+				submit(decision)
+				snap, err = f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := snap.State.Results[action]; got.Outcome != protocol.OutcomePass || got.PayloadDigest != "sha256:result" {
+				t.Fatalf("ready original result not accepted: %+v", got)
+			}
+			if receipt := snap.State.SpawnReceipts[action]; receipt.Status != protocol.SpawnStatusAttached || receipt.LifecycleIdentity != "actual-agent" || receipt.Correlation != "transport-correlation" {
+				t.Fatalf("native binding changed: %+v", receipt)
+			}
+			entry := snap.State.Cost.Dispatches[action]
+			if source == "UNAVAILABLE" {
+				if entry.Source != "unavailable" || entry.Reason == "" {
+					t.Fatalf("missing native source fabricated consumption: %+v", entry)
+				}
+			} else if entry.Source != "transcript" || entry.InputCacheMissTokens != 5 || entry.InputCacheHitTokens != 1 || entry.OutputTokens != 2 {
+				t.Fatalf("original consumption changed: %+v", entry)
+			}
+			if _, err = f.Drive(); err != nil {
+				t.Fatal(err)
+			}
+			if replay, _, err := f.Submit(result); err != nil || !reflect.DeepEqual(replay, accepted) {
+				t.Fatalf("original event replay=%+v err=%v", replay, err)
+			}
+			after, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after.State.Cost, snap.State.Cost) || !reflect.DeepEqual(after.State.Results[action], snap.State.Results[action]) {
+				t.Fatal("drive/replay counted the original result or usage twice")
+			}
+		})
+	}
+}
+
+func TestAttachedReceiptPreservesAuthorizedResumeIdentity(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := ""
+	for id := range r.PendingActions {
+		action = id
+		break
+	}
+	if action == "" {
+		t.Fatal("no dispatch")
+	}
+	submit := func(ev protocol.Event) {
+		if _, _, err := f.Submit(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unknown, err := protocol.NewSpawnReceiptEvent("unknown", action, meteredProvider, "transport-correlation", protocol.SpawnStatusUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(unknown)
+	for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+		ev, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("lc-"+edge), meteredProvider, "transport-correlation", "actual-agent", edge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(ev)
+	}
+
+	before, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := before.State.PendingActions[action]
+	if input, current := before.State.WorkerInput(action, f.definition); !current || input.Pending.AttemptID != pending.AttemptID {
+		t.Fatalf("fixture has no original current canonical worker: %+v current=%t", input, current)
+	}
+	receipt := before.State.SpawnReceipts[action]
+	if receipt.Status != protocol.SpawnStatusAttached || receipt.LifecycleIdentity != "actual-agent" {
+		t.Fatalf("not uniquely attached: %+v", receipt)
+	}
+	recovery, _, err := f.engine.RecoverAttempt(action, protocol.Interruption{InterruptionReason: "native outcome interrupted before completion"}, protocol.Observation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Action != protocol.RecoveryAsk {
+		t.Fatalf("unknown-cause recovery did not retain its typed Ask: %+v", recovery)
+	}
+	token, err := f.engine.Freshness(protocol.RequestID(recovery.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := protocol.NewDecideEvent("resume-authorized", protocol.RequestID(recovery.RequestID), token, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(ev)
+	snap, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := protocol.HostActionIntent{}
+	for _, value := range snap.State.PendingHostActions {
+		if value.Resume != nil && value.Resume.WorkerActionID == action {
+			intent = value
+			break
+		}
+	}
+	if intent.ActionID == "" || intent.Resume.Identity != "actual-agent" || intent.Resume.AttemptID != pending.AttemptID {
+		t.Fatalf("resume lost original native binding: %+v", intent)
+	}
+	if input, current := snap.State.WorkerInput(action, f.definition); !current || input.Pending.AttemptID != pending.AttemptID {
+		t.Fatalf("original canonical worker no longer current: %+v current=%t", input, current)
+	}
+	input, identity, err := snap.State.WorkerExecutionIdentity(action, pending.AttemptID, intent.ActionID, f.definition)
+	t.Logf("receipt=%+v recovery=%+v pending=%+v intent=%+v input=%+v admittedIdentity=%q error=%v", receipt, recovery, pending, intent, input, identity, err)
+	if err != nil || identity != "actual-agent" || input.Pending.ActionID != action {
+		t.Error("authorized original resume rejected its uniquely attached native identity")
 	}
 }

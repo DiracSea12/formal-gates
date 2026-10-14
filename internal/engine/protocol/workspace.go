@@ -11,31 +11,6 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-// RecordQAWorktree records the public QA role projection. Native resources
-// remain in NativeResources until their typed cleanup evidence is accepted.
-func (e *Engine) RecordQAWorktree(worktree, expectedFingerprint string) error {
-	worktree = strings.TrimSpace(worktree)
-	revision, state, err := e.load()
-	if err != nil {
-		return err
-	}
-	if state == nil {
-		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
-	}
-	if state.BaseSnapshot == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "QA worktree registration requires a verified base snapshot"}
-	}
-	if worktree == "" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "QA worktree path is required"}
-	}
-	if state.QAWorktree == worktree {
-		return nil
-	}
-	state.QAWorktree = worktree
-	_, err = e.commit(state, revision, expectedFingerprint)
-	return err
-}
-
 // AdmitPromotion applies the shared final validation qualification before
 // opening or committing a promotion. Terminal and child checkpoints are closed.
 func (s *State) AdmitPromotion(cd *compiler.CompiledDefinition) error {
@@ -56,7 +31,8 @@ func (s *State) AdmitPromotion(cd *compiler.CompiledDefinition) error {
 
 // OpenPromotion signs the current verified source and the exact observed
 // target prefix. A superseded responsibility remains pending until completion.
-func (e *Engine) OpenPromotion(p PromotionParameters, expectedFingerprint string) error {
+func (e *Engine) OpenPromotion(p PromotionParameters, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -108,13 +84,14 @@ func (e *Engine) OpenPromotion(p PromotionParameters, expectedFingerprint string
 		return err
 	}
 	s.PendingHostActions[intent.ActionID] = intent
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
 // RecordCandidatePromotion submits a completed native proof through ordinary
 // typed receipt admission. It does not write delivery facts directly.
-func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromotionReceipt, expectedFingerprint string) error {
+func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromotionReceipt, input Observation) error {
+	e = e.observing(input)
 	_, s, err := e.load()
 	if err != nil {
 		return err
@@ -135,7 +112,7 @@ func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromot
 	if err != nil {
 		return err
 	}
-	_, err = e.Submit(event, expectedFingerprint)
+	_, err = e.Submit(event, input)
 	return err
 }
 
@@ -143,7 +120,8 @@ func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromot
 // A child cannot seal independently. Native identity enters from the facade;
 // current validation, promotion, barrier and abort facts are checked here.
 // A terminal replay with the same promoted identity performs no write.
-func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
+func (e *Engine) SealTerminal(delivered string, input Observation) error {
+	e = e.observing(input)
 	delivered = strings.TrimSpace(delivered)
 	revision, state, err := e.load()
 	if err != nil {
@@ -173,7 +151,7 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 	if delivered != state.PromotedSnapshot {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: fmt.Sprintf("native VCS identity %s does not match the promoted snapshot %s", delivered, state.PromotedSnapshot)}
 	}
-	if !state.validationConcluded(e.cfg.Definition) {
+	if !state.DeliveryComplete(e.cfg.Definition) {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal sealing requires the concluded validation pipeline"}
 	}
 	if state.pendingControl() {
@@ -193,7 +171,7 @@ func (e *Engine) SealTerminal(delivered, expectedFingerprint string) error {
 	if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
 		return err
 	}
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 
@@ -243,14 +221,6 @@ func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
 	return complete && sameTaskSet(w.SourceTasks, sources) && s.validateFinalCoverage() == nil && digestOfCanonical(w.Coverage) == digestOfCanonical(s.coverageContract(s.Validation.Candidate)) && s.validationEvidenceComplete(w)
 }
 
-func (s *State) validationConcluded(cd *compiler.CompiledDefinition) bool {
-	return s.validationDeliveryComplete(cd)
-}
-
-func (s *State) validationDeliveryComplete(cd *compiler.CompiledDefinition) bool {
-	return s.FinalValidationComplete(cd) && s.validationPromotionCurrent()
-}
-
 func (s *State) validationPromotionCurrent() bool {
 	w := s.currentValidationWave()
 	p := s.CandidatePromotion
@@ -295,7 +265,7 @@ type CandidatePromotionReceipt struct {
 }
 
 func (s *State) DeliveryComplete(cd *compiler.CompiledDefinition) bool {
-	return s.validationDeliveryComplete(cd)
+	return s.FinalValidationComplete(cd) && s.validationPromotionCurrent()
 }
 func (s *State) nonCleanupNativeDebt() bool {
 	for _, intent := range s.PendingHostActions {
@@ -433,6 +403,10 @@ func (s *State) promotionAuthorized(p CandidateParameters) bool {
 func (o PromotionObservation) Digest() string { return digestOfCanonical(o) }
 
 func (s *State) pendingControl() bool {
+	return s.hasPendingAsks() || s.nodeContinuationPending()
+}
+
+func (s *State) hasPendingAsks() bool {
 	for _, ask := range s.PendingAsks {
 		if !ask.Resolved {
 			return true
@@ -463,7 +437,7 @@ func (s *State) nativeReplacementAuthorized(old, current HostActionIntent, cd *c
 		}
 		if before.Task != nil && after.Task != nil {
 			replacement, authorized := s.requirementWorkReplacement(*before.Task)
-			if authorized && replacement != *before.Task && replacement == *after.Task && sameWorkspaceInput(s.NativeResources[before.Resource.ID], before.Resource) && sameWorkspaceInput(s.taskResource(replacement, cd), after.Resource) {
+			if authorized && replacement != *before.Task && replacement == *after.Task && SameWorkspaceInput(s.NativeResources[before.Resource.ID], before.Resource) && SameWorkspaceInput(s.taskResource(replacement, cd), after.Resource) {
 				return true
 			}
 		}
@@ -509,11 +483,5 @@ func (s *State) confirmedRequirementPromotionPrefix(p *PromotionParameters) bool
 	if p.TargetStart.Head != s.AcceptedNativeSnapshot() || len(p.TargetStart.Changes) != 1 || p.TargetStart.Changes[0].Path != s.RequirementArtifactPath() || p.TargetStart.Changes[0].Kind != "M" {
 		return false
 	}
-	current := s.currentValidationWave()
-	for i := range s.Validation.Waves {
-		if s.RequirementAssemblyReceipt(&s.Validation.Waves[i], current) != "" {
-			return true
-		}
-	}
-	return false
+	return true
 }

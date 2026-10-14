@@ -147,7 +147,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	approved := approvedReview(manifest)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &approved})
 	d.drive()
-	id, in = d.action("engine.development.batch.v4")
+	id, in = d.action("engine.development.batch.v5")
 	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package main\nimport \"os\"\nfunc main(){if len(os.Args)>1&&os.Args[1]==\"invalid\"{os.Exit(2)}}\n"} {
 		if err := os.WriteFile(filepath.Join(in.Workspace.Path, path), []byte(body), 0644); err != nil {
 			t.Fatal(err)
@@ -177,7 +177,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 	r := protocol.FindingResolution{FindingID: finding, Decision: "NEW", Requirement: "AC-001", NormalPath: "app run valid-input", Module: "command", RootCause: "composition", Consequence: "documented result missing", Severity: severity, SeverityRationale: "documented command behavior", Verification: review.FindingVerification{Scope: "command", Severity: "documented severity", Causality: "composition", Reproduction: "normal command invocation", Classification: "implementation"}, Reason: "native output comparison"}
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: w.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
 	d.drive()
-	id, in = d.action("engine.repair.v5")
+	id, in = d.action("engine.repair.v6")
 	return d, in, id
 }
 
@@ -241,7 +241,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 						var action string
 						var input protocol.ValidationInput
 						for id, in := range d.run.ValidationInputs {
-							if in.Handler == "engine.gate.v2" && in.Binding.Candidate != candidate.Identity {
+							if in.Handler == "engine.gate.v3" && in.Binding.Candidate != candidate.Identity {
 								action, input = id, in
 								break
 							}
@@ -303,7 +303,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 				}
 				if severity == "P2" {
 					for _, in := range d.run.ValidationInputs {
-						if in.Handler == "engine.gate.v2" {
+						if in.Handler == "engine.gate.v3" {
 							t.Fatal("pure P2 repeated a gate review")
 						}
 					}
@@ -331,7 +331,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		var action string
 		var input protocol.ValidationInput
 		for id, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.gate.v2" && in.Binding.BatchID == batch {
+			if in.Handler == "engine.gate.v3" && in.Binding.BatchID == batch {
 				action, input = id, in
 				break
 			}
@@ -385,7 +385,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 	d.reopen()
 	d.drive()
 	for _, in := range d.run.ValidationInputs {
-		if in.Handler == "engine.gate.v2" && in.Binding.BatchID == "logging" {
+		if in.Handler == "engine.gate.v3" && in.Binding.BatchID == "logging" {
 			t.Fatal("P2 member correction repeated gate review")
 		}
 	}
@@ -408,7 +408,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		var action string
 		var input protocol.ValidationInput
 		for id, in := range d.run.ValidationInputs {
-			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v2" {
+			if in.Handler == "engine.qa.execution.v3" || in.Handler == "engine.gate.v3" {
 				action, input = id, in
 				break
 			}
@@ -437,7 +437,7 @@ func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
 		t.Fatal("completed member source problem stayed open")
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.repair.v5" {
+		if input.Handler == "engine.repair.v6" {
 			t.Fatal("completed source problem created another repair")
 		}
 	}

@@ -103,7 +103,8 @@ const (
 	// TaskQueued：依赖已满足、等待签发（含"尚未登记"——状态投影中缺省
 	// 即 QUEUED，见 decision.State.TaskStatus）。
 	TaskQueued TaskStatus = "QUEUED"
-	// TaskIssued：SelectIssued 已分配 actionID 并持久化，尚未观察到运行。
+	// TaskIssued：protocol 的签发事务已登记最终 actionID、Attempt 与 pending
+	// action 并经 CAS 持久化，尚未观察到运行。
 	TaskIssued TaskStatus = "ISSUED"
 	// TaskRunning：worker/lifecycle 已观察到运行中。
 	TaskRunning TaskStatus = "RUNNING"
@@ -114,21 +115,6 @@ const (
 	TaskTerminal TaskStatus = "TERMINAL"
 )
 
-// taskStatuses 是全部合法任务状态值。
-var taskStatuses = []TaskStatus{
-	TaskQueued, TaskIssued, TaskRunning, TaskValidating, TaskTerminal,
-}
-
-// Valid 报告 s 是否属于封闭状态集合。
-func (s TaskStatus) Valid() bool {
-	for _, v := range taskStatuses {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
 // TaskEdge 是一条合法的任务状态转移边。
 type TaskEdge struct {
 	From TaskStatus
@@ -137,7 +123,7 @@ type TaskEdge struct {
 
 // taskTransitionTable 是任务状态机合法转移全表。状态机只前进：
 //
-//	QUEUED    → ISSUED      SelectIssued 签发
+//	QUEUED    → ISSUED      protocol 签发事务登记并提交
 //	QUEUED    → TERMINAL    未签发即被作废/替代（需求变化 Phase B、
 //	                       用户授权跳转的失效清理）
 //	ISSUED    → RUNNING     lifecycle/worker 观察到运行
@@ -146,8 +132,8 @@ type TaskEdge struct {
 //	RUNNING   → TERMINAL    运行期失败（RUNTIME_ERROR 类）不进结果校验
 //	VALIDATING → TERMINAL   校验完成
 //
-// 不存在回退边：重跑不把旧状态拨回 QUEUED，而是按 §6.4.3 开新 Attempt/
-// 新任务实例，旧实例保留 TERMINAL 状态。
+// 任务转移表不存在回退边。重跑复用 TaskKey，以新 Attempt 承载执行；当前
+// Tasks 投影重新置为 QUEUED，已结束执行由 EndedAttempts/ObsoleteActions 留证。
 var taskTransitionTable = []TaskEdge{
 	{TaskQueued, TaskIssued},
 	{TaskQueued, TaskTerminal},

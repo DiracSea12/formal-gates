@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/engine/decision"
 	"io"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
@@ -103,7 +105,7 @@ func TestStartRecoveryKeepsAdmissionThroughRootAlias(t *testing.T) {
 	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID, Admission: *admission}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Start(StartOptions{Root: alias, Request: StartRequest{RunID: runID, IntakeConfirmationReceipt: testReceipt()}, Admission: admission}); err != nil {
+	if _, _, err := Start(StartOptions{Root: alias, Request: StartRequest{RunID: runID, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: admission}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(root, runID)
@@ -197,7 +199,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 			case "provider":
 				incomplete.Provider = ""
 			}
-			_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-" + missing, IntakeConfirmationReceipt: testReceipt()}, Admission: &incomplete})
+			_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-" + missing, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &incomplete})
 			if err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
 				t.Fatalf("incomplete binding=%v", err)
 			}
@@ -207,7 +209,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 		})
 	}
 	wrongProvider := *a
-	if _, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "provider-mismatch", Provider: "zcode", IntakeConfirmationReceipt: testReceipt()}, Admission: &wrongProvider}); err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
+	if _, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "provider-mismatch", Route: "lightweight", Provider: "zcode", IntakeConfirmationReceipt: testReceipt()}, Admission: &wrongProvider}); err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
 		t.Fatalf("provider mismatch=%v", err)
 	}
 }
@@ -228,7 +230,7 @@ func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
 	}
 	before := installationFiles(t, filepath.Join(root, EngineNamespace))
 	next := advanceInstallation(t, *a)
-	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: id, IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
+	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: id, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
 	if !errors.Is(err, errStaleFencingToken) {
 		t.Fatalf("stale prefix recovery=%v", err)
 	}
@@ -243,7 +245,7 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/fenced=%t", point, fenced), func(t *testing.T) {
 				root := t.TempDir()
 				a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
-				f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "recovery", IntakeConfirmationReceipt: testReceipt()}, Admission: a})
+				f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "recovery", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: a})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -262,7 +264,8 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = store.Save(persistence.Transaction{ExpectedRevision: snapshot.Revision, ExpectedFingerprint: emptyFingerprint(), CollectFingerprint: func() (string, error) { return emptyFingerprint(), nil }, Content: snapshot.State})
+				fingerprint, _ := (decision.Observation{}).Digest()
+				_, err = store.Save(persistence.Transaction{ExpectedRevision: snapshot.Revision, ExpectedFingerprint: fingerprint, CollectFingerprint: (decision.Observation{}).Digest, Content: snapshot.State})
 				if !errors.Is(err, persistence.ErrInjectedCrash) {
 					t.Fatalf("fault=%v", err)
 				}
@@ -304,6 +307,144 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 	}
 }
 
+// Public requests preserve interrupted durable input and return the original
+// acceptance on replay. Independent input must be read against the recovered
+// revision before acceptance.
+func TestSubmitPreservesPendingCommitAndReplay(t *testing.T) {
+	for _, point := range []persistence.FaultPoint{persistence.FaultIntentAfter, persistence.FaultExecuteAfter, persistence.FaultCommitResponseLost} {
+		for _, replay := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/replay=%t", point, replay), func(t *testing.T) {
+				root := t.TempDir()
+				d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, snapshotRepoCommits(t, root)[0], nil)
+				baseline, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				original, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				store, err := persistence.NewStore(d.f.stateDir, persistence.Config{PackageDigest: d.f.envelope.PackageDigest, DefinitionSource: d.f.envelope.DefinitionSource, InstalledTargetIdentity: d.f.envelope.InstalledTargetIdentity, AcquireAdmission: d.f.admission.acquire, FaultInjector: func(at persistence.FaultPoint) error {
+					if at == point {
+						return &persistence.InjectedCrashError{Point: at}
+					}
+					return nil
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine, err := protocol.New(store, protocol.Config{NativeRoot: d.f.root, Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(d.f.root, d.f.runID), ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.f.store, d.f.engine = store, engine
+				if _, _, err := d.f.Submit(original); !errors.Is(err, persistence.ErrInjectedCrash) {
+					t.Fatalf("interrupted public submit: %v", err)
+				}
+				statePath := filepath.Join(d.f.stateDir, "state.json")
+				if point == persistence.FaultIntentAfter {
+					data, err := os.ReadFile(filepath.Join(d.f.stateDir, "state.json.intent"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var intent struct {
+						Temp string `json:"temp"`
+					}
+					if err := json.Unmarshal(data, &intent); err != nil {
+						t.Fatal(err)
+					}
+					statePath = filepath.Join(d.f.stateDir, intent.Temp)
+				}
+				data, err := os.ReadFile(statePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var durable struct {
+					Revision uint64         `json:"revision"`
+					Content  protocol.State `json:"content"`
+				}
+				if err := json.Unmarshal(data, &durable); err != nil {
+					t.Fatal(err)
+				}
+				if durable.Revision != baseline.Revision+1 {
+					t.Fatalf("durable revision=%d baseline=%d", durable.Revision, baseline.Revision)
+				}
+				originalDigest, err := original.Digest()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if record, ok := durable.Content.Events[string(original.ID)]; !ok || record.Digest != originalDigest || record.Acceptance.EventID != string(original.ID) || record.Acceptance.Revision != durable.Revision || durable.Content.PendingAsks[string(original.ID)].Control != protocol.ControlRequestRequirementChange {
+					t.Fatalf("durable input lost original request identity/content: %+v", record)
+				}
+				f, err := Open(d.f.root, d.f.runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				submitted := original
+				if !replay {
+					submitted, err = protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				acceptance, _, err := f.Submit(submitted)
+				if point == persistence.FaultIntentAfter {
+					var conflict *persistence.RevisionConflictError
+					if !errors.As(err, &conflict) || conflict.Expected != baseline.Revision || conflict.Observed != durable.Revision {
+						t.Fatalf("stale public submit: %v, want CAS %d/%d", err, baseline.Revision, durable.Revision)
+					}
+					recovered, loadErr := f.engine.Load()
+					if loadErr != nil || recovered.Revision != durable.Revision || !reflect.DeepEqual(recovered.State, &durable.Content) {
+						t.Fatalf("stale submit changed original durable state: %+v %v", recovered, loadErr)
+					}
+					acceptance, _, err = f.Submit(submitted)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				driven, err := f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantRevision := durable.Revision
+				if !replay {
+					wantRevision++
+				}
+				if snapshot.Revision != wantRevision || driven.Revision != wantRevision || !reflect.DeepEqual(snapshot.State.Events[string(original.ID)], durable.Content.Events[string(original.ID)]) || !reflect.DeepEqual(snapshot.State.PendingAsks[string(original.ID)], durable.Content.PendingAsks[string(original.ID)]) {
+					t.Fatalf("original request/acceptance/ask changed: revision=%d want=%d", snapshot.Revision, wantRevision)
+				}
+				if replay {
+					if !reflect.DeepEqual(acceptance, durable.Content.Events[string(original.ID)].Acceptance) {
+						t.Fatalf("replay acceptance changed: %+v", acceptance)
+					}
+				} else {
+					digest, err := submitted.Digest()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if record, ok := snapshot.State.Events[string(submitted.ID)]; !ok || record.Digest != digest || !reflect.DeepEqual(record.Acceptance, acceptance) || record.Acceptance.Revision != wantRevision || snapshot.State.PendingAsks[string(submitted.ID)].Control != protocol.ControlAbort {
+						t.Fatalf("independent request lost identity/content: %+v", record)
+					}
+				}
+				before := installationFiles(t, f.stateDir)
+				if repeated, _, err := f.Submit(submitted); err != nil || !reflect.DeepEqual(repeated, acceptance) {
+					t.Fatalf("repeat acceptance: %+v %v", repeated, err)
+				}
+				if report, err := f.store.Recover(); err != nil || report.Outcome != persistence.RecoveryClean || report.Revision != wantRevision {
+					t.Fatalf("repeat recovery: %+v %v", report, err)
+				}
+				if after := installationFiles(t, f.stateDir); !reflect.DeepEqual(before, after) {
+					t.Fatal("repeat submit/recovery changed durable bytes")
+				}
+			})
+		}
+	}
+}
+
 func TestFencedDispatchClaimDoesNotWriteLifecycleBinding(t *testing.T) {
 	d := startValidationDriverAt(t, t.TempDir(), meteredProvider, nil)
 	id := ""
@@ -335,7 +476,7 @@ func TestNewInstallationStartsWithoutWritingFencedOwnerPeer(t *testing.T) {
 	old := startIntervalRun(t, root, "old-owner", transcript)
 	before := installationFiles(t, old.stateDir)
 	next := advanceInstallation(t, old.admission)
-	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: "new-owner", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: "new-owner", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
 	if err != nil {
 		t.Fatalf("new installation start=%v", err)
 	}
@@ -356,11 +497,11 @@ func TestFencedTerminalWindowsRetainEvidenceAndAllowPureReplay(t *testing.T) {
 	for _, window := range []string{"intent", "cleanup", "summary", "remove-intent", "end-lifecycle", "complete"} {
 		t.Run(window, func(t *testing.T) {
 			root := t.TempDir()
-			f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+			f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.engine.CompleteAll(emptyFingerprint()); err != nil {
+			if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			run, err := f.project()
@@ -453,7 +594,8 @@ func TestInstallationSubprocess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, saveErr := f.store.Save(persistence.Transaction{ExpectedRevision: expected, ExpectedFingerprint: emptyFingerprint(), CollectFingerprint: func() (string, error) { return emptyFingerprint(), nil }, Content: snapshot.State})
+	fingerprint, _ := (decision.Observation{}).Digest()
+	result, saveErr := f.store.Save(persistence.Transaction{ExpectedRevision: expected, ExpectedFingerprint: fingerprint, CollectFingerprint: (decision.Observation{}).Digest, Content: snapshot.State})
 	outcome := map[string]any{"cap": cap, "revision": result.Revision}
 	if saveErr != nil {
 		outcome["error"] = saveErr.Error()
@@ -467,7 +609,7 @@ func TestInstallationSubprocess(t *testing.T) {
 
 func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	root := t.TempDir()
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "process-window", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +670,7 @@ func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	// Use the newly admitted run to check both process/state order and crash release.
 	currentRoot := t.TempDir()
 	currentAdmission := testAdmission(t, currentRoot, "current", "sha256:package", DefaultProvider)
-	current, _, err := Start(StartOptions{Root: currentRoot, Request: StartRequest{RunID: "process-window", IntakeConfirmationReceipt: testReceipt()}, Admission: currentAdmission})
+	current, _, err := Start(StartOptions{Root: currentRoot, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: currentAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +767,6 @@ func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	if state.TokenCapMaxTokens == nil || *state.TokenCapMaxTokens != cap || stored.Revision != snapshot.Revision+1 {
 		t.Fatal("parallel CAS lost winner bytes/revision")
 	}
-
 }
 
 func TestFencedUnknownAttachmentPreservesItsObservation(t *testing.T) {
@@ -654,7 +795,7 @@ func TestFencedUnknownAttachmentPreservesItsObservation(t *testing.T) {
 	}
 	before := installationFiles(t, d.f.root)
 	advanceInstallation(t, d.f.admission)
-	if _, _, err := d.f.engine.ReconcileUnknownReceipt(id, emptyFingerprint()); !errors.Is(err, errStaleFencingToken) {
+	if _, _, err := d.f.engine.ReconcileUnknownReceipt(id, protocol.Observation{}); !errors.Is(err, errStaleFencingToken) {
 		t.Fatalf("stale UNKNOWN attach=%v", err)
 	}
 	if after := installationFiles(t, d.f.root); !reflect.DeepEqual(before, after) {
@@ -681,7 +822,7 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 			}
 			source := d.run.Validation.Candidate.Identity
 			if window != "before-intent" {
-				if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, source, "organized delivery"), emptyFingerprint()); err != nil {
+				if err := d.f.engine.OpenPromotion(promotionInputForTest(t, d, source, "organized delivery"), protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -796,7 +937,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 			beforeChild := installationFiles(t, child.f.stateDir)
 			beforeMaster := installationFiles(t, master.f.stateDir)
 			if window == "replay" {
-				if err := master.f.engine.AcceptSliceReceipt(receipt, emptyFingerprint()); err != nil {
+				if err := master.f.engine.AcceptSliceReceipt(receipt, protocol.Observation{}); err != nil {
 					t.Fatalf("pure accepted receipt replay=%v", err)
 				}
 				for _, query := range []func() (Run, error){master.f.Show, master.f.Status} {
@@ -875,13 +1016,18 @@ func (runner *admittedGitRunner) Run(dir, command string, args ...string) (strin
 	}
 	return runner.inner.Run(dir, command, args...)
 }
+
+func (runner *admittedGitRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return runner.inner.RunRaw(dir, command, input, args...)
+}
+
 func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "application", "reviewed changes")
 	d := completePromotionPipeline(t, nil, root, identities[0])
 	candidate := d.run.Validation.Candidate
 	promotion := promotionInputForTest(t, d, candidate.Identity, "admitted native delivery")
-	if err := d.f.engine.OpenPromotion(promotion, emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(promotion, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.f.admission.write(func() error { return d.f.vcs.FastForward(candidate.Identity) }); err != nil {
@@ -891,7 +1037,6 @@ func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
 	if err != nil || tree != candidate.Digest {
 		t.Fatalf("prepared target tree=%s want approved=%s err=%v", tree, candidate.Digest, err)
 	}
-	t.Logf("approved source=%s digest=%s targetStart=%s preparedTarget=%s", candidate.Identity, candidate.Digest, promotion.TargetStart.Head, candidate.Identity)
 	observer := &admittedGitRunner{inner: vcs.ExecRunner{}, registry: d.f.admission.RegistryPath}
 	d.f.vcs = vcs.New(root, observer)
 	if _, err := d.f.PrepareCandidate("admitted native delivery"); err != nil {
@@ -905,8 +1050,4 @@ func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-}
-
-func (runner *admittedGitRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
-	return runner.inner.RunRaw(dir, command, input, args...)
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ const promotionLockDescription = "candidate promotion window"
 
 // promotionLockPath 是晋升执行窗互斥锁（等待式文件锁）的路径：放在 run 状态
 // 目录内（.gates/engine/ 属 porcelain 的运行期未跟踪排除清单，锁文件不污染
-// 就绪检查）。Drive、PrepareCandidate 的原生执行与观察共用此窗口；公开新事件的
+// 就绪检查）。Drive 的原生执行与观察共用此窗口；公开新事件的
 // 接纳在同一把锁上等待至窗口关闭（等待式文件锁本
 // 体：持锁冲突时阻塞、由内核在持锁释放时唤醒的等待者，与 owner 区间串行使
 // 用同款原语）。
@@ -69,20 +70,9 @@ func (f *Facade) acquireNativeWindow() (func(), error) {
 	return coordination.AcquireExistingPathWaiting(f.promotionLockPath(), promotionLockDescription)
 }
 
-// PrepareCandidate completes the signed native effect for the current FULL
+// prepareCandidate completes the signed native effect for the current FULL
 // candidate. Observation and execution use the same handler as Drive recovery.
-func (f *Facade) PrepareCandidate(message string) (string, error) {
-	if f.vcs == nil {
-		return "", fmt.Errorf("candidate promotion requires a regular run with a native VCS provider")
-	}
-	unlock, err := f.acquireWriteWindow()
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
-	return f.prepareCandidate(message)
-}
-func (f *Facade) prepareCandidate(message string) (string, error) {
+func (f *Facade) prepareCandidate() (string, error) {
 	snap, err := f.engine.Load()
 	if err != nil {
 		return "", err
@@ -92,13 +82,6 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		return "", err
 	}
 	if s.DeliveryComplete(f.definition) {
-		tree, err := f.vcs.TreeDigest("HEAD")
-		if err != nil {
-			return "", err
-		}
-		if tree != s.PromotedDigest {
-			return "", fmt.Errorf("candidate content does not match the verified final candidate")
-		}
 		head, _, err := f.verifyDelivered()
 		return head, err
 	}
@@ -115,10 +98,10 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 				return "", err
 			}
 			if complete {
-				if err := f.engine.RecordCandidatePromotion(intent.ActionID, *result.Candidate.Promotion, emptyFingerprint()); err != nil {
+				if err := f.engine.RecordCandidatePromotion(intent.ActionID, *result.Candidate.Promotion, result.observation); err != nil {
 					return "", err
 				}
-				return f.prepareCandidate(message)
+				return f.prepareCandidate()
 			}
 			if _, err := f.promotionPrefix(*old.Promotion); err != nil {
 				return "", err
@@ -127,24 +110,12 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		}
 	}
 	if !pending {
-		observed, err := f.observePromotion()
+		read := f.observePromotion
+		observed, err := read()
 		if err != nil {
 			return "", err
 		}
-		p := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: f.vcs.Root(), TargetBase: s.BaseSnapshot, TargetStart: observed, Message: strings.TrimSpace(message)}
-		if s.NativeRoot != "" {
-			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
-		}
-		if p.Message == "" {
-			count, err := f.vcs.CommitCount(s.BaseSnapshot, observed.Head)
-			if err != nil {
-				return "", err
-			}
-			if s.SliceChild == nil && count > 1 {
-				return "", fmt.Errorf("candidate promotion requires a squash message for multiple commits")
-			}
-			p.Message = "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity
-		}
+		p := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: f.vcs.Root(), TargetBase: s.BaseSnapshot, TargetStart: observed, Message: "formal-gates delivery " + f.runID + " " + s.BaseSnapshot + " " + source.Identity}
 		if intent.ActionID != "" {
 			p.SupersedesActionID = intent.ActionID
 		} else {
@@ -165,6 +136,14 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 					return "", err
 				}
 				p.TargetStart = observed
+				read = func() (protocol.PromotionObservation, error) {
+					current, err := f.observePromotion()
+					if err != nil {
+						return current, err
+					}
+					current.Changes, err = f.vcs.Changes(current.Head, "")
+					return current, err
+				}
 			}
 		}
 		for _, r := range s.NativeResources {
@@ -176,7 +155,7 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		if s.NativeRoot != "" && p.SourceWorkspace == "" {
 			return "", fmt.Errorf("candidate promotion requires its registered source workspace")
 		}
-		if err := f.engine.OpenPromotion(p, emptyFingerprint()); err != nil {
+		if err := f.engine.OpenPromotion(p, f.promotionObservation(p.TargetStart, read)); err != nil {
 			return "", err
 		}
 		snap, err = f.engine.Load()
@@ -200,7 +179,7 @@ func (f *Facade) prepareCandidate(message string) (string, error) {
 		return "", fmt.Errorf("candidate promotion remains incomplete")
 	}
 	proof := *result.Candidate.Promotion
-	if err := f.engine.RecordCandidatePromotion(intent.ActionID, proof, emptyFingerprint()); err != nil {
+	if err := f.engine.RecordCandidatePromotion(intent.ActionID, proof, result.observation); err != nil {
 		return "", err
 	}
 	return proof.Final, nil
@@ -296,37 +275,41 @@ func (f *Facade) promotionPrefix(p protocol.PromotionParameters) (protocol.Promo
 	if err := f.vcs.IsAncestorOrEqual(p.TargetBase, o.Head); err != nil {
 		return o, err
 	}
-	if !o.Clean && !o.StagedOnly {
-		snap, loadErr := f.engine.Load()
-		if loadErr != nil {
-			return o, loadErr
-		}
-		allowed, checkErr := f.confirmedRequirementTarget(snap.State, p.Source)
-		if checkErr != nil {
-			return o, checkErr
-		}
-		if !allowed || o.Head != p.TargetStart.Head || o.IndexTree != p.TargetStart.IndexTree {
-			return o, fmt.Errorf("candidate promotion cannot resume over changes it did not stage (unstaged or untracked)")
-		}
-	}
-	if o.Head == p.TargetStart.Head {
-		expected, err := f.vcs.Changes(p.TargetStart.IndexTree, p.Source)
-		if err != nil {
-			return o, err
-		}
-		actual, err := f.vcs.Changes(p.TargetStart.IndexTree, o.IndexTree)
-		if err != nil {
-			return o, err
-		}
-		for _, change := range actual {
-			if !slices.Contains(expected, change) {
-				return o, fmt.Errorf("promotion contains an unexplained staged change: %s", change.Path)
+	// An immutable completed value is independent of the target's next input.
+	// Only a remaining native prefix requires the current index and worktree.
+	if o.Head == p.TargetStart.Head || o.Tree != p.SourceDigest {
+		if !o.Clean && !o.StagedOnly {
+			snap, loadErr := f.engine.Load()
+			if loadErr != nil {
+				return o, loadErr
+			}
+			allowed, checkErr := f.confirmedRequirementTarget(snap.State, p.Source)
+			if checkErr != nil {
+				return o, checkErr
+			}
+			if !allowed || o.Head != p.TargetStart.Head || o.IndexTree != p.TargetStart.IndexTree {
+				return o, fmt.Errorf("candidate promotion cannot resume over changes it did not stage (unstaged or untracked)")
 			}
 		}
-		return o, nil
-	}
-	if o.IndexTree != p.SourceDigest || o.Clean && o.Tree != p.SourceDigest {
-		return o, fmt.Errorf("promotion target does not match the verified final candidate")
+		if o.Head == p.TargetStart.Head {
+			expected, err := f.vcs.Changes(p.TargetStart.IndexTree, p.Source)
+			if err != nil {
+				return o, err
+			}
+			actual, err := f.vcs.Changes(p.TargetStart.IndexTree, o.IndexTree)
+			if err != nil {
+				return o, err
+			}
+			for _, change := range actual {
+				if !slices.Contains(expected, change) {
+					return o, fmt.Errorf("promotion contains an unexplained staged change: %s", change.Path)
+				}
+			}
+			return o, nil
+		}
+		if o.IndexTree != p.SourceDigest || o.Clean && o.Tree != p.SourceDigest {
+			return o, fmt.Errorf("promotion target does not match the verified final candidate")
+		}
 	}
 	if o.Head == p.TargetBase || o.Head == p.Source {
 		return o, nil
@@ -390,10 +373,13 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 	if err != nil {
 		return nativeResult{}, false, err
 	}
-	complete := o.Clean && o.Tree == p.SourceDigest && o.IndexTree == p.SourceDigest && (s.SliceChild != nil || count <= 1)
+	complete := o.Tree == p.SourceDigest && (o.Head != p.TargetStart.Head || o.Clean && o.IndexTree == p.SourceDigest) && (s.SliceChild != nil || count <= 1)
 	if !complete {
 		if !mayWrite {
 			return nativeResult{}, false, nil
+		}
+		if o.Head != p.TargetStart.Head && (o.IndexTree != p.SourceDigest || !o.Clean && !o.StagedOnly) {
+			return nativeResult{}, false, fmt.Errorf("promotion remainder differs from its native prefix")
 		}
 		if !s.NativeActionWritable(intent, f.definition) {
 			return nativeResult{}, false, fmt.Errorf("native responsibility has no current execution allowance")
@@ -487,70 +473,7 @@ func (f *Facade) promotionEvidence(s *protocol.State, intent protocol.HostAction
 		}
 	}
 	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
-	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
-}
-
-// RegisterQAWorktree validates a base workspace and its confirmed current
-// artifacts. Native workflow resources are created and owned by Drive.
-func (f *Facade) RegisterQAWorktree(worktree string) error {
-	if f.vcs == nil {
-		return fmt.Errorf("QA worktree registration requires a regular run with a native VCS provider")
-	}
-	snap, err := f.engine.Load()
-	if err != nil {
-		return err
-	}
-	worktree = strings.TrimSpace(worktree)
-	if worktree == "" {
-		return fmt.Errorf("QA isolation worktree path is required")
-	}
-	worktree, err = filepath.Abs(worktree)
-	if err != nil {
-		return err
-	}
-	resolved, err := f.vcs.At(worktree).Resolve()
-	if err != nil {
-		return fmt.Errorf("cannot resolve QA isolation worktree: %w", err)
-	}
-	if resolved != snap.State.BaseSnapshot {
-		return fmt.Errorf("QA isolation worktree native identity %s does not match the base snapshot %s", resolved, snap.State.BaseSnapshot)
-	}
-	receipt := snap.State.CurrentIntakeConfirmation()
-	if receipt == nil {
-		return fmt.Errorf("QA worktree registration requires the run's intake artifacts")
-	}
-	requirementPath := filepath.Clean(receipt.RequirementSource)
-	if filepath.IsAbs(requirementPath) {
-		requirementPath, err = filepath.Rel(f.root, requirementPath)
-		if err != nil {
-			return err
-		}
-	}
-	for _, artifact := range receipt.Artifacts {
-		expected := artifact.Revision
-		if filepath.Clean(filepath.FromSlash(artifact.Path)) == requirementPath {
-			expected = strings.TrimPrefix(snap.State.RequirementRevision(), "sha256:")
-		}
-		path := filepath.Join(worktree, filepath.FromSlash(artifact.Path))
-		revision, err := requirementArtifactRevision(path)
-		if err != nil {
-			return fmt.Errorf("QA isolation worktree requirement artifact %s: %w", artifact.Path, err)
-		}
-		if revision != expected {
-			return fmt.Errorf("QA isolation worktree requirement artifact %s does not match the run revision %s", artifact.Path, expected)
-		}
-	}
-	return f.engine.RecordQAWorktree(worktree, emptyFingerprint())
-}
-
-// requirementArtifactRevision uses the intake artifact hash language: bare
-// hexadecimal SHA256 with CRLF normalized to LF.
-func requirementArtifactRevision(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return requirementContentRevision(data), nil
+	return nativeResult{observation: f.promotionObservation(o, f.observePromotion), Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
 }
 
 func requirementContentRevision(data []byte) string {
@@ -564,6 +487,10 @@ func requirementContentRevision(data []byte) string {
 // submit, including a submit whose process response was lost.
 func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.HostActionIntent, params protocol.CandidateParameters, mayWrite bool, invoked *bool) (nativeResult, bool, error) {
 	p := *params.Promotion
+	completed := func(o protocol.PromotionObservation, observation protocol.Observation) (nativeResult, bool, error) {
+		proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
+		return nativeResult{observation: observation, Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
+	}
 	head, err := f.vcs.Resolve()
 	if err != nil {
 		return nativeResult{}, false, err
@@ -579,6 +506,38 @@ func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.Host
 		}
 		if digest != p.SourceDigest {
 			return nativeResult{}, false, fmt.Errorf("observed native promotion values differ from candidate")
+		}
+		native := f.vcs
+		synchronized, err := native.WorkspaceSynchronized(observed)
+		if err != nil {
+			return nativeResult{}, false, err
+		}
+		if synchronized {
+			message, err := native.Message(observed)
+			if err != nil {
+				return nativeResult{}, false, err
+			}
+			facts := func(tree, message string, synchronized bool) decision.Observation {
+				key := native.Name() + ":" + native.Root() + ":" + observed
+				return decision.Observation{Facts: []decision.Fact{
+					{Source: decision.SourceVCS, Key: key + ":tree", Value: tree},
+					{Source: decision.SourceVCS, Key: key + ":message", Value: message},
+					{Source: decision.SourceVCS, Key: key + ":synchronized", Value: fmt.Sprint(synchronized)},
+				}}
+			}
+			observation := protocol.Observation{Facts: facts(digest, message, synchronized), Read: func() (decision.Observation, error) {
+				tree, err := native.TreeDigest(observed)
+				if err != nil {
+					return decision.Observation{}, err
+				}
+				message, err := native.Message(observed)
+				if err != nil {
+					return decision.Observation{}, err
+				}
+				synchronized, err := native.WorkspaceSynchronized(observed)
+				return facts(tree, message, synchronized), err
+			}}
+			return completed(protocol.PromotionObservation{Head: observed, Tree: digest}, observation)
 		}
 	}
 	status, err := f.vcs.Status()
@@ -643,26 +602,14 @@ func (f *Facade) nativePromotionEvidence(s *protocol.State, intent protocol.Host
 			return nativeResult{}, false, fmt.Errorf("native promotion final values differ from candidate")
 		}
 	}
-	proof := &protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: f.vcs.Name(), SourceWorkspace: p.SourceWorkspace, Source: p.Source, SourceDigest: p.SourceDigest, TargetRoot: p.TargetRoot, TargetBase: p.TargetBase, TargetStart: p.TargetStart, SupersedesActionID: p.SupersedesActionID, Final: o.Head, FinalDigest: o.Tree}
-	return nativeResult{Candidate: &protocol.CandidateEvidence{ParametersDigest: intent.PayloadDigest, WorkspaceID: params.WorkspaceID, Identity: o.Head, Digest: o.Tree, Promotion: proof}}, true, nil
+	return completed(o, f.promotionObservation(o, f.observePromotion))
 }
 
 // confirmedRequirementTarget admits only the user's exact pending document
-// whose first native assembly already has a current candidate receipt.
+// for the current qualified candidate.
 func (f *Facade) confirmedRequirementTarget(s *protocol.State, source string) (bool, error) {
 	current := s.Validation
 	if current == nil || current.Candidate == nil || current.Candidate.Identity != source || len(current.Waves) == 0 {
-		return false, nil
-	}
-	wave := &current.Waves[len(current.Waves)-1]
-	confirmed := false
-	for i := range current.Waves {
-		if s.RequirementAssemblyReceipt(&current.Waves[i], wave) != "" {
-			confirmed = true
-			break
-		}
-	}
-	if !confirmed {
 		return false, nil
 	}
 	path := s.RequirementArtifactPath()
@@ -689,4 +636,30 @@ func (f *Facade) confirmedRequirementTarget(s *protocol.State, source string) (b
 		return false, err
 	}
 	return requirementContentRevision(body) == strings.TrimPrefix(current.RequirementRevision, "sha256:"), nil
+}
+
+// promotionObservation binds the target prefix consumed by this intent or receipt.
+func (f *Facade) promotionObservation(value protocol.PromotionObservation, read func() (protocol.PromotionObservation, error)) protocol.Observation {
+	native := f.vcs
+	facts := func(value protocol.PromotionObservation) decision.Observation {
+		return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceVCS, Key: native.Name() + ":" + native.Root(), Value: value.Digest()}}}
+	}
+	return protocol.Observation{Facts: facts(value), Read: func() (decision.Observation, error) {
+		current, err := read()
+		return facts(current), err
+	}}
+}
+
+// requirementObservation binds the document sample to its exact file reader.
+func requirementObservation(path string, data []byte) protocol.Observation {
+	facts := func(data []byte) decision.Observation {
+		return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceFile, Key: path, Value: requirementContentRevision(data)}}}
+	}
+	return protocol.Observation{Facts: facts(data), Read: func() (decision.Observation, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return decision.Observation{}, err
+		}
+		return facts(data), nil
+	}}
 }

@@ -24,8 +24,8 @@ func cancelAbortRequest(t *testing.T, id EventID) Event {
 // freshness token，与 Freshness() 求值一致。
 func TestRequestCreatesPendingAsk(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	acceptance, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
+	observedInput := Observation{}
+	acceptance, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput)
 	if err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
@@ -57,12 +57,12 @@ func TestRequestCreatesPendingAsk(t *testing.T) {
 // 原样 acceptance（含 token），不重复创建、revision 不再 +1。
 func TestRequestIdempotentReplay(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	first, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
+	observedInput := Observation{}
+	first, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput)
 	if err != nil {
 		t.Fatalf("first submit: %v", err)
 	}
-	second, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp)
+	second, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput)
 	if err != nil {
 		t.Fatalf("replay submit: %v", err)
 	}
@@ -82,8 +82,8 @@ func TestRequestIdempotentReplay(t *testing.T) {
 // 硬拒绝，零状态变化（台账、Ask、revision 均不动）。
 func TestSameIDDifferentDigestHardReject(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
 		t.Fatalf("first submit: %v", err)
 	}
 	// 同 ID、不同选项集 → 不同 digest。
@@ -93,7 +93,7 @@ func TestSameIDDifferentDigestHardReject(t *testing.T) {
 		t.Fatalf("conflicting event: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
-	if _, err := engine.Submit(conflicting, fp); err == nil {
+	if _, err := engine.Submit(conflicting, observedInput); err == nil {
 		t.Fatal("same-id different-digest accepted")
 	} else if code := rejectionCode(t, err); code != CodeDuplicateEventMismatch {
 		t.Fatalf("mismatch code = %q", code)
@@ -109,8 +109,8 @@ func TestSameIDDifferentDigestHardReject(t *testing.T) {
 // 重放返回稳定 acceptance 且 revision 不再 +1。
 func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	token, err := engine.Freshness("req-abort-1")
@@ -121,7 +121,7 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	acceptance, err := engine.Submit(decide, fp)
+	acceptance, err := engine.Submit(decide, observedInput)
 	if err != nil {
 		t.Fatalf("submit decide: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	}
 
 	// 决定事件重放：稳定 acceptance、revision 不变、不二次落账。
-	replay, err := engine.Submit(decide, fp)
+	replay, err := engine.Submit(decide, observedInput)
 	if err != nil {
 		t.Fatalf("decide replay: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
 	engine, dir, _, _ := preparedEngine(t)
 	action := issueReady(t, engine)[0]
-	plan, _, err := engine.RecoverAttempt(action, Interruption{}, fingerprintOf(t, engine))
+	plan, _, err := engine.RecoverAttempt(action, Interruption{}, Observation{})
 	if err != nil || plan.Action != RecoveryAsk {
 		t.Fatalf("recovery request = %+v, %v", plan, err)
 	}
@@ -181,16 +181,16 @@ func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := engine.Submit(event, fingerprintOf(t, engine))
+	accepted, err := engine.Submit(event, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := stateBytesOf(t, dir)
-	engine, err = New(mustStore(t, dir), engine.cfg, nil)
+	engine, err = New(mustStore(t, dir), engine.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := engine.Submit(event, fingerprintOf(t, engine))
+	replay, err := engine.Submit(event, Observation{})
 	if err != nil || !reflect.DeepEqual(replay, accepted) || !reflect.DeepEqual(before, stateBytesOf(t, dir)) {
 		t.Fatal("replayed recovery decision changed its durable evidence")
 	}
@@ -204,8 +204,8 @@ func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
 // 提交）取代后旧 token 拒绝且零状态变化；重新获取的当前 token 放行。
 func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
 	staleToken, err := engine.Freshness("req-abort-1")
@@ -213,7 +213,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 		t.Fatalf("freshness: %v", err)
 	}
 	// 另一个受限请求提交成功：revision 前进，旧 token 被取代。
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-2"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-2"), observedInput); err != nil {
 		t.Fatalf("request 2: %v", err)
 	}
 	before := engine.LoadMustSucceed(t)
@@ -222,7 +222,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(decide, fp); err == nil {
+	if _, err := engine.Submit(decide, observedInput); err == nil {
 		t.Fatal("stale token accepted")
 	} else if code := rejectionCode(t, err); code != CodeStaleFreshness {
 		t.Fatalf("stale code = %q", code)
@@ -244,7 +244,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(decideFresh, fp); err != nil {
+	if _, err := engine.Submit(decideFresh, observedInput); err != nil {
 		t.Fatalf("current token rejected: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -256,8 +256,8 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 // TestDecideNegatives：未知 request、已决 request、选项不在落账选项集。
 func TestDecideNegatives(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	token, err := engine.Freshness("req-abort-1")
@@ -269,7 +269,7 @@ func TestDecideNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(unknown, fp); err == nil {
+	if _, err := engine.Submit(unknown, observedInput); err == nil {
 		t.Fatal("unknown request accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownRequest {
 		t.Fatalf("unknown request code = %q", code)
@@ -279,7 +279,7 @@ func TestDecideNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(badChoice, fp); err == nil {
+	if _, err := engine.Submit(badChoice, observedInput); err == nil {
 		t.Fatal("invalid choice accepted")
 	} else if code := rejectionCode(t, err); code != CodeInvalidChoice {
 		t.Fatalf("invalid choice code = %q", code)
@@ -289,7 +289,7 @@ func TestDecideNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(ok, fp); err != nil {
+	if _, err := engine.Submit(ok, observedInput); err != nil {
 		t.Fatalf("valid decide: %v", err)
 	}
 	newToken, err := engine.Freshness("req-abort-1")
@@ -300,7 +300,7 @@ func TestDecideNegatives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	if _, err := engine.Submit(again, fp); err == nil {
+	if _, err := engine.Submit(again, observedInput); err == nil {
 		t.Fatal("re-decide accepted")
 	} else if code := rejectionCode(t, err); code != CodeRequestResolved {
 		t.Fatalf("re-decide code = %q", code)
@@ -311,17 +311,17 @@ func TestDecideNegatives(t *testing.T) {
 // 仍返回原样 acceptance 且零状态变化（崩溃/重启后的幂等）。
 func TestReplayAcrossEngineRestart(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	request := cancelAbortRequest(t, "req-abort-1")
-	acceptance, err := engine.Submit(request, fp)
+	acceptance, err := engine.Submit(request, observedInput)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	restarted := reopenEngine(t, dir)
-	replay, err := restarted.Submit(request, fp)
+	replay, err := restarted.Submit(request, observedInput)
 	if err != nil {
 		t.Fatalf("replay after restart: %v", err)
 	}
@@ -339,7 +339,7 @@ func reopenEngine(t *testing.T, dir string) *Engine {
 	t.Helper()
 	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)
 	}
@@ -350,13 +350,13 @@ func reopenEngine(t *testing.T, dir string) *Engine {
 // even when a later request commits through the same engine.
 func TestSnapshotFreshnessRetainsItsRevision(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	accepted, err := engine.Submit(cancelAbortRequest(t, "original-request"), fp)
+	observedInput := Observation{}
+	accepted, err := engine.Submit(cancelAbortRequest(t, "original-request"), observedInput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := engine.LoadMustSucceed(t)
-	if _, err := engine.Submit(cancelAbortRequest(t, "parallel-request"), fp); err != nil {
+	if _, err := engine.Submit(cancelAbortRequest(t, "parallel-request"), observedInput); err != nil {
 		t.Fatal(err)
 	}
 	before := engine.LoadMustSucceed(t)
@@ -382,7 +382,7 @@ func TestSnapshotFreshnessRetainsItsRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(decision, fp); err != nil {
+	if _, err := engine.Submit(decision, observedInput); err != nil {
 		t.Fatal(err)
 	}
 	resolved := engine.LoadMustSucceed(t)

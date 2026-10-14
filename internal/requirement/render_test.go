@@ -1,11 +1,129 @@
 package requirement
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func prose(s string) *string { return &s }
+
+func TestSemanticConditionEditsReplaceCompleteBodyAndPreserveOtherMaterial(t *testing.T) {
+	for _, ending := range []string{"\n", "\r\n"} {
+		for spaces := 0; spaces <= 3; spaces++ {
+			for _, identity := range []string{"", "AC-010："} {
+				t.Run(fmt.Sprintf("ending=%q/indent=%d/identity=%q", ending, spaces, identity), func(t *testing.T) {
+					indent := strings.Repeat(" ", spaces)
+					original, body := multilineConditionDocument(indent, identity)
+					original = strings.ReplaceAll(original, "\n", ending)
+					body = strings.ReplaceAll(body, "\n", ending)
+					before, err := ParseRequirementProjection("requirement.md", []byte(original))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, change := range []SemanticChange{{Item: 1}, {Item: 1, Condition: 1, Acceptance: prose("Archive exactly once.")}, {Item: 1, Condition: 1, RemoveCondition: true}} {
+						got, err := RenderSemanticChange("requirement.md", []byte(original), change)
+						if err != nil {
+							t.Fatal(err)
+						}
+						want := original
+						if change.Acceptance != nil {
+							want = strings.Replace(want, body, indent+"- "+identity+"Archive exactly once.  ", 1)
+						} else if change.RemoveCondition {
+							want = strings.Replace(want, body+ending, "", 1)
+							if identity == "" {
+								want = strings.Replace(want, "- Pending work remains active.", "- AC-002：Pending work remains active.", 1)
+								want = strings.Replace(want, "- The archived content is exact.", "- AC-003：The archived content is exact.", 1)
+							}
+						}
+						if string(got) != want {
+							t.Fatalf("complete condition edit changed surrounding bytes\nwant=%q\ngot=%q", want, got)
+						}
+						after, err := ParseRequirementProjection("requirement.md", got)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if after.Requirements[0].ID != before.Requirements[0].ID || after.Requirements[1].ID != before.Requirements[1].ID || after.Requirements[1].AcceptanceConditions[0].ID != before.Requirements[1].AcceptanceConditions[0].ID {
+							t.Fatal("edit changed neighboring identities")
+						}
+						if change.RemoveCondition {
+							if len(after.Requirements[0].AcceptanceConditions) != 1 || after.Requirements[0].AcceptanceConditions[0].ID != before.Requirements[0].AcceptanceConditions[1].ID || after.Requirements[0].AcceptanceConditions[0].Text != before.Requirements[0].AcceptanceConditions[1].Text {
+								t.Fatal("removal changed surviving condition")
+							}
+						} else if change.Acceptance != nil && (after.Requirements[0].AcceptanceConditions[0].ID != before.Requirements[0].AcceptanceConditions[0].ID || after.Requirements[0].AcceptanceConditions[0].Text != *change.Acceptance) {
+							t.Fatal("replacement changed identity or retained selected body")
+						}
+						repeated, err := RenderSemanticChange("requirement.md", got, SemanticChange{Item: 1})
+						if err != nil || string(repeated) != string(got) {
+							t.Fatal("repeated no-op changed material", err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSemanticConditionRemovalPreservesMixedIdentities(t *testing.T) {
+	source, body := multilineConditionDocument("", "")
+	source = strings.Replace(source, "### Read archived work", "### REQ-001：Read archived work", 1)
+	source = strings.Replace(source, "- Pending work remains active.", "- AC-001：Pending work remains active.", 1)
+	before, err := ParseRequirementProjection("requirement.md", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := RenderSemanticChange("requirement.md", []byte(source), SemanticChange{Item: 1, Condition: 1, RemoveCondition: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(source, body+"\n", "", 1)
+	want = strings.Replace(want, "- The archived content is exact.", "- AC-003：The archived content is exact.", 1)
+	if string(got) != want {
+		t.Fatalf("mixed identities changed surrounding bytes\nwant=%q\ngot=%q", want, got)
+	}
+	after, err := ParseRequirementProjection("requirement.md", got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range after.Requirements {
+		if after.Requirements[i].ID != before.Requirements[i].ID {
+			t.Fatal("removal changed requirement identity")
+		}
+	}
+	condition := after.Requirements[0].AcceptanceConditions[0]
+	condition.Line = before.Requirements[0].AcceptanceConditions[1].Line
+	if !reflect.DeepEqual(condition, before.Requirements[0].AcceptanceConditions[1]) || after.Requirements[1].AcceptanceConditions[0].ID != before.Requirements[1].AcceptanceConditions[0].ID {
+		t.Fatal("removal changed surviving condition identity or text")
+	}
+}
+
+func TestSemanticLastConditionEditsPreserveSourceAndNestedIdentityText(t *testing.T) {
+	source, _ := multilineConditionDocument(" ", "")
+	body := " - Pending work remains active.\n   Preserve pending content.\n"
+	for _, ending := range []string{"\n", "\r\n"} {
+		original := strings.ReplaceAll(source, "\n", ending)
+		for _, test := range []struct {
+			change SemanticChange
+			text   string
+		}{
+			{SemanticChange{Item: 1, Condition: 2, Acceptance: prose("Retain pending entries.")}, " - Retain pending entries." + ending},
+			{SemanticChange{Item: 1, Condition: 2, RemoveCondition: true}, ""},
+		} {
+			got, err := RenderSemanticChange("requirement.md", []byte(original), test.change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Replace(original, strings.ReplaceAll(body, "\n", ending), test.text, 1)
+			if test.change.RemoveCondition {
+				want = strings.Replace(want, "- The archived content is exact.", "- AC-003：The archived content is exact.", 1)
+			}
+			if string(got) != want {
+				t.Fatalf("last condition edit changed source or nested identity text\nwant=%q\ngot=%q", want, got)
+			}
+		}
+	}
+}
 
 func TestSemanticRenderingCreatesPrecheckedDocumentAndRetainsExistingMaterial(t *testing.T) {
 	created, err := RenderSemanticChange("requirement.md", nil, SemanticChange{Title: prose("归档"), Requirement: prose("保存中文、引号 \" 与换行。\n\n```go\nvalue := 1\n```"), Acceptance: prose("归档可读取。"), Source: prose("用户原请求。"), Context: prose("保留工作；正文中提及 ## 方案。"), Solution: prose("使用现有归属。")})

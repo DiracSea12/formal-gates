@@ -1,8 +1,6 @@
 package harness
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/authoring"
 	"os"
@@ -20,23 +18,8 @@ func StopNativeJob(directory string) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]any{"operation": "supervisor-process", "payload": map[string]any{"directory": directory, "requestDigest": digest, "cancel": true}})
-	if err != nil {
-		return err
-	}
-	var out bytes.Buffer
-	if code := Bridge(bytes.NewReader(body), &out); code != 0 {
-		return fmt.Errorf("native cancellation: %s", out.String())
-	}
-	var response struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
-		return err
-	}
-	if !response.OK {
-		return fmt.Errorf("native cancellation: %s", response.Error)
+	if _, err := observeSupervisor(directory, digest, true); err != nil {
+		return fmt.Errorf("native cancellation: %w", err)
 	}
 	if request, err := readJSONFile(filepath.Join(directory, "native-request.json")); err == nil {
 		if impl, err := nativeImplementationFor(textOf(getOf(request, "provider"))); err == nil && impl.cleanup != nil {
@@ -48,7 +31,7 @@ func StopNativeJob(directory string) error {
 
 // NativeJobSource observes the original completion, including a lost response.
 // Its provider verifier remains the source of truth for the native evidence.
-func NativeJobSource(provider, directory string) (map[string]any, error) {
+func NativeJobSource(provider, directory string, services ...ExecutionServices) (map[string]any, error) {
 	impl, err := nativeImplementationFor(provider)
 	if err != nil {
 		return nil, err
@@ -59,13 +42,22 @@ func NativeJobSource(provider, directory string) (map[string]any, error) {
 		if processErr != nil {
 			return nil, processErr
 		}
-		source, err = impl.reconcile(directory, process)
+		source, err = impl.reconcile(directory, process, services...)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if err := impl.verifySource(directory, source); err != nil {
 		return nil, err
+	}
+	if len(services) > 0 {
+		request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+		if err != nil {
+			return nil, err
+		}
+		if err := settleQueuedMessages(directory, request, nil, services); err != nil {
+			return nil, err
+		}
 	}
 	return source.(map[string]any), nil
 }

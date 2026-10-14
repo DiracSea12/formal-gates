@@ -207,13 +207,14 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
-	Reset          *ResetPreview      `json:"reset,omitempty"`
-	ResetRequestID string             `json:"resetRequestId,omitempty"`
-	Validation     *ValidationRequest `json:"validation,omitempty"`
-	RequestID      string             `json:"requestId"`
-	Control        ControlKind        `json:"control"`
-	Step           authoring.StepID   `json:"step,omitempty"`
-	Options        []AskOption        `json:"options"`
+	Continuation   *NodeContinuationPreview `json:"continuation,omitempty"`
+	Reset          *ResetPreview            `json:"reset,omitempty"`
+	ResetRequestID string                   `json:"resetRequestId,omitempty"`
+	Validation     *ValidationRequest       `json:"validation,omitempty"`
+	RequestID      string                   `json:"requestId"`
+	Control        ControlKind              `json:"control"`
+	Step           authoring.StepID         `json:"step,omitempty"`
+	Options        []AskOption              `json:"options"`
 	// Package 是携包控制（当前仅需求变化）在 Ask 上持久化的 typed 决定
 	// 包：用户确认边界落账于此，DECIDE 载荷必须与之逐字段相等。
 	Package *RequirementDecisionPackage `json:"package,omitempty"`
@@ -236,15 +237,16 @@ type PendingAsk struct {
 
 // RecordedDecision preserves the user decision and its typed action.
 type RecordedDecision struct {
-	Reset      *ResetDecision         `json:"reset,omitempty"`
-	Review     *ReviewDecisionPayload `json:"review,omitempty"`
-	Validation *ValidationDecision    `json:"validation,omitempty"`
-	RequestID  string                 `json:"requestId"`
-	Control    ControlKind            `json:"control"`
-	Step       authoring.StepID       `json:"step,omitempty"`
-	Choice     AskOptionID            `json:"choice"`
-	EventID    string                 `json:"eventId"`
-	Revision   uint64                 `json:"revision"`
+	Continuation *NodeContinuationDecision `json:"continuation,omitempty"`
+	Reset        *ResetDecision            `json:"reset,omitempty"`
+	Review       *ReviewDecisionPayload    `json:"review,omitempty"`
+	Validation   *ValidationDecision       `json:"validation,omitempty"`
+	RequestID    string                    `json:"requestId"`
+	Control      ControlKind               `json:"control"`
+	Step         authoring.StepID          `json:"step,omitempty"`
+	Choice       AskOptionID               `json:"choice"`
+	EventID      string                    `json:"eventId"`
+	Revision     uint64                    `json:"revision"`
 }
 
 // EventRecord 是事件台账的单条记录：accepted 事件的 payload digest 与
@@ -455,15 +457,6 @@ type LifecycleEventRecord struct {
 	Digest      string `json:"digest"`
 }
 
-// LifecycleVerification 是一个 identity 的已验证配对：start 与 stop 都
-// 在 buffer 中且 identity 被某个 SpawnReceipt 的 correlation 认领。
-type LifecycleVerification struct {
-	Correlation string `json:"correlation"`
-	Identity    string `json:"identity"`
-	Provider    string `json:"provider"`
-	Revision    uint64 `json:"revision"`
-}
-
 // State 是 engine 权威状态投影。内嵌 decision.State 复用决策视图的全部
 // 派生与校验；协议台账是其上的增量。TaskKey owns
 // its text codec, and encoding/json deterministically orders map keys, so the
@@ -506,7 +499,6 @@ type State struct {
 	// the first drive and is intentionally not a second confirmation event.
 	RunID                     string                      `json:"runId,omitempty"`
 	Route                     string                      `json:"route,omitempty"`
-	InstalledTargetIdentity   string                      `json:"installedTargetIdentity,omitempty"`
 	IntakeConfirmationReceipt *IntakeConfirmationReceipt  `json:"intakeConfirmationReceipt,omitempty"`
 	IntakeReceipt             *IntakeReceipt              `json:"intakeReceipt,omitempty"`
 	Expected                  []runtime.TaskKey           `json:"expected"`
@@ -566,13 +558,11 @@ type State struct {
 	HostActionFailures map[string][]HostActionReceipt `json:"hostActionFailures"`
 	// LifecycleEvents 是 lifecycle observation buffer（只记录，不改
 	// workflow 投影）。
-	LifecycleEvents []LifecycleEventRecord `json:"lifecycleEvents"`
-	// LifecycleVerified 按 identity 落账已验证的 start/stop 配对。
-	LifecycleVerified map[string]LifecycleVerification `json:"lifecycleVerified"`
-	ObsoleteActions   map[string]ObsoleteAction        `json:"obsoleteActions"`
-	ObsoleteResults   map[string]WorkerResultHistory   `json:"obsoleteResults"`
-	RecoveryRecords   []RecoveryRecord                 `json:"recoveryRecords"`
-	ReconciledEffects map[string]ReconciledEffect      `json:"reconciledEffects"`
+	LifecycleEvents   []LifecycleEventRecord         `json:"lifecycleEvents"`
+	ObsoleteActions   map[string]ObsoleteAction      `json:"obsoleteActions"`
+	ObsoleteResults   map[string]WorkerResultHistory `json:"obsoleteResults"`
+	RecoveryRecords   []RecoveryRecord               `json:"recoveryRecords"`
+	ReconciledEffects map[string]ReconciledEffect    `json:"reconciledEffects"`
 	// ReviewSeries 是本 run 的开发前审查账本（product-review 与
 	// start-readiness 两条 series）：raw candidate 只作证据，effective
 	// status 由账本确定性投影。run phase 的推进条件从它重算。
@@ -648,7 +638,7 @@ type TopologyBinding struct {
 
 // ConfirmedRevision 是需求 revision 权威账本的单条确认事实。Revision 是
 // 确认后的需求 revision；BaseRevision 是它所基于的上一确认 revision
-// （INTAKE 初始账目为空）；DeltaDigest 绑定主代理生成的 review-delta 指纹；
+// （INTAKE 初始账目为空）；DeltaDigest 绑定程序按原确认材料生成的穷尽 review-delta 指纹；
 // Source/Classification/DecidedScope 记录用户声明的来源、含义分类与勾选的
 // 重走范围；RequestID 绑定授权它的 Ask；StateRevision 是登记落账时的 state
 // 代数（单调，防篡改链的一环）。
@@ -717,8 +707,6 @@ type IntakeConfirmationReceipt struct {
 	SolutionSource   string `json:"solutionSource,omitempty"`
 	SolutionRevision string `json:"solutionRevision"`
 	SolutionDigest   string `json:"solutionDigest"`
-	ConfirmedAt      string `json:"confirmedAt,omitempty"`
-	ExpiresAt        string `json:"expiresAt,omitempty"`
 	Digest           string `json:"digest,omitempty"`
 }
 
@@ -822,9 +810,6 @@ func (s *State) normalizeCollections() {
 	}
 	if s.LifecycleEvents == nil {
 		s.LifecycleEvents = []LifecycleEventRecord{}
-	}
-	if s.LifecycleVerified == nil {
-		s.LifecycleVerified = map[string]LifecycleVerification{}
 	}
 	if s.ObsoleteActions == nil {
 		s.ObsoleteActions = map[string]ObsoleteAction{}

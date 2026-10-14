@@ -7,10 +7,9 @@ package harness
 // requests and write the original source evidence. Only the launch arguments
 // and the protocol sequence belong to an adapter, supplied as plain hooks.
 //
-// Every JSON surface this file touches is canonical (sorted keys, compact):
-// everything that lands on disk goes through the single atomic writer, and
-// the outbound protocol lines and stdout use CanonicalJSON directly. Consumers
-// on both sides parse by value.
+// Protocol frames and routing trace records use canonical JSON (sorted keys,
+// compact). Source receipts use the shared atomic JSON writer; submitted
+// semantics retain their original bytes, and routing trace records are appended.
 //
 // Decoded values are plain Go values (map[string]any, []any, string, bool,
 // nil) with number literals kept as json.Number so the canonical encoder can
@@ -402,9 +401,6 @@ func verifyNativeSource(directory string, source any, provider string) error {
 			return &blockedError{message: "EVIDENCE_CHANGED: " + textOf(name)}
 		}
 	}
-	if err := verifyNativeToolEvidence(directory); err != nil {
-		return err
-	}
 	raw, err := submittedSemantics(directory)
 	if err != nil {
 		return err
@@ -549,9 +545,6 @@ func normalizeNewlines(text string) string {
 // evidenceSource is the receipt every host returns: provider, identity, the
 // caller's extra keys and the original evidence file proofs.
 func evidenceSource(directory, provider string, identity any, extra map[string]any) (map[string]any, error) {
-	if err := verifyNativeToolEvidence(directory); err != nil {
-		return nil, err
-	}
 	receipt := map[string]any{"provider": provider, "identity": identity}
 	for key, value := range extra {
 		receipt[key] = value

@@ -21,7 +21,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"whitebox", "quality"}))
 			d.drive()
-			dev, di := d.action("engine.development.batch.v4")
+			dev, di := d.action("engine.development.batch.v5")
 			if err := os.WriteFile(filepath.Join(di.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) > 1 }\n"), 0644); err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 			d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Impact: impact, Reason: "Confirm each retained and rebuilt responsibility"}}})
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			d.drive()
-			nextDev, newInput := d.action("engine.development.batch.v4")
+			nextDev, newInput := d.action("engine.development.batch.v5")
 			devEntry, statErr := os.ReadFile(filepath.Join(newInput.Workspace.Path, "app_test.go"))
 			if err := os.WriteFile(filepath.Join(newInput.Workspace.Path, "app.go"), []byte("package command\nfunc Valid(s string) bool { return len(s) >= 2 }\n"), 0644); err != nil {
 				t.Fatal(err)

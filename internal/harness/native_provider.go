@@ -9,6 +9,7 @@ import (
 
 // nativeImplementation is the execution boundary for one native provider.
 type nativeImplementation struct {
+	resolvePaths      func(map[string]string, map[string]string) error
 	cleanup           func(string) error
 	captureConfigured func(settings.Values) (map[string]any, error)
 	capture           func() (map[string]any, error)
@@ -16,7 +17,7 @@ type nativeImplementation struct {
 	verifySource      func(directory string, source any) error
 	verifyStart       func(request, acknowledgement any, identity string) error
 	inheritInvocation func(directory string, request map[string]any, source any) error
-	reconcile         func(directory string, process any) (map[string]any, error)
+	reconcile         func(directory string, process any, services ...ExecutionServices) (map[string]any, error)
 	execute           func(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error)
 }
 
@@ -26,12 +27,12 @@ func init() {
 		provider string
 		nativeImplementation
 	}{
-		{"dsh", nativeImplementation{capture: dshCaptureBinding, captureConfigured: dshConfiguredBinding, validateBinding: dshValidateBinding, verifySource: dshVerifySource, verifyStart: dshVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
-		{"zcode", nativeImplementation{capture: zcodeCaptureBinding, captureConfigured: zcodeConfiguredBinding, validateBinding: zcodeValidateBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
-		{"claude", nativeImplementation{capture: claudeCaptureBinding, captureConfigured: claudeConfiguredBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
-		{"codex", nativeImplementation{capture: codexCaptureBinding, captureConfigured: codexConfiguredBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
-		{"workbuddy", nativeImplementation{cleanup: workbuddyInvocationCleanup, capture: workbuddyCaptureBinding, captureConfigured: workbuddyConfiguredBinding, validateBinding: workbuddyValidateBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
-		{"cursor", nativeImplementation{capture: cursorCaptureBinding, captureConfigured: cursorConfiguredBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
+		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, capture: dshCaptureBinding, captureConfigured: dshConfiguredBinding, validateBinding: dshValidateBinding, verifySource: dshVerifySource, verifyStart: dshVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
+		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, capture: zcodeCaptureBinding, captureConfigured: zcodeConfiguredBinding, validateBinding: zcodeValidateBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
+		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, capture: claudeCaptureBinding, captureConfigured: claudeConfiguredBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
+		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, capture: codexCaptureBinding, captureConfigured: codexConfiguredBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
+		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, cleanup: workbuddyInvocationCleanup, capture: workbuddyCaptureBinding, captureConfigured: workbuddyConfiguredBinding, validateBinding: workbuddyValidateBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
+		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, capture: cursorCaptureBinding, captureConfigured: cursorConfiguredBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
 	}
 
 	for _, entry := range platforms {
@@ -51,6 +52,13 @@ type nativePlatform struct {
 }
 
 func (p *nativePlatform) nativeBoundary() nativeImplementation { return p.implementation }
+
+func (p *nativePlatform) ResolveNativePaths(native, sources map[string]string) error {
+	if p.implementation.resolvePaths == nil {
+		return fmt.Errorf("native path resolver unavailable for %s", p.ID)
+	}
+	return p.implementation.resolvePaths(native, sources)
+}
 
 type nativeCapability interface {
 	host.Adapter

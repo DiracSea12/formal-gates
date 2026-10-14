@@ -217,6 +217,10 @@ func (r *transientOrganizationRunner) Run(dir, command string, args ...string) (
 	return r.inner.Run(dir, command, args...)
 }
 
+func (r *transientOrganizationRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	return r.inner.RunRaw(dir, command, input, args...)
+}
+
 func TestControlAskProjectionsKeepTheirSnapshot(t *testing.T) {
 	d := newValidationDriver(t, "quality")
 	pkg := protocol.RequirementDecisionPackage{CandidateRevision: "sha256:clarified-requirement", DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-behavior", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved}
@@ -312,8 +316,4 @@ func TestControlAskProjectionsKeepTheirSnapshot(t *testing.T) {
 	if !reflect.DeepEqual(accepted, replay) || resolved.Revision != final.Revision || !reflect.DeepEqual(resolved.State, final.State) {
 		t.Fatal("accepted requirement replay changed its persisted decision")
 	}
-}
-
-func (r *transientOrganizationRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
-	return r.inner.RunRaw(dir, command, input, args...)
 }

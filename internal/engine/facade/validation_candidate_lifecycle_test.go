@@ -20,7 +20,7 @@ func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
 				id, in = d.action("engine.qa.review.rationale.v2")
 				review := approvedReview(in.Manifest)
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &review})
-				id, in = d.action("engine.development.batch.v4")
+				id, in = d.action("engine.development.batch.v5")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input contract"}})
 				d.materialize()
 				var old protocol.HostActionIntent

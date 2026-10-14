@@ -82,7 +82,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 					}
 					d.materialize()
 				}
-				id, in := d.action("engine.development.batch.v4")
+				id, in := d.action("engine.development.batch.v5")
 				d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 				materialize()
 				materialize()
@@ -271,7 +271,7 @@ func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
 						}
 						d.submit(life)
 					}
-					if _, _, err := d.f.engine.ReconcileUnknownReceipt(old, emptyFingerprint()); err != nil {
+					if _, _, err := d.f.engine.ReconcileUnknownReceipt(old, protocol.Observation{}); err != nil {
 						t.Fatal(err)
 					}
 					d.drive()

@@ -12,7 +12,7 @@ import (
 )
 
 func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v4", "engine.gate.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.readiness.plan.v5", "engine.gate.v3", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler
@@ -20,10 +20,10 @@ func TestRequirementReadFindingLocationsUseFrozenDocumentForEveryRole(t *testing
 			input.RequirementDocument.Content = "# Frozen requirement\r\nRequired behavior.  \r\n"
 			finding := Finding{Severity: "P3", Message: "The frozen requirement needs clarification", Locations: []Location{{Read: 1, Line: 2}, {Read: 1}, {RequirementLine: 2}}}
 			var body any = Gate{Findings: []Finding{finding}}
-			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v4" {
+			if handler == "engine.review.worker.v2" || handler == "engine.readiness.plan.v5" {
 				input.Validation = nil
 				input.Review = &protocol.WorkerReviewInput{Action: review.ProductReview}
-				if handler == "engine.readiness.plan.v4" {
+				if handler == "engine.readiness.plan.v5" {
 					input.Review.Action = review.StartReadiness
 					for _, category := range review.TechnicalCategories() {
 						if review.ValidateFindingClassification(review.StartReadiness, category, "P3") == nil {

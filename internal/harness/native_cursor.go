@@ -23,15 +23,109 @@ import (
 )
 
 func cursorCaptureBinding() (map[string]any, error) {
-	return cursorConfiguredBinding(settings.Values{})
+	native, sources := map[string]string{}, map[string]string{}
+	if err := cursorResolvePaths(native, sources); err != nil {
+		return nil, err
+	}
+	return cursorConfiguredBinding(settings.Values{Native: native})
+}
+
+func cursorResolvePaths(native, sources map[string]string) error {
+	config := settings.Values{Native: native}
+	executable := config.NativeString("cursorExecutable")
+	path, err := exec.LookPath(executable)
+	if err != nil {
+		return &blockedError{message: "CURSOR_UNAVAILABLE: cursor-agent is not on PATH"}
+	}
+	executableSource := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		executableSource = "configured"
+	}
+	home := config.NativeString("cursorHome")
+	explicitHome := home != ""
+	homeSource := "configured"
+	if !explicitHome {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		homeSource = "HOME"
+		if runtime.GOOS == "windows" {
+			homeSource = "USERPROFILE"
+		}
+	}
+	nativeHome := native["cursorConfigRoot"]
+	configSource := "cursorHome"
+	if nativeHome == "" {
+		if !explicitHome {
+			nativeHome = os.Getenv("CURSOR_CONFIG_DIR")
+			if nativeHome != "" {
+				configSource = "CURSOR_CONFIG_DIR"
+			} else if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+				nativeHome = filepath.Join(xdg, "cursor")
+				configSource = "XDG_CONFIG_HOME"
+			}
+		}
+		if nativeHome == "" {
+			nativeHome = filepath.Join(home, ".cursor")
+		}
+	}
+	data := native["cursorDataRoot"]
+	dataSource := "cursorHome"
+	if data == "" {
+		if !explicitHome {
+			data = os.Getenv("CURSOR_DATA_DIR")
+			if data != "" {
+				dataSource = "CURSOR_DATA_DIR"
+			}
+		}
+		if data == "" {
+			data = filepath.Join(home, ".cursor")
+		}
+	}
+	cache := native["cursorCompileCache"]
+	cacheSource := "cursorHome"
+	if cache == "" {
+		if !explicitHome {
+			cache = os.Getenv("NODE_COMPILE_CACHE")
+			if cache != "" {
+				cacheSource = "NODE_COMPILE_CACHE"
+			}
+		}
+		if cache == "" {
+			if runtime.GOOS == "darwin" {
+				cache = filepath.Join(home, "Library", "Caches", "cursor-compile-cache")
+			} else {
+				cache = filepath.Join(home, ".cache", "cursor-compile-cache")
+			}
+		}
+	}
+	store := native["cursorCredentialStore"]
+	storeSource := "AGENT_CLI_CREDENTIAL_STORE"
+	if store == "" {
+		store = os.Getenv("AGENT_CLI_CREDENTIAL_STORE")
+	}
+	if store != "file" && store != "memory" {
+		store = "default"
+		storeSource = "platform default"
+	}
+	for name, value := range map[string]string{"cursorExecutable": resolveNativePath(path), "cursorHome": resolveNativePath(home), "cursorConfigRoot": resolveNativePath(nativeHome), "cursorDataRoot": resolveNativePath(data), "cursorCompileCache": resolveNativePath(cache), "cursorCredentialStore": store} {
+		native[name] = value
+	}
+	for name, source := range map[string]string{"cursorExecutable": executableSource, "cursorHome": homeSource, "cursorConfigRoot": configSource, "cursorDataRoot": dataSource, "cursorCompileCache": cacheSource, "cursorCredentialStore": storeSource} {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+	return nil
 }
 
 func cursorConfiguredBinding(config settings.Values) (map[string]any, error) {
-	executable, err := exec.LookPath(config.NativeString("cursorExecutable"))
-	if err != nil {
-		return nil, &blockedError{message: "CURSOR_UNAVAILABLE: cursor-agent is not on PATH"}
+	executable, home, nativeHome := config.Native["cursorExecutable"], config.Native["cursorHome"], config.Native["cursorConfigRoot"]
+	data, cache, store := config.Native["cursorDataRoot"], config.Native["cursorCompileCache"], config.Native["cursorCredentialStore"]
+	if executable == "" || home == "" || nativeHome == "" || data == "" || cache == "" || store == "" {
+		return nil, &blockedError{message: "CURSOR_CONFIG: frozen native paths required"}
 	}
-	executable = resolveNativePath(executable)
 	launch := map[string]any{"executable": executable}
 	// The native wrapper executes these siblings and loads chunks relative to
 	// index.js. Proof their bytes without relocating the host's runtime layout.
@@ -45,38 +139,7 @@ func cursorConfiguredBinding(config settings.Values) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	if override := config.NativeString("cursorHome"); override != "" {
-		home = override
-	}
-	nativeHome := os.Getenv("CURSOR_CONFIG_DIR")
-	if nativeHome == "" || config.NativeString("cursorHome") != "" {
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && config.NativeString("cursorHome") == "" {
-			nativeHome = filepath.Join(xdg, "cursor")
-		} else {
-			nativeHome = filepath.Join(home, ".cursor")
-		}
-	}
-	data := os.Getenv("CURSOR_DATA_DIR")
-	if data == "" || config.NativeString("cursorHome") != "" {
-		data = filepath.Join(home, ".cursor")
-	}
-	cache := os.Getenv("NODE_COMPILE_CACHE")
-	if cache == "" || config.NativeString("cursorHome") != "" {
-		if runtime.GOOS == "darwin" {
-			cache = filepath.Join(home, "Library", "Caches", "cursor-compile-cache")
-		} else {
-			cache = filepath.Join(home, ".cache", "cursor-compile-cache")
-		}
-	}
-	store := os.Getenv("AGENT_CLI_CREDENTIAL_STORE")
-	if store != "file" && store != "memory" {
-		store = "default"
-	}
-	binding["environment"] = map[string]any{"HOME": resolveNativePath(home), "CURSOR_CONFIG_DIR": resolveNativePath(nativeHome), "CURSOR_DATA_DIR": resolveNativePath(data), "NODE_COMPILE_CACHE": resolveNativePath(cache), "AGENT_CLI_CREDENTIAL_STORE": store}
+	binding["environment"] = map[string]any{"HOME": home, "CURSOR_CONFIG_DIR": nativeHome, "CURSOR_DATA_DIR": data, "NODE_COMPILE_CACHE": cache, "AGENT_CLI_CREDENTIAL_STORE": store}
 	return binding, nil
 }
 func cursorValidateBinding(binding any) error { return validateNativeBinding(binding, "cursor") }
@@ -608,6 +671,6 @@ func cursorObserve(directory string) (map[string]any, error) {
 	}
 	return evidenceSource(directory, "cursor", identity, map[string]any{"native_store": store, "selection": selection, "native_request": terminal["request_id"], "native_result": terminal, "usage_evidence": terminal["usage"]})
 }
-func cursorReconcile(directory string, process any) (map[string]any, error) {
+func cursorReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	return recoverNativeSource(directory, process, "CURSOR", func() (map[string]any, error) { return cursorObserve(directory) })
 }

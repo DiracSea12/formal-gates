@@ -14,11 +14,11 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 普通任务：创建、编辑、移动或删除项目内容时，默认提醒一次“若需走 formal-gates 流程，可直接提出”。常规工作在用户已授权范围内继续。需求规模、耦合、风险或验证复杂度超过普通直接处理能力时，在需求澄清与方案确认完毕、准备开做之际再额外强调一次：“检测到复杂需求，建议走 formal-gates 流程”。非修改性的提问、解释、诊断和 review 不触发正式流程；主代理不得自行触发。
 
-新对话检查：主代理必须检查工作区 `.gates/engine/*/state.json` 与 `.gates/tmp/*/state.json`。发现无法对应当前用户会话的残留状态时，告知文件路径、run 状态及可能影响写入，并说明若需走 formal-gates 流程可直接提出。由用户决定推进完成、通过当前 typed Ask 授权的 reset/abort 及 engine 清理结束或删除对应状态文件；不得自行处置，也不得把残留状态解释为用户已启动正式流程。
+新对话检查：主代理执行 `workflow diagnose` 读取程序枚举工作区 `.gates/engine/*/state.json` 与 `.gates/tmp/*/state.json` 的原诊断报告，判断其是否对应当前用户会话。发现无法对应当前用户会话的残留状态时，告知报告中的原文件路径、run 状态及可能影响写入，并说明若需走 formal-gates 流程可直接提出。由用户决定推进完成、通过当前 typed Ask 授权的 reset/abort 及 engine 清理结束或删除对应状态文件；不得自行处置，也不得把残留状态解释为用户已启动正式流程。
 
 用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做确定性结构预检，通过后展示该文件全文与精确 revision，再单独请求并等待用户明确确认。确认后才以 typed intake receipt 启动开发 run。确认前不选择路线或派发后续子代理。修订时更新同一文件并重新预检、展示和确认。
 
-确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确模式时再选择 lightweight 或 regular；full/custom 在拆分决定之后确认。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
+确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确启动路线时先取得用户对 lightweight 或 regular 的选择；regular 内的 default/full/custom 在拆分决定之后确认，每个 child 独立决定。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
 <formal-gates:host-instructions:end>
 
 正式文件包含完整目标、边界、方案、需求块、验收条目与来源。通过 requirement 入口输入新语义，程序构造固定章节与编号并保留未修改的原文及已有 ID。
@@ -27,13 +27,15 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 formal-gates workflow start --precheck --document <原文档序号>
 ```
 
-在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认后使用 `start --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
+在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认并明确启动路线后使用 `start --route <用户已选择的 regular|lightweight> --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
 
 需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 的原字段序号入口，不编写固定 JSON 外壳。
 
 ## 活动任务
 
 `workflow drive` 消费原签发职责；主代理不另建任务、补排步骤或手工恢复。遇用户决定时，核实并展示程序当前候选与原因，只提交语义选择和必要理由；程序在语义准备时保存完整确认载荷并公布 `confirmationCandidate` 序号，确认后用 `submit --confirmation-candidate <原序号>` 提交；唯一载荷可用 `submit --confirm`。选择方式见[公共控制入口](references/formal-flow.md#启动与-run-控制)。
+
+程序为每个开发 Batch 派发全新的零上下文代理，批内连续和恢复沿用原身份，开发会话不跨批复用。批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。
 
 请求用户处置 finding 前，逐项展示问题、正常路径错误、后果、建议、等级及定级理由；原身份由程序候选携带。按[审查契约](prompts/reviewer-base.md)独立核真实性、范围、严重度、因果和复现，不能把候选或未执行项当正式 PASS。
 需求变化先按当前 Ask 冻结受影响工作，再修同一正式文件、重新预检、完整展示和确认。只澄清影响范围、公开行为、验收或主要架构的未决选择。

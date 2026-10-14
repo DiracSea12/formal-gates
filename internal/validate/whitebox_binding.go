@@ -1,22 +1,27 @@
 package validate
 
-// whiteboxDeliveredTestCode is the whitebox designer's delivered structural test
-// code used by fixtures and the portable canary. Test-reference assembly parses
-// candidate Go files and binds the selected test's exact signature. QA review
-// checks correspondence, and QA execution runs the delivered tests.
+// whiteboxDeliveredTestCode checks the portable fixture's delivery bytes and
+// missing artifact through the two tests bound by the whitebox design result.
 const whiteboxDeliveredTestCode = `package whiteboxfixture
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
-func TestWhiteboxDirectRules(t *testing.T) {}
+func TestWhiteboxDirectBehavior(t *testing.T) {
+	actual, err := os.ReadFile("delivery.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != "delivery\n" {
+		t.Fatalf("delivery bytes = %q", actual)
+	}
+}
 
-func TestWhiteboxStructure(t *testing.T) {}
-
-func TestWhiteboxStructureRevised(t *testing.T) {}
-
-func TestWhiteboxDirectBehavior(t *testing.T) {}
-
-func TestWhiteboxFailurePaths(t *testing.T) {}
-
-func TestWhiteboxDuplicate(t *testing.T) {}
+func TestWhiteboxMissingArtifact(t *testing.T) {
+	if _, err := os.Stat("absent-marker.txt"); !os.IsNotExist(err) {
+		t.Fatalf("missing artifact accepted: %v", err)
+	}
+}
 `

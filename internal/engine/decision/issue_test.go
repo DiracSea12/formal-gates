@@ -10,20 +10,6 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-// recorderStore 记录每次持久化的 IssuedSet（可注入错误）。
-type recorderStore struct {
-	sets []IssuedSet
-	err  error
-}
-
-func (r *recorderStore) PersistIssued(s IssuedSet) error {
-	if r.err != nil {
-		return r.err
-	}
-	r.sets = append(r.sets, s)
-	return nil
-}
-
 // issueDefinition 构造三个 sibling agent 步骤同时 eligible 的定义，用于
 // min(C,N) 与补位测试：
 //
@@ -63,7 +49,6 @@ func issueDefinition(t *testing.T) *compiler.CompiledDefinition {
 	}
 	agent := func(id string) authoring.Step {
 		io := authoring.IO{InputCodec: "codec.test.in", OutputCodec: "codec.test.out",
-			Inputs:         []authoring.InputBinding{{From: "boot.local", OutputField: "out", ToField: "in"}},
 			Postconditions: []authoring.PredicateRef{{ID: "pred.test.work"}}}
 		h := authoring.Header{ID: authoring.StepID(id), NodeID: "work",
 			Dependencies: []authoring.StepID{"boot.local"}, DefinitionVersion: testDefVersion}
@@ -72,12 +57,7 @@ func issueDefinition(t *testing.T) *compiler.CompiledDefinition {
 		}))
 	}
 	bootH := authoring.Header{ID: "boot.local", NodeID: "boot", DefinitionVersion: testDefVersion}
-	finIO := authoring.IO{InputCodec: "codec.test.in", OutputCodec: "codec.test.out",
-		Inputs: []authoring.InputBinding{
-			{From: "work.a1", OutputField: "out", ToField: "in"},
-			{From: "work.a2", OutputField: "out", ToField: "in"},
-			{From: "work.a3", OutputField: "out", ToField: "in"},
-		}}
+	finIO := authoring.IO{InputCodec: "codec.test.in", OutputCodec: "codec.test.out"}
 	finH := authoring.Header{ID: "fin.report", NodeID: "fin",
 		Dependencies: []authoring.StepID{"work.a1", "work.a2", "work.a3"}, DefinitionVersion: testDefVersion}
 	def := &compiler.Definition{Version: testDefVersion, EntryNode: "boot", Steps: []authoring.Step{
@@ -128,7 +108,6 @@ func TestSelectIssuedMinCN(t *testing.T) {
 		t.Fatalf("issuable N = %d, want 3", len(plan.Next.Ready.Tasks))
 	}
 
-	store := &recorderStore{}
 	for _, tc := range []struct {
 		cap  int
 		want string
@@ -137,7 +116,7 @@ func TestSelectIssuedMinCN(t *testing.T) {
 		{5, "work.a1,work.a2,work.a3"}, // C > N：恰好 N 个
 		{0, ""},                        // C = 0：零个（机械裁剪，不报错）
 	} {
-		set, err := SelectIssued(plan, Admission{Capacity: tc.cap}, store)
+		set, err := SelectIssued(plan, Admission{Capacity: tc.cap})
 		if err != nil {
 			t.Fatalf("select C=%d: %v", tc.cap, err)
 		}
@@ -146,26 +125,21 @@ func TestSelectIssuedMinCN(t *testing.T) {
 		}
 	}
 	// actionID 确定性派生（无随机/时间）。
-	set, err := SelectIssued(plan, Admission{Capacity: 1}, store)
+	set, err := SelectIssued(plan, Admission{Capacity: 1})
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	if set[0].ActionID != "act:work/work.a1" {
 		t.Fatalf("actionID = %q, want act:work/work.a1", set[0].ActionID)
 	}
-	set2, _ := SelectIssued(plan, Admission{Capacity: 1}, store)
+	set2, _ := SelectIssued(plan, Admission{Capacity: 1})
 	if set2[0].ActionID != set[0].ActionID {
 		t.Fatal("same plan must derive the same actionID")
 	}
-	// 持久化接口收到完整签发集（容量循环 3 次 + actionID 校验 2 次）。
-	if len(store.sets) != 5 {
-		t.Fatalf("persist calls = %d, want 5", len(store.sets))
-	}
 }
 
-// TestSelectIssuedRefill 核对自动补位：receipt/result 释放容量后重新
-// Decide/SelectIssued 立即按固定顺序补满下一批；已签发在途任务不被重复
-// 签发。
+// TestSelectIssuedRefill 核对步骤完成释放容量后重新 Decide/SelectIssued
+// 按固定顺序选择下一任务；已签发在途任务从 Ready 前沿排除。
 func TestSelectIssuedRefill(t *testing.T) {
 	cd := issueDefinition(t)
 	s, err := NewState(testDefVersion, runtime.PhaseDevelopmentParallel)
@@ -173,10 +147,9 @@ func TestSelectIssuedRefill(t *testing.T) {
 		t.Fatalf("new state: %v", err)
 	}
 	complete(t, s, cd, "boot.local")
-	store := &recorderStore{}
 
 	// 第一轮：C=1，N=3 → 签发 a1。
-	set, err := SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1}, store)
+	set, err := SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1})
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -193,7 +166,7 @@ func TestSelectIssuedRefill(t *testing.T) {
 	}
 	// a1 完成（容量释放）：C=1 时立即补位 a2；再释放补 a3。
 	complete(t, s, cd, "work.a1")
-	set, err = SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1}, store)
+	set, err = SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1})
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -201,7 +174,7 @@ func TestSelectIssuedRefill(t *testing.T) {
 		t.Fatalf("refill = %q, want work.a2", got)
 	}
 	complete(t, s, cd, "work.a2")
-	set, err = SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1}, store)
+	set, err = SelectIssued(readyPlan(t, s, cd), Admission{Capacity: 1})
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -245,22 +218,14 @@ func TestSelectIssuedRejections(t *testing.T) {
 	complete(t, s, cd, "boot.local")
 	plan := readyPlan(t, s, cd)
 
-	if _, err := SelectIssued(nil, Admission{Capacity: 1}, &recorderStore{}); err == nil {
+	if _, err := SelectIssued(nil, Admission{Capacity: 1}); err == nil {
 		t.Error("nil plan must be rejected")
 	}
-	if _, err := SelectIssued(plan, Admission{Capacity: 1}, nil); err == nil {
-		t.Error("nil store must be rejected")
-	}
-	if _, err := SelectIssued(plan, Admission{Capacity: -1}, &recorderStore{}); err == nil {
+	if _, err := SelectIssued(plan, Admission{Capacity: -1}); err == nil {
 		t.Error("negative capacity must be rejected")
 	}
-	if _, err := SelectIssued(waitPlan, Admission{Capacity: 1}, &recorderStore{}); err == nil || !strings.Contains(err.Error(), "not READY") {
+	if _, err := SelectIssued(waitPlan, Admission{Capacity: 1}); err == nil || !strings.Contains(err.Error(), "not READY") {
 		t.Errorf("non-ready plan err = %v, want not READY", err)
-	}
-	// 持久化失败传播（签发未落账则不返回签发集）。
-	failing := &recorderStore{err: errTestObserve}
-	if _, err := SelectIssued(plan, Admission{Capacity: 1}, failing); err == nil || !strings.Contains(err.Error(), "persist") {
-		t.Errorf("persist failure err = %v, want persist error", err)
 	}
 }
 

@@ -12,14 +12,15 @@ import (
 // ChildCreation is the master's immutable preparation plan. SliceChildren
 // alone authorizes released children; this intent owns the preceding work.
 type ChildCreation struct {
-	RequestID           string             `json:"requestId,omitempty"`
-	Previous            *ChildCreation     `json:"previous,omitempty"`
-	RequirementRevision string             `json:"requirementRevision"`
-	Coverage            *CoverageInventory `json:"coverage,omitempty"`
-	Topology            TopologyBinding    `json:"topology"`
-	Source              string             `json:"source"`
-	Digest              string             `json:"digest"`
-	Children            []ChildPreparation `json:"children"`
+	RequestID           string                     `json:"requestId,omitempty"`
+	Previous            *ChildCreation             `json:"previous,omitempty"`
+	RequirementRevision string                     `json:"requirementRevision"`
+	Intake              *IntakeConfirmationReceipt `json:"intake,omitempty"`
+	Coverage            *CoverageInventory         `json:"coverage,omitempty"`
+	Topology            TopologyBinding            `json:"topology"`
+	Source              string                     `json:"source"`
+	Digest              string                     `json:"digest"`
+	Children            []ChildPreparation         `json:"children"`
 }
 
 type ChildPreparation struct {
@@ -44,7 +45,7 @@ func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
 			}
 		}
 	}
-	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
+	return &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, InheritedIntake: s.ChildCreation.Intake, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
 }
 
 func (s *State) CreationChild(resourceID string) (ChildPreparation, bool) {
@@ -58,7 +59,8 @@ func (s *State) CreationChild(resourceID string) (ChildPreparation, bool) {
 	return ChildPreparation{}, false
 }
 
-func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error {
+func (e *Engine) PrepareChildren(sourceDigest string, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -95,7 +97,7 @@ func (e *Engine) PrepareChildren(sourceDigest, expectedFingerprint string) error
 			return validationError("topology rebuild requires its confirmed topology request")
 		}
 	}
-	c := &ChildCreation{Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
+	c := &ChildCreation{Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Intake: s.CurrentIntakeConfirmation(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
 	if s.NativeResources == nil {
 		s.NativeResources = map[string]NativeResource{}
 	}
@@ -128,7 +130,7 @@ sliceLoop:
 		})
 	}
 	s.ChildCreation = c
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
@@ -137,10 +139,11 @@ func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 		return false
 	}
 	expected := s.ChildStart(child)
-	return actual.NativeVCS() == s.NativeVCS() && actual.NativeHandle == s.NativeResources[child.ResourceID].Handle && actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
+	return actual.NativeVCS() == s.NativeVCS() && actual.NativeHandle == s.NativeResources[child.ResourceID].Handle && actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.InheritedIntake) == digestOfCanonical(expected.Binding.InheritedIntake) && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
 }
 
-func (e *Engine) RecordPreparedChildren(children []*State, expectedFingerprint string) error {
+func (e *Engine) RecordPreparedChildren(children []*State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -159,11 +162,12 @@ func (e *Engine) RecordPreparedChildren(children []*State, expectedFingerprint s
 	if err := s.CompleteStep("children.prepare", e.cfg.Definition); err != nil {
 		return err
 	}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
-func (e *Engine) SignChildWorkspace(expectedFingerprint string) (bool, error) {
+func (e *Engine) SignChildWorkspace(input Observation) (bool, error) {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return false, err
@@ -196,7 +200,7 @@ func (e *Engine) SignChildWorkspace(expectedFingerprint string) (bool, error) {
 			return false, err
 		}
 		s.PendingHostActions[intent.ActionID] = intent
-		_, err = e.commit(s, revision, expectedFingerprint)
+		_, err = e.commit(s, revision, input)
 		return err == nil, err
 	}
 	return false, nil
@@ -222,7 +226,8 @@ func (s *State) ChildWorkspaceProof(child ChildPreparation) (WorkspaceEvidence, 
 
 // AcceptPreparedSnapshot binds the first native identity only from the
 // master's original typed workspace proof while both run windows are held.
-func (e *Engine) AcceptPreparedSnapshot(parent *State, expectedFingerprint string) error {
+func (e *Engine) AcceptPreparedSnapshot(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -245,7 +250,7 @@ func (e *Engine) AcceptPreparedSnapshot(parent *State, expectedFingerprint strin
 		return nil
 	}
 	s.InitialSnapshot = proof.Resource.Identity
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
@@ -260,7 +265,8 @@ func (s *State) CreationChildByRun(runID string) (ChildPreparation, bool) {
 	return ChildPreparation{}, false
 }
 
-func (e *Engine) ReleaseChildren(children []*State, expectedFingerprint string) error {
+func (e *Engine) ReleaseChildren(children []*State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -288,11 +294,12 @@ func (e *Engine) ReleaseChildren(children []*State, expectedFingerprint string) 
 	for _, child := range s.ChildCreation.Children {
 		s.SliceChildren[child.SliceID] = child.RunID
 	}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
-func (e *Engine) ActivateChild(parent *State, expectedFingerprint string) error {
+func (e *Engine) ActivateChild(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -307,11 +314,12 @@ func (e *Engine) ActivateChild(parent *State, expectedFingerprint string) error 
 	if err := s.TransitionPhase(runtime.PhaseTopologyAndRoute); err != nil {
 		return err
 	}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
-func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
+func (e *Engine) CancelChild(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -326,7 +334,7 @@ func (e *Engine) CancelChild(parent *State, expectedFingerprint string) error {
 		return validationError("child cancellation lacks parent authority")
 	}
 	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: record, RequestDigest: parent.requestDigest(d.RequestID)}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
@@ -380,7 +388,8 @@ func (s *State) creationWorkspaceCurrent(p WorkspaceParameters) bool {
 func (s *State) RebuildingChildren() bool {
 	return !s.abortRequested() && s.ChildCreation != nil && s.ChildCreation.Previous != nil && !slices.Contains(s.Completed, authoring.StepID("children.publish"))
 }
-func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) error {
+func (e *Engine) CancelReplacedChild(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -416,7 +425,7 @@ func (e *Engine) CancelReplacedChild(parent *State, expectedFingerprint string) 
 		return validationError("child replacement lacks confirmed topology scope")
 	}
 	s.SliceChild.ParentAbort = &AbortAuthority{Decision: d, Event: event, RequestDigest: parent.requestDigest(d.RequestID), Requirement: authorization}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
@@ -436,7 +445,8 @@ func (s *State) replacedTargetResources() []NativeResource {
 	return resources
 }
 
-func (e *Engine) CleanupReplacedTargets(expectedFingerprint string) error {
+func (e *Engine) CleanupReplacedTargets(input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -458,7 +468,7 @@ func (e *Engine) CleanupReplacedTargets(expectedFingerprint string) error {
 		return err
 	}
 	s.PendingHostActions[intent.ActionID] = intent
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 

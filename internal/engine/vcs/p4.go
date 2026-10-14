@@ -817,7 +817,9 @@ func (p *Provider) p4Index() ([]IndexEntry, error) {
 	conflicts := map[string]string{}
 	for _, file := range opened {
 		logical := strings.TrimPrefix(file["clientFile"], "//"+p.p4Client()+"/")
-		if file["action"] == "delete" || file["action"] == "move/delete" {
+		// A deleted file can still require a native branch or delete resolve.
+		_, unresolved := file["unresolved"]
+		if (file["action"] == "delete" || file["action"] == "move/delete") && !unresolved {
 			delete(entries, logical)
 			continue
 		}
@@ -841,7 +843,7 @@ func (p *Provider) p4Index() ([]IndexEntry, error) {
 			value.Action = file["action"]
 			entries[logical] = entryValue(value)
 		}
-		if _, unresolved := file["unresolved"]; unresolved {
+		if unresolved {
 			conflicts[logical] = hashValue(resolve)
 		}
 	}
@@ -1026,12 +1028,64 @@ func (p *Provider) p4ObserveIntegration(base, incoming string) (IntegrationObser
 }
 func (p *Provider) p4ResolveConflicts(paths []string) error {
 	for _, path := range paths {
-		// A semantic edit must remain an edited integration result. Native edit
-		// preserves the pending source records and accepts the workspace bytes.
-		if _, err := p.p4Raw(nil, "edit", materialPath(p.root, path)); err != nil {
+		target := materialPath(p.root, path)
+		info, statErr := os.Lstat(target)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+		exists := statErr == nil
+		records, err := p.p4JSON("fstat", "-Or", target)
+		if err != nil {
 			return err
 		}
-		if _, err := p.p4Raw(nil, "resolve", "-e", "-ay", materialPath(p.root, path)); err != nil {
+		if len(records) != 1 {
+			return fmt.Errorf("P4 conflict file is not unique")
+		}
+		for i, kind := range p4List(records[0], "resolveType") {
+			if records[0]["resolveAction"+strconv.Itoa(i)] != "unresolved" || kind != "branch" && kind != "delete" {
+				continue
+			}
+			choice := "-ay"
+			if kind == "branch" && exists || kind == "delete" && !exists {
+				choice = "-at"
+			}
+			// Accepting a branch replaces workspace bytes; retain the semantic edit.
+			var content []byte
+			if kind == "branch" && exists {
+				content, err = workingBytes(target)
+				if err != nil {
+					return err
+				}
+			}
+			_, resolveErr := p.p4Raw(nil, "resolve", "-A"+kind[:1], choice, target)
+			if kind == "branch" && exists {
+				if info.Mode()&os.ModeSymlink != 0 {
+					if err = os.Remove(target); err != nil {
+						return err
+					}
+					if err = os.Symlink(string(content), target); err != nil {
+						return err
+					}
+				} else {
+					if err = os.Chmod(target, info.Mode().Perm()); err != nil {
+						return err
+					}
+					if err = os.WriteFile(target, content, info.Mode().Perm()); err != nil {
+						return err
+					}
+				}
+			}
+			if resolveErr != nil {
+				return resolveErr
+			}
+		}
+		// Native edit records a semantic integration result for retained files.
+		if exists {
+			if _, err = p.p4Raw(nil, "edit", target); err != nil {
+				return err
+			}
+		}
+		if _, err := p.p4Raw(nil, "resolve", "-e", "-ay", target); err != nil {
 			return err
 		}
 	}

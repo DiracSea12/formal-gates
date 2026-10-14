@@ -2,8 +2,6 @@ package acceptance_test
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -46,31 +44,33 @@ func newInstalledStartProject(t *testing.T) installedStartProject {
 	if err := os.WriteFile(filepath.Join(p.source, "gates", "quality.md"), quality, 0600); err != nil {
 		t.Fatal(err)
 	}
-	write := func(name, content string) string {
+	write := func(name, content string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(p.project, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		sum := sha256.Sum256([]byte(content))
-		return hex.EncodeToString(sum[:])
 	}
-	requirement := write("requirements.md", "# Application\nREQ-001: Review the application through the installed native workflow.\nAC-001: Keep the admitted host and native base.\n")
-	solution := write("design.md", "# Design\nUse the admitted installation and the native Git provider.\n")
+	write("requirements.md", "# Application\n\n## 需求点\n\n### REQ-001：Installed native workflow\n\n#### 要求\nReview the application through the installed native workflow.\n\n#### 验收条件\n- AC-001：Keep the admitted host and native base.\n\n#### 来源\nUser contract.\n")
+	write("design.md", "# Design\nUse the admitted installation and the native Git provider.\n")
 	write("app.go", "package main\nfunc main() {}\n")
 	write(".gitignore", ".gates/\n.formal-gates-resources/\n.zcode/\n.codex/\nAGENTS.md\n")
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"add", "."}, {"commit", "-qm", "Application"}} {
 		p.git(t, args...)
 	}
 	p.base = p.git(t, "rev-parse", "HEAD")
-	p.intake = facade.IntakeConfirmationReceipt{
-		Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport,
-		RequirementSource: "requirements.md", RequirementRevision: requirement,
-		Artifacts:        []facade.IntakeArtifact{{Path: "requirements.md", Revision: requirement}, {Path: "design.md", Revision: solution}},
-		SolutionRevision: solution, SolutionDigest: "sha256:" + solution,
-	}
 	p.intakePath = filepath.Join(t.TempDir(), "intake.json")
-	writeInstalledJSON(t, p.intakePath, p.intake)
+	p.prepareIntake(t, "requirements.md")
 	return p
+}
+
+func (p *installedStartProject) prepareIntake(t *testing.T, requirementPath string) {
+	t.Helper()
+	preview, err := facade.PrepareIntake(p.project, requirementPath, "design.md", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.intake = preview.IntakeCandidate
+	writeInstalledJSON(t, p.intakePath, p.intake)
 }
 
 func (p installedStartProject) git(t *testing.T, args ...string) string {
@@ -329,6 +329,7 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	wrongBase := p.startArgs("wrong-base", "regular")
 	wrongBase[len(wrongBase)-1] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
+	assertRejected("missing-route", p.startArgs("missing-route", ""), "workflow start requires --route regular or lightweight")
 	for _, route := range []string{"default", "full", "custom"} {
 		assertRejected(route, p.startArgs(route, route), "workflow start supports --route regular or lightweight")
 	}
@@ -348,23 +349,17 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	// Lightweight keeps its bootstrap default and needs no native repository.
+	// Lightweight is an explicit start choice and needs no native repository.
 	if err := os.RemoveAll(filepath.Join(p.project, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{"", "lightweight"} {
-		runID := "record-only"
-		if route != "" {
-			runID = "explicit-record"
-		}
-		p.call(t, nil, append(p.startArgs(runID, route), "--base-snapshot", "not-a-native-snapshot")...)
-		request, _ := p.bindings(t, runID, "zcode")
-		if request.Route != "lightweight" || request.BaseSnapshot != "" {
-			t.Fatalf("lightweight acquired native semantics: %+v", request)
-		}
-		if run := p.run(t, "drive", runID); run.Next.Kind != decision.KindComplete || !run.Unverified {
-			t.Fatalf("lightweight completion=%+v", run)
-		}
+	p.call(t, nil, append(p.startArgs("lightweight-record", "lightweight"), "--base-snapshot", "not-a-native-snapshot")...)
+	request, _ := p.bindings(t, "lightweight-record", "zcode")
+	if request.Route != "lightweight" || request.BaseSnapshot != "" {
+		t.Fatalf("lightweight acquired native semantics: %+v", request)
+	}
+	if run := p.run(t, "drive", "lightweight-record"); run.Next.Kind != decision.KindComplete || !run.Unverified {
+		t.Fatalf("lightweight completion=%+v", run)
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"add", "."}, {"commit", "-qm", "Application"}} {
 		p.git(t, args...)

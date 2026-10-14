@@ -1,8 +1,7 @@
-// Package decision 是确定性三段式决策核心：
+// Package decision 承载纯决策输入与确定性决策核心：
 //
-//	Observe(state, collectors)      只读收集带 source binding 的外部事实
 //	Decide(state, obs, definition)  纯函数，产出字节级稳定的 canonical Plan
-//	SelectIssued(plan, admission)   按容量机械裁剪，分配 actionID 并持久化
+//	SelectIssued(plan, admission)   按容量机械裁剪，派生基础 actionID
 //
 // 依赖单向向下：authoring → compiler → encoder 之下的 runtime 模型与
 // 本包；本包不执行 handler、不写权威 state。
@@ -21,7 +20,7 @@ import (
 
 // State 是决策内核的 state 投影视图：run-level phase、已完成步骤与动态
 // 任务状态。权威持久化投影（state.json 及其版本信封、revision/CAS）由
-// 持久化层承载；本结构只承载 Decide/Observe 所需的最小决策输入。Tasks 中缺省
+// 持久化层承载；本结构只承载 Decide 所需的最小决策输入。Tasks 中缺省
 // 的键按 QUEUED 解释（依赖满足、尚未签发）。
 type State struct {
 	OperatorFacts     []Fact                                 `json:"-"`

@@ -2,10 +2,79 @@ package review
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestSettledFindingsUseLatestUserDispositionWithoutChangingLedger(t *testing.T) {
+	const runID = "run-settled-findings"
+	finding := Finding{Severity: "P2", Message: "input boundary", Requirement: "AC-001", NormalPath: "normal entry", ActualError: "missing boundary", Locations: []string{"requirements.md:5"}}
+	set, first := mustRecord(t, NewSet(), runID, ProductReview, Dispatch{ID: "product-original", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{finding, {Severity: "P3", Message: "unsettled concern"}}})
+	apply := func(candidate RawCandidate, index int, decision, severity, reason string) {
+		t.Helper()
+		series, _ := set.Series(candidate.Action)
+		set = mustApply(t, set, runID, candidate.RequirementRevision, CorrectionInput{Action: candidate.Action, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision, ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[index].ID, Decision: decision, Severity: severity, Reason: reason, Source: "user", UserAuthorized: true, Supersedes: LatestDecisionID(series, candidate.ResultDigest, candidate.Findings[index].ID)})
+	}
+	apply(first, 0, "CONFIRM", "", "confirmed original finding")
+	set, second := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "product-repeated", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{finding}})
+	apply(second, 0, "DISMISS", "", "dismissed repeated finding")
+	apply(first, 0, "RESEVERITIZE", "P3", "latest original correction")
+	set, excluded := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "product-excluded", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{{Severity: "P2", Message: "excluded concern"}}})
+	apply(excluded, 0, "CONFIRM", "", "excluded decision")
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{Action: ProductReview, DispatchID: excluded.DispatchID, RequirementRevision: excluded.RequirementRevision, ResultDigest: excluded.ResultDigest, Decision: "INVALIDATE_RESULT", Invalidity: "INCOMPLETE", Reason: "incomplete round", Source: "user", UserAuthorized: true})
+	set, technical := mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "technical-original", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{{Severity: "P2", Category: "implementation-detail", Message: "technical concern"}}})
+	apply(technical, 0, "INVALIDATE_FINDING", "", "premise rejected")
+	// A changed review binding retains original settled context. It does not
+	// mechanically prove whether that finding's semantic premise changed.
+	set = StaleSeries(set, ProductReview, "requirement-change:current", 9)
+	before, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := SettledFindings(set)
+	if len(values) != 2 {
+		t.Fatalf("settled facts = %+v", values)
+	}
+	product, readiness := values[0], values[1]
+	if product.Action != ProductReview || product.RequirementRevision != "rev-1" || product.Finding.ID != first.Findings[0].ID || product.Finding.Message != finding.Message || product.Decision != "RESEVERITIZE" || product.EffectiveSeverity != "P3" || product.Reason != "latest original correction" {
+		t.Fatalf("latest source decision was lost: %+v", product)
+	}
+	if readiness.Action != StartReadiness || readiness.Decision != "INVALIDATE_FINDING" || readiness.Reason != "premise rejected" {
+		t.Fatalf("technical settlement was lost: %+v", readiness)
+	}
+	var reopened Set
+	if err := json.Unmarshal(before, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	resumed, _ := json.Marshal(SettledFindings(reopened))
+	original, _ := json.Marshal(values)
+	if string(resumed) != string(original) {
+		t.Fatal("serialized reopen changed settled facts")
+	}
+	values[0].Finding.Locations[0] = "different location"
+	after, _ := json.Marshal(set)
+	if string(after) != string(before) {
+		t.Fatal("projection shared mutable finding locations or changed the ledger")
+	}
+	if SettledFindings(set)[0].Finding.Locations[0] != finding.Locations[0] {
+		t.Fatal("repeated projection changed original finding")
+	}
+}
+
+func TestSettledFindingsKeepDismissalUntilItsRoundIsExcluded(t *testing.T) {
+	const runID = "run-dismissed-finding"
+	set, candidate := mustRecord(t, NewSet(), runID, ProductReview, Dispatch{ID: "product", RequirementRevision: "rev-1"}, Result{Status: "PASS", Findings: []Finding{{Severity: "P2", Message: "settled concern"}}})
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{Action: ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision, ResultDigest: candidate.ResultDigest, FindingID: candidate.Findings[0].ID, Decision: "DISMISS", Reason: "premise checked", Source: "user", UserAuthorized: true})
+	if facts := SettledFindings(set); len(facts) != 1 || facts[0].Decision != "DISMISS" || facts[0].Reason != "premise checked" {
+		t.Fatalf("dismissed fact = %+v", facts)
+	}
+	set = mustApply(t, set, runID, "rev-1", CorrectionInput{Action: ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: candidate.RequirementRevision, ResultDigest: candidate.ResultDigest, Decision: "INVALIDATE_RESULT", Invalidity: "STALE", Reason: "round excluded", Source: "user", UserAuthorized: true})
+	if facts := SettledFindings(set); len(facts) != 0 {
+		t.Fatalf("excluded round leaked settled facts: %+v", facts)
+	}
+}
 
 func TestFindingDecisionMatrixProjectsSeverityAndBlocking(t *testing.T) {
 	cases := []struct {
@@ -139,7 +208,7 @@ func TestCorrectionChainMustSupersedeTheCurrentDecision(t *testing.T) {
 	}
 }
 
-func TestEffectiveRationaleFollowsTheLatestDecision(t *testing.T) {
+func TestSeverityCorrectionsPreserveOriginalAndAcceptedRationale(t *testing.T) {
 	runID := "run-rationale"
 	set := NewSet()
 	set, candidate := mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-rationale", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P2", SeverityRationale: "original reviewer judgement", Message: "rationale finding"}}})
@@ -148,7 +217,7 @@ func TestEffectiveRationaleFollowsTheLatestDecision(t *testing.T) {
 		FindingID: candidate.Findings[0].ID, Reason: "user disposition", Source: "user", UserAuthorized: true,
 	}
 	series, _ := set.Series(ProductReview)
-	if got := EffectiveFindingRationale(series, candidate.ResultDigest, candidate.Findings[0]); got != "original reviewer judgement" {
+	if got := series.RawCandidates[0].Findings[0].SeverityRationale; got != "original reviewer judgement" {
 		t.Fatalf("unadjudicated rationale is wrong: %q", got)
 	}
 	downgrade := binding
@@ -156,8 +225,11 @@ func TestEffectiveRationaleFollowsTheLatestDecision(t *testing.T) {
 	downgrade.Severity = "P3"
 	set = mustApply(t, set, runID, "rev-1", downgrade)
 	series, _ = set.Series(ProductReview)
-	if got := EffectiveFindingRationale(series, candidate.ResultDigest, candidate.Findings[0]); got != "original reviewer judgement" {
+	if got := series.RawCandidates[0].Findings[0].SeverityRationale; got != "original reviewer judgement" {
 		t.Fatalf("a rationale-free correction must keep the original rationale: %q", got)
+	}
+	if decision := series.Adjudications[0]; decision.Severity != "P3" || decision.SeverityRationale != "" {
+		t.Fatalf("rationale-free severity disposition changed its accepted evidence: %+v", decision)
 	}
 	upgrade := binding
 	upgrade.Decision = "RESEVERITIZE"
@@ -166,8 +238,12 @@ func TestEffectiveRationaleFollowsTheLatestDecision(t *testing.T) {
 	upgrade.Supersedes = LatestDecisionID(series, candidate.ResultDigest, candidate.Findings[0].ID)
 	set = mustApply(t, set, runID, "rev-1", upgrade)
 	series, _ = set.Series(ProductReview)
-	if got := EffectiveFindingRationale(series, candidate.ResultDigest, candidate.Findings[0]); got != "independent blocking justification" {
+	if got := series.Corrections[0].SeverityRationale; got != "independent blocking justification" {
 		t.Fatalf("latest rationale must win: %q", got)
+	}
+	decision, severity, source := EffectiveFindingDecision(series, candidate.ResultDigest, candidate.Findings[0])
+	if decision != "RESEVERITIZE" || severity != "P1" || source != series.Corrections[0].ID || series.RawCandidates[0].Findings[0].SeverityRationale != "original reviewer judgement" {
+		t.Fatalf("severity correction lost its accepted source or rewrote the raw rationale: %+v", series)
 	}
 }
 
@@ -329,7 +405,7 @@ func TestFindingCorrectionRequiresTheCurrentRequirementRevision(t *testing.T) {
 	if _, err := ApplyCorrection(set, runID, "new-rev", input); err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("finding correction across a requirement revision change was accepted: %v", err)
 	}
-	set = MarkStale(set, "REQUIREMENT_REVISION_INVALIDATION")
+	set = StaleSeries(set, StartReadiness, "requirement-change:req-readiness", 7)
 	set = mustApply(t, set, runID, "new-rev", CorrectionInput{
 		Action: StartReadiness, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision,
 		Decision: "INVALIDATE_RESULT", Invalidity: "STALE", Reason: "user invalidates the prior-revision result", Source: "user", UserAuthorized: true,
@@ -491,34 +567,53 @@ func TestRecordingABlockingRoundMarksOnlyItsOwnSeries(t *testing.T) {
 	}
 }
 
-func TestMarkStaleResetsBothSeriesAndKeepsAccounting(t *testing.T) {
-	runID := "run-mark-stale"
+func TestStaleSeriesKeepsAccountingAndUnselectedAction(t *testing.T) {
+	runID := "run-scoped-stale"
 	set := NewSet()
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-product", RequirementRevision: "rev-1"}, Result{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "product blocker"}}})
 	set, _ = mustRecord(t, set, runID, StartReadiness, Dispatch{ID: "dispatch-readiness", RequirementRevision: "rev-1"}, Result{Status: "PASS"})
-	set = MarkStale(set, "REQUIREMENT_REVISION_INVALIDATION")
+	original := cloneSet(t, set)
 	for _, action := range []Action{ProductReview, StartReadiness} {
-		series := mustSeries(t, set, action)
-		if series.Effective.Status != "PENDING" || series.Effective.Source != "REQUIREMENT_REVISION_INVALIDATION" || series.Effective.Revision != 2 {
-			t.Fatalf("%s was not staled: %#v", action, series.Effective)
-		}
-		if len(series.Effective.BlockingFindingIDs) != 0 || len(series.Effective.AdvisoryFindingIDs) != 0 {
-			t.Fatalf("%s kept finding projections after stale: %#v", action, series.Effective)
-		}
-		if !slices.Equal(series.Effective.DownstreamImpact, downstreamImpact(action)) {
-			t.Fatalf("%s lost its stale impact marker: %#v", action, series.Effective)
-		}
-		if series.Completed != 1 || len(series.RawCandidates) != 1 {
-			t.Fatalf("%s accounting moved on stale: %#v", action, series)
-		}
-	}
-	if err := Validate(runID, set); err != nil {
-		t.Fatal(err)
-	}
-	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-fresh", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
-	product := mustSeries(t, set, ProductReview)
-	if product.Effective.Status != "PASS" || product.Effective.RequirementRevision != "rev-2" || product.Completed != 2 {
-		t.Fatalf("fresh revision did not reopen the series: %#v", product)
+		t.Run(string(action), func(t *testing.T) {
+			source := "requirement-change:req-redo-" + string(action)
+			staled := StaleSeries(set, action, source, 7)
+			series := mustSeries(t, staled, action)
+			if series.Effective.Status != "PENDING" || series.Effective.Source != source || series.Effective.Revision != 2 {
+				t.Fatalf("%s was not staled: %#v", action, series.Effective)
+			}
+			if len(series.Effective.BlockingFindingIDs) != 0 || len(series.Effective.AdvisoryFindingIDs) != 0 {
+				t.Fatalf("%s kept finding projections after stale: %#v", action, series.Effective)
+			}
+			if !slices.Equal(series.Effective.DownstreamImpact, downstreamImpact(action)) {
+				t.Fatalf("%s lost its stale impact marker: %#v", action, series.Effective)
+			}
+			if series.Completed != 1 || len(series.RawCandidates) != 1 || series.FreshFloor != 7 || !series.FreshOwed {
+				t.Fatalf("%s accounting or redo obligation is wrong: %#v", action, series)
+			}
+			want := cloneSet(t, original)
+			selected := &want.ProductReview
+			if action == StartReadiness {
+				selected = &want.StartReadiness
+			}
+			previous := selected.Effective
+			selected.Effective = EffectiveStatus{
+				Status: "PENDING", RawStatus: previous.RawStatus, ResultDigest: previous.ResultDigest,
+				RequirementRevision: "rev-1", Revision: 2, Source: source,
+				BlockingFindingIDs: []string{}, AdvisoryFindingIDs: []string{}, DownstreamImpact: downstreamImpact(action),
+			}
+			selected.FreshFloor, selected.FreshOwed = 7, true
+			if !reflect.DeepEqual(staled, want) || !reflect.DeepEqual(set, original) {
+				t.Fatal("stale changed evidence, accounting, the unselected action, or the input set")
+			}
+			if err := Validate(runID, staled); err != nil {
+				t.Fatal(err)
+			}
+			staled, _ = mustRecord(t, staled, runID, action, Dispatch{ID: "dispatch-fresh", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
+			fresh := mustSeries(t, staled, action)
+			if fresh.Effective.Status != "PASS" || fresh.Effective.RequirementRevision != "rev-2" || fresh.Completed != 2 {
+				t.Fatalf("fresh revision did not reopen the series: %#v", fresh)
+			}
+		})
 	}
 }
 
@@ -544,7 +639,7 @@ func TestConfirmedBlockingProjectionBindsTheRequirementRevision(t *testing.T) {
 	if series.Completed != 2 || series.Effective.Status != "FAIL" || len(series.Effective.BlockingFindingIDs) != 1 {
 		t.Fatalf("the confirmed blocker must survive the later PASS round: %#v", series.Effective)
 	}
-	set = MarkStale(set, "REQUIREMENT_REVISION_INVALIDATION")
+	set = StaleSeries(set, ProductReview, "requirement-change:req-product", 9)
 	set, _ = mustRecord(t, set, runID, ProductReview, Dispatch{ID: "dispatch-changed", RequirementRevision: "rev-2"}, Result{Status: "PASS"})
 	series = mustSeries(t, set, ProductReview)
 	if series.Effective.RequirementRevision != "rev-2" || series.Completed != 3 {

@@ -2,10 +2,12 @@ package settings
 
 import (
 	"encoding/json"
+	"formal-gates/internal/coordination"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func settingPosition(t *testing.T, root, home, name string) int {
@@ -36,7 +38,8 @@ func TestEditFieldPreservesOtherValuesAndInheritsOverlay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(userPath, []byte(`{"model":"user-model","capacity":8}`), 0600); err != nil {
+	userData := []byte(`{"model":"user-model","capacity":8}`)
+	if err := os.WriteFile(userPath, userData, 0600); err != nil {
 		t.Fatal(err)
 	}
 	before := map[string]any{"capacity": float64(5), "qaCapacity": float64(3), "tokenCap": float64(42), "model": "项目模型", "reasoningEffort": "high", "codexExecutable": "a \"command\"\n中文"}
@@ -67,6 +70,87 @@ func TestEditFieldPreservesOtherValuesAndInheritsOverlay(t *testing.T) {
 	effective, err = EditField(root, home, "project", position, "", true)
 	if err != nil || effective.Values.Model != "user-model" || effective.Sources["model"] != userPath {
 		t.Fatalf("field removal did not inherit: %+v %v", effective, err)
+	}
+	actual, err = os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after = nil
+	if err := json.Unmarshal(actual, &after); err != nil {
+		t.Fatal(err)
+	}
+	delete(before, "model")
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("removal changed unselected values: %v", after)
+	}
+	actual, err = os.ReadFile(userPath)
+	if err != nil || string(actual) != string(userData) {
+		t.Fatalf("editing project changed user overlay bytes: %q %v", actual, err)
+	}
+}
+
+func TestEditFieldSerializesSelectedOverlay(t *testing.T) {
+	for _, scope := range []string{"project", "user"} {
+		t.Run(scope, func(t *testing.T) {
+			root, home := t.TempDir(), t.TempDir()
+			otherRoot := root
+			path := overlayPaths(root, home)[1]
+			if scope == "user" {
+				otherRoot = t.TempDir()
+				path = overlayPaths(root, home)[0]
+			}
+			positions := []int{settingPosition(t, root, home, "capacity"), settingPosition(t, otherRoot, home, "model")}
+			release, err := coordination.AcquirePathWaiting(path+".lock", "settings test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(release)
+			lockInfo, err := os.Stat(path + ".lock")
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := make(chan error, 2)
+			started := make(chan struct{}, 2)
+			for i, edit := range []struct{ root, value string }{{root, "8"}, {otherRoot, "new-model"}} {
+				go func(position int, root, value string) {
+					started <- struct{}{}
+					_, err := EditField(root, home, scope, position, value, false)
+					results <- err
+				}(positions[i], edit.root, edit.value)
+			}
+			<-started
+			<-started
+			select {
+			case err := <-results:
+				t.Fatalf("edit completed while its overlay lock was held: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			if err := os.WriteFile(path, []byte(`{"qaCapacity":3}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			release()
+			for i := 0; i < 2; i++ {
+				if err := <-results; err != nil {
+					t.Fatal(err)
+				}
+			}
+			actual, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]any
+			if err := json.Unmarshal(actual, &values); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"capacity": float64(8), "model": "new-model", "qaCapacity": float64(3)}
+			if !reflect.DeepEqual(values, want) {
+				t.Fatalf("concurrent edits did not preserve all values: %s", actual)
+			}
+			currentLock, err := os.Stat(path + ".lock")
+			if err != nil || !os.SameFile(lockInfo, currentLock) {
+				t.Fatalf("edit replaced its stable lock file: %v", err)
+			}
+		})
 	}
 }
 

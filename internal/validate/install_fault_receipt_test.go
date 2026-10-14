@@ -122,9 +122,8 @@ func faultInstallSource(t *testing.T) string {
 }
 
 // faultAssertNoInstallResidue 验证故障回滚后没有安装残留。
-// .formal-gates-install.lock 例外：它是内核文件锁的持久工件（释放＝关
-// 闭描述符，锁文件永不删除），属于运行期输出而非事务状态，因此显式豁免
-// 该文件，改验“留下的确为普通锁文件，且事务已释放它”。
+// 普通事务释放锁描述符并保留锁文件；最后卸载退役未使用的锁路径。
+// 留下的锁文件须是普通文件，且内核锁已释放。
 func faultAssertNoInstallResidue(t *testing.T, registry, target string) {
 	t.Helper()
 	for _, pattern := range []string{

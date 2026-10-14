@@ -24,7 +24,6 @@ type CodexHookCanarySummary struct {
 	Status                 string `json:"status"`
 	Case                   string `json:"case"`
 	CodexCommand           string `json:"codexCommand"`
-	CodexVersion           string `json:"codexVersion"`
 	ThreadID               string `json:"threadId,omitempty"`
 	TurnID                 string `json:"turnId,omitempty"`
 	ToolUseID              string `json:"toolUseId,omitempty"`

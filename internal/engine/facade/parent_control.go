@@ -8,6 +8,18 @@ import (
 	"path/filepath"
 )
 
+func (f *Facade) nodeParentSnapshot() (protocol.Snapshot, error) {
+	snap, err := f.engine.Load()
+	if err != nil || snap.State.SliceChild == nil {
+		return protocol.Snapshot{}, err
+	}
+	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID, f.runtimeFiles)
+	if err != nil {
+		return protocol.Snapshot{}, err
+	}
+	return parent.engine.Load()
+}
+
 // acquireWriteWindow linearizes a child's writes with its master's controls.
 // Native adapter effects cannot continue on authority read before this window.
 func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
@@ -73,16 +85,16 @@ func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
 		err = f.recordIntakeReceipt(actual.State)
 	}
 	if err == nil {
-		err = f.engine.SyncParentReset(current.State, emptyFingerprint())
+		err = f.engine.SyncParentReset(current.State, protocol.Observation{})
 	}
 	if err == nil {
-		err = f.engine.SyncParentRequirement(current.State, emptyFingerprint())
+		err = f.engine.SyncParentRequirement(current.State, protocol.Observation{})
 	}
 	if err == nil {
 		actual, loadErr := f.engine.Load()
 		err = loadErr
 		if err == nil && actual.State.Phase == runtime.PhasePreparing && current.State.ChildCreationCurrent() && current.State.SliceChildren[actual.State.SliceChild.SliceID] == f.runID {
-			err = f.engine.ActivateChild(current.State, emptyFingerprint())
+			err = f.engine.ActivateChild(current.State, protocol.Observation{})
 		}
 	}
 	if err != nil {
@@ -208,16 +220,19 @@ func (f *Facade) syncReleasedChildren() error {
 			if isMissingEngineState(loadErr) {
 				return nil
 			}
-			if loadErr == nil && actual.State.Phase != runtime.PhasePreparing {
+			if loadErr == nil {
 				err = child.recordIntakeReceipt(actual.State)
 				if err == nil {
-					err = child.engine.SyncParentReset(snap.State, emptyFingerprint())
+					err = child.engine.SyncParentReset(snap.State, protocol.Observation{})
 				}
-				if err == nil {
-					err = child.engine.SyncParentRequirement(snap.State, emptyFingerprint())
+				if err == nil && actual.State.Phase != runtime.PhasePreparing {
+					err = child.engine.SyncParentRequirement(snap.State, protocol.Observation{})
 				}
 				if err == nil {
 					actual, err = child.engine.Load()
+					if err == nil && snap.State.SliceChildren[plan.SliceID] == plan.RunID {
+						err = f.engine.RecordChildControl(actual.State, protocol.Observation{})
+					}
 					if err == nil && actual.State.ResetPending() {
 						_, err = child.driveInWindow()
 					}
@@ -234,7 +249,7 @@ func (f *Facade) syncReleasedChildren() error {
 	return nil
 }
 
-func (f *Facade) recordChildReset() error {
+func (f *Facade) recordChildControl() error {
 	snap, err := f.engine.Load()
 	if err != nil {
 		return err
@@ -246,11 +261,18 @@ func (f *Facade) recordChildReset() error {
 	if err != nil {
 		return err
 	}
-	return parent.engine.RecordChildReset(snap.State, emptyFingerprint())
+	return parent.engine.RecordChildControl(snap.State, protocol.Observation{})
 }
 
 func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 	for _, id := range preview.Children {
+		established, err := runDirectoryEstablished(filepath.Join(f.root, EngineNamespace, id))
+		if err != nil {
+			return err
+		}
+		if !established {
+			continue
+		}
 		child, err := Open(f.root, id, f.runtimeFiles)
 		if err != nil {
 			return err
@@ -318,11 +340,12 @@ func (f *Facade) syncResetRequirement() error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(filepath.Join(f.root, req.IntakeConfirmationReceipt.RequirementSource))
+	path := filepath.Join(f.root, req.IntakeConfirmationReceipt.RequirementSource)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	event := protocol.Event{ID: protocol.EventID("reset-requirement:" + entry.RequestID), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: entry.Revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: entry.Revision, Document: string(data)}}}
-	_, err = f.engine.Submit(event, emptyFingerprint())
+	_, err = f.engine.Submit(event, requirementObservation(path, data))
 	return err
 }

@@ -25,32 +25,32 @@ import (
 // （解除）后同一调用照常受理并落账。
 func TestBarrierRejectsRecoveryAndReconciliationUntilTheAskResolves(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
+	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "fan.slice"}, "", observedInput)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
-	if _, err := engine.Submit(unknownHostReceipt(t, "evt-hold-unknown", intent), fp); err != nil {
+	if _, err := engine.Submit(unknownHostReceipt(t, "evt-hold-unknown", intent), observedInput); err != nil {
 		t.Fatalf("unknown receipt: %v", err)
 	}
 	request, err := NewRequirementRequestEvent("req-hold-recovery", requirementPackageOf(nil), requirementOptions()...)
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
-	if _, err := engine.Submit(request, fp); err != nil {
+	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
 
 	before := stateBytesOf(t, dir)
-	if _, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine}, fp); err == nil {
+	if _, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine}, observedInput); err == nil {
 		t.Fatal("attempt recovery accepted while the barrier holds")
 	} else if code := rejectionCode(t, err); code != CodeChangeBarrierActive {
 		t.Fatalf("recovery code = %q", code)
 	}
-	if _, _, err := engine.ReconcileHostAction(intent.ActionID, "sha256:observed-hold", true, false, fp); err == nil {
+	if _, _, err := engine.ReconcileHostAction(intent.ActionID, "sha256:observed-hold", true, false, observedInput); err == nil {
 		t.Fatal("host reconciliation accepted while the barrier holds")
 	} else if code := rejectionCode(t, err); code != CodeChangeBarrierActive {
 		t.Fatalf("reconciliation code = %q", code)
@@ -61,11 +61,11 @@ func TestBarrierRejectsRecoveryAndReconciliationUntilTheAskResolves(t *testing.T
 
 	// 对照：解除后同一调用照常。
 	abortExistingAsk(t, engine, "req-hold-recovery")
-	recovered, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine}, fp)
+	recovered, _, err := engine.RecoverAttempt(reviewAction, Interruption{Class: authoring.FailureTransientEngine}, observedInput)
 	if err != nil || recovered.Action != RecoveryResumeAttempt {
 		t.Fatalf("recovery after the lift = %+v err=%v", recovered, err)
 	}
-	reconciled, _, err := engine.ReconcileHostAction(intent.ActionID, "sha256:observed-hold", true, false, fp)
+	reconciled, _, err := engine.ReconcileHostAction(intent.ActionID, "sha256:observed-hold", true, false, observedInput)
 	if err != nil || reconciled.Action != RecoveryReconcile {
 		t.Fatalf("reconciliation after the lift = %+v err=%v", reconciled, err)
 	}
@@ -94,27 +94,21 @@ func hostAskStepsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
-	}
-	prep, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.entry.parse"})
+	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
+	prep, err := authoring.NewLocalStep(header("prep.parse"), io, authoring.LocalSpec{Handler: "engine.entry.parse"})
 	must(err)
 	ask, err := authoring.NewHumanAskStep(header("gate.confirm", "prep.parse"), authoring.HumanAskSpec{
 		AskKind: "decision", RequestSchema: "schema.ask.decision.request",
 		ResponseSchema: "schema.ask.decision.response", FreshnessTTL: time.Minute,
 	})
 	must(err)
-	host, err := authoring.NewHostActionStep(header("fan.transport", "prep.parse"), io("prep.parse"), authoring.HostActionSpec{
+	host, err := authoring.NewHostActionStep(header("fan.transport", "prep.parse"), io, authoring.HostActionSpec{
 		Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
 		Operation: opTransport, Schema: "schema.candidate.review-range", Timeout: 10 * time.Second,
 	})
 	must(err)
 	join, err := authoring.NewLocalStep(header("after.join", "gate.confirm", "fan.transport"),
-		io("gate.confirm", "fan.transport"), authoring.LocalSpec{Handler: "engine.fan.join"})
+		io, authoring.LocalSpec{Handler: "engine.fan.join"})
 	must(err)
 	cd, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "review",
 		Steps: []authoring.Step{prep, ask, host, join}}, reg)
@@ -128,17 +122,17 @@ func hostAskStepsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
 	cd, reg := hostAskStepsFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 
 	// 取消终止 Ask 先建（绑定 gate.confirm），host intent 随后，最后立屏障。
 	abortAsk, err := NewRequestEvent("req-hold-abort", ControlAbort, AskOption{ID: "cancel", Label: "取消终止"})
 	if err != nil {
 		t.Fatalf("abort ask event: %v", err)
 	}
-	if _, err := engine.Submit(abortAsk, fp); err != nil {
+	if _, err := engine.Submit(abortAsk, observedInput); err != nil {
 		t.Fatalf("submit abort ask: %v", err)
 	}
-	intent, _, err := engine.ExecuteHostAction(opTransport, map[string]any{"stage": "fan.slice"}, fp)
+	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "fan.slice"}, "", observedInput)
 	if err != nil {
 		t.Fatalf("intent: %v", err)
 	}
@@ -149,12 +143,12 @@ func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("change ask event: %v", err)
 	}
-	if _, err := engine.Submit(change, fp); err != nil {
+	if _, err := engine.Submit(change, observedInput); err != nil {
 		t.Fatalf("submit change ask: %v", err)
 	}
 
 	// EXECUTED 回执：观察照常落账，清算挂起。
-	if _, err := engine.Submit(hostReceipt(t, "evt-hold-executed", intent), fp); err != nil {
+	if _, err := engine.Submit(hostReceipt(t, "evt-hold-executed", intent), observedInput); err != nil {
 		t.Fatalf("executed receipt: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -189,7 +183,7 @@ func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel decide event: %v", err)
 	}
-	if _, err := engine.Submit(cancel, fp); err != nil {
+	if _, err := engine.Submit(cancel, observedInput); err != nil {
 		t.Fatalf("cancel decide during the barrier: %v", err)
 	}
 	snap = engine.LoadMustSucceed(t)
@@ -252,7 +246,7 @@ func driveFailedReceipt(t *testing.T, receiptDuringBarrier bool) failedRoutingFa
 	t.Helper()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	product := issueReady(t, engine)[0]
 	task := engine.LoadMustSucceed(t).State.PendingActions[product].Task
 
@@ -261,7 +255,7 @@ func driveFailedReceipt(t *testing.T, receiptDuringBarrier bool) failedRoutingFa
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
 	}
-	if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(staged, observedInput); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("stage: %v %+v", err, acceptance)
 	}
 
@@ -270,10 +264,10 @@ func driveFailedReceipt(t *testing.T, receiptDuringBarrier bool) failedRoutingFa
 		if err != nil {
 			t.Fatalf("request event: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
-		if acceptance, err := engine.Submit(failedSpawnReceipt(t, "spawn-failed-hold", product, "agent-failed"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+		if acceptance, err := engine.Submit(failedSpawnReceipt(t, "spawn-failed-hold", product, "agent-failed"), observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 			t.Fatalf("failed receipt during the barrier: %v %+v", err, acceptance)
 		}
 		snap := engine.LoadMustSucceed(t)
@@ -292,11 +286,11 @@ func driveFailedReceipt(t *testing.T, receiptDuringBarrier bool) failedRoutingFa
 		if err != nil {
 			t.Fatalf("request event: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		abortExistingAsk(t, engine, "req-failed-hold")
-		if acceptance, err := engine.Submit(failedSpawnReceipt(t, "spawn-failed-hold", product, "agent-failed"), fp); err != nil || acceptance.Status != "ACCEPTED" {
+		if acceptance, err := engine.Submit(failedSpawnReceipt(t, "spawn-failed-hold", product, "agent-failed"), observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 			t.Fatalf("failed receipt after the lift: %v %+v", err, acceptance)
 		}
 	}
@@ -355,11 +349,11 @@ func driveCompletionOrder(t *testing.T, terminalFirst bool) completionFacts {
 	t.Helper()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	product := issueReady(t, engine)[0]
 	pending := engine.LoadMustSucceed(t).State.PendingActions[product]
 
-	if _, err := engine.Submit(spawnReceipt(t, "spawn-completion", product, "agent-completion"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-completion", product, "agent-completion"), observedInput); err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
 	if terminalFirst {
@@ -368,7 +362,7 @@ func driveCompletionOrder(t *testing.T, terminalFirst bool) completionFacts {
 			if err != nil {
 				t.Fatalf("task event: %v", err)
 			}
-			if _, err := engine.Submit(ev, fp); err != nil {
+			if _, err := engine.Submit(ev, observedInput); err != nil {
 				t.Fatalf("progress %s: %v", status, err)
 			}
 		}
@@ -378,7 +372,7 @@ func driveCompletionOrder(t *testing.T, terminalFirst bool) completionFacts {
 	if err != nil {
 		t.Fatalf("result event: %v", err)
 	}
-	if acceptance, err := engine.Submit(result, fp); err != nil || acceptance.Status != "ACCEPTED" {
+	if acceptance, err := engine.Submit(result, observedInput); err != nil || acceptance.Status != "ACCEPTED" {
 		t.Fatalf("result: %v %+v", err, acceptance)
 	}
 
@@ -441,7 +435,7 @@ func TestTerminalAndResultFirstOrdersReachTheSameState(t *testing.T) {
 func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	product := issueReady(t, engine)[0]
 
 	staged, err := NewReviewWorkerResultEvent("result-attach-staged", product, testProvider, "sha256:payload-attach-staged",
@@ -449,7 +443,7 @@ func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("staged event: %v", err)
 	}
-	if acceptance, err := engine.Submit(staged, fp); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(staged, observedInput); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("stage: %v %+v", err, acceptance)
 	}
 
@@ -457,10 +451,10 @@ func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
-	if _, err := engine.Submit(request, fp); err != nil {
+	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
-	if _, err := engine.Submit(unknownSpawnReceipt(t, "spawn-attach-unknown", product, "agent-attach"), fp); err != nil {
+	if _, err := engine.Submit(unknownSpawnReceipt(t, "spawn-attach-unknown", product, "agent-attach"), observedInput); err != nil {
 		t.Fatalf("unknown receipt during the barrier: %v", err)
 	}
 	for _, eventName := range []string{LifecycleStart, LifecycleStop} {
@@ -468,15 +462,11 @@ func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("lifecycle event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fp); err != nil {
+		if _, err := engine.Submit(ev, observedInput); err != nil {
 			t.Fatalf("lifecycle %s: %v", eventName, err)
 		}
 	}
 
-	plan, _, err := engine.ReconcileUnknownReceipt(product, fp)
-	if err != nil || plan.Action != RecoveryAttachReceipt {
-		t.Fatalf("attach during the barrier = %+v err=%v", plan, err)
-	}
 	snap := engine.LoadMustSucceed(t)
 	if receipt := snap.State.SpawnReceipts[product]; receipt.Status != SpawnStatusAttached {
 		t.Fatalf("attached receipt = %+v", receipt)

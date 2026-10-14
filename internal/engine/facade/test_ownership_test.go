@@ -62,12 +62,8 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 					t.Fatalf("normal Python test rejected: %v", err)
 				}
 				evidence := proof.Candidate
-				values, err := evidenceFields(evidence)
-				if err != nil {
-					t.Fatal(err)
-				}
 				evidence.GateView = &protocol.GateReviewView{TestOwnedPaths: []string{"test_app.py"}}
-				values, err = evidenceFields(evidence)
+				values, err := evidenceFields(evidence)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -122,9 +118,12 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				write(path, "helper.data", "extra")
 				p.Paths = append(p.Paths, "helper.data")
 			}
-			before := git(path, "write-tree") + git(path, "rev-parse", "HEAD") + git(root, "show-ref", r.Ref)
-			proof, complete, err := freeze("artifact")
 			rejected := variant == "unassociated"
+			var before string
+			if rejected {
+				before = git(path, "write-tree") + git(path, "rev-parse", "HEAD") + git(root, "show-ref", r.Ref)
+			}
+			proof, complete, err := freeze("artifact")
 			if rejected {
 				if err == nil || complete || proof.Candidate != nil {
 					t.Fatalf("unproved endpoint gained ownership: complete=%v err=%v", complete, err)

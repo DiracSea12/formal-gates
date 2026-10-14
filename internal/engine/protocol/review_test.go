@@ -70,7 +70,7 @@ func agentStepsDefinition(t *testing.T, specOf func(name string) authoring.Agent
 	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -78,12 +78,8 @@ func agentStepsDefinition(t *testing.T, specOf func(name string) authoring.Agent
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+	io := func() authoring.IO {
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 	}
 	steps := []authoring.Step{}
 	prep, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.test.prep"})
@@ -91,8 +87,8 @@ func agentStepsDefinition(t *testing.T, specOf func(name string) authoring.Agent
 	steps = append(steps, prep)
 	previous := "prep.parse"
 	for _, name := range agentSteps {
-		stepIO := io(previous)
-		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+		stepIO := io()
+		stepIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 		step, err := authoring.NewAgentStep(header(name, previous), stepIO, specOf(name))
 		must(err)
 		steps = append(steps, step)
@@ -126,7 +122,7 @@ func reviewEngine(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.R
 func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *compiler.Registry, capacity int) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: capacity}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: capacity})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -137,12 +133,12 @@ func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *co
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-review", "", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-review", "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
+	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {
 		t.Fatalf("intake receipt: %v", err)
 	}
 	return engine, dir
@@ -159,15 +155,15 @@ func reviewVerification() review.OperatorVerification {
 // issueReady 签发当前 Ready frontier 并返回 actionID。
 func issueReady(t *testing.T, engine *Engine) []string {
 	t.Helper()
-	fp := fingerprintOf(t, engine)
-	plan, _, err := engine.Plan()
+	observedInput := Observation{}
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 	if plan.Next.Kind == decision.KindWait || plan.Next.Kind == decision.KindComplete {
 		return nil
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp)
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -203,8 +199,8 @@ func reviewEvidence(action review.Action, dispatchID, authorizationID, status, m
 func submitReviewResult(t *testing.T, engine *Engine, event, actionID string, evidence ReviewResultEvidence) Acceptance {
 	t.Helper()
 	evidence.DispatchID = actionID
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-"+event), actionID, "agent-"+event), fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(spawnReceipt(t, EventID("spawn-"+event), actionID, "agent-"+event), observedInput); err != nil {
 		t.Fatalf("spawn %s: %v", event, err)
 	}
 	evidence.DispatchID = actionID
@@ -212,7 +208,7 @@ func submitReviewResult(t *testing.T, engine *Engine, event, actionID string, ev
 	if err != nil {
 		t.Fatalf("review result event: %v", err)
 	}
-	acceptance, err := engine.Submit(ev, fp)
+	acceptance, err := engine.Submit(ev, observedInput)
 	if err != nil {
 		t.Fatalf("submit review result %s: %v", event, err)
 	}
@@ -258,9 +254,9 @@ func askAndDecide(t *testing.T, engine *Engine, control ControlKind, requestID s
 			payload.Topology.DevelopmentPlan = &preview.Confirmation
 		}
 	}
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	request := controlRequestEvent(t, control, requestID, payload, options)
-	if _, err := engine.Submit(request, fp); err != nil {
+	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
 	token, err := engine.Freshness(RequestID(requestID))
@@ -276,7 +272,7 @@ func askAndDecide(t *testing.T, engine *Engine, control ControlKind, requestID s
 	if err != nil {
 		t.Fatalf("decide event: %v", err)
 	}
-	acceptance, err := engine.Submit(ev, fp)
+	acceptance, err := engine.Submit(ev, observedInput)
 	if err != nil {
 		t.Fatalf("submit decide %s: %v", requestID, err)
 	}
@@ -311,8 +307,8 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp := fingerprintOf(t, engine)
-	if _, err := engine.Submit(request, fp); err != nil {
+	observedInput := Observation{}
+	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatal(err)
 	}
 	token, err := engine.Freshness("req-default")
@@ -337,7 +333,7 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 			t.Fatal(err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(event, fp); err == nil {
+		if _, err := engine.Submit(event, observedInput); err == nil {
 			t.Fatalf("default accepted %s", name)
 		}
 		if !bytes.Equal(before, stateBytesOf(t, dir)) {
@@ -359,7 +355,7 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			accepted, err := engine.Submit(event, fp)
+			accepted, err := engine.Submit(event, observedInput)
 			results <- struct {
 				acceptance Acceptance
 				err        error
@@ -387,18 +383,18 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 		t.Fatalf("concurrent decision wrote more than once: %+v revision=%d events=%d", first, afterConcurrent.Revision, len(afterConcurrent.State.Events))
 	}
 	beforeReplay := stateBytesOf(t, dir)
-	if replay, err := engine.Submit(event, fp); err != nil || replay.Revision != first.Revision || replay.EventID != first.EventID {
+	if replay, err := engine.Submit(event, observedInput); err != nil || replay.Revision != first.Revision || replay.EventID != first.EventID {
 		t.Fatalf("CAS replay = %+v, %v", replay, err)
 	}
 	if !bytes.Equal(beforeReplay, stateBytesOf(t, dir)) {
 		t.Fatal("CAS replay changed persisted state")
 	}
-	reopened, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
+	reopened, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := stateBytesOf(t, dir)
-	if replay, err := reopened.Submit(event, fp); err != nil || replay.Revision != first.Revision {
+	if replay, err := reopened.Submit(event, observedInput); err != nil || replay.Revision != first.Revision {
 		t.Fatalf("restart replay = %+v, %v", replay, err)
 	}
 	if !bytes.Equal(before, stateBytesOf(t, dir)) {
@@ -618,9 +614,9 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	}})
 	gates := []string{"blackbox", "whitebox", "gate.quality"}
 	// 绑定前两个 Ask 并存（PendingAsks 按 requestID 各自落账）。
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	for _, requestID := range []string{"req-route-binding", "req-route-coexisting"} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fp); err != nil {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), observedInput); err != nil {
 			t.Fatalf("submit ask %s: %v", requestID, err)
 		}
 	}
@@ -632,7 +628,7 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(binding, fp); err != nil {
+	if _, err := engine.Submit(binding, observedInput); err != nil {
 		t.Fatalf("submit binding decide: %v", err)
 	}
 	// 并存 Ask 的决定在绑定后被接纳：同集重选（候选表与自身 Ask 钉住的
@@ -645,7 +641,7 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(decision, Observation{}); err != nil {
 		t.Fatalf("coexisting route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -675,11 +671,11 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 	t.Run("request without the gate list is rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		// 字面构造事件绕开构造器前置校验，让引擎在接纳处拒绝。
 		request := Event{ID: EventID("req-route-nogates"), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions()}}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(request, fp); err == nil {
+		if _, err := engine.Submit(request, observedInput); err == nil {
 			t.Fatal("route request without the gate list accepted")
 		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 			t.Fatalf("gate-less request code = %q (%v)", code, err)
@@ -692,7 +688,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 	t.Run("request gate list carrying merge or a duplicate is rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		// 保留字全集（merge/merge-gate/merge-qa，命名权威 internal/validate/
 		// catalog.go:28-31）一律拒绝零写。
 		for name, gates := range map[string][]string{
@@ -703,7 +699,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 		} {
 			request := Event{ID: EventID("req-" + name), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions(), RouteGates: gates}}
 			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(request, fp); err == nil {
+			if _, err := engine.Submit(request, observedInput); err == nil {
 				t.Fatalf("%s accepted", name)
 			} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 				t.Fatalf("%s code = %q (%v)", name, code, err)
@@ -729,8 +725,8 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("route request: %v", err)
 		}
-		fp := fingerprintOf(t, engine)
-		if _, err := engine.Submit(request, fp); err != nil {
+		observedInput := Observation{}
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit route request: %v", err)
 		}
 		for name, gates := range map[string][]string{
@@ -746,7 +742,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 				t.Fatalf("decide %s: %v", name, err)
 			}
 			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(ev, fp); err == nil {
+			if _, err := engine.Submit(ev, observedInput); err == nil {
 				t.Fatalf("%s accepted", name)
 			} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 				t.Fatalf("%s code = %q (%v)", name, code, err)
@@ -770,7 +766,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("corrected decide: %v", err)
 		}
-		if _, err := engine.Submit(corrected, fp); err != nil {
+		if _, err := engine.Submit(corrected, observedInput); err != nil {
 			t.Fatalf("corrected decide rejected: %v", err)
 		}
 		snap := engine.LoadMustSucceed(t)
@@ -864,7 +860,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("start-readiness evidence before product-review PASS", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		product := issueReady(t, engine)[0]
 		// 产品审先 effective PASS：技术审载体步才可达（拓扑上依赖产品审
 		// 载体）并被补位签发；随后整轮作废把产品审刷回 PENDING——在途技
@@ -887,11 +883,11 @@ func TestReviewGatingNegatives(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-early", readiness, "agent-early"), fp); err != nil {
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-early", readiness, "agent-early"), observedInput); err != nil {
 			t.Fatalf("spawn: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("start-readiness evidence accepted before product-review PASS")
 		} else if code := rejectionCode(t, err); code != CodeReviewSequenceGate {
 			t.Fatalf("early readiness code = %q", code)
@@ -1002,7 +998,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 			Decision: "no-split", Note: "建议不拆",
 		}})
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		for name, route := range map[string]*RouteDecision{
 			"full-with-merge":      {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
 			"custom-with-merge":    {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
@@ -1016,7 +1012,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 				Review: &ReviewDecisionPayload{Route: route},
 			}}
 			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(ev, fp); err == nil {
+			if _, err := engine.Submit(ev, observedInput); err == nil {
 				t.Fatalf("%s accepted", name)
 			} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 				t.Fatalf("%s code = %q (%v)", name, code, err)
@@ -1033,7 +1029,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			"full-without-blackbox": {"whitebox", "gate.quality"},
 		} {
 			request := controlRequestEvent(t, ControlSelectRoute, "req-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions())
-			if _, err := engine.Submit(request, fp); err != nil {
+			if _, err := engine.Submit(request, observedInput); err != nil {
 				t.Fatalf("route ask %s: %v", name, err)
 			}
 			token, err := engine.Freshness(RequestID("req-route-" + name))
@@ -1045,7 +1041,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 				t.Fatalf("decide event %s: %v", name, err)
 			}
 			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(event, fp); err == nil {
+			if _, err := engine.Submit(event, observedInput); err == nil {
 				t.Fatalf("%s accepted", name)
 			} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 				t.Fatalf("%s code = %q (%v)", name, code, err)
@@ -1081,12 +1077,12 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("review control decide without payload", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequestEvent("req-topology-nopayload", ControlConfirmTopology, topologyOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		token, err := engine.Freshness("req-topology-nopayload")
@@ -1098,7 +1094,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("decide: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("payload-less topology decide accepted")
 		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 			t.Fatalf("no-payload code = %q", code)
@@ -1111,12 +1107,12 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("grant choice without the roundGrant branch is rejected, not a panic", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequestEvent("req-grant-nopayload", ControlReviewRoundGrant, grantOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		token, err := engine.Freshness("req-grant-nopayload")
@@ -1128,7 +1124,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("decide: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("payload-less grant decide accepted")
 		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 			t.Fatalf("no-payload grant code = %q", code)
@@ -1185,12 +1181,12 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("non-review control cannot carry review payload", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequestEvent("req-cancel-payload", ControlAbort, AskOption{ID: "cancel", Label: "取消终止"})
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		token, err := engine.Freshness("req-cancel-payload")
@@ -1203,7 +1199,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("decide: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("RESET decide with review payload accepted")
 		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 			t.Fatalf("reset payload code = %q", code)
@@ -1216,12 +1212,12 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("stale freshness on a review decide", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		request, err := NewRequestEvent("req-stale", ControlConfirmTopology, topologyOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		if _, err := engine.Submit(request, fp); err != nil {
+		if _, err := engine.Submit(request, observedInput); err != nil {
 			t.Fatalf("submit request: %v", err)
 		}
 		stale, err := engine.Freshness("req-stale")
@@ -1233,7 +1229,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		if err != nil {
 			t.Fatalf("other request: %v", err)
 		}
-		if _, err := engine.Submit(other, fp); err != nil {
+		if _, err := engine.Submit(other, observedInput); err != nil {
 			t.Fatalf("submit other request: %v", err)
 		}
 		payload := ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "建议不拆"}}
@@ -1242,7 +1238,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("decide: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("stale token accepted")
 		} else if code := rejectionCode(t, err); code != CodeStaleFreshness {
 			t.Fatalf("stale code = %q", code)
@@ -1255,7 +1251,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("duplicate result digest rejected", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "round.one", "round.two")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		first := issueReady(t, engine)[0]
 		evidence := reviewEvidence(review.ProductReview, first, "", "FAIL", "same bytes", []review.Finding{
 			{Severity: "P1", Message: "same finding"},
@@ -1269,7 +1265,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("event: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if acceptance, err := engine.Submit(repeat, fp); err != nil || acceptance.Status != "DUPLICATE" {
+		if acceptance, err := engine.Submit(repeat, observedInput); err != nil || acceptance.Status != "DUPLICATE" {
 			t.Fatalf("same-bytes resubmission = %v %+v (want DUPLICATE)", err, acceptance)
 		}
 		_ = before
@@ -1278,9 +1274,9 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("review evidence with a stale requirement revision", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		product := issueReady(t, engine)[0]
-		if _, err := engine.Submit(spawnReceipt(t, "spawn-stale-revision", product, "agent-stale-revision"), fp); err != nil {
+		if _, err := engine.Submit(spawnReceipt(t, "spawn-stale-revision", product, "agent-stale-revision"), observedInput); err != nil {
 			t.Fatalf("spawn: %v", err)
 		}
 		stale := reviewEvidence(review.ProductReview, "dispatch-stale", "", "FAIL", "bound to an older requirement", []review.Finding{
@@ -1293,7 +1289,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("event: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(ev, fp); err == nil {
+		if _, err := engine.Submit(ev, observedInput); err == nil {
 			t.Fatal("stale requirement revision accepted")
 		} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
 			t.Fatalf("stale revision code = %q", code)
@@ -1306,7 +1302,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("review content participates in result identity", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		fp := fingerprintOf(t, engine)
+		observedInput := Observation{}
 		product := issueReady(t, engine)[0]
 		evidence := reviewEvidence(review.ProductReview, "dispatch-identity", "", "PASS", "first verdict", nil)
 		submitReviewResult(t, engine, "result-identity", product, evidence)
@@ -1317,7 +1313,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		if err != nil {
 			t.Fatalf("event: %v", err)
 		}
-		acceptance, err := engine.Submit(identical, fp)
+		acceptance, err := engine.Submit(identical, observedInput)
 		if err != nil {
 			t.Fatalf("identical replay rejected: %v", err)
 		}
@@ -1335,7 +1331,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 			t.Fatalf("event: %v", err)
 		}
 		before := stateBytesOf(t, dir)
-		if _, err := engine.Submit(replayed, fp); err == nil {
+		if _, err := engine.Submit(replayed, observedInput); err == nil {
 			t.Fatal("altered review content resubmission accepted")
 		} else if code := rejectionCode(t, err); code != CodeReceiptConflict {
 			t.Fatalf("altered review code = %q", code)
@@ -1554,7 +1550,7 @@ func TestDirectDismissLeavesTheDownstreamConclusionUntouched(t *testing.T) {
 func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	product := issueReady(t, engine)[0]
 
 	stale := reviewEvidence(review.ProductReview, "dispatch-stale", "", "PASS", "bound to an older requirement", nil)
@@ -1565,7 +1561,7 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 		t.Fatalf("event: %v", err)
 	}
 	before := stateBytesOf(t, dir)
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("stale-revision review result staged before its receipt")
 	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
 		t.Fatalf("stale staging code = %q", code)
@@ -1583,14 +1579,14 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	acceptance, err := engine.Submit(evCurrent, fp)
+	acceptance, err := engine.Submit(evCurrent, observedInput)
 	if err != nil {
 		t.Fatalf("current result: %v", err)
 	}
 	if acceptance.Status != "STAGED" {
 		t.Fatalf("current result status = %q, want STAGED", acceptance.Status)
 	}
-	if _, err := engine.Submit(spawnReceipt(t, "spawn-current", product, "agent-current"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "spawn-current", product, "agent-current"), observedInput); err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -1605,7 +1601,7 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	product := issueReady(t, engine)[0]
 
 	misbound := reviewEvidence(review.ProductReview, "act:review/another.dispatch", "", "PASS", "evidence naming a foreign dispatch", nil)
@@ -1614,7 +1610,7 @@ func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
 		t.Fatalf("event: %v", err)
 	}
 	before := stateBytesOf(t, dir)
-	if _, err := engine.Submit(misboundEvent, fp); err == nil {
+	if _, err := engine.Submit(misboundEvent, observedInput); err == nil {
 		t.Fatal("foreign-dispatch evidence accepted")
 	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
 		t.Fatalf("misbound evidence code = %q", code)
@@ -1630,7 +1626,7 @@ func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if acceptance, err := engine.Submit(correct, fp); err != nil || acceptance.Status != "STAGED" {
+	if acceptance, err := engine.Submit(correct, observedInput); err != nil || acceptance.Status != "STAGED" {
 		t.Fatalf("correctly bound result after the rejection: %v %+v", err, acceptance)
 	}
 }
@@ -1652,7 +1648,7 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 			engine, _ := reviewEngine(t, cd, reg)
-			fp := fingerprintOf(t, engine)
+			observedInput := Observation{}
 			product := issueReady(t, engine)[0]
 
 			broken := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "inadmissible evidence", []review.Finding{
@@ -1664,7 +1660,7 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("event: %v", err)
 			}
-			if a, err := engine.Submit(ev, fp); err != nil || a.Status != "STAGED" {
+			if a, err := engine.Submit(ev, observedInput); err != nil || a.Status != "STAGED" {
 				t.Fatalf("result before receipt: %+v %v", a, err)
 			}
 			submitSpawnReceipt(t, engine, "spawn-pair", product)
@@ -1687,7 +1683,7 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("event: %v", err)
 			}
-			acceptance, err := engine.Submit(evCorrect, fp)
+			acceptance, err := engine.Submit(evCorrect, observedInput)
 			if err != nil {
 				t.Fatalf("correct result after a rejected staging: %v", err)
 			}
@@ -1706,9 +1702,9 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 // 只围绕决定提交本身（Ask 落账是合法提交，不属于被拒部分）。
 func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control ControlKind, requestID string, options []AskOption, choice AskOptionID, payload *ReviewDecisionPayload) error {
 	t.Helper()
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	request := controlRequestEvent(t, control, requestID, payload, options)
-	if _, err := engine.Submit(request, fp); err != nil {
+	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatalf("submit request: %v", err)
 	}
 	token, err := engine.Freshness(RequestID(requestID))
@@ -1720,7 +1716,7 @@ func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control Con
 		t.Fatalf("decide event: %v", err)
 	}
 	before := stateBytesOf(t, dir)
-	_, err = engine.Submit(ev, fp)
+	_, err = engine.Submit(ev, observedInput)
 	if err == nil {
 		return nil
 	}
@@ -1866,7 +1862,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review")
 	dir := t.TempDir()
-	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -1877,7 +1873,7 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	err = engine.InitWithMetadata(view, testProvider, fingerprintOf(t, engine), "run-dial", "", reviewConfirmation(), "", "", nil)
+	err = engine.InitWithMetadata(view, testProvider, Observation{}, "run-dial", "", reviewConfirmation(), "", "", nil)
 	if err == nil {
 		t.Fatal("dial-past init accepted")
 	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {
@@ -1937,7 +1933,7 @@ func TestReleasedAuthorizationSlotIsConsumedByTheNextIssuance(t *testing.T) {
 		t.Fatal("granted another slot while the released slot is unused")
 	}
 	observedStoppedWorker(t, engine, fifth)
-	plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, fingerprintOf(t, engine))
+	plan, _, err := engine.RecoverAttempt(fifth, Interruption{CauseKnown: true}, Observation{})
 	if err != nil || plan.Action != RecoveryNewAttempt {
 		t.Fatalf("retry = %+v, %v", plan, err)
 	}
@@ -1976,7 +1972,7 @@ func productReviewDAGFixture(t *testing.T, steps ...dagStep) (*compiler.Compiled
 	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -1984,16 +1980,12 @@ func productReviewDAGFixture(t *testing.T, steps ...dagStep) (*compiler.Compiled
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+	io := func() authoring.IO {
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 	}
 	reviewStep := func(name string, deps ...string) authoring.Step {
-		stepIO := io(deps...)
-		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+		stepIO := io()
+		stepIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 		step, err := authoring.NewAgentStep(header(name, deps...), stepIO, authoring.AgentSpec{
 			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute,
@@ -2214,7 +2206,7 @@ func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = engine.Submit(event, fingerprintOf(t, engine)); err == nil || rejectionCode(t, err) != CodeReviewEvidenceRejected {
+			if _, err = engine.Submit(event, Observation{}); err == nil || rejectionCode(t, err) != CodeReviewEvidenceRejected {
 				t.Fatalf("wrong authorization admitted: %v", err)
 			}
 		}
@@ -2227,7 +2219,7 @@ func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := engine.Submit(event, fingerprintOf(t, engine)); err != nil {
+		if _, err := engine.Submit(event, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		assertSeriesCommitmentHeld(t, engine)
@@ -2265,14 +2257,14 @@ func TestQuarantinedReviewReplaysAfterBarrierLift(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := engine.Submit(request, fingerprintOf(t, engine)); err != nil {
+			if _, err := engine.Submit(request, Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			event, err := NewReviewWorkerResultEvent("quarantine-result", action, testProvider, "sha256:quarantine-result", evidence)
 			if err != nil {
 				t.Fatal(err)
 			}
-			acceptance, err := engine.Submit(event, fingerprintOf(t, engine))
+			acceptance, err := engine.Submit(event, Observation{})
 			if err != nil || acceptance.Status != "QUARANTINED" {
 				t.Fatalf("quarantine = %+v, %v", acceptance, err)
 			}
@@ -2321,7 +2313,7 @@ func relayChainFixture(t *testing.T, series authoring.ReviewSeriesAction, mid re
 	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	must(reg.RegisterAskKind("ask.mid.gate"))
 	must(reg.RegisterSchema("schema.ask.request"))
 	must(reg.RegisterSchema("schema.ask.response"))
@@ -2332,16 +2324,12 @@ func relayChainFixture(t *testing.T, series authoring.ReviewSeriesAction, mid re
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
+	io := func() authoring.IO {
+		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 	}
 	carrier := func(name string, mark authoring.ReviewSeriesAction, deps ...string) authoring.Step {
-		stepIO := io(deps...)
-		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+		stepIO := io()
+		stepIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 		step, err := authoring.NewAgentStep(header(name, deps...), stepIO, authoring.AgentSpec{
 			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
 			ReviewSeries: mark, Timeout: time.Minute,
@@ -2361,7 +2349,7 @@ func relayChainFixture(t *testing.T, series authoring.ReviewSeriesAction, mid re
 	steps = append(steps, carrier("head.carrier", series, headDeps...))
 	switch mid {
 	case relayLocal:
-		midStep, err := authoring.NewLocalStep(header("mid.local", "head.carrier"), io("head.carrier"), authoring.LocalSpec{Handler: "engine.test.prep"})
+		midStep, err := authoring.NewLocalStep(header("mid.local", "head.carrier"), io(), authoring.LocalSpec{Handler: "engine.test.prep"})
 		must(err)
 		steps = append(steps, midStep)
 	case relayAsk:
@@ -2527,13 +2515,13 @@ func TestProductRedoFreshRoundKeepsTheRelayChainLatched(t *testing.T) {
 	}
 	// 负控：重走窗口内绑旧 revision 的新鲜轮证据被拒，零状态。
 	before := stateBytesOf(t, dir)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	ev, err := NewReviewWorkerResultEvent("result-relay-redo-stale", fresh, testProvider, "sha256:relay-redo-stale",
 		reviewEvidence(review.ProductReview, fresh, "", "PASS", "bound to the superseded revision", nil))
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("evidence bound to the superseded revision was accepted during the redo window")
 	} else if code := rejectionCode(t, err); code != CodeReviewEvidenceRejected {
 		t.Fatalf("stale-bound fresh round code = %q", code)

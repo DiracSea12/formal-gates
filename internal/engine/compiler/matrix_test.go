@@ -30,15 +30,8 @@ import (
 // TestAgentReviewSeriesVocabularyAcceptsTheClosedSet：三值封闭词汇逐值通过
 // compiler 校验（raw 结构体直通 validate 层的正控）。
 func TestAgentReviewSeriesVocabularyAcceptsTheClosedSet(t *testing.T) {
-	seriesIO := func(from string) authoring.IO {
-		var inputs []authoring.InputBinding
-		if from != "" {
-			inputs = []authoring.InputBinding{{From: authoring.StepID(from), OutputField: "out", ToField: "in"}}
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-			Inputs:         inputs,
-			Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}}
-	}
+	io := typedIO()
+	io.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
 	steps := make([]authoring.Step, 0, 3)
 	previous := ""
 	for i, mark := range []authoring.ReviewSeriesAction{
@@ -50,7 +43,7 @@ func TestAgentReviewSeriesVocabularyAcceptsTheClosedSet(t *testing.T) {
 			header.Dependencies = []authoring.StepID{authoring.StepID(previous)}
 		}
 		steps = append(steps, authoring.AgentStep{
-			Header: header, IO: seriesIO(previous), Handler: "engine.review.worker.v2",
+			Header: header, IO: io, Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonIndependentReview, ReviewSeries: mark, Timeout: time.Minute,
 		})
 		previous = string(id)
@@ -83,49 +76,49 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 				Preconditions: []authoring.PredicateRef{{ID: ""}}},
 			Handler: "engine.entry.parse"}}, "precondition predicate id required"},
 		{"local without handler", []authoring.Step{authoring.LocalStep{
-			Header: rawHeader("entry.s"), IO: ioWith()}}, "local step \"entry.s\": handler id required"},
+			Header: rawHeader("entry.s"), IO: typedIO()}}, "local step \"entry.s\": handler id required"},
 		{"local negative timeout", []authoring.Step{authoring.LocalStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.entry.parse", Timeout: -time.Second}},
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.entry.parse", Timeout: -time.Second}},
 			"timeout must be >= 0"},
 		{"local invalid retry", []authoring.Step{authoring.LocalStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.entry.parse",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.entry.parse",
 			Retry: &authoring.RetryPolicy{MaxAttempts: 0, Backoff: -time.Second}}},
 			"retry maxAttempts must be >= 1"},
 		{"durable without idempotency", []authoring.Step{authoring.DurableStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.entry.persist",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.entry.persist",
 			Reconcile: "reconcile.entry.persist", Timeout: time.Second,
 			Retry: authoring.RetryPolicy{MaxAttempts: 1}}},
 			"idempotency key strategy required"},
 		{"durable without reconcile", []authoring.Step{authoring.DurableStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.entry.persist",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.entry.persist",
 			Idempotency: authoring.IdempotencyTaskKeyScoped, Timeout: time.Second,
 			Retry: authoring.RetryPolicy{MaxAttempts: 1}}},
 			"durable step \"entry.s\": reconcile id required"},
 		{"durable zero retry", []authoring.Step{authoring.DurableStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.entry.persist",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.entry.persist",
 			Idempotency: authoring.IdempotencyTaskKeyScoped, Reconcile: "reconcile.entry.persist",
 			Timeout: time.Second}},
 			"retry maxAttempts must be >= 1"},
 		{"host without boundary", []authoring.Step{authoring.HostActionStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.fan.transport",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.fan.transport",
 			Operation: "op.fan.transport", Timeout: time.Second}},
 			"hostBoundaryReason required"},
 		{"host without operation", []authoring.Step{authoring.HostActionStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.fan.transport",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.fan.transport",
 			Boundary: authoring.BoundaryExternalCapability, Timeout: time.Second}},
 			"registered operation id required"},
 		{"agent without reason", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.review.worker.v2",
 			Timeout: time.Second}},
 			"nonProgrammableReason required"},
 		{"agent negative timeout", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: -time.Second}},
 			"timeout must be >= 0"},
 		// worker result 合同的二次防线：绕过 constructor 的原始结构体缺
 		// postconditions 必须拒绝。
 		{"agent without postconditions", []authoring.Step{authoring.AgentStep{
-			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker.v2",
+			Header: rawHeader("entry.s"), IO: typedIO(), Handler: "engine.review.worker.v2",
 			Reason: authoring.ReasonSemanticJudgment, Timeout: time.Second}},
 			"postcondition predicate reference required (worker result contract)"},
 		// 审查系列归属的二次防线：独立审查步必须显式声明系列归属，且系
@@ -192,7 +185,7 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 // parallelRows 构建并行二次防线基座：root → split(children) → join(joinDeps)。
 // mutate 调整 join/failure 策略、join 依赖集合与 children 以命中不同分支。
 func parallelRows(mutate func(j *authoring.JoinPolicy, f *authoring.FailurePolicy, joinDeps, children *[]string)) []authoring.Step {
-	root := mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse")
+	root := mustLocal(header("entry.root", "entry"), typedIO(), "engine.entry.parse")
 	join := authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAll}
 	failure := authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation}
 	joinDeps := []string{"fan.c1", "fan.c2"}
@@ -202,7 +195,7 @@ func parallelRows(mutate func(j *authoring.JoinPolicy, f *authoring.FailurePolic
 	kids := make([]authoring.Step, 0, len(children))
 	for _, c := range children {
 		ids = append(ids, authoring.StepID(c))
-		kids = append(kids, mustLocal(header(c, "fan", "fan.split"), ioWith("fan.split"), "engine.fan.slice"))
+		kids = append(kids, mustLocal(header(c, "fan", "fan.split"), typedIO(), "engine.fan.slice"))
 	}
 	split := authoring.ParallelStep{
 		Header:   header("fan.split", "fan", "entry.root"),
@@ -210,7 +203,7 @@ func parallelRows(mutate func(j *authoring.JoinPolicy, f *authoring.FailurePolic
 		Join:     join,
 		Failure:  failure,
 	}
-	joinStep := mustLocal(header("fan.join", "fan", joinDeps...), ioWith(joinDeps...), "engine.fan.join")
+	joinStep := mustLocal(header("fan.join", "fan", joinDeps...), typedIO(), "engine.fan.join")
 	steps := append([]authoring.Step{root, split}, kids...)
 	return append(steps, joinStep)
 }
@@ -289,24 +282,25 @@ func TestMissingEngineAdapterRouting(t *testing.T) {
 func TestKindAndRunnerMismatchBothModes(t *testing.T) {
 	for _, row := range []struct {
 		name string
+		def  func() *Definition
 		reg  func(t *testing.T) *Registry
 		want string
 	}{
-		{"kind mismatch", func(t *testing.T) *Registry {
+		{"kind mismatch", goldenDefinition, func(t *testing.T) *Registry {
 			reg := goldenRegistry(t, "op.fan.transport")
 			if err := reg.RegisterSchema("op.fan.transport"); err != nil {
 				t.Fatalf("register schema: %v", err)
 			}
 			return reg
 		}, `id "op.fan.transport" registered as schema, want operation`},
-		{"runner mismatch", func(t *testing.T) *Registry {
+		{"runner mismatch", goldenDefinition, func(t *testing.T) *Registry {
 			reg := goldenRegistry(t, "engine.review.worker.v2")
 			if err := reg.RegisterHandler("engine.review.worker.v2", authoring.RunnerEngineLocal); err != nil {
 				t.Fatalf("register handler: %v", err)
 			}
 			return reg
 		}, `handler "engine.review.worker.v2" runner ENGINE_LOCAL != variant runner AGENT_WORKER`},
-		{"ask kind mismatch", func(t *testing.T) *Registry {
+		{"ask kind mismatch", goldenDefinition, func(t *testing.T) *Registry {
 			// ask 类型 ID 错注册进 schema 槽：human 步解析 askKind 时报 kind
 			// 错用，而非含糊的 not found（单一命名空间的收益）。
 			reg := goldenRegistry(t, "decision")
@@ -315,15 +309,45 @@ func TestKindAndRunnerMismatchBothModes(t *testing.T) {
 			}
 			return reg
 		}, `id "decision" registered as schema, want askKind`},
+		{"predicate kind mismatch", func() *Definition {
+			def := goldenDefinition()
+			for i, step := range def.Steps {
+				if agent, ok := step.(authoring.AgentStep); ok {
+					agent.IO.Postconditions = []authoring.PredicateRef{{ID: "engine.fan.slice"}}
+					def.Steps[i] = agent
+				}
+			}
+			return def
+		}, func(t *testing.T) *Registry { return goldenRegistry(t) }, "registered as handler, want predicate"},
+		{"host runner mismatch", func() *Definition {
+			def := goldenDefinition()
+			for i, step := range def.Steps {
+				if host, ok := step.(authoring.HostActionStep); ok {
+					host.Handler = "h.wrong.runner"
+					def.Steps[i] = host
+				}
+			}
+			return def
+		}, func(t *testing.T) *Registry {
+			reg := goldenRegistry(t)
+			if err := reg.RegisterHandler("h.wrong.runner", authoring.RunnerEngineLocal); err != nil {
+				t.Fatal(err)
+			}
+			return reg
+		}, "runner ENGINE_LOCAL != variant runner HOST_ADAPTER"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			_, err := Compile(goldenDefinition(), row.reg(t))
-			wantErr(t, err, row.want)
-			_, err = CompileDiagnostic(goldenDefinition(), row.reg(t))
+			def := row.def()
+			_, err := Compile(def, row.reg(t))
 			wantErr(t, err, row.want)
 			var ce *Error
 			if !errors.As(err, &ce) || ce.Class != authoring.FailureInvariantViolation {
-				t.Fatalf("mismatch must classify INVARIANT_VIOLATION in both modes: %v", err)
+				t.Fatalf("normal compile mismatch must classify INVARIANT_VIOLATION: %v", err)
+			}
+			_, err = CompileDiagnostic(def, row.reg(t))
+			wantErr(t, err, row.want)
+			if !errors.As(err, &ce) || ce.Class != authoring.FailureInvariantViolation {
+				t.Fatalf("diagnostic compile mismatch must classify INVARIANT_VIOLATION: %v", err)
 			}
 		})
 	}

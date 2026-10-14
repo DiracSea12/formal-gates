@@ -25,7 +25,6 @@ type installedHarnessReport struct {
 	Paths    []string                   `json:"paths"`
 	Terminal *testkit.TerminalSummary   `json:"terminal"`
 	Next     []testkit.NextRecord       `json:"next"`
-	Effects  map[string]int             `json:"sideEffects"`
 }
 
 func buildInstalledHarnessBinary(t *testing.T, root, packagePath, name string) string {
@@ -140,32 +139,27 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		}
 	}
 
-	fullProject, err := testkit.NewIsolatedProject(t.TempDir())
+	terminalProject, err := testkit.NewIsolatedProject(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullOutput, err := fullProject.RunInstalled(harness, "--scenario", "full")
+	terminalOutput, err := terminalProject.RunInstalled(harness, "--scenario", "terminal")
 	if err != nil {
-		t.Fatalf("installed full scenario: %v\n%s", err, fullOutput)
+		t.Fatalf("installed terminal scenario: %v\n%s", err, terminalOutput)
 	}
-	full := decodeHarnessReport(t, fullOutput)
-	if full.Terminal == nil || full.Terminal.Status != "COMPLETE" || len(full.Next) == 0 || full.Next[len(full.Next)-1].Kind != decision.KindComplete || len(full.Effects) != 3 {
-		t.Fatalf("installed full terminal report = %+v", full)
+	terminal := decodeHarnessReport(t, terminalOutput)
+	if terminal.Terminal == nil || terminal.Terminal.Status != "ABORTED" || len(terminal.Next) == 0 || terminal.Next[len(terminal.Next)-1].Kind != decision.KindComplete {
+		t.Fatalf("installed terminal report = %+v", terminal)
 	}
-	for name, count := range full.Effects {
-		if count != 1 {
-			t.Fatalf("installed full side effect %s count=%d", name, count)
-		}
-	}
-	queryOutput, err := fullProject.RunInstalled(harness, "--scenario", "query-terminal")
+	queryOutput, err := terminalProject.RunInstalled(harness, "--scenario", "query-terminal")
 	if err != nil {
 		t.Fatalf("installed terminal query: %v\n%s", err, queryOutput)
 	}
-	replayOutput, err := fullProject.RunInstalled(harness, "--scenario", "terminal-replay")
+	replayOutput, err := terminalProject.RunInstalled(harness, "--scenario", "terminal-replay")
 	if err != nil {
 		t.Fatalf("installed terminal replay: %v\n%s", err, replayOutput)
 	}
-	if query := decodeHarnessReport(t, queryOutput); query.Terminal == nil || query.Terminal.Revision != full.Terminal.Revision {
+	if query := decodeHarnessReport(t, queryOutput); query.Terminal == nil || query.Terminal.Revision != terminal.Terminal.Revision {
 		t.Fatalf("installed terminal query = %+v", query)
 	}
 	if replay := decodeHarnessReport(t, replayOutput); len(replay.Next) != 1 || replay.Next[0].Kind != decision.KindComplete {
@@ -193,8 +187,9 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 	}
 }
 
-// Use the candidate built by this test, not a stale checkout bin that an
-// earlier install can silently copy over the candidate executable.
+// The source tree's bin/ holds the caller-built candidate binary, so an
+// install from this source cannot silently substitute a stale checkout
+// bin as the candidate executable.
 func isolatedInstallSource(t *testing.T, root, candidate string) string {
 	t.Helper()
 	receipt, err := validate.PackageReceipt(root)
@@ -221,27 +216,4 @@ func isolatedInstallSource(t *testing.T, root, candidate string) string {
 	}
 	copyFile(candidate, filepath.Join(source, "bin", filepath.Base(candidate)), 0o700)
 	return source
-}
-
-func runCandidate(t *testing.T, candidate, home, workdir string, args ...string) []byte {
-	t.Helper()
-	cmd := exec.Command(candidate, args...)
-	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"AI_AGENT=",
-		"CLAUDE_CODE_ENTRYPOINT=",
-		"CODEX_HOME=",
-		"CODEX_CLI_PATH=",
-		"CURSOR_TRACE_ID=",
-		"CURSOR_RUNTIME=",
-		"DSH_HOME=",
-		"DSH_PROJECT_DIR=",
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("candidate %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
-	return output
 }

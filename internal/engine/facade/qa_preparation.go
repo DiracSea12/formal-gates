@@ -107,8 +107,7 @@ func (f *Facade) qaPreparationInput(s *protocol.State, p protocol.CheckParameter
 		Inputs, Tools map[string]string
 		Environment   string
 		Step          coverage.SharedStep
-		Ordinal       int
-	}{inputs, tools, preparationDigest(environment), step, p.QA.PreparationOrdinal}), nil
+	}{inputs, tools, preparationDigest(environment), step}), nil
 }
 
 func preparationPathIdentity(path string) (identity string, script bool, err error) {
@@ -160,9 +159,44 @@ func preparationArtifacts(p protocol.CheckParameters) (map[string]string, error)
 	return artifacts, nil
 }
 
+func preparationCaseIntent(s *protocol.State, p protocol.CheckParameters, ordinal int) (protocol.HostActionIntent, bool, error) {
+	qa := *p.QA
+	qa.PreparationOrdinal = ordinal
+	p.QA = &qa
+	for _, intent := range s.CommonPreparationIntents(p) {
+		var issued protocol.CheckParameters
+		if err := decodeNativeParams(intent, &issued); err != nil {
+			return protocol.HostActionIntent{}, false, err
+		}
+		if issued.Binding == p.Binding && issued.QA.CaseID == p.QA.CaseID && issued.QA.Source == p.QA.Source {
+			return intent, true, nil
+		}
+	}
+	return protocol.HostActionIntent{}, false, nil
+}
+
 // reusePreparation observes the original admitted job and preserves all of its
 // execution identities. A preparing or unknown original job never grants a launch.
 func (f *Facade) reusePreparation(s *protocol.State, intent protocol.HostActionIntent, p protocol.CheckParameters, input string) (nativeResult, bool, bool, error) {
+	prefixSource := ""
+	if input != "" && p.QA.PreparationOrdinal > 0 {
+		prefix, found, err := preparationCaseIntent(s, p, 0)
+		if err != nil || !found {
+			return nativeResult{}, false, false, err
+		}
+		receipt, recorded := s.HostActionReceipts[prefix.ActionID]
+		if !recorded {
+			return nativeResult{}, false, true, nil
+		}
+		var evidence protocol.CheckEvidence
+		if err := decodeReceiptEvidence(receipt, &evidence); err != nil {
+			return nativeResult{}, false, false, err
+		}
+		prefixSource = evidence.PreparationSourceAction
+		if prefixSource == "" {
+			return nativeResult{}, false, false, nil
+		}
+	}
 	for _, original := range s.CommonPreparationIntents(p) {
 		if original.ActionID == intent.ActionID {
 			continue
@@ -191,12 +225,59 @@ func (f *Facade) reusePreparation(s *protocol.State, intent protocol.HostActionI
 		if prior.Error != "" || prior.PreparationSourceAction != "" || prior.PreparationInput != input {
 			continue
 		}
-		artifacts, err := preparationArtifacts(p)
-		if err != nil || preparationDigest(artifacts) != preparationDigest(prior.PreparationArtifacts) {
+		var originalParams protocol.CheckParameters
+		if err := decodeNativeParams(original, &originalParams); err != nil {
+			return nativeResult{}, false, false, err
+		}
+		if prefixSource != "" {
+			prefix, found, err := preparationCaseIntent(s, originalParams, 0)
+			if err != nil {
+				return nativeResult{}, false, false, err
+			}
+			if !found || prefix.ActionID != prefixSource {
+				continue
+			}
+		}
+		last := len(p.QA.Preparation.Operations) - 1
+		final, found, err := preparationCaseIntent(s, originalParams, last)
+		if err != nil {
+			return nativeResult{}, false, false, err
+		}
+		if !found {
+			continue
+		}
+		finalReceipt, recorded := s.HostActionReceipts[final.ActionID]
+		if !recorded {
+			return nativeResult{}, false, true, nil
+		}
+		var complete protocol.CheckEvidence
+		if err := decodeReceiptEvidence(finalReceipt, &complete); err != nil {
+			return nativeResult{}, false, false, err
+		}
+		if finalReceipt.Status != protocol.HostActionStatusExecuted || complete.Error != "" || complete.PreparationSourceAction != "" || complete.PreparationInput != input {
+			continue
+		}
+		qa := *p.QA
+		qa.PreparationOrdinal = last
+		finished := p
+		finished.QA = &qa
+		artifacts, err := preparationArtifacts(finished)
+		if err != nil || preparationDigest(artifacts) != preparationDigest(complete.PreparationArtifacts) {
 			continue
 		}
 		invoked := false
-		observed, done, err := f.checkEvidence(s, original, false, &invoked)
+		observed, done, err := f.checkEvidence(s, final, false, &invoked)
+		if err != nil || !done {
+			return nativeResult{}, false, true, err
+		}
+		if observed.Check == nil || preparationDigest(*observed.Check) != preparationDigest(complete) {
+			return nativeResult{}, false, false, fmt.Errorf("shared preparation final evidence differs")
+		}
+		if final.ActionID == original.ActionID {
+			prior.PreparationSourceAction = original.ActionID
+			return nativeResult{Check: &prior}, true, true, nil
+		}
+		observed, done, err = f.checkEvidence(s, original, false, &invoked)
 		if err != nil || !done {
 			return nativeResult{}, false, true, err
 		}

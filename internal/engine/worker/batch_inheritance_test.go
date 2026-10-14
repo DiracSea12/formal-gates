@@ -15,7 +15,7 @@ import (
 func TestGranularityReusesConfirmedBatchAndNestedValues(t *testing.T) {
 	original := protocol.DevelopmentBatch{ID: "original-batch", Owner: "slice-1", Artifacts: []string{"original.go"}, Subtasks: []protocol.DevelopmentSubtask{{ID: "original-first", Description: "first duty"}, {ID: "original-second", Description: "second duty"}}, Deliverable: "original delivery", PublicEntry: "./app", Interfaces: "original interface", StateBoundary: "original state boundary", Risk: "original risk", DoD: []protocol.DevelopmentCriterion{{ID: "original-check", Description: "original criterion"}, {ID: "original-other", Description: "another criterion"}}, Checks: []protocol.DevelopmentCheck{{ID: "original-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "original-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}}, Rollback: "original rollback", Recovery: "original recovery", Handoff: "original handoff", ContextCost: "original context", Route: &protocol.RouteDecision{Mode: "full", Gates: []string{"quality"}}}
 	source := &protocol.GranularityReview{Reason: "approved", VerificationTier: "FINAL", Batches: []protocol.DevelopmentBatch{original}}
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", ApprovedPlan: source}
+	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v5", ApprovedPlan: source}
 	decode := func(raw string) *protocol.GranularityReview {
 		t.Helper()
 		var value Granularity
@@ -59,7 +59,7 @@ func TestGranularityReusesConfirmedBatchAndNestedValues(t *testing.T) {
 
 func TestApprovedPlanRetainsOmittedTopLevelContract(t *testing.T) {
 	original := nativePlanForInheritance()
-	input := protocol.WorkerInput{RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v4", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, ApprovedPlan: original, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.readiness.plan.v5", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, ApprovedPlan: original, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	before, _ := json.Marshal(original)
 	material, err := Render(input, prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "start-readiness"}}})
 	if err != nil {

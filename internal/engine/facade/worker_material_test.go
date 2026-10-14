@@ -303,10 +303,10 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, _, err := f.engine.ReconcileUnknownReceipt(ref.ActionID, emptyFingerprint()); err != nil {
+			if _, _, err := f.engine.ReconcileUnknownReceipt(ref.ActionID, protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.ObserveWorkerSource(ref, directory, source, harness.NativeResultEvidence); err != nil {
+			if err := f.ObserveWorkerTerminal(ref, nativeIdentity); err != nil {
 				t.Fatal(err)
 			}
 

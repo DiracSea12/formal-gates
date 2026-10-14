@@ -31,21 +31,11 @@ func newTestEngine(t *testing.T) (*Engine, string) {
 	}
 	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
 	return engine, dir
-}
-
-// fingerprintOf 取引擎的当前观察指纹（提交事务的期望值）。
-func fingerprintOf(t *testing.T, engine *Engine) string {
-	t.Helper()
-	fp, err := engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatalf("observe fingerprint: %v", err)
-	}
-	return fp
 }
 
 // stateBytesOf 读取落盘的 state.json 原始字节（零状态变化断言用）。
@@ -94,10 +84,10 @@ func preparedEngine(t *testing.T) (*Engine, string, *decision.Plan, *compiler.Co
 			t.Fatalf("complete %s: %v", step, err)
 		}
 	}
-	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -125,7 +115,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}
-	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	snap, err := engine.Load()
@@ -139,7 +129,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 		t.Fatalf("view not persisted: %+v", snap.State.State)
 	}
 	before := stateBytesOf(t, dir)
-	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err == nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err == nil {
 		t.Fatal("re-init accepted")
 	} else if code := rejectionCode(t, err); code != CodeAlreadyInitialized {
 		t.Fatalf("re-init code = %q", code)
@@ -147,7 +137,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	if after := stateBytesOf(t, dir); !reflect.DeepEqual(before, after) {
 		t.Fatal("rejected re-init changed state bytes")
 	}
-	if err := engine.Init(nil, testProvider, "fp"); err == nil {
+	if err := engine.InitWithMetadata(nil, testProvider, Observation{}, "", "", nil, "", "", nil); err == nil {
 		t.Fatal("nil view accepted")
 	}
 }
@@ -156,8 +146,8 @@ func TestInitLoadLifecycle(t *testing.T) {
 // （确定性 ID）与 pendingActions，任务视图推进 ISSUED，且重启后仍在档。
 func TestIssueFromPlanRecordsModel(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	issued, revision, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp)
+	observedInput := Observation{}
+	issued, revision, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -183,7 +173,8 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan identity: %v", err)
 	}
-	if attempt.Bindings != (AttemptBindings{Task: key, Snapshot: fp, Responsibility: testProvider}) || attempt.Plan != wantIdentity {
+	sampleDigest, _ := observedInput.Facts.Digest()
+	if attempt.Bindings != (AttemptBindings{Task: key, Snapshot: sampleDigest, Responsibility: testProvider}) || attempt.Plan != wantIdentity {
 		t.Fatalf("attempt bindings/plan = %+v / %+v", attempt.Bindings, attempt.Plan)
 	}
 	pending, ok := snap.State.PendingActions["act:review/review.worker"]
@@ -201,7 +192,7 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 	}
 	engine2, err := New(store2, Config{InternalSteps: fixtureInternalSteps(),
 		Definition: compiledWorkflow(t), Registry: definition.Registry(), Capacity: 4,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("engine2: %v", err)
 	}
@@ -218,7 +209,7 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 // canonical binding 被改写，都在签发落账前拒绝。
 func TestIssueRejectsForgedPlanComponents(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	before := stateBytesOf(t, dir)
 	cases := []struct {
 		name   string
@@ -232,7 +223,7 @@ func TestIssueRejectsForgedPlanComponents(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			candidate := *plan
 			tc.mutate(&candidate)
-			if _, _, err := engine.IssueFromPlan(&candidate, decision.Admission{Capacity: 4}, fp); err == nil {
+			if _, _, err := engine.IssueFromPlan(&candidate, decision.Admission{Capacity: 4}, observedInput); err == nil {
 				t.Fatal("forged plan was issued")
 			} else if code := rejectionCode(t, err); code != CodePlanBindingMismatch {
 				t.Fatalf("forged plan code = %q", code)
@@ -248,8 +239,8 @@ func TestIssueRejectsForgedPlanComponents(t *testing.T) {
 // 再次签发，且拒绝保持零状态变化。
 func TestIssueStalePlanRejected(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("first issue: %v", err)
 	}
 	before := stateBytesOf(t, dir)
@@ -257,7 +248,7 @@ func TestIssueStalePlanRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	_, _, err = engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp)
+	_, _, err = engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	if err == nil {
 		t.Fatal("duplicate issue accepted")
 	} else if code := rejectionCode(t, err); code != CodePlanBindingMismatch {
@@ -278,7 +269,7 @@ func TestIssueStalePlanRejected(t *testing.T) {
 // TestIssueNegativePaths：未初始化签发拒绝；非 Ready 计划签发拒绝。
 func TestIssueNegativePaths(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
-	_, _, err := engine.IssueFromPlan(nil, decision.Admission{Capacity: 1}, fingerprintOf(t, engine))
+	_, _, err := engine.IssueFromPlan(nil, decision.Admission{Capacity: 1}, Observation{})
 	if err == nil {
 		t.Fatal("nil plan accepted")
 	}
@@ -293,20 +284,20 @@ func TestIssueNegativePaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
-	if _, _, err := fresh.IssueFromPlan(waitPlan, decision.Admission{Capacity: 1}, "fp"); err == nil {
+	if _, _, err := fresh.IssueFromPlan(waitPlan, decision.Admission{Capacity: 1}, Observation{}); err == nil {
 		t.Fatal("issue before init accepted")
 	} else if code := rejectionCode(t, err); code != CodeNotInitialized {
 		t.Fatalf("issue before init code = %q", code)
 	}
 	// 初始化后同一非 Ready 计划：SelectIssued 的派生拒绝原样上抛。
-	if err := fresh.Init(view, testProvider, fingerprintOf(t, fresh)); err != nil {
+	if err := fresh.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	waitPlan, _, err = fresh.Plan()
+	waitPlan, _, err = fresh.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := fresh.IssueFromPlan(waitPlan, decision.Admission{Capacity: 1}, "fp"); err == nil {
+	if _, _, err := fresh.IssueFromPlan(waitPlan, decision.Admission{Capacity: 1}, Observation{}); err == nil {
 		t.Fatal("non-ready plan accepted")
 	} else if !strings.Contains(err.Error(), "not READY") {
 		t.Fatalf("non-ready plan error = %v", err)
@@ -318,8 +309,8 @@ func TestIssueNegativePaths(t *testing.T) {
 // TERMINAL，全部持久。
 func TestTaskProgressLifecycle(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	key := reviewTaskKey()
@@ -329,7 +320,7 @@ func TestTaskProgressLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("task event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fp); err != nil {
+		if _, err := engine.Submit(ev, observedInput); err != nil {
 			t.Fatalf("submit %s: %v", status, err)
 		}
 	}
@@ -356,8 +347,8 @@ func TestTaskProgressLifecycle(t *testing.T) {
 // 节点（EVENT_NOT_CURRENT），零状态变化。
 func TestTaskProgressNotCurrent(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	before := stateBytesOf(t, dir)
@@ -368,7 +359,7 @@ func TestTaskProgressNotCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("stranger task accepted")
 	} else if code := rejectionCode(t, err); code != CodeEventNotCurrent {
 		t.Fatalf("stranger code = %q", code)
@@ -384,7 +375,7 @@ func TestTaskProgressNotCurrent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("task event: %v", err)
 		}
-		if _, err := engine.Submit(ev, fp); err != nil {
+		if _, err := engine.Submit(ev, observedInput); err != nil {
 			t.Fatalf("submit %s: %v", status, err)
 		}
 	}
@@ -392,7 +383,7 @@ func TestTaskProgressNotCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("progress after terminal accepted")
 	} else if code := rejectionCode(t, err); code != CodeEventNotCurrent {
 		t.Fatalf("post-terminal code = %q", code)
@@ -403,8 +394,8 @@ func TestTaskProgressNotCurrent(t *testing.T) {
 // 可区分拒绝（STALE_ATTEMPT），零状态变化。
 func TestTaskProgressStaleAttempt(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	before := stateBytesOf(t, dir)
@@ -412,7 +403,7 @@ func TestTaskProgressStaleAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("stale attempt accepted")
 	} else if code := rejectionCode(t, err); code != CodeStaleAttempt {
 		t.Fatalf("stale attempt code = %q", code)
@@ -426,8 +417,8 @@ func TestTaskProgressStaleAttempt(t *testing.T) {
 // 重复 RUNNING 都违反 runtime 任务状态机（复用迁移表）。
 func TestTaskProgressIllegalTransition(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	key := reviewTaskKey()
@@ -436,7 +427,7 @@ func TestTaskProgressIllegalTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("skip-transition accepted")
 	} else if code := rejectionCode(t, err); code != CodeIllegalTransition {
 		t.Fatalf("skip code = %q", code)
@@ -445,14 +436,14 @@ func TestTaskProgressIllegalTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err != nil {
+	if _, err := engine.Submit(ev, observedInput); err != nil {
 		t.Fatalf("submit running: %v", err)
 	}
 	ev, err = NewTaskEvent("evt-repeat", key, attempt, runtime.TaskRunning)
 	if err != nil {
 		t.Fatalf("task event: %v", err)
 	}
-	if _, err := engine.Submit(ev, fp); err == nil {
+	if _, err := engine.Submit(ev, observedInput); err == nil {
 		t.Fatal("self-loop accepted")
 	} else if code := rejectionCode(t, err); code != CodeIllegalTransition {
 		t.Fatalf("self-loop code = %q", code)
@@ -463,8 +454,8 @@ func TestTaskProgressIllegalTransition(t *testing.T) {
 // （写前拒绝、零状态变化）——协议层不绕过指纹纪律。
 func TestSubmitFingerprintIntegration(t *testing.T) {
 	engine, dir, plan, _ := preparedEngine(t)
-	fp := fingerprintOf(t, engine)
-	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
+	observedInput := Observation{}
+	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	before := stateBytesOf(t, dir)
@@ -472,7 +463,7 @@ func TestSubmitFingerprintIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request event: %v", err)
 	}
-	_, err = engine.Submit(request, "sha256:different-observation")
+	_, err = engine.Submit(request, Observation{Facts: decision.Observation{Facts: []decision.Fact{{Source: decision.SourceFile, Key: "input", Value: "different-observation"}}}})
 	var changed *persistence.FingerprintChangedError
 	if !errors.As(err, &changed) {
 		t.Fatalf("fingerprint mismatch error is %v, want *persistence.FingerprintChangedError", err)

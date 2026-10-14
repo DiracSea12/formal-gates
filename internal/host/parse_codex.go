@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"time"
 )
 
 // codexTokenUsage mirrors the per-request usage object Codex writes into
@@ -20,12 +18,10 @@ type codexTokenUsage struct {
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
 
-// parseCodexTranscript prefers current request records, deduplicated by response
-// ID. Once they appear, legacy token_count events are mirrors, not extra usage:
-// after CLI resume their cumulative counter may restart while the request
-// records still carry the full thread total. Older-only transcripts retain the
-// cumulative delta / timestamp fallback. An older prefix is kept when a thread
-// continues after upgrading Codex.
+// parseCodexTranscript supports token_usage_record and event_msg/token_count.
+// Request records are deduplicated by response ID; token_count events mirror
+// them once requests are present. Token_count-only sources use cumulative deltas
+// and timestamp/model/usage keys. Any preceding cumulative prefix remains counted.
 func parseCodexTranscript(reader io.Reader) (Usage, error) {
 	total := Usage{}
 	seen := map[string]bool{}
@@ -80,9 +76,8 @@ func parseCodexTranscript(reader io.Reader) (Usage, error) {
 		var usage codexTokenUsage
 		if record.Type == "token_usage_record" {
 			usage = *last
-			// If an older mirror already reported exactly this first thread total,
-			// its request is already counted. Subsequent current requests always use
-			// their explicit per-response usage; a CLI-local mirror cannot reset it.
+			// An equal first thread total is already counted by its cumulative mirror.
+			// Other requests contribute their explicit per-response usage.
 			if !hasRequests && cumulative != nil && *cumulative == previousTotal {
 				usage = codexTokenUsage{}
 			}
@@ -100,8 +95,8 @@ func parseCodexTranscript(reader io.Reader) (Usage, error) {
 			return false
 		}
 		seen[key] = true
-		// Mark the incremental mirror too, for older transcripts that repeat a
-		// total+last event as a last-only event at the same timestamp.
+		// Record the last-only key so a total+last event and its last-only mirror
+		// at the same timestamp contribute once.
 		if last != nil && cumulative != nil {
 			seen[record.Timestamp+"\x00"+payload.Model+"\x00"+codexUsageKey(*last)] = true
 		}
@@ -120,63 +115,6 @@ func parseCodexTranscript(reader io.Reader) (Usage, error) {
 		return Usage{}, err
 	}
 	return total, nil
-}
-
-// CodexTaskTiming measures completed model tasks from their native rollout
-// boundaries. Tool execution and waits inside a task are included; idle time
-// between separate turns is excluded. Any unfinished task leaves timing absent.
-func CodexTaskTiming(path string) (TaskTiming, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return TaskTiming{}, err
-	}
-	defer file.Close()
-	starts := map[string]time.Time{}
-	completed := map[string]bool{}
-	var first, last time.Time
-	var elapsed time.Duration
-	err = scanTranscriptLines(file, func(line []byte) bool {
-		var record struct {
-			Timestamp time.Time `json:"timestamp"`
-			Type      string    `json:"type"`
-			Payload   struct {
-				Type   string `json:"type"`
-				TurnID string `json:"turn_id"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" || record.Timestamp.IsZero() {
-			return false
-		}
-		id := record.Payload.TurnID
-		switch record.Payload.Type {
-		case "task_started":
-			if _, exists := starts[id]; !exists {
-				starts[id] = record.Timestamp
-			}
-		case "task_complete", "turn_aborted":
-			start, exists := starts[id]
-			if !exists || completed[id] || record.Timestamp.Before(start) {
-				return false
-			}
-			completed[id] = true
-			if first.IsZero() || start.Before(first) {
-				first = start
-			}
-			if record.Timestamp.After(last) {
-				last = record.Timestamp
-			}
-			elapsed += record.Timestamp.Sub(start)
-			return true
-		}
-		return false
-	})
-	if err != nil {
-		return TaskTiming{}, err
-	}
-	if len(completed) != len(starts) {
-		return TaskTiming{}, fmt.Errorf("Codex transcript contains unfinished tasks")
-	}
-	return TaskTiming{StartedAt: first.Format(time.RFC3339Nano), CompletedAt: last.Format(time.RFC3339Nano), WallTimeMillis: elapsed.Milliseconds()}, nil
 }
 
 // cumulativeDelta computes the per-field delta between consecutive

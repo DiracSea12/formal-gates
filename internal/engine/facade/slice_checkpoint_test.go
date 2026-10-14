@@ -157,7 +157,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 			t.Fatal("promotion admitted while security gate is missing")
 		}
 		state := driverState(t, child)
-		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", emptyFingerprint()); err == nil {
+		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", protocol.Observation{}); err == nil {
 			t.Fatal("checkpoint admitted missing gate")
 		}
 		child.drive()
@@ -167,7 +167,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 		child := reviewReadySlice(t, "custom", OwnerBinding{})
 		completeSliceGates(t, child)
 		state := driverState(t, child)
-		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", emptyFingerprint()); err == nil {
+		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", protocol.Observation{}); err == nil {
 			t.Fatal("checkpoint admitted unbound promotion")
 		}
 		assertNoSuccessfulSliceReceipt(t, child)
@@ -187,7 +187,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 				snapshotCommitOne(t, child.f.vcs.Root(), "different delivery")
 				_, err = child.f.Drive()
 			case "tree":
-				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, strings.Repeat("1", 40), nil, "", emptyFingerprint())
+				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, strings.Repeat("1", 40), nil, "", protocol.Observation{})
 			case "barrier":
 				parent, e := Open(child.f.root, state.SliceChild.MasterRunID)
 				if e != nil {
@@ -201,13 +201,13 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 					t.Fatal(e)
 				}
 				child.drive()
-				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, state.PromotedDigest, nil, "", emptyFingerprint())
+				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, state.PromotedDigest, nil, "", protocol.Observation{})
 				child.drive()
 			case "abort":
 				abortRun(t, child)
-				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, state.PromotedDigest, nil, "", emptyFingerprint())
+				err = child.f.engine.CheckpointSlice(state.PromotedSnapshot, state.PromotedDigest, nil, "", protocol.Observation{})
 			case "independent-seal":
-				err = child.f.engine.SealTerminal(state.PromotedSnapshot, emptyFingerprint())
+				err = child.f.engine.SealTerminal(state.PromotedSnapshot, protocol.Observation{})
 			}
 			if err == nil {
 				t.Fatalf("%s was accepted", kind)
@@ -232,7 +232,7 @@ func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 	writeTranscript(t, path, []string{intervalBaseLine})
 	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
-	if _, _, err := child.f.engine.Drive(emptyFingerprint()); err != nil {
+	if _, _, err := child.f.engine.Drive(protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := child.f.engine.Load()
@@ -429,7 +429,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 			child, offer, event := promotedSliceWithAuthorizedRetry(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			// Settle the engine's internal frontier before injecting the checkpoint transaction.
-			if _, _, err := child.f.engine.Drive(emptyFingerprint()); err != nil {
+			if _, _, err := child.f.engine.Drive(protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			store, err := persistence.NewStore(child.f.stateDir, persistence.Config{PackageDigest: child.f.envelope.PackageDigest, DefinitionSource: child.f.envelope.DefinitionSource, InstalledTargetIdentity: child.f.envelope.InstalledTargetIdentity, AcquireAdmission: child.f.admission.acquire, FaultInjector: func(at persistence.FaultPoint) error {
@@ -441,7 +441,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			eng, err := protocol.New(store, protocol.Config{Definition: child.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(child.f.root, child.f.runID), ClaimDispatch: dispatchClaimBridge(child.f.root, child.f.runID, child.f.admission)}, nil)
+			eng, err := protocol.New(store, protocol.Config{Definition: child.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(child.f.root, child.f.runID), ClaimDispatch: dispatchClaimBridge(child.f.root, child.f.runID, child.f.admission)})
 			if err != nil {
 				t.Fatal(err)
 			}

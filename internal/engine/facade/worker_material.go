@@ -396,24 +396,6 @@ func (f *Facade) workerSupervisorRequest(directory, workspace string, ref any) m
 	return map[string]any{"kind": "native", "argv": []string{filepath.Join(f.admission.Target, "bin", "formal-gates"), "harness", "native", directory}, "cwd": workspace, "stdin": "", "environment": map[string]any{}, "engine": ref}
 }
 
-// ObserveWorkerSource uses the original provider verifier before exposing native
-// completion to the existing lifecycle/cost source owner.
-func (f *Facade) ObserveWorkerSource(material WorkerMaterial, directory string, source map[string]any, verifyNative func(string, string, map[string]any) ([]byte, string, string, error)) error {
-	value, err := readWorkerMaterial(material)
-	if err != nil {
-		return err
-	}
-	provider := value.Input.Provider
-	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
-		provider = descriptor.InstallName
-	}
-	_, _, identity, err := verifyNative(provider, directory, source)
-	if err != nil {
-		return err
-	}
-	return f.ObserveWorkerTerminal(material, identity)
-}
-
 // ObserveWorkerTerminal records a verified invocation's final identity in the
 // original normalized journal. Result/source validation belongs to the caller.
 func (f *Facade) ObserveWorkerTerminal(material WorkerMaterial, identity string) error {
@@ -477,15 +459,11 @@ func (f *Facade) RequestWorkflowChoice() (bool, error) {
 	if control == protocol.ControlConfirmTopology {
 		event, err = protocol.NewRequestEvent(id, control, protocol.AskOption{ID: "no-split", Label: "Keep one development workspace"}, protocol.AskOption{ID: "split", Label: "Use the reviewed development slices"})
 	} else {
-		catalog, loadErr := prompts.LoadPromptCatalog(f.admission.Target)
+		request, loadErr := f.routeRequestPayload(snap.State.SliceChild != nil)
 		if loadErr != nil {
 			return false, loadErr
 		}
-		candidates := catalog.RouteCandidates()
-		if snap.State.SliceChild != nil {
-			candidates = slices.DeleteFunc(candidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
-		}
-		event, err = protocol.NewRouteRequestEvent(id, candidates, protocol.AskOption{ID: "full", Label: "Run all proposed gates"}, protocol.AskOption{ID: "custom", Label: "Choose the proposed gates"})
+		event, err = protocol.NewRouteRequestEvent(id, request.RouteGates, request.Options...)
 	}
 	if err != nil {
 		return false, err
@@ -521,16 +499,12 @@ func (f *Facade) AgentExecution(intent protocol.HostActionIntent) (provider stri
 	if target == nil {
 		return "", nil, release, fmt.Errorf("native agent effect has no original target")
 	}
-	action := sha256.Sum256([]byte(target.WorkerActionID))
-	root := filepath.Join(f.stateDir, "native", hex.EncodeToString(action[:]))
-	entries, err := os.ReadDir(root)
+	invocations, err := claimedWorkerInvocations(f.root, f.runID, target.WorkerActionID, target.AttemptID)
 	if err != nil {
 		return "", nil, release, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			directories = append(directories, filepath.Join(root, entry.Name()))
-		}
+	for _, invocation := range invocations {
+		directories = append(directories, invocation.directory)
 	}
 	return snap.State.RunProvider, directories, release, nil
 }
@@ -786,12 +760,13 @@ func (f *Facade) registerIntakeRequirement() error {
 	}
 	receipt := s.CurrentIntakeConfirmation()
 	revision := s.RequirementRevision()
-	data, err := os.ReadFile(filepath.Join(f.root, receipt.RequirementSource))
+	path := filepath.Join(f.root, receipt.RequirementSource)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	event := protocol.Event{ID: protocol.EventID("intake.requirement:" + revision), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: string(data)}}}
-	_, err = f.engine.Submit(event, emptyFingerprint())
+	_, err = f.engine.Submit(event, requirementObservation(path, data))
 	return err
 }
 
@@ -843,4 +818,16 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	// Submit alone owns current, terminal, duplicate and obsolete-result admission.
 	// The native session proof is distinct from the ledger's spawn correlation.
 	return f.Submit(event)
+}
+
+func (f *Facade) routeRequestPayload(child bool) (*protocol.RequestPayload, error) {
+	catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
+	if err != nil {
+		return nil, err
+	}
+	candidates := catalog.RouteCandidates()
+	if child {
+		candidates = slices.DeleteFunc(candidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
+	}
+	return &protocol.RequestPayload{Control: protocol.ControlSelectRoute, RouteGates: candidates, Options: []protocol.AskOption{{ID: "full", Label: "Run all proposed gates"}, {ID: "custom", Label: "Choose the proposed gates"}}}, nil
 }

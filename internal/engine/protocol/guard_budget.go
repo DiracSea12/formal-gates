@@ -241,7 +241,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	// 桶 1b：需求重走替换任务——确认账本的 redo 决定经用户确认，替换 TaskKey
 	// 由该 revision 机械派生（预授权；provenance 经 sourceValidationTask 折叠
 	// 回原任务归类）。
-	for _, entry := range state.RequirementRevisions {
+	for _, entry := range state.workAuthorizations() {
 		if !state.requirementWorkRevisionCurrent(entry.StateRevision) {
 			continue
 		}
@@ -293,6 +293,9 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			}
 		}
 		for _, context := range state.repairComparisonContexts(e.cfg.Definition) {
+			if len(context.affected) == 0 {
+				continue
+			}
 			if err := declare(context.binding.Task); err != nil {
 				return guard.Basis{}, err
 			}
@@ -356,22 +359,13 @@ func externalStepsOf(cd *compiler.CompiledDefinition) []runtime.TaskKey {
 	for _, step := range cd.Steps {
 		if _, ok := step.Payload.(compiler.CompiledAgentStep); ok {
 			key := runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID}
-			if !containsTaskKey(steps, key) {
+			if !slices.Contains(steps, key) {
 				steps = append(steps, key)
 			}
 		}
 	}
 	sort.Slice(steps, func(i, j int) bool { return steps[i].String() < steps[j].String() })
 	return steps
-}
-
-func containsTaskKey(keys []runtime.TaskKey, key runtime.TaskKey) bool {
-	for _, existing := range keys {
-		if existing == key {
-			return true
-		}
-	}
-	return false
 }
 
 // taskScopeMode 解析派发 scope 中的 mode 段（generation:mode:...）。解析
@@ -475,7 +469,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.development.batch.v4":
+	case "engine.development.batch.v5":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
 			return guard.Provenance{}, 0, false
@@ -510,7 +504,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		// 首个 QA design 派发先于 case-set 存在：路线选择（所选门决定的 QA
 		// mode 集）是其授权来源。
 		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.gate.v2":
+	case "engine.gate.v3":
 		if _, target := state.repairGateTarget(source); target != nil {
 			return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
 		}
@@ -542,11 +536,11 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 				}
 			}
 		}
-		if !ok || context.wave.Repair == nil {
+		if !ok || len(context.affected) == 0 || context.wave.Repair == nil {
 			return guard.Provenance{}, 0, false
 		}
 		return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: context.wave.Repair.Task.String(), Revision: context.wave.ExpectedDigest}}, maxAttempts, true
-	case "engine.repair.v5":
+	case "engine.repair.v6":
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}
@@ -582,7 +576,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 // replacementFold 把一个返修 TaskKey 沿确认账本的重走决定折叠为当前责任人
 // （返修义务枚举与 repairWork 的替换计算共用本归属）。
 func (s *State) replacementFold(task runtime.TaskKey) runtime.TaskKey {
-	for _, revision := range s.RequirementRevisions {
+	for _, revision := range s.workAuthorizations() {
 		for j, choice := range revision.WorkDecisions {
 			if choice.Work.Task == task && choice.Disposition == RequirementWorkRedo {
 				task = replacementWorkTask(revision, j)
@@ -754,15 +748,15 @@ func (e *Engine) guardTaskAuthorized(state *State, basis guard.Basis, task runti
 }
 
 // guardEffectBudget 判定一次宿主效果执行（resume intent 或换新 install）的
-// 派发预算，公开 ResumeAgent 与恢复入口的全部执行创建点共用同一判定，两维：
+// 派发预算，applyAttemptRecovery 的执行创建点共用同一判定，两维：
 //   - retry 余量：绑定未变的执行消耗有限次数——Attempt 账本已计执行＋在途
 //     resume intent＋本次将达上限即拒绝（无有限策略的步骤不参与该维）；
 //   - token cap：engine 派发用量达到配置上限且无未消耗的一次继续授权即拒
 //     绝（与签发漏斗同一算式）。
 //
 // 被阻时幂等落 DISPATCH_BUDGET_DISPOSITION Ask 并返回拒绝（Ask 即进展，不是
-// 错误）；本函数不改其他状态、不提交——提交形状归调用方（公开入口落 Ask 后
-// 提交并拒绝返回；事务收尾内的恢复路径直接跳过效果创建）。workerActionID 解
+// 错误）；本函数不改其他状态、不提交——恢复事务收尾在受阻时跳过效果创建，
+// Ask 随外层提交落盘。workerActionID 解
 // 析失败不在此拒（交给 agentHostIntent 以 UNKNOWN_ACTION 拒绝）。
 func (e *Engine) guardEffectBudget(s *State, workerActionID string, nextRevision uint64) *RejectedError {
 	pending, attempt, ok := s.workerActionTarget(workerActionID)

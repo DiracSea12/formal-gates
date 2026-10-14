@@ -11,14 +11,14 @@ import (
 )
 
 func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 	probe := &costSourceProbe{state: CostSourceReady}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	partial := WorkerResultPayload{ActionID: pending.ActionID, Provider: s.RunProvider, Outcome: OutcomePass, PayloadDigest: "actual-first", Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Read the actual contract", RemainingWork: "Deliver app.txt"}}}
 	vectors := []cost.Usage{{InputCacheMissTokens: 19655, OutputTokens: 119}, {InputCacheMissTokens: 40544, OutputTokens: 238}, {InputCacheMissTokens: 61532, OutputTokens: 450}}
 	admit := func(payload *WorkerResultPayload, event string, want string) {
 		t.Helper()
-		accepted, _, err := e.admitWorkerResultRecord(s, pending.ActionID, payload, event, "", 1, 2, "")
+		accepted, _, err := e.admitWorkerResultRecord(s, pending.ActionID, payload, event, "", 1, 2, Observation{})
 		if err != nil || accepted.Status != want {
 			t.Fatalf("%s: %#v %v", event, accepted, err)
 		}
@@ -69,7 +69,7 @@ func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) 
 	stale := partial
 	stale.PayloadDigest = "actual-stale"
 	stale.SourceResult = "not-current"
-	if _, _, err := e.admitWorkerResultRecord(s, pending.ActionID, &stale, "stale", "", 2, 3, ""); err == nil || probe.called != 3 {
+	if _, _, err := e.admitWorkerResultRecord(s, pending.ActionID, &stale, "stale", "", 2, 3, Observation{}); err == nil || probe.called != 3 {
 		t.Fatal("invalid source chain changed metering")
 	}
 	cap := int64(61982)
@@ -82,7 +82,7 @@ func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) 
 func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 	for _, location := range []string{"current", "ended-awaiting-result"} {
 		t.Run(location, func(t *testing.T) {
-			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 			attempt := s.Attempts[pending.Task]
 			attempt.Attempts = 0
 			s.Attempts[pending.Task] = attempt
@@ -90,7 +90,7 @@ func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 			e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 			e.dispatchCostHeld(s, pending.ActionID)
 			runtimeResult := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomeRuntimeError, FailureClass: authoring.FailureUserActionRequired, PayloadDigest: "original-inability"}
-			if _, err := e.completeResult(s, runtimeResult, 2, ""); err != nil {
+			if _, err := e.completeResult(s, runtimeResult, 2, Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			if len(s.RecoverableResults[pending.ActionID]) != 1 {
@@ -129,7 +129,7 @@ func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 }
 
 func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 	probe := &costSourceProbe{state: CostSourceReady, usage: cost.Usage{InputCacheHitTokens: 10, InputCacheMissTokens: 20, OutputTokens: 5}}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	cap := int64(35)
@@ -156,7 +156,7 @@ func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
 }
 
 func TestResumedUnavailableDispatchRecordsKnownNativeUsage(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "original invocation has no provider usage"}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
 	e.dispatchCostHeld(s, pending.ActionID)

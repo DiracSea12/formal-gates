@@ -58,8 +58,7 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 			options = nil
 		}
 	case "DISPOSE":
-		for i := range s.Validation.Waves {
-			w := &s.Validation.Waves[i]
+		if w := s.currentValidationWave(); w != nil {
 			if target := w.target(r.Target); target != nil {
 				r.Binding = WorkBinding{Task: target.Task, WaveID: w.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, Candidate: w.Candidate.Identity}
 				for _, binding := range s.DispatchBindings {
@@ -70,7 +69,6 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 				}
 				r.Binding.WaveID = w.ID
 				r.Obligations = []string{r.Target}
-				break
 			}
 		}
 	case "RETRY":
@@ -91,8 +89,11 @@ func (s *State) validationOffer(r ValidationRequest) (ValidationRequest, []AskOp
 					options = nil
 				}
 				if a.Work != nil && a.Work.WaveID != "" {
-					options = append(options, AskOption{ID: "waive", Label: "Skip this unavailable validation target"})
-					r.Obligations = []string{key.String()}
+					if w := s.currentValidationWave(); w != nil && w.target(key.String()) != nil {
+						r.Binding.WaveID = w.ID
+						options = append(options, AskOption{ID: "waive", Label: "Skip this unavailable validation target"})
+						r.Obligations = []string{key.String()}
+					}
 				}
 			}
 		}

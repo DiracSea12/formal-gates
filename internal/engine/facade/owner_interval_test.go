@@ -94,23 +94,47 @@ func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 }
 
 // TestVanishedPeerBeforeTerminalStillMarksBothUnavailable：peer 在我启动观察
-// 点之后启动、先于我终态消失（状态目录已清理）——双边标记在 peer 的启动段内
-// 持久，我方终态不得报精确假数字。
+// 点之后启动、先于我终态消失（其活动 state.json 由正常 Drive 的终态清理删
+// 除，终态摘要保留）——重叠标记在 peer 的启动段内双边持久，我方终态不得报
+// 精确假数字。
 func TestVanishedPeerBeforeTerminalStillMarksBothUnavailable(t *testing.T) {
 	root := t.TempDir()
 	transcript := filepath.Join(root, "shared.jsonl")
 	writeTranscript(t, transcript, []string{intervalBaseLine})
 	first := startIntervalRun(t, root, "first", transcript)
 	peer := startIntervalRun(t, root, "peer", transcript)
+	firstSnapshot, err := first.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerSnapshot, err := peer.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firstSnapshot.State.OwnerOverlapped || !peerSnapshot.State.OwnerOverlapped {
+		t.Fatalf("owner overlap markers after peer start: first=%t peer=%t, want both persisted", firstSnapshot.State.OwnerOverlapped, peerSnapshot.State.OwnerOverlapped)
+	}
 	writeTranscript(t, transcript, []string{intervalBaseLine, intervalDuringLine})
-	for id, f := range map[string]*Facade{"peer": peer, "first": first} {
-		run, err := f.Drive()
-		if err != nil {
-			t.Fatalf("drive %s: %v", id, err)
-		}
-		if run.Cost.Owner == nil || run.Cost.Owner.Source != "unavailable" || run.Cost.Owner.TotalInputTokens != 0 {
-			t.Fatalf("run %s owner = %+v, want unavailable zero after peer vanish", id, run.Cost.Owner)
-		}
+	peerRun, err := peer.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peerRun.Cost.Owner == nil || peerRun.Cost.Owner.Source != "unavailable" || peerRun.Cost.Owner.TotalInputTokens != 0 {
+		t.Fatalf("peer owner = %+v, want unavailable zero", peerRun.Cost.Owner)
+	}
+	// 消失的是 peer 的活动 state.json（正常 Drive 的终态清理）；终态摘要保留。
+	if _, err := os.Stat(filepath.Join(peer.stateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("peer active state survived terminal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(peer.stateDir, "terminal-summary.json")); err != nil {
+		t.Fatalf("peer terminal summary missing: %v", err)
+	}
+	firstRun, err := first.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Cost.Owner == nil || firstRun.Cost.Owner.Source != "unavailable" || firstRun.Cost.Owner.TotalInputTokens != 0 {
+		t.Fatalf("first owner = %+v, want unavailable zero after peer vanish", firstRun.Cost.Owner)
 	}
 }
 
@@ -179,7 +203,7 @@ func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) 
 		Definition: first.definition, Registry: definition.Registry(), Capacity: first.capacity,
 		CostSource:    CostSourceBridge(first.root, first.runID),
 		ClaimDispatch: dispatchClaimBridge(first.root, first.runID, first.admission),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

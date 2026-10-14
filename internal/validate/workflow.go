@@ -68,43 +68,37 @@ func verifyRegisteredTargetIdentity(record RegistryRecord) (PackageReceiptReport
 	return receipt, nil
 }
 
-func validateSemanticResult(interruptionReason string, findings []FindingInput) (string, []Finding, error) {
+func validateSemanticResult(interruptionReason string, findings []FindingInput) (string, error) {
 	status := "PASS"
 	if interruptionReason != "" {
 		if len(findings) != 0 {
-			return "", nil, fmt.Errorf("interrupted review cannot include reviewer findings")
+			return "", fmt.Errorf("interrupted review cannot include reviewer findings")
 		}
 		status = "RUNTIME_ERROR"
 	}
 
-	converted := make([]Finding, 0, len(findings))
 	hasBlocking := false
 	for _, input := range findings {
 		if strings.TrimSpace(input.Message) == "" {
-			return "", nil, fmt.Errorf("finding message is required")
+			return "", fmt.Errorf("finding message is required")
 		}
-		locations := make([]string, 0, len(input.Locations))
 		for _, location := range input.Locations {
 			if err := validateFindingLocation(location); err != nil {
-				return "", nil, err
+				return "", err
 			}
-			locations = append(locations, strings.TrimSpace(location))
 		}
 		severity := strings.ToUpper(strings.TrimSpace(input.Severity))
 		if severity != "P0" && severity != "P1" && severity != "P2" && severity != "P3" {
-			return "", nil, fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
+			return "", fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
 		}
 		if severity == "P0" || severity == "P1" {
 			hasBlocking = true
 		}
-		finding := Finding{Severity: severity, SeverityRationale: strings.TrimSpace(input.SeverityRationale), Category: strings.ToUpper(strings.TrimSpace(input.Category)), Requirement: strings.TrimSpace(input.Requirement), NormalPath: strings.TrimSpace(input.NormalPath), ActualError: strings.TrimSpace(input.ActualError), DeferralImpact: strings.TrimSpace(input.DeferralImpact), Verification: input.Verification, Message: strings.TrimSpace(input.Message), Locations: locations}
-		finding.ID = findingStableID(finding)
-		converted = append(converted, finding)
 	}
 	if hasBlocking {
 		status = "FAIL"
 	}
-	return status, converted, nil
+	return status, nil
 }
 
 func validateFindingLocation(value string) error {

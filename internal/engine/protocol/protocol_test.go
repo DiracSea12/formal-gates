@@ -53,7 +53,7 @@ func richState(t *testing.T) *State {
 		EventID: "evt-0", Kind: "REQUEST_CONTROL", Status: "ACCEPTED", Revision: 3, RequestID: "req-0",
 	}}
 	// 台账：provider 绑定、回执/暂存结果/结果、Operator 观察、
-	// HostAction intent/回执、lifecycle buffer 与验证配对。
+	// HostAction intent/回执与 lifecycle buffer。
 	state.RunProvider = "fake-host"
 	state.SpawnReceipts[reviewAction] = SpawnReceipt{
 		ActionID: reviewAction, Provider: "fake-host", Correlation: "agent-1",
@@ -86,7 +86,6 @@ func richState(t *testing.T) *State {
 		{Provider: "fake-host", Correlation: "corr-1", Identity: "agent-1", Event: LifecycleStart, Digest: "sha256:ls"},
 		{Provider: "fake-host", Correlation: "corr-1", Identity: "agent-1", Event: LifecycleStop, Digest: "sha256:lp"},
 	}
-	state.LifecycleVerified["agent-1"] = LifecycleVerification{Correlation: "corr-1", Identity: "agent-1", Provider: "fake-host", Revision: 6}
 	return state
 }
 
@@ -143,7 +142,7 @@ func TestStateJSONEmptyCollections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, fragment := range []string{`"tasks": {}`, `"expected": []`, `"attempts": {}`, `"pendingActions": {}`, `"pendingAsks": {}`, `"decisions": {}`, `"events": {}`, `"spawnReceipts": {}`, `"spawnFailures": {}`, `"stagedResults": {}`, `"results": {}`, `"recoverableResults": {}`, `"operatorObservations": []`, `"pendingHostActions": {}`, `"hostActionReceipts": {}`, `"hostActionFailures": {}`, `"lifecycleEvents": []`, `"lifecycleVerified": {}`, `"runProvider": ""`} {
+	for _, fragment := range []string{`"tasks": {}`, `"expected": []`, `"attempts": {}`, `"pendingActions": {}`, `"pendingAsks": {}`, `"decisions": {}`, `"events": {}`, `"spawnReceipts": {}`, `"spawnFailures": {}`, `"stagedResults": {}`, `"results": {}`, `"recoverableResults": {}`, `"operatorObservations": []`, `"pendingHostActions": {}`, `"hostActionReceipts": {}`, `"hostActionFailures": {}`, `"lifecycleEvents": []`, `"runProvider": ""`} {
 		if !strings.Contains(string(data), fragment) {
 			t.Fatalf("empty collection not encoded as []: missing %q in %s", fragment, data)
 		}
@@ -156,7 +155,7 @@ func TestStateJSONEmptyCollections(t *testing.T) {
 		t.Fatal("decoded maps must be non-nil")
 	}
 	if decoded.SpawnReceipts == nil || decoded.SpawnFailures == nil || decoded.StagedResults == nil || decoded.Results == nil || decoded.RecoverableResults == nil ||
-		decoded.PendingHostActions == nil || decoded.HostActionReceipts == nil || decoded.HostActionFailures == nil || decoded.LifecycleVerified == nil {
+		decoded.PendingHostActions == nil || decoded.HostActionReceipts == nil || decoded.HostActionFailures == nil {
 		t.Fatal("decoded 1c maps must be non-nil")
 	}
 }

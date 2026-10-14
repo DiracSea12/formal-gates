@@ -39,7 +39,7 @@ func costEngineFixture(t *testing.T, resolver CostSourceResolver) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1, CostSource: resolver}, nil)
+	engine, err := New(store, Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 1, CostSource: resolver})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func costEngineFixture(t *testing.T, resolver CostSourceResolver) *Engine {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.Init(view, testProvider, fingerprintOf(t, engine)); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	return engine
@@ -71,7 +71,7 @@ func costAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Reg
 	must(reg.RegisterHandler("engine.cost.worker", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.cost.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -80,8 +80,7 @@ func costAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Reg
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "cost", Dependencies: ds, DefinitionVersion: "1"}
 	}
 	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
-		Inputs:         []authoring.InputBinding{{From: "prep.parse", OutputField: "out", ToField: "in"}},
-		Postconditions: []authoring.PredicateRef{{ID: "pred.cost.post"}}}
+		Postconditions: []authoring.PredicateRef{{ID: reviewResultPredicate}}}
 	parse, err := authoring.NewLocalStep(header("prep.parse"), authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}, authoring.LocalSpec{Handler: "engine.cost.parse"})
 	must(err)
 	worker, err := authoring.NewAgentStep(header("cost.worker", "prep.parse"), io, authoring.AgentSpec{
@@ -99,24 +98,24 @@ func costAgentFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.Reg
 // 返回 acceptance（错误由调用方断言）。
 func dispatchPassResult(t *testing.T, engine *Engine, eventID string) (Acceptance, error) {
 	t.Helper()
-	fp := fingerprintOf(t, engine)
-	plan, _, err := engine.Plan()
+	observedInput := Observation{}
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fp)
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, observedInput)
 	if err != nil || len(issued) != 1 {
 		t.Fatalf("issue = %+v err=%v", issued, err)
 	}
 	action := issued[0].ActionID
-	if _, err := engine.Submit(spawnReceipt(t, "cost-spawn", action, "agent-cost-1"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "cost-spawn", action, "agent-cost-1"), observedInput); err != nil {
 		t.Fatal(err)
 	}
 	event, err := NewWorkerResultEvent(EventID(eventID), action, testProvider, OutcomePass, "sha256:cost-payload", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return engine.Submit(event, fp)
+	return engine.Submit(event, observedInput)
 }
 
 // TestWorkerResultHeldAtCostPending：lifecycle stop 未到（PENDING）——结果滞
@@ -125,24 +124,24 @@ func dispatchPassResult(t *testing.T, engine *Engine, eventID string) (Acceptanc
 func TestWorkerResultHeldAtCostPending(t *testing.T) {
 	probe := &costSourceProbe{state: CostSourcePending}
 	engine := costEngineFixture(t, probe.resolver())
-	fp := fingerprintOf(t, engine)
-	plan, _, err := engine.Plan()
+	observedInput := Observation{}
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fp)
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, observedInput)
 	if err != nil || len(issued) != 1 {
 		t.Fatalf("issue = %+v err=%v", issued, err)
 	}
 	action := issued[0].ActionID
-	if _, err := engine.Submit(spawnReceipt(t, "cost-spawn", action, "agent-cost-1"), fp); err != nil {
+	if _, err := engine.Submit(spawnReceipt(t, "cost-spawn", action, "agent-cost-1"), observedInput); err != nil {
 		t.Fatal(err)
 	}
 	event, err := NewWorkerResultEvent("cost-result", action, testProvider, OutcomePass, "sha256:cost-payload", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	acceptance, err := engine.Submit(event, fp)
+	acceptance, err := engine.Submit(event, observedInput)
 	if err != nil {
 		t.Fatalf("submit pending-cost result: %v", err)
 	}
@@ -166,7 +165,7 @@ func TestWorkerResultHeldAtCostPending(t *testing.T) {
 	}
 	// stop 证据到达：来源转 READY（精确用量），同一配对路径完成并记录用量。
 	probe.state, probe.usage = CostSourceReady, cost.Usage{InputCacheMissTokens: 120, OutputTokens: 30}
-	if _, err := engine.Submit(lifecycleEventOf(t, "cost-start", "agent-cost-1", LifecycleStart), fp); err != nil {
+	if _, err := engine.Submit(lifecycleEventOf(t, "cost-start", "agent-cost-1", LifecycleStart), observedInput); err != nil {
 		t.Fatal(err)
 	}
 	snap = engine.LoadMustSucceed(t)

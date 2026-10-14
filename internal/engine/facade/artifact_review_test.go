@@ -58,7 +58,7 @@ func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 			plan.Batches[0].Checks[0].Command = strconv.Quote(python) + " -m compileall -q ."
 			plan.Batches[0].Checks[1].Command = strconv.Quote(python) + " -m unittest discover -v"
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, plan, "whitebox", "quality")
-			dev, di := d.action("engine.development.batch.v4")
+			dev, di := d.action("engine.development.batch.v5")
 			if di.Workspace == nil {
 				t.Fatal("development lacks signed workspace")
 			}

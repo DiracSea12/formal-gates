@@ -1,8 +1,6 @@
 package acceptance_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,10 +50,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 			if !ancestor {
 				p.base = head
 			}
-			sum := sha256.Sum256([]byte(candidateDocument))
-			p.intake.RequirementRevision = hex.EncodeToString(sum[:])
-			p.intake.Artifacts[0].Revision = p.intake.RequirementRevision
-			writeInstalledJSON(t, p.intakePath, p.intake)
+			p.prepareIntake(t, p.intake.RequirementSource)
 			p.install(t, "codex", "global")
 			p.call(t, nil, p.startArgs("candidate", "regular")...)
 			d := &candidateDriver{p: p, t: t, mode: "none"}
@@ -82,7 +77,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 				for _, id := range ids {
 					in := d.run.ValidationInputs[id]
 					switch in.Handler {
-					case "engine.development.batch.v4":
+					case "engine.development.batch.v5":
 						if in.Workspace == nil || in.Workspace.Source != head || in.Binding.WorkspaceID != in.Workspace.ID {
 							t.Fatalf("wrong development source: %+v", in)
 						}

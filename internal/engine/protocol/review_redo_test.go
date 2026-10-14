@@ -42,7 +42,7 @@ func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					accepted, err := engine.Submit(event, fingerprintOf(t, engine))
+					accepted, err := engine.Submit(event, Observation{})
 					if err != nil || accepted.Status != OutcomeRuntimeError {
 						t.Fatalf("transient failure = %+v, %v", accepted, err)
 					}
@@ -106,7 +106,7 @@ func TestRequirementRedoRetiresExhaustedReviewDuty(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.Submit(event, fingerprintOf(t, e)); err != nil {
+		if _, err := e.Submit(event, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 	}

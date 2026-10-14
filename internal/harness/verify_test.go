@@ -210,32 +210,3 @@ func TestValuesEqualNumbersCompareByValue(t *testing.T) {
 		}
 	}
 }
-
-func TestVerifyFiles(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "input.txt")
-	if err := os.WriteFile(path, []byte("content\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	proof, _ := FileProof(path)
-	intact := []Proof{{Name: path, Expected: map[string]any{
-		"sha256": proof.SHA256, "size": json.Number(strconv.Itoa(proof.Size))}}}
-
-	if kind, refusal := VerifyFiles(intact, "comparison input "); refusal != "" {
-		t.Fatalf("expected acceptance: %s / %s", kind, refusal)
-	}
-
-	changed := []Proof{{Name: path, Expected: map[string]any{
-		"sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-		"size":   json.Number("1")}}}
-	kind, refusal := VerifyFiles(changed, "comparison input ")
-	if kind != KindChanged || refusal != "EVIDENCE_CHANGED: comparison input "+path {
-		t.Fatalf("%s / %s", kind, refusal)
-	}
-
-	absent := []Proof{{Name: filepath.Join(directory, "absent.txt"), Expected: map[string]any{
-		"sha256": "0", "size": json.Number("0")}}}
-	if kind, _ := VerifyFiles(absent, "comparison input "); kind != KindMissing {
-		t.Fatalf("a missing file is missing evidence, got %s", kind)
-	}
-}

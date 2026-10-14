@@ -16,7 +16,7 @@ func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				inventory := &protocol.CoverageInventory{Sources: []coverage.RequiredSource{{SourceID: "SOL-001", Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}, {SourceID: "SOL-002", Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}}, Points: []coverage.AcceptancePoint{{PointID: "SP-001", ObservableBehavior: "records outcome", Oracle: "record exists"}}, Links: []protocol.SourcePoint{{SourceID: "SOL-001", PointID: "SP-001"}, {SourceID: "SOL-002", PointID: "AC-001"}, {SourceID: "SOL-002", PointID: "SP-001"}}}
 				d := configuredValidationDriver(t, inventory, "blackbox")
-				dev, di := d.action("engine.development.batch.v4")
+				dev, di := d.action("engine.development.batch.v5")
 				design, qi := d.action("engine.qa.design.v5")
 				m := simpleManifest(qi)
 				for _, id := range []string{"normal", "invalid"} {
@@ -146,7 +146,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	inventory := relationInventory()
 	inventory.Links = append(inventory.Links, protocol.SourcePoint{SourceID: "SOL-002", PointID: "SP-001"})
 	d := configuredValidationDriver(t, inventory, "blackbox", "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	id, in := qaModeAction(d, "engine.qa.design.v5", coverage.ReviewBlackbox)
 	black := simpleManifest(in)
 	black.Sources = []string{"REQ-001", "SOL-001"}
@@ -192,7 +192,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	for finding := range d.run.Validation.Findings {
 		resolveGateFinding(d, finding, wave.ID)
 	}
-	id, in = d.action("engine.repair.v5")
+	id, in = d.action("engine.repair.v6")
 	repair := gateRepairResult(in)
 	d.business(id, repair)
 	d.verifyRepair(repair)

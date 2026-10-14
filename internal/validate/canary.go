@@ -36,7 +36,6 @@ const (
 	canaryDeliveryContents  = "delivery\n"
 	canaryBlackboxProcedure = "git show HEAD:delivery.txt"
 	canaryBlackboxOracle    = `stdout equals "delivery"`
-	canaryWhiteboxMarker    = "func TestWhiteboxDirectBehavior(t *testing.T) {}"
 	canaryWhiteboxOracle    = "The exact approved Go test runs and passes"
 )
 
@@ -105,7 +104,6 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		phases = []string{canonicalInstallFaultPhase(fixture)}
 	}
 	for _, phase := range phases {
-		phase := phase
 		fixture, err := os.MkdirTemp("", "formal-gates-fault-matrix-")
 		if err != nil {
 			add("fault-"+phase, err)
@@ -279,7 +277,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	f, run, err := facade.Start(facade.StartOptions{RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, PackageRoot: packageRoot, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		return err
 	}
@@ -342,7 +340,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			return err
 		}
 		if run.Status == "COMPLETE" {
-			for _, role := range []string{"engine.development.batch.v4", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
+			for _, role := range []string{"engine.development.batch.v5", "design:BLACKBOX", "design:WHITEBOX", "review:BLACKBOX", "review:WHITEBOX", "execution:BLACKBOX", "execution:WHITEBOX"} {
 				if !checked[role] {
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
@@ -459,7 +457,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 }
 
 func portableDevelopmentPlan() *worker.Granularity {
-	return &worker.Granularity{Reason: "One data-artifact fixture with exact byte build/test checks and no inferred language.", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, NewArtifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Native candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []worker.Criterion{{Description: "Exact delivery marker content"}}, Checks: []worker.Check{{Purpose: protocol.CheckFullBuild, Command: "cp delivery.txt built-delivery.txt"}, {Purpose: protocol.CheckFullTests, Command: "printf 'delivery\\n' | cmp - built-delivery.txt"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes", ContextCost: "One file and one acceptance condition"}}}
+	return &worker.Granularity{Reason: "One data-artifact fixture with exact byte build/test checks and no inferred language.", VerificationTier: "FINAL", Batches: []worker.Batch{{Subtasks: []worker.Subtask{{Description: "Write the delivery marker"}}, Deliverable: "Committed delivery marker", PublicEntry: canaryBlackboxProcedure, NewArtifacts: []string{"delivery.txt"}, Interfaces: "delivery.txt contains delivery", StateBoundary: "Native candidate owns committed files", Risk: "Missing or incorrect marker", DoD: []worker.Criterion{{Description: "Exact delivery marker content"}}, Rollback: "Discard the isolated workspace", Recovery: "Resume from the issued workspace", Handoff: "Recorded marker bytes", ContextCost: "One file and one acceptance condition"}}}
 }
 
 func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, facts *[]worker.LocationFact) (any, error) {
@@ -474,6 +472,21 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 		if input.Review.Action == review.StartReadiness {
 			result.GranularityReview = portableDevelopmentPlan()
+			batch := &result.GranularityReview.Batches[0]
+			for index := range input.RequirementPoints {
+				batch.Requirements = append(batch.Requirements, index+1)
+			}
+			for index, check := range input.ApprovedChecks {
+				if check.Purpose == protocol.CheckFullBuild || check.Purpose == protocol.CheckFullTests {
+					batch.Checks = append(batch.Checks, worker.Check{Reuse: index + 1})
+				}
+			}
+			if !slices.ContainsFunc(input.ApprovedChecks, func(c protocol.DevelopmentCheck) bool { return c.Purpose == protocol.CheckFullBuild }) {
+				batch.Checks = append(batch.Checks, worker.Check{Purpose: protocol.CheckFullBuild, Goal: "Create built-delivery.txt from the exact delivery marker"})
+			}
+			if !slices.ContainsFunc(input.ApprovedChecks, func(c protocol.DevelopmentCheck) bool { return c.Purpose == protocol.CheckFullTests }) {
+				batch.Checks = append(batch.Checks, worker.Check{Purpose: protocol.CheckFullTests, Goal: "Compare built-delivery.txt with delivery newline"})
+			}
 		}
 		return result, nil
 	}
@@ -486,7 +499,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		workspace = in.Workspace.Path
 	}
 	switch in.Handler {
-	case "engine.development.batch.v4":
+	case "engine.development.batch.v5":
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -494,7 +507,28 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		if err != nil || string(actual) != canaryDeliveryContents {
 			return payload, fmt.Errorf("delivery fixture bytes differ: %q (%v)", actual, err)
 		}
-		payload = &worker.Development{Completion: &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration"}, Summary: "Wrote the exact portable delivery fixture"}
+		requirements := []string{}
+		for _, point := range input.RequirementPoints {
+			requirements = append(requirements, point.ID+": "+point.Text+"; portable implementation fixture wrote and reread the exact delivery marker bytes")
+		}
+		commands := []string{}
+		for index, check := range in.Development.Batch.Checks {
+			if check.Command != "" || index < len(in.Development.Checks) && in.Development.Checks[index].ExitCode == 0 && in.Development.Checks[index].Error == "" {
+				continue
+			}
+			switch check.Purpose {
+			case protocol.CheckFullBuild:
+				commands = append(commands, "cp delivery.txt built-delivery.txt")
+			case protocol.CheckFullTests:
+				commands = append(commands, "printf 'delivery\\n' | cmp - built-delivery.txt")
+			default:
+				return payload, fmt.Errorf("unsupported portable verification purpose: %s", check.Purpose)
+			}
+		}
+		payload = map[string]any{"completion": &worker.Completion{DoD: []string{"delivery.txt bytes equal delivery newline"}, Handoff: "delivery.txt is ready for engine candidate registration", Requirements: requirements}, "summary": "Wrote the exact portable delivery fixture"}
+		if len(commands) > 0 {
+			payload.(map[string]any)["commands"] = commands
+		}
 		checked[in.Handler] = true
 	case "engine.qa.design.v5":
 		mode := in.Manifest.Binding.ReviewKind
@@ -507,7 +541,7 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 			missing.PublicEntry, missing.Preconditions, missing.Steps = "", "", ""
 			missing.Operations = nil
 			missing.Oracle = canaryWhiteboxOracle
-			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(strings.Replace(whiteboxDeliveredTestCode, `import "testing"`, "import (\n\"testing\"\n\"os\"\n)", 1)+"\nfunc TestWhiteboxMissingArtifact(t *testing.T) { if _, err := os.Stat(\"absent-marker.txt\"); !os.IsNotExist(err) { t.Fatalf(\"missing artifact accepted: %v\", err) } }\n"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(workspace, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0600); err != nil {
 				return payload, err
 			}
 			body, err := os.ReadFile(filepath.Join(workspace, "whitebox_delivered_test.go"))
@@ -559,8 +593,12 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 		}
 
 		checked["execution:"+string(in.Manifest.Binding.ReviewKind)] = true
-	case "engine.gate.v2":
-		payload = &worker.Gate{Findings: []worker.Finding{}}
+	case "engine.gate.v3":
+		result := &worker.Gate{Findings: []worker.Finding{}, Requirements: []worker.RequirementDecision{}}
+		for _, point := range input.RequirementPoints {
+			result.Requirements = append(result.Requirements, worker.RequirementDecision{Status: "PASS", Evidence: point.ID + ": synthetic gate fixture independently compares " + point.Text + " with its committed delivery-marker contract; no model semantic validation is claimed"})
+		}
+		payload = result
 		if in.Gate == nil {
 			return payload, fmt.Errorf("portable gate lacks issued input")
 		}
@@ -681,12 +719,10 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		canaryRecord := ""
-		if len(report.Targets) > 0 {
-			for _, record := range registryDoc.Records {
-				if canonicalRegistryPath(record.Target) == canonicalRegistryPath(report.Targets[0].TargetPath) {
-					canaryRecord = record.ID
-					break
-				}
+		for _, record := range registryDoc.Records {
+			if canonicalRegistryPath(record.Target) == canonicalRegistryPath(report.Targets[0].TargetPath) {
+				canaryRecord = record.ID
+				break
 			}
 		}
 		if canaryRecord == "" {

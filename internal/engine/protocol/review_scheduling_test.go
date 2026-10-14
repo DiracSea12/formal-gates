@@ -14,11 +14,11 @@ import (
 
 func TestReviewIssuanceRespectsZeroCapacity(t *testing.T) {
 	engine, _ := canonicalReviewEngine(t)
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 0}, fingerprintOf(t, engine))
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 0}, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +38,14 @@ func TestReviewPlanWaitsForItsWorkerDependency(t *testing.T) {
 		return spec
 	}, "prepare.document", "product.review")
 	engine, _ := reviewEngineCapacity(t, cd, reg, 1)
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.Next.Kind != decision.KindReady || len(plan.Next.Ready.Tasks) != 1 || plan.Next.Ready.Tasks[0].Step != "prepare.document" {
 		t.Fatalf("review escaped dependency in plan: %+v", plan.Next)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fingerprintOf(t, engine))
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
 	if !state.ReviewSeries.ProductReview.FreshOwed || state.PendingActions[fresh].Task == state.SpawnReceipts[first].Task {
 		t.Fatalf("redo did not retain its new work identity: %+v", state.PendingActions)
 	}
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
 		t.Fatalf("pending redo plan = %s, want WAIT", plan.Next.Kind)
 	}
 	submitReviewResult(t, engine, "fresh-pass", fresh, reviewEvidenceAt(review.ProductReview, fresh, state.RequirementRevision(), "PASS", "new revision reviewed", nil))
-	plan, _, err = engine.Plan()
+	plan, _, err = engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestReviewInvalidationOrderPreservesEvidenceAndNewWork(t *testing.T) {
 					t.Fatalf("candidate remains effective: %+v", candidate)
 				}
 			}
-			plan, _, err := engine.Plan()
+			plan, _, err := engine.Plan(Observation{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -148,14 +148,14 @@ func TestReviewUsesEligibleSiblingCarrier(t *testing.T) {
 		}
 	}
 	engine, _ := reviewEngineCapacity(t, cd, reg, 2)
-	plan, _, err := engine.Plan()
+	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.Next.Kind != decision.KindReady || len(plan.Next.Ready.Tasks) != 2 || plan.Next.Ready.Tasks[0].Step != "prepare.document" || plan.Next.Ready.Tasks[1].Step != "review.b" {
 		t.Fatalf("independent eligible carrier was suppressed: %+v", plan.Next)
 	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 2}, fingerprintOf(t, engine))
+	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 2}, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func reviewDependencyDefinition(t *testing.T, steps ...dagStep) (*compiler.Compi
 	must(reg.RegisterHandler("engine.test.reviewer", authoring.RunnerAgentWorker))
 	must(reg.RegisterCodec("codec.any.in"))
 	must(reg.RegisterCodec("codec.any.out"))
-	must(reg.RegisterPredicate("pred.test.post"))
+	must(reg.RegisterPredicate(reviewResultPredicate))
 	header := func(id string, deps ...string) authoring.Header {
 		ds := make([]authoring.StepID, 0, len(deps))
 		for _, d := range deps {
@@ -189,16 +189,10 @@ func reviewDependencyDefinition(t *testing.T, steps ...dagStep) (*compiler.Compi
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: "review", Dependencies: ds, DefinitionVersion: definition.Version}
 	}
-	io := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out", Inputs: inputs}
-	}
+	io := authoring.IO{InputCodec: "codec.any.in", OutputCodec: "codec.any.out"}
 	reviewStep := func(name string, deps ...string) authoring.Step {
-		stepIO := io(deps...)
-		stepIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.post"}}
+		stepIO := io
+		stepIO.Postconditions = []authoring.PredicateRef{{ID: reviewResultPredicate}}
 		spec := authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute}
 		if name == "consume.review" {
 			spec.ReviewSeries = ""
@@ -208,7 +202,7 @@ func reviewDependencyDefinition(t *testing.T, steps ...dagStep) (*compiler.Compi
 		must(err)
 		return step
 	}
-	prep, err := authoring.NewLocalStep(header("prep.parse"), io(), authoring.LocalSpec{Handler: "engine.test.prep"})
+	prep, err := authoring.NewLocalStep(header("prep.parse"), io, authoring.LocalSpec{Handler: "engine.test.prep"})
 	must(err)
 	definitionSteps := []authoring.Step{prep}
 	for _, step := range steps {
@@ -226,11 +220,11 @@ func TestSharedReviewObligationHoldsSiblingDependents(t *testing.T) {
 		dagStep{name: "consume.review", deps: []string{"review.b"}},
 	)
 	e, _ := reviewEngineCapacity(t, cd, reg, 0)
-	plan, _, err := e.Plan()
+	plan, _, err := e.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: 1}, fingerprintOf(t, e))
+	issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: 1}, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,12 +234,12 @@ func TestSharedReviewObligationHoldsSiblingDependents(t *testing.T) {
 	id := issued[0].ActionID
 	submitReviewResult(t, e, "first-pass", id, reviewEvidenceAt(review.ProductReview, id, "rev-1", "PASS", "complete", nil))
 	redoProductReview(t, e, "review-updated")
-	plan, _, err = e.Plan()
+	plan, _, err = e.Plan(Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("plan=%+v required=%+v", plan.Next.Ready, e.LoadMustSucceed(t).State.decisionView(cd).RequiredTasks)
-	issued, _, err = e.IssueFromPlan(plan, decision.Admission{Capacity: 2}, fingerprintOf(t, e))
+	issued, _, err = e.IssueFromPlan(plan, decision.Admission{Capacity: 2}, Observation{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,15 +48,6 @@ type PredicateRef struct {
 	Negated bool
 }
 
-// InputBinding 是 typed source binding：把依赖步骤的输出字段绑定到本步输入
-// 字段。compiler 强制非 parallel/human 步骤的 {Inputs[i].From} 集合
-// 与 Dependencies 集合精确相等。
-type InputBinding struct {
-	From        StepID
-	OutputField string
-	ToField     string
-}
-
 // IO 是共享 IO 段，仅 local/durable/host_action/agent 四个可执行变体嵌入。
 // human 的 typed I/O 是 payload 内的 request/response schema，parallel 是纯
 // 调度语义，二者不嵌入 IO。
@@ -65,7 +56,6 @@ type IO struct {
 	OutputCodec    CodecID
 	Preconditions  []PredicateRef
 	Postconditions []PredicateRef
-	Inputs         []InputBinding
 }
 
 // RetryPolicy 是声明式机械重试策略（仅 TRANSIENT_ENGINE_ERROR 类失败适用，

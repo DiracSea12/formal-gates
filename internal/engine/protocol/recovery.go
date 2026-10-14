@@ -167,10 +167,29 @@ func (s *State) appendRecovery(record RecoveryRecord) {
 	s.RecoveryRecords = append(s.RecoveryRecords, record)
 }
 
+// recordObsoleteAction preserves the issued execution until its stop is observed.
+func (s *State) recordObsoleteAction(pending PendingAction, attempt Attempt, replacedBy, reason string) {
+	obsolete := s.ObsoleteActions[pending.ActionID]
+	obsolete.ActionID, obsolete.Task = pending.ActionID, pending.Task
+	if pending.AttemptID != "" {
+		obsolete.AttemptID = pending.AttemptID
+	}
+	if attempt.ActionID == pending.ActionID {
+		obsolete.AttemptID, obsolete.Bindings, obsolete.Plan = attempt.ID, attempt.Bindings, attempt.Plan
+	}
+	if replacedBy != "" {
+		obsolete.ReplacedBy = replacedBy
+	}
+	if obsolete.Reason == "" {
+		obsolete.Reason = reason
+	}
+	s.ObsoleteActions[pending.ActionID] = obsolete
+}
+
 // retireAction removes an execution from current acceptance indexes while
-// retaining its received evidence in the obsolete-result ledger.
+// retaining its issued identity and received evidence.
 func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction, bool) {
-	pending, ok := s.PendingActions[actionID]
+	pending, attempt, ok := s.workerActionTarget(actionID)
 	if !ok {
 		if _, obsolete := s.ObsoleteActions[actionID]; obsolete {
 			return PendingAction{}, false
@@ -181,10 +200,6 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 		}
 		pending = PendingAction{ActionID: actionID, Task: receipt.Task, Step: string(receipt.Task.Step)}
 	}
-	attempt, current := s.Attempts[pending.Task]
-	if !current {
-		attempt = s.EndedAttempts[pending.Task]
-	}
 	if pending.AttemptID == "" && attempt.ActionID == actionID {
 		pending.AttemptID = attempt.ID
 	}
@@ -194,9 +209,9 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 		s.archiveObsoleteResult(result)
 		delete(s.StagedResults, actionID)
 	}
-	s.ObsoleteActions[actionID] = ObsoleteAction{
-		ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
-		ReplacedBy: replacedBy, Reason: reason, Bindings: attempt.Bindings, Plan: attempt.Plan,
+	s.recordObsoleteAction(pending, attempt, replacedBy, reason)
+	if ended, awaiting := s.EndedAttempts[pending.Task]; awaiting && ended.ActionID == actionID && ended.AwaitingResult {
+		delete(s.EndedAttempts, pending.Task)
 	}
 	return pending, true
 }
@@ -246,7 +261,8 @@ func (s *State) installReplacement(pending PendingAction, nextRevision uint64, b
 // current Attempt. Resume/reconcile/operator/agent decisions retain the old
 // action until its declared protocol step. Fresh execution reconciles the old
 // session before replacement; ASK persists resume/fresh/abort.
-func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expectedFingerprint string) (RecoveryPlan, uint64, error) {
+func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, input Observation) (RecoveryPlan, uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return RecoveryPlan{}, 0, err
@@ -270,8 +286,12 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 	if !ok || attempt.ID != pending.AttemptID {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeStaleAttempt, Detail: fmt.Sprintf("recovery action %q has no matching current Attempt", actionID)}
 	}
+	fingerprint, err := e.sourceFacts.Digest()
+	if err != nil {
+		return RecoveryPlan{}, 0, err
+	}
 	currentBindings := AttemptBindings{
-		Task: pending.Task, Snapshot: expectedFingerprint, Responsibility: state.RunProvider,
+		Task: pending.Task, Snapshot: fingerprint, Responsibility: state.RunProvider,
 	}
 	plan := decideRecovery(interruption, !attempt.Bindings.Equal(currentBindings))
 	if pending, exists := state.pendingAttemptRecovery(actionID, attempt.ID); exists {
@@ -290,7 +310,7 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, expe
 		}
 	}
 	state.appendRecovery(record)
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+	commitRevision, _, err := e.commitEffects(state, revision, input, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
@@ -339,7 +359,8 @@ func (s *State) registerRecoveryAsk(record *RecoveryRecord, revision uint64) boo
 // Candidate lifecycle identities are derived from the persisted lifecycle
 // buffer. Exactly one match allows an automatic attach; zero or multiple
 // matches become an Operator route and never trigger a blind respawn.
-func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (RecoveryPlan, uint64, error) {
+func (e *Engine) ReconcileUnknownReceipt(actionID string, input Observation) (RecoveryPlan, uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return RecoveryPlan{}, 0, err
@@ -362,9 +383,21 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 	if receipt.Status != SpawnStatusUnknown {
 		return RecoveryPlan{}, 0, &RejectedError{Code: CodeReceiptConflict, Detail: fmt.Sprintf("receipt %q is not UNKNOWN", actionID)}
 	}
+	plan := e.reconcileUnknownReceipt(state, actionID, revision+1)
+
+	commitRevision, _, err := e.commitEffects(state, revision, input, nil)
+	if err != nil {
+		return RecoveryPlan{}, 0, err
+	}
+	return plan, commitRevision, nil
+}
+
+// reconcileUnknownReceipt derives attachment from durable lifecycle facts.
+// Attachment is an observation; result acceptance remains in the transaction epilogue.
+func (e *Engine) reconcileUnknownReceipt(state *State, actionID string, nextRevision uint64) RecoveryPlan {
+	receipt := state.SpawnReceipts[actionID]
 	matches := state.lifecycleMatches(receipt.Correlation)
 	plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(matches)})
-	nextRevision := revision + 1
 	if len(matches) == 1 {
 		receipt.Status = SpawnStatusAttached
 		receipt.LifecycleIdentity = matches[0]
@@ -396,16 +429,27 @@ func (e *Engine) ReconcileUnknownReceipt(actionID, expectedFingerprint string) (
 		plan.Detail = fmt.Sprintf("unknown receipt has %d lifecycle matches; operator reconciliation required", len(matches))
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: authoring.FailureSideEffectUnknown, Action: plan.Action, Detail: plan.Detail, LifecycleMatches: len(matches), Revision: nextRevision})
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
-	if err != nil {
-		return RecoveryPlan{}, 0, err
+	return plan
+}
+
+// attachObservedReceipts settles uniquely observed dispatches without replaying spawn.
+func (e *Engine) attachObservedReceipts(state *State, nextRevision uint64) bool {
+	ids := []string{}
+	for id, receipt := range state.SpawnReceipts {
+		if receipt.Status == SpawnStatusUnknown && state.liveDispatch(id) && len(state.lifecycleMatches(receipt.Correlation)) == 1 {
+			ids = append(ids, id)
+		}
 	}
-	return plan, commitRevision, nil
+	slices.Sort(ids)
+	for _, id := range ids {
+		e.reconcileUnknownReceipt(state, id, nextRevision)
+	}
+	return len(ids) > 0
 }
 
 // ReconcileHostAction settles an UNKNOWN local side effect from observed
 // external facts. fulfilled=true commits only the reconciliation result and
-// never invokes ExecuteHostAction again; conflict routes to Operator; an
+// never executes the side effect again; conflict routes to Operator; an
 // unfulfilled but non-conflicting observation remains WAIT/pending.
 type HostActionObservation struct {
 	Promotion *PromotionObservation `json:"promotion,omitempty"`
@@ -419,7 +463,8 @@ func (o HostActionObservation) Digest() string {
 	return digestOfCanonical(o)
 }
 
-func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfilled, conflict bool, expectedFingerprint string, observations ...HostActionObservation) (RecoveryPlan, uint64, error) {
+func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfilled, conflict bool, input Observation, observations ...HostActionObservation) (RecoveryPlan, uint64, error) {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return RecoveryPlan{}, 0, err
@@ -439,7 +484,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
 	}
-	if len(observations) == 1 && (state.abortRequested() || state.resetPending()) && observations[0].Resource != nil && observations[0].Promotion == nil {
+	if len(observations) == 1 && (state.abortRequested() || state.resetPending() || state.NodeContinuationWithdraws(state.PendingHostActions[actionID]) || state.WorkspaceMirrorSuperseded(state.PendingHostActions[actionID], e.cfg.Definition)) && observations[0].Resource != nil && observations[0].Promotion == nil {
 		intent, ok := state.PendingHostActions[actionID]
 		observation := observations[0]
 		if !ok || observationDigest != observation.Digest() {
@@ -449,11 +494,11 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			return RecoveryPlan{}, 0, err
 		}
 		state.retireNative(intent, "WITHDRAWN", observationDigest, &observation, revision+1)
-		plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "aborted native remainder withdrawn from its exact resource prefix"}
-		committed, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+		plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "native remainder withdrawn from its exact resource prefix"}
+		committed, _, err := e.commitEffects(state, revision, input, nil)
 		return plan, committed, err
 	}
-	if len(observations) == 1 && (state.abortRequested() || state.resetPending()) && observations[0].Promotion != nil && observations[0].Resource == nil {
+	if len(observations) == 1 && (state.abortRequested() || state.resetPending() || state.NodeContinuationWithdraws(state.PendingHostActions[actionID])) && observations[0].Promotion != nil && observations[0].Resource == nil {
 		intent, ok := state.PendingHostActions[actionID]
 		params, parseErr := candidateParameters(intent)
 		observation := *observations[0].Promotion
@@ -468,7 +513,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			state.retireNative(original, "WITHDRAWN", observationDigest, &HostActionObservation{Promotion: &observation}, revision+1)
 		}
 		plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "aborted promotion remainder withdrawn from the exact native prefix"}
-		committed, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+		committed, _, err := e.commitEffects(state, revision, input, nil)
 		return plan, committed, err
 	}
 	receipt, hasReceipt := state.HostActionReceipts[actionID]
@@ -506,7 +551,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		plan.Detail = "external observation does not yet satisfy the intent; keep pending and wait"
 	}
 	state.appendRecovery(RecoveryRecord{ActionID: actionID, Class: plan.Class, Action: plan.Action, Detail: plan.Detail, Revision: nextRevision})
-	commitRevision, _, err := e.commitEffects(state, revision, expectedFingerprint, nil)
+	commitRevision, _, err := e.commitEffects(state, revision, input, nil)
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}

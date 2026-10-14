@@ -104,7 +104,7 @@ func (p *FaultPlan) PersistenceInjector() func(persistence.FaultPoint) error {
 	return p.Inject
 }
 
-// FakeHost models the host side of spawn and HostAction protocols. It counts
+// FakeHost models the host side of the spawn protocol. It counts
 // side effects before returning receipts, so a lost response can be retried
 // and checked for duplicate execution.
 type FakeHost struct {
@@ -113,22 +113,20 @@ type FakeHost struct {
 	Faults   *FaultPlan
 	VCS      *FakeVCS
 
-	seq          atomic.Uint64
-	mu           sync.Mutex
-	spawnCalls   map[string]int
-	spawned      map[string]string
-	actionCalls  map[string]int
-	observations map[string]string
+	collectObservation func() (protocol.Observation, error)
+	seq                atomic.Uint64
+	mu                 sync.Mutex
+	spawnCalls         map[string]int
+	spawned            map[string]string
 }
 
-func NewFakeHost(engine *protocol.Engine, provider string, faults *FaultPlan) *FakeHost {
+func NewFakeHost(engine *protocol.Engine, provider string, faults *FaultPlan, collectObservation func() (protocol.Observation, error)) *FakeHost {
 	if faults == nil {
 		faults = NewFaultPlan()
 	}
 	return &FakeHost{
-		Engine: engine, Provider: provider, Faults: faults,
+		Engine: engine, Provider: provider, Faults: faults, collectObservation: collectObservation,
 		spawnCalls: map[string]int{}, spawned: map[string]string{},
-		actionCalls: map[string]int{}, observations: map[string]string{},
 	}
 }
 
@@ -195,11 +193,11 @@ func (h *FakeHost) spawnEvent(eventID protocol.EventID, actionID, identity, stat
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	fp, err := h.Engine.ObserveFingerprint()
+	observedInput, err := h.collectObservation()
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	acceptance, err := h.Engine.Submit(ev, fp)
+	acceptance, err := h.Engine.Submit(ev, observedInput)
 	if err != nil {
 		return SpawnResult{Acceptance: acceptance, ActionID: actionID, Identity: identity, Calls: calls}, err
 	}
@@ -223,131 +221,21 @@ func (h *FakeHost) SpawnCalls(actionID string) int {
 	return h.spawnCalls[actionID]
 }
 
-func (h *FakeHost) Execute(operation authoring.OperationID, params any) (protocol.HostActionIntent, error) {
-	fp, err := h.Engine.ObserveFingerprint()
-	if err != nil {
-		return protocol.HostActionIntent{}, err
-	}
-	intent, _, err := h.Engine.ExecuteHostAction(operation, params, fp)
-	if err != nil {
-		return protocol.HostActionIntent{}, err
-	}
-	if h.VCS != nil {
-		name := sha256.Sum256([]byte(intent.ActionID))
-		calls, applyErr := h.VCS.ApplyOnce("fake-host.action:"+intent.ActionID, filepath.Join("fake-host", "action", hex.EncodeToString(name[:])+".txt"), []byte(string(operation)+"\n"))
-		if applyErr != nil {
-			return intent, applyErr
-		}
-		h.mu.Lock()
-		h.actionCalls[intent.ActionID] = calls
-		h.mu.Unlock()
-	} else {
-		h.mu.Lock()
-		h.actionCalls[intent.ActionID]++
-		h.mu.Unlock()
-	}
-	if err := h.Faults.Inject(persistence.FaultHostCommitBefore); err != nil {
-		return intent, err
-	}
-	if err := h.Faults.Inject(persistence.FaultHostCommitAfter); err != nil {
-		return intent, err
-	}
-	return intent, nil
-}
-
-func (h *FakeHost) ActionCalls(actionID string) int {
-	if h.VCS != nil {
-		count, err := h.VCS.OperationCount("fake-host.action:" + actionID)
-		if err == nil {
-			return count
-		}
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.actionCalls[actionID]
-}
-
-func (h *FakeHost) Receipt(intent protocol.HostActionIntent, status string) (protocol.Acceptance, error) {
-	return h.ReceiptWithCorrelation(intent, status, "")
-}
-
-func (h *FakeHost) ReceiptWithCorrelation(intent protocol.HostActionIntent, status, correlation string) (protocol.Acceptance, error) {
-	if status == "" {
-		status = protocol.HostActionStatusExecuted
-	}
-	seq := h.seq.Add(1)
-	if correlation == "" {
-		correlation = fmt.Sprintf("fake-correlation-%d", seq)
-	}
-	return h.ReceiptEvent(protocol.EventID(fmt.Sprintf("fake-host-receipt-%d", seq)), intent, status, correlation)
-}
-
-// ReceiptEvent is ReceiptWithCorrelation with a caller-owned event ID.
-func (h *FakeHost) ReceiptEvent(eventID protocol.EventID, intent protocol.HostActionIntent, status, correlation string) (protocol.Acceptance, error) {
-	if status == "" {
-		status = protocol.HostActionStatusExecuted
-	}
-	if intent.Adapter == nil {
-		return protocol.Acceptance{}, fmt.Errorf("testkit: ReceiptWithCorrelation requires adapter HostAction intent")
-	}
-	ev, err := protocol.NewHostActionReceiptEvent(
-		eventID, intent.ActionID,
-		intent.Adapter.Operation, h.Provider, correlation,
-		intent.PayloadDigest, status,
-	)
-	if err != nil {
-		return protocol.Acceptance{}, err
-	}
-	fp, err := h.Engine.ObserveFingerprint()
-	if err != nil {
-		return protocol.Acceptance{}, err
-	}
-	acceptance, err := h.Engine.Submit(ev, fp)
-	if err != nil {
-		return acceptance, err
-	}
-	if fault := h.Faults.Inject(persistence.FaultSubmitResponseLost); fault != nil {
-		return acceptance, fault
-	}
-	return acceptance, nil
-}
-
-func (h *FakeHost) Observe(actionID, digest string) (string, error) {
-	if err := h.Faults.Inject(persistence.FaultHostObserveBefore); err != nil {
-		return "", err
-	}
-	h.mu.Lock()
-	h.observations[actionID] = digest
-	h.mu.Unlock()
-	return digest, nil
-}
-
-func (h *FakeHost) Reconcile(actionID, digest string, fulfilled, conflict bool) (protocol.RecoveryPlan, error) {
-	if err := h.Faults.Inject(persistence.FaultHostReconcileBefore); err != nil {
-		return protocol.RecoveryPlan{}, err
-	}
-	fp, err := h.Engine.ObserveFingerprint()
-	if err != nil {
-		return protocol.RecoveryPlan{}, err
-	}
-	plan, _, err := h.Engine.ReconcileHostAction(actionID, digest, fulfilled, conflict, fp)
-	return plan, err
-}
-
 // FakeWorker submits typed results and deliberately supports result-before-
 // receipt. The response-loss point fires after Engine.Submit has committed.
 type FakeWorker struct {
-	Engine   *protocol.Engine
-	Provider string
-	Faults   *FaultPlan
-	seq      atomic.Uint64
+	Engine             *protocol.Engine
+	Provider           string
+	Faults             *FaultPlan
+	collectObservation func() (protocol.Observation, error)
+	seq                atomic.Uint64
 }
 
-func NewFakeWorker(engine *protocol.Engine, provider string, faults *FaultPlan) *FakeWorker {
+func NewFakeWorker(engine *protocol.Engine, provider string, faults *FaultPlan, collectObservation func() (protocol.Observation, error)) *FakeWorker {
 	if faults == nil {
 		faults = NewFaultPlan()
 	}
-	return &FakeWorker{Engine: engine, Provider: provider, Faults: faults}
+	return &FakeWorker{Engine: engine, Provider: provider, Faults: faults, collectObservation: collectObservation}
 }
 
 func (w *FakeWorker) Result(actionID, outcome, payloadDigest string, class authoring.FailureClass) (protocol.Acceptance, error) {
@@ -361,11 +249,11 @@ func (w *FakeWorker) ResultEvent(eventID protocol.EventID, actionID, outcome, pa
 	if err != nil {
 		return protocol.Acceptance{}, err
 	}
-	fp, err := w.Engine.ObserveFingerprint()
+	observedInput, err := w.collectObservation()
 	if err != nil {
 		return protocol.Acceptance{}, err
 	}
-	acceptance, err := w.Engine.Submit(ev, fp)
+	acceptance, err := w.Engine.Submit(ev, observedInput)
 	if err != nil {
 		return acceptance, err
 	}
@@ -416,11 +304,11 @@ func (w *FakeWorker) ReviewResultEvent(eventID protocol.EventID, actionID string
 	if err != nil {
 		return protocol.Acceptance{}, err
 	}
-	fp, err := w.Engine.ObserveFingerprint()
+	observedInput, err := w.collectObservation()
 	if err != nil {
 		return protocol.Acceptance{}, err
 	}
-	acceptance, err := w.Engine.Submit(ev, fp)
+	acceptance, err := w.Engine.Submit(ev, observedInput)
 	if err != nil {
 		return acceptance, err
 	}
@@ -631,17 +519,21 @@ func (v *FakeVCS) Commit(message string) (FakeCommit, error) {
 	return commit, nil
 }
 
-func (v *FakeVCS) Fingerprint() (string, error) {
-	snapshot, err := v.Snapshot()
-	if err != nil {
-		return "", err
+func (v *FakeVCS) Observe() (protocol.Observation, error) {
+	read := func() (decision.Observation, error) {
+		snapshot, err := v.Snapshot()
+		if err != nil {
+			return decision.Observation{}, err
+		}
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return decision.Observation{}, err
+		}
+		sum := sha256.Sum256(data)
+		return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceVCS, Key: v.Root, Value: "sha256:" + hex.EncodeToString(sum[:])}}}, nil
 	}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	facts, err := read()
+	return protocol.Observation{Facts: facts, Read: read}, err
 }
 
 func (v *FakeVCS) Write(path string, data []byte) error {
@@ -839,13 +731,13 @@ func NewProtocolFixtureWithDefinition(root string, compiled *compiler.CompiledDe
 	}
 	engine, err := protocol.New(store, protocol.Config{
 		Definition: compiled, Registry: registry, Capacity: capacity, InternalSteps: InternalSteps(),
-	}, vcs.Fingerprint)
+	})
 	if err != nil {
 		return nil, err
 	}
 	fixture := &ProtocolFixture{Root: root, Store: store, Engine: engine, Faults: faults, VCS: vcs, Definition: compiled, Registry: registry, Capacity: capacity}
-	fixture.Host = NewFakeHost(engine, "fake-host", faults)
-	fixture.Worker = NewFakeWorker(engine, "fake-host", faults)
+	fixture.Host = NewFakeHost(engine, "fake-host", faults, vcs.Observe)
+	fixture.Worker = NewFakeWorker(engine, "fake-host", faults, vcs.Observe)
 	return fixture, nil
 }
 
@@ -871,19 +763,19 @@ func fakeIntakeConfirmation() *protocol.IntakeConfirmationReceipt {
 }
 
 func (f *ProtocolFixture) Initialize(view *decision.State, provider string) error {
-	fingerprint, err := f.Engine.ObserveFingerprint()
+	observedInput, err := f.VCS.Observe()
 	if err != nil {
 		return err
 	}
 	confirmation := fakeIntakeConfirmation()
-	if err := f.Engine.InitWithMetadata(view, provider, fingerprint, "", "", confirmation, "", "", nil); err != nil {
+	if err := f.Engine.InitWithMetadata(view, provider, observedInput, "", "", confirmation, "", "", nil); err != nil {
 		return err
 	}
-	fingerprint, err = f.Engine.ObserveFingerprint()
+	observedInput, err = f.VCS.Observe()
 	if err != nil {
 		return err
 	}
-	_, err = f.Engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, fingerprint)
+	_, err = f.Engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, observedInput)
 	return err
 }
 
@@ -913,15 +805,15 @@ func (f *ProtocolFixture) PrepareReady() (decision.IssuedSet, error) {
 	if err := f.Initialize(view, "fake-host"); err != nil {
 		return nil, err
 	}
-	plan, _, err := f.Engine.Plan()
+	observedInput, err := f.VCS.Observe()
 	if err != nil {
 		return nil, err
 	}
-	fingerprint, err := f.Engine.ObserveFingerprint()
+	plan, _, err := f.Engine.Plan(observedInput)
 	if err != nil {
 		return nil, err
 	}
-	issued, _, err := f.Engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprint)
+	issued, _, err := f.Engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	return issued, err
 }
 
@@ -931,9 +823,13 @@ func TaskKey(node, step string) runtime.TaskKey {
 	return runtime.TaskKey{Node: authoring.NodeID(node), Step: authoring.StepID(step)}
 }
 
-// InternalSteps binds the fixture's transaction-local scheduling nodes.
+// InternalSteps binds the fixture's registered entry and transaction-local scheduling nodes.
 func InternalSteps() map[authoring.HandlerID]protocol.InternalStep {
-	bindings := make(map[authoring.HandlerID]protocol.InternalStep)
+	registered := func(s *protocol.State, _ compiler.CompiledStep) (bool, error) { return s.RunProvider != "", nil }
+	bindings := map[authoring.HandlerID]protocol.InternalStep{
+		"engine.entry.parse":   {Runner: authoring.RunnerEngineLocal, Run: registered},
+		"engine.entry.persist": {Runner: authoring.RunnerDurableActivity, Run: registered},
+	}
 	for _, id := range []authoring.HandlerID{"engine.fan.slice", "engine.fan.join", "engine.report.cost"} {
 		bindings[id] = protocol.InternalStep{Runner: authoring.RunnerEngineLocal, Run: func(*protocol.State, compiler.CompiledStep) (bool, error) { return true, nil }}
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -25,8 +26,9 @@ func confirmValidationCoverage(d *validationDriver, redo string, inventory *prot
 	d.t.Helper()
 	confirmValidationDocument(d, redo, inventory, validationDocument+"\n")
 }
-func confirmValidationDocument(d *validationDriver, redo string, inventory *protocol.CoverageInventory, document string) {
+func confirmValidationDocument(d *validationDriver, redo string, inventory *protocol.CoverageInventory, document string, redoReadiness ...bool) {
 	d.t.Helper()
+	redoStartReadiness := len(redoReadiness) > 0 && redoReadiness[0]
 	receipt := driverState(d.t, d).CurrentIntakeConfirmation()
 	if err := os.WriteFile(filepath.Join(d.f.root, receipt.RequirementSource), []byte(document), 0600); err != nil {
 		d.t.Fatal(err)
@@ -56,14 +58,14 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 		}
 	}
 	impact := &protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, TransitiveImpacts: []string{}, CarryReasons: []string{"all bound inputs preserve meaning"}}
-	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, Children: children, Impact: impact, Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: choices}
+	pkg := protocol.RequirementDecisionPackage{Intake: &intake.IntakeCandidate, Children: children, Impact: impact, Coverage: inventory, CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:work-selection", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: redoStartReadiness, WorkDecisions: choices}
 	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	d.submit(event)
 	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, Children: children, Impact: impact, Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: choices, Reason: "confirmed each work decision"}}}.WithRequirementDocument(document))
+	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, Children: children, Impact: impact, Coverage: inventory, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoStartReadiness: pkg.RedoStartReadiness, WorkDecisions: choices, Reason: "confirmed each work decision"}}}.WithRequirementDocument(document))
 }
 
 // TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection：重走
@@ -115,7 +117,7 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	}
 	d.submit(ev)
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			t.Fatal("new contract executed before plan confirmation")
 		}
 	}
@@ -128,27 +130,49 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	}
 }
 
-// unlockRouteByRequirementRedo 走需求变化勾选重走路线：PRESERVED 全携解
-// 除当前路线绑定并重新观察需求文档；已派发工作与波次证据不动，随后的重
-// 新选择由调用方完成（直接重选通道同样可达，两种通道等价）。
+// unlockRouteByRequirementRedo confirms the current source's formatting change
+// and carries every duty while reopening the route selection boundary.
 func unlockRouteByRequirementRedo(d *validationDriver) {
 	d.t.Helper()
-	d.routeRedos++
-	document := validationDocument + strings.Repeat("\n", d.routeRedos+1)
-	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	var choices []protocol.RequirementWorkDecision
-	for _, item := range d.run.RequirementWork {
-		choices = append(choices, protocol.RequirementWorkDecision{Work: item, Disposition: protocol.RequirementWorkCarry, Reason: "route redo carries every confirmed duty"})
-	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:route-redo", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, RedoRoute: true, WorkDecisions: choices}
-	event, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"})
+	source := d.run.IntakeConfirmationReceipt.RequirementSource
+	path := filepath.Join(d.f.root, source)
+	document, err := os.ReadFile(path)
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	d.submit(event)
-	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, RedoRoute: true, WorkDecisions: choices, Reason: "redo the route selection boundary"}}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
+	document = append(document, '\n')
+	if err := os.WriteFile(path, document, 0600); err != nil {
+		d.t.Fatal(err)
+	}
+	choices := make([]WorkChoice, len(d.run.RequirementWork))
+	for i := range choices {
+		choices[i] = WorkChoice{Disposition: protocol.RequirementWorkCarry, Reason: "route redo carries every confirmed duty"}
+	}
+	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Redo: []string{"route"}, Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"document formatting"}, CarryReasons: []string{"all bound inputs preserve meaning"}}}})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	_, d.run, err = d.f.SubmitControl(request)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	confirmation, err := d.f.PrepareControl(ControlInput{Ask: askPosition(d.t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "redo the route selection boundary"})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	intake := confirmation.Intake
+	if intake.Content != string(document) || intake.IntakeCandidate.RequirementSource != source || intake.RequirementDocument.Path != source || intake.Revision != intake.RequirementDocument.ContentDigest || intake.IntakeCandidate.RequirementRevision != intake.Revision {
+		d.t.Fatal("route redo confirmation differs from its actual requirement source")
+	}
+	before := d.run.Revision
+	_, d.run, err = d.f.SubmitControl(confirmation)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	state := driverState(d.t, d)
+	if d.run.Revision != before+1 || d.run.Review.RequirementRevision != confirmation.Event.Decide.Requirement.CandidateRevision || !reflect.DeepEqual(state.CurrentIntakeConfirmation(), &intake.IntakeCandidate) || !reflect.DeepEqual(state.Validation.Document, *intake.RequirementDocument) {
+		d.t.Fatal("route redo did not bind its complete source and projection in one confirmation")
+	}
 }
 
 func materializeUnchangedCandidate(d *validationDriver, candidate coverage.ValidationCandidate) {
@@ -269,7 +293,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
-	id, in := d.action("engine.repair.v5")
+	id, in := d.action("engine.repair.v6")
 	repair := gateRepairResult(in)
 	repair.Development.AffectedCases = []string{"invalid"}
 	repair.Development.CaseRuns[0].CaseID = "invalid"
@@ -376,7 +400,7 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 	confirmValidationWork(d, "")
 	d.reopen()
 	for i := 0; i < 12; i++ {
-		if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+		if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := d.f.driveNative(); err != nil {
@@ -443,5 +467,442 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(root, "requirements.md"))
 	if err != nil || string(body) != validationDocument+"\n" {
 		t.Fatalf("confirmed document was not delivered: %v", err)
+	}
+}
+
+func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
+	for _, status := range []string{"spawned", "awaiting-result", "unknown", "attached", "claimed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			root := t.TempDir()
+			base := snapshotRepoCommits(t, root)[0]
+			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
+			action, _ := d.action("engine.development.batch.v5")
+			before, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := before.State.PendingActions[action]
+			attempt := before.State.Attempts[original.Task]
+			correlation, identity := action, action
+			if status == "spawned" || status == "awaiting-result" {
+				d.receipt(action)
+				start, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), correlation, identity, protocol.LifecycleStart)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(start)
+			}
+			if status == "awaiting-result" {
+				for _, progress := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+					event, err := protocol.NewTaskEvent(d.eventID(), original.Task, attempt.ID, progress)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(event)
+				}
+			}
+			if status == "unknown" || status == "attached" {
+				correlation, identity = action+"/transport", action+"/native"
+				event, err := protocol.NewSpawnReceiptEvent(d.eventID(), action, d.host(), correlation, protocol.SpawnStatusUnknown)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(event)
+				if status == "attached" {
+					for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+						event, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), correlation, identity, edge)
+						if err != nil {
+							t.Fatal(err)
+						}
+						d.submit(event)
+					}
+				}
+			}
+			if status == "claimed" {
+				refs, err := d.f.workerMaterials(before.State, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref := refs[action]
+				request, _, directory, _, err := d.f.WorkerExecutionRequest(ref, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.MkdirAll(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = writeJSONAtomic(filepath.Join(directory, "native-request.json"), request); err != nil {
+					t.Fatal(err)
+				}
+				release, err := AdmitExecution(directory, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file, err := os.OpenFile(filepath.Join(directory, "owner"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+				if err == nil {
+					err = file.Close()
+				}
+				release()
+				if err != nil {
+					t.Fatal(err)
+				}
+				correlation, identity = directory, action+"/native"
+			}
+			path := filepath.Join(root, "requirements.md")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+				t.Fatal(err)
+			}
+			choices := make([]WorkChoice, len(d.run.RequirementWork))
+			for i, w := range d.run.RequirementWork {
+				choice := protocol.RequirementWorkCarry
+				if w.ActionID == action {
+					choice = protocol.RequirementWorkRedo
+				}
+				choices[i] = WorkChoice{Disposition: choice, Reason: "Explicitly replace unfinished implementation and carry independent duty"}
+			}
+			candidate, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"requirement formatting and implementation replay"}, CarryReasons: []string{"independent QA design remains applicable"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, d.run, err = d.f.SubmitControl(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status == "failed" {
+				failure, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), action, d.host(), action, protocol.SpawnStatusFailed, authoring.FailureTransientEngine)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(failure)
+			}
+			confirm, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "Confirm exact work dispositions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, d.run, err = d.f.SubmitControl(confirm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.reopen()
+			after, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			obsolete := after.State.ObsoleteActions[action]
+			if obsolete.AttemptID != attempt.ID || !reflect.DeepEqual(obsolete.Bindings, attempt.Bindings) || !reflect.DeepEqual(obsolete.Plan, attempt.Plan) {
+				t.Fatal("lost original complete carrier", obsolete, attempt)
+			}
+			if _, material := d.run.WorkerMaterials[action]; material {
+				t.Fatal("obsolete execution still has launch material")
+			}
+			if _, worker := after.State.WorkerInput(action, d.f.definition); worker {
+				t.Fatal("obsolete execution still admitted")
+			}
+			if _, replacement := after.State.PendingActions[obsolete.ReplacedBy]; replacement && status != "failed" && status != "attached" {
+				t.Fatal("replacement issued before stop", obsolete)
+			}
+			assertStopped := func(withLate bool) {
+				d.drive()
+				d.reopen()
+				final, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, pending := final.State.PendingActions[action]; pending {
+					t.Fatal("stopped original remains pending")
+				}
+				if _, ended := final.State.EndedAttempts[original.Task]; ended {
+					t.Fatal("stopped original remains awaiting result")
+				}
+				if _, replacement := final.State.PendingActions[obsolete.ReplacedBy]; !replacement {
+					t.Fatal("exact stop did not release replacement", d.run.Next, final.State.Tasks)
+				}
+				if !reflect.DeepEqual(final.State.ObsoleteActions[action], obsolete) {
+					t.Fatal("stop replaced original identity evidence", final.State.ObsoleteActions[action], obsolete)
+				}
+				if withLate && (len(final.State.ObsoleteResults[action]) != 1 || final.State.ObsoleteResults[action][0].PayloadDigest != "original-late-result") {
+					t.Fatal("late original raw evidence lost")
+				}
+			}
+			if status == "failed" || status == "attached" {
+				assertStopped(false)
+				return
+			}
+			late, err := protocol.NewWorkerResultEvent(d.eventID(), action, d.host(), protocol.OutcomeRuntimeError, "original-late-result", authoring.FailureTransientEngine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if acceptance := d.submit(late); acceptance.Status != "OBSOLETE_RESULT" {
+				t.Fatal("late result advanced original duty", acceptance)
+			}
+			if status == "unknown" || status == "claimed" {
+				unknown, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if unknown.State.SpawnReceipts[action].Status != protocol.SpawnStatusUnknown {
+					t.Fatal("unknown original lost", unknown.State.SpawnReceipts[action])
+				}
+				for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+					event, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), correlation, identity, edge)
+					if err != nil {
+						t.Fatal(err)
+					}
+					d.submit(event)
+				}
+				assertStopped(true)
+				return
+			}
+			after, err = d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var terminate protocol.HostActionIntent
+			for _, intent := range after.State.PendingHostActions {
+				if intent.Terminate != nil && intent.Terminate.WorkerActionID == action {
+					terminate = intent
+				}
+			}
+			if terminate.ActionID == "" || terminate.Terminate.AttemptID != attempt.ID || terminate.Terminate.Identity != identity {
+				t.Fatal("missing exact termination", terminate, identity)
+			}
+			after, err = d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, replacement := after.State.PendingActions[obsolete.ReplacedBy]; replacement {
+				t.Fatal("late result released replacement without stop")
+			}
+			wrong, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), terminate.ActionID, protocol.HostActionTerminateAgent, d.host(), terminate.ActionID, terminate.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity + "/wrong", Event: protocol.LifecycleStop})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = d.f.Submit(wrong); err == nil {
+				t.Fatal("wrong stop identity admitted")
+			}
+			unchanged, err := d.f.engine.Load()
+			if err != nil || !reflect.DeepEqual(after, unchanged) {
+				t.Fatal("wrong stop changed state", err)
+			}
+			stop, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), d.host(), correlation, identity, protocol.LifecycleStop)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(stop)
+			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), terminate.ActionID, protocol.HostActionTerminateAgent, d.host(), terminate.ActionID, terminate.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: protocol.LifecycleStop})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(receipt)
+			assertStopped(true)
+		})
+	}
+}
+
+func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
+	for _, kind := range []review.Action{review.ProductReview, review.StartReadiness} {
+		for _, terminal := range []bool{false, true} {
+			name := string(kind)
+			if terminal {
+				name += "/awaiting-result"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				base := snapshotRepoCommits(t, root)[0]
+				d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
+				if kind == review.StartReadiness {
+					passPreDevelopmentReviews(t, d, commandPlan(), review.ProductReview)
+				}
+				var action string
+				for id, pending := range d.run.PendingActions {
+					if pending.ReviewSeries == kind {
+						action = id
+					}
+				}
+				if action == "" {
+					t.Fatal("missing original series")
+				}
+				d.receipt(action)
+				initial, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				original := initial.State.PendingActions[action]
+				attempt := initial.State.Attempts[original.Task]
+				start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), action, protocol.LifecycleStart)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.submit(start)
+				if terminal {
+					for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
+						event, err := protocol.NewTaskEvent(d.eventID(), original.Task, attempt.ID, status)
+						if err != nil {
+							t.Fatal(err)
+						}
+						d.submit(event)
+					}
+				}
+				path := filepath.Join(root, "requirements.md")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				candidate, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Redo: []string{string(kind)}, Impact: protocol.RequirementImpact{ChangedItems: []string{"formatting with explicit fresh review"}, CarryReasons: []string{"unchanged other series"}}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, d.run, err = d.f.SubmitControl(candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				confirm, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "Redo the selected original review"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, d.run, err = d.f.SubmitControl(confirm)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.reopen()
+				after, err := d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				obsolete := after.State.ObsoleteActions[action]
+				if obsolete.AttemptID != attempt.ID || obsolete.Bindings != attempt.Bindings || obsolete.Plan != attempt.Plan {
+					t.Fatal("review carrier lost", obsolete, attempt)
+				}
+				for id, pending := range after.State.PendingActions {
+					if id != action && pending.ReviewSeries == kind {
+						t.Fatal("fresh review issued before original stop")
+					}
+				}
+				var termination protocol.HostActionIntent
+				for _, intent := range after.State.PendingHostActions {
+					if intent.Terminate != nil && intent.Terminate.WorkerActionID == action {
+						termination = intent
+					}
+				}
+				if termination.Terminate == nil || termination.Terminate.AttemptID != attempt.ID {
+					t.Fatal("missing review termination", termination)
+				}
+				d.completeWorkerTerminations()
+				d.reopen()
+				d.drive()
+				after, err = d.f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				fresh := false
+				for id, pending := range after.State.PendingActions {
+					if id != action && pending.ReviewSeries == kind {
+						fresh = true
+					}
+				}
+				if !fresh {
+					t.Fatal("stopped review did not unlock original fresh obligation", d.run.Next)
+				}
+				if !reflect.DeepEqual(after.State.ObsoleteActions[action], obsolete) {
+					t.Fatal("review stop lost carrier")
+				}
+			})
+		}
+	}
+}
+func TestRequirementRedoTracksLatestReplacementAndPreservesIndependentWorker(t *testing.T) {
+	root := t.TempDir()
+	base := snapshotRepoCommits(t, root)[0]
+	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
+	action, _ := d.action("engine.development.batch.v5")
+	qa, _ := d.action("engine.qa.design.v5")
+	d.receipt(action)
+	initial, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := initial.State.PendingActions[action]
+	independent := initial.State.PendingActions[qa]
+	independentAttempt := initial.State.Attempts[independent.Task]
+	start, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), action, protocol.LifecycleStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.submit(start)
+	var latest string
+	for iteration := 0; iteration < 2; iteration++ {
+		path := filepath.Join(root, "requirements.md")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+			t.Fatal(err)
+		}
+		choices := make([]WorkChoice, len(d.run.RequirementWork))
+		for i, w := range d.run.RequirementWork {
+			choice := protocol.RequirementWorkCarry
+			if w.Task.Step == original.Task.Step {
+				choice = protocol.RequirementWorkRedo
+			}
+			choices[i] = WorkChoice{Disposition: choice, Reason: "Replace the current implementation obligation only"}
+		}
+		candidate, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationPreserved, Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"implementation replay"}, CarryReasons: []string{"independent QA design unchanged"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, d.run, err = d.f.SubmitControl(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		confirm, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "Confirm current redo and independent carry"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, d.run, err = d.f.SubmitControl(confirm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.reopen()
+		current, err := d.f.engine.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.State.PendingActions[qa] != independent || !reflect.DeepEqual(current.State.Attempts[independent.Task], independentAttempt) {
+			t.Fatal("redo changed independent original execution")
+		}
+		for id, pending := range current.State.PendingActions {
+			if id != action && pending.Task.Step == original.Task.Step {
+				t.Fatal("replacement issued before original stopped")
+			}
+		}
+		for _, w := range d.run.RequirementWork {
+			if w.Task.Step == original.Task.Step {
+				latest = w.ActionID
+			}
+		}
+		if latest == "" || latest == action {
+			t.Fatal("missing current queued replacement")
+		}
+	}
+	d.completeWorkerTerminations()
+	d.drive()
+	d.reopen()
+	final, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issued := final.State.PendingActions[latest]; !issued {
+		t.Fatal("stopping original failed to release latest confirmed replacement", latest, d.run.Next)
+	}
+	if final.State.PendingActions[qa] != independent || !reflect.DeepEqual(final.State.Attempts[independent.Task], independentAttempt) {
+		t.Fatal("stop changed independent carried work")
 	}
 }

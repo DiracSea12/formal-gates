@@ -63,5 +63,3 @@ func parseTranscript(provider string, reader io.Reader) (Usage, error) {
 	}
 	return parser(reader)
 }
-
-func CodexTaskTiming(path string) (TaskTiming, error) { return host.CodexTaskTiming(path) }

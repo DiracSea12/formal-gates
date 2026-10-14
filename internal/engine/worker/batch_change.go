@@ -22,6 +22,7 @@ type BatchChange struct {
 	DependsOn     *[]int         `json:"dependsOn,omitempty"`
 	Subtasks      *[]Subtask     `json:"subtasks,omitempty"`
 	DoD           *[]Criterion   `json:"dod,omitempty"`
+	Requirements  *[]int         `json:"requirements,omitempty"`
 	Checks        *[]Check       `json:"checks,omitempty"`
 	Artifacts     *[]Location    `json:"artifacts,omitempty"`
 	NewArtifacts  *[]string      `json:"newArtifacts,omitempty"`

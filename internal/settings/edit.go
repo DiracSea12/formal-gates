@@ -3,6 +3,7 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/coordination"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,6 +48,21 @@ func EditableFields(e Effective) ([]EditableField, error) {
 // EditField changes only the selected field in its original overlay file. The
 // same Load rules validate the complete candidate before it replaces that file.
 func EditField(root, home, scope string, position int, value string, remove bool) (Effective, error) {
+	files := overlayPaths(root, home)
+	var path string
+	switch scope {
+	case "project":
+		path = files[1]
+	case "user":
+		path = files[0]
+	default:
+		return Effective{}, fmt.Errorf("configuration scope must be project or user")
+	}
+	release, err := coordination.AcquirePathWaiting(path+".lock", "settings edit")
+	if err != nil {
+		return Effective{}, err
+	}
+	defer release()
 	effective, err := Load(root, home)
 	if err != nil {
 		return Effective{}, err
@@ -57,15 +73,6 @@ func EditField(root, home, scope string, position int, value string, remove bool
 	}
 	if position < 1 || position > len(fields) {
 		return Effective{}, fmt.Errorf("field position must be 1..%d", len(fields))
-	}
-	var path string
-	switch scope {
-	case "project":
-		path = effective.Files[1]
-	case "user":
-		path = effective.Files[0]
-	default:
-		return Effective{}, fmt.Errorf("configuration scope must be project or user")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -108,10 +115,20 @@ func EditField(root, home, scope string, position int, value string, remove bool
 	if err := applyOverlay(&effective, path, candidate, path == effective.Files[0] && effective.Sources["tokenCap"] == filepath.Join(root, ".gates", "token-cap.json")); err != nil {
 		return Effective{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
+	if err != nil {
 		return Effective{}, err
 	}
-	if err := os.WriteFile(path, candidate, 0600); err != nil {
+	defer os.Remove(temp.Name())
+	_, writeErr := temp.Write(candidate)
+	closeErr := temp.Close()
+	if writeErr != nil {
+		return Effective{}, writeErr
+	}
+	if closeErr != nil {
+		return Effective{}, closeErr
+	}
+	if err := os.Rename(temp.Name(), path); err != nil {
 		return Effective{}, err
 	}
 	return Load(root, home)

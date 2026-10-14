@@ -25,7 +25,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if input.Pending.ActionID == "" || input.Pending.AttemptID == "" || input.Provider == "" || input.RequirementDocument.Content == "" {
 		return Material{}, fmt.Errorf("worker material requires issued identity and confirmed requirement context")
 	}
-	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v5" {
+	if input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v6" {
 		input.AvailableRouteCandidates = catalog.RouteCandidates()
 		input.AvailableRouteCandidates = slices.DeleteFunc(input.AvailableRouteCandidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
@@ -47,13 +47,13 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 
 	} else if input.Validation != nil {
 		switch input.Handler {
-		case "engine.development.batch.v4":
+		case "engine.development.batch.v5":
 			instructions = "Report summary, ordered DoD evidence and handoff for input.validation.development.batch. Supply commands only for its missing verification goals in their issued order; select existing read bytes or author genuinely new calls. Accepted calls are retained by the program. If work remains, return summary and actual remainingWork instead of completion. Use development.result and exact failed-check evidence as unfinished confirmed obligations."
 			value.ReadOnly = false
 		case "engine.repair.verify.v2":
 			instructions = "Report only each comparison and honest EXECUTED_PASS/EXECUTED_FAIL against the approved affected case oracle and issued native facts."
 			value.ReadOnly = true
-		case "engine.repair.v5":
+		case "engine.repair.v6":
 			instructions = "completion is only for an issued development batch or a proposed single batch in granularityReview. Without either, omit completion and report summary. If work remains, return summary and actual remainingWork instead of completion or granularityReview. Use repair.result as unfinished confirmed obligations."
 			if len(repairCaseIDs(input.Validation)) > 0 {
 				instructions += " affectedCases selects the affected cases from contract manifests in their original order, with duplicates removed; use 1-based positions."
@@ -78,12 +78,12 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.qa.execution.v3":
 			instructions = "Compare the issued complete native execution facts with each approved case oracle. Return records in issued pending required fact order, with comparison and EXECUTED_PASS/EXECUTED_FAIL, or null for unfinished comparison. The program derives checkpoint and overall status. Completed FAIL judgments are complete; when no new judgments remain, return records []. Missing native facts never establish PASS."
 			if len(input.Validation.CommandCases) > 0 {
-				instructions = "Return commands in commandCases order, each an ordered nonempty ARGV/SHELL operation list. Supply invocation only for these approved cases; preserve their fixed steps and oracle. The program binds the candidate and workspace, executes the operations and collects real stdout/stderr/exit. Do not run shell yourself or judge PASS before the original facts return."
+				instructions = "Return commands in commandCases/commandSources order, each an ordered nonempty ARGV/SHELL operation list. commandSources identifies the missing case invocation or shared preparation invocation at each position. Supply only these missing invocation values; preserve the approved shared procedures, case steps, oracle and all declared operations. The program supplies all identities, binds the candidate and workspace, executes the operations and collects real stdout/stderr/exit. Do not run shell yourself or judge PASS before the original facts return."
 			}
 			value.ReadOnly = true
 		case "engine.validation.observation.v2":
 			instructions = "Return findings/scopes/gateImpacts/suggestions arrays exactly their issued input order; preserve real P0/P1. sameAs selects input.validation.observation.problems first, then findings, numbered continuously from 1. A selected finding must be another pending item judged NEW; existing problem history is context. Scope cases select approvedCases; the program includes mustExecute. Accepted suggestion impact selects manifest case numbers, otherwise affectedCases is empty."
-		case "engine.gate.v2":
+		case "engine.gate.v3":
 			instructions = "Report concrete findings with independent evidence, normal-use reproduction and severity rationale."
 		default:
 			return Material{}, fmt.Errorf("unsupported worker role %s", input.Handler)
@@ -112,9 +112,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	switch input.Handler {
 	case "engine.review.worker.v2":
 		actionID = "product-review"
-	case "engine.readiness.plan.v4":
+	case "engine.readiness.plan.v5":
 		actionID = "start-readiness"
-	case "engine.development.batch.v4", "engine.repair.v5":
+	case "engine.development.batch.v5", "engine.repair.v6":
 		actionID = "development-worker"
 	case "engine.repair.verify.v2":
 		actionID = "qa-execution"
@@ -131,7 +131,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	if value.ReadOnly {
 		blocks = append(blocks, "[Shared reviewer contract]\n"+catalog.Base)
 	}
-	if input.Handler == "engine.gate.v2" {
+	if input.Handler == "engine.gate.v3" {
 		if input.Validation.Gate == nil {
 			return Material{}, fmt.Errorf("gate material lacks exact gate duty")
 		}
@@ -149,7 +149,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	var ruleIDs []string
 	switch input.Handler {
-	case "engine.gate.v2":
+	case "engine.gate.v3":
 		ruleIDs = []string{"gate"}
 	case "engine.repair.verify.v2":
 		for _, caseID := range input.Validation.Repair.VerificationCases {
@@ -185,6 +185,38 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	document.Content = ""
 	document.Requirements = nil
 	contextValue := map[string]any{"requirementDocument": document}
+	if len(input.RequirementPoints) > 0 {
+		contextValue["requirementPoints"] = input.RequirementPoints
+		instructions += " requirementPoints supplies the complete confirmed parent requirement, point, oracle and source in issued order. Judge all assigned points; never copy their IDs, original text, revision or binding into the result. Point coverage supplements the original responsibilities: development retains correctness, readability, simplicity, coupling, maintainability, redundancy, overengineering, defensive programming, abstraction and hardcoding; each reviewer retains its own gate dimensions and findings outside individual points. It does not establish QA execution."
+		if input.Review != nil && input.Review.Action == review.StartReadiness {
+			instructions += " Each proposed batch requirements selects assigned point positions from requirementPoints; the whole plan covers every issued point. Use the original batch responsibilities to explain the assignment."
+		}
+		if input.Handler == "engine.repair.v6" && completionBatch(input) == nil {
+			instructions += " requirementPoints is the complete confirmed choice inventory for repair planning; repair.requiredPoints contains only actual duties bound to the original confirmed findings and execution facts. Complete a small repair directly with summary and ordered requirements evidence for repair.requiredPoints, without selecting points or creating a plan. A necessary plan selects only actually affected contributions from the confirmed inventory and completion supplies evidence for the proposed single batch's selected points; omit outer requirements. An issued batch uses only completion.requirements. A quality repair without requiredPoints does not claim requirement points completed. Original quality and readability obligations remain effective without reimplementing the whole project."
+		}
+		if completionBatch(input) != nil {
+			instructions += " completion.requirements supplies actual evidence that this batch contribution is complete, in issued batch requirement-point order. DoD and subtasks define that contribution; another batch contribution to the same point can remain unfinished. Unfinished assigned work uses remainingWork."
+		}
+		if input.Handler == "engine.gate.v3" {
+			instructions += " requirements gives one independent PASS/FAIL and evidence per issued point within this gate responsibility. A FAIL selects its original findings by 1-based positions; P2/P3 findings can accompany a PASS. Finding severity and the existing gate contract determine overall status; a point FAIL alone does not establish P0/P1."
+			if len(input.Validation.Gate.Batches) > 0 {
+				instructions += " gate.batches defines the confirmed completed contributions for this boundary. Judge each issued point against those batches' subtasks and DoD, without requiring unfinished contributions of other batches. Retain the gate's original quality checks and change regressions."
+			}
+		}
+	}
+	if input.Review != nil && len(input.Review.SettledFindings) > 0 {
+		settled := make([]any, 0, len(input.Review.SettledFindings))
+		for _, item := range input.Review.SettledFindings {
+			finding := item.Finding
+			settled = append(settled, map[string]any{
+				"action": item.Action, "requirementRevision": item.RequirementRevision,
+				"finding":  map[string]any{"id": finding.ID, "severity": finding.Severity, "severityRationale": finding.SeverityRationale, "category": finding.Category, "requirement": finding.Requirement, "normalPath": finding.NormalPath, "actualError": finding.ActualError, "deferralImpact": finding.DeferralImpact, "verification": finding.Verification, "message": finding.Message, "locations": finding.Locations},
+				"decision": item.Decision, "effectiveSeverity": item.EffectiveSeverity, "reason": item.Reason,
+			})
+		}
+		contextValue["settledFindings"] = settled
+		instructions += " settledFindings supplies original facts and current user dispositions, not proof of completed repair. Review only your current duty; do not repeat a settled finding unchanged while its premise remains unchanged. If its premise actually changes, report the specific new basis. Do not return or regenerate the historical disposition list."
+	}
 	if len(input.Materials) > 0 {
 		selected := make([]map[string]any, len(input.Materials))
 		for i, material := range input.Materials {
@@ -208,7 +240,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		contextValue["scope"] = input.Scope
 		instructions += " scope supplies the confirmed responsibility of this child. Judge its assigned obligations and regressions caused by its changes; another owner's unfinished work is not a defect of this child."
 	}
-	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v5" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
+	planRole := input.Review != nil && input.Review.Action == review.StartReadiness || input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && input.Validation.Repair.Plan == nil && input.Validation.Development == nil
 	if planRole {
 		if input.ApprovedPlan != nil {
 			contextValue["approvedPlan"] = input.ApprovedPlan
@@ -230,9 +262,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		}
 		var names []string
 		switch input.Handler {
-		case "engine.development.batch.v4":
+		case "engine.development.batch.v5":
 			names = []string{"development"}
-		case "engine.repair.v5":
+		case "engine.repair.v6":
 			names = []string{"repair", "development", "contract"}
 		case "engine.merge.resolve.v3":
 			names = []string{"conflict"}
@@ -241,18 +273,36 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		case "engine.qa.review.rationale.v2":
 			names = []string{"manifest", "contract", "sourcePoints", "revisionInstruction", "acceptedSuggestions", "affectedCases", "reviewScope", "reviewBase", "reviewArtifact", "inheritableReviews", "inheritableSharedReviews"}
 		case "engine.qa.execution.v3":
-			names = []string{"manifest", "commandCases", "executionFacts", "requiredCases", "pendingCases"}
+			names = []string{"manifest", "commandCases", "commandSources", "executionFacts", "requiredCases", "pendingCases"}
 		case "engine.repair.verify.v2":
 			names = []string{"repair", "contract", "executionFacts"}
 		case "engine.validation.observation.v2":
 			names = []string{"observation"}
-		case "engine.gate.v2":
+		case "engine.gate.v3":
 			names = []string{"gate"}
 		}
 		validation := map[string]json.RawMessage{}
 		for _, name := range append(names, "interruption") {
 			if field, ok := fields[name]; ok {
 				validation[name] = field
+			}
+		}
+		if input.Handler == "engine.qa.review.rationale.v2" {
+			for _, field := range []struct {
+				name    string
+				reviews []coverage.ReviewDecision
+			}{{"inheritableReviews", input.Validation.InheritableReviews}, {"inheritableSharedReviews", input.Validation.InheritableSharedReviews}} {
+				if len(field.reviews) == 0 {
+					continue
+				}
+				ids := make([]string, len(field.reviews))
+				for i, item := range field.reviews {
+					ids[i] = item.ID
+				}
+				validation[field.name], err = json.Marshal(ids)
+				if err != nil {
+					return Material{}, err
+				}
 			}
 		}
 		if recovery := input.Validation.Interruption; recovery != nil {
@@ -279,28 +329,46 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				return Material{}, err
 			}
 		}
+		var currentCases []string
 		if input.Handler == "engine.qa.execution.v3" {
-			manifest := input.Validation.Manifest
-			manifest.Cases = nil
-			manifest.SharedSteps = nil
-			manifest.Edges = nil
-			manifest.Points = nil
-			manifest.Sources = nil
-			shared := map[string]bool{}
-			for _, item := range input.Validation.Manifest.Cases {
-				if slices.Contains(input.Validation.PendingCases, item.CaseID) {
-					manifest.Cases = append(manifest.Cases, item)
-					for _, id := range item.SharedSteps {
-						shared[id] = true
+			currentCases = executionCaseIDs(input.Validation)
+			if len(input.Validation.CommandCases) > 0 {
+				currentCases = input.Validation.CommandCases
+				delete(validation, "executionFacts")
+			}
+			for _, field := range []struct {
+				name string
+				ids  []string
+			}{{"requiredCases", input.Validation.RequiredCases}, {"pendingCases", input.Validation.PendingCases}} {
+				ids := []string{}
+				for _, id := range field.ids {
+					if slices.Contains(currentCases, id) {
+						ids = append(ids, id)
 					}
 				}
-			}
-			for _, step := range input.Validation.Manifest.SharedSteps {
-				if shared[step.ID] {
-					manifest.SharedSteps = append(manifest.SharedSteps, step)
+				validation[field.name], err = json.Marshal(ids)
+				if err != nil {
+					return Material{}, err
 				}
 			}
-			validation["manifest"], err = json.Marshal(manifest)
+			validation["manifest"], err = json.Marshal(promptCaseManifest(input.Validation.Manifest, currentCases))
+			if err != nil {
+				return Material{}, err
+			}
+		} else if input.Handler == "engine.repair.verify.v2" {
+			currentCases = input.Validation.Repair.VerificationCases
+			manifests := []coverage.AcceptanceManifest{}
+			for _, manifest := range input.Validation.Contract.Manifests {
+				selected := promptCaseManifest(manifest, currentCases)
+				if len(selected.Cases) > 0 {
+					manifests = append(manifests, selected)
+				}
+			}
+			validation["contract"], err = json.Marshal(map[string]any{"manifests": manifests})
+			if err != nil {
+				return Material{}, err
+			}
+			validation["repair"], err = json.Marshal(map[string]any{"verificationCases": currentCases})
 			if err != nil {
 				return Material{}, err
 			}
@@ -308,6 +376,9 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		if validation["executionFacts"] != nil {
 			facts := make([]any, 0, len(input.Validation.ExecutionFacts))
 			for _, fact := range input.Validation.ExecutionFacts {
+				if !slices.Contains(currentCases, fact.CaseID) {
+					continue
+				}
 				var operations []any
 				for _, operation := range fact.Operations {
 					qa := operation.Parameters.QA
@@ -320,7 +391,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 				return Material{}, err
 			}
 		}
-		if input.Validation.Repair != nil && validation["repair"] != nil {
+		if input.Handler == "engine.repair.v6" && input.Validation.Repair != nil && validation["repair"] != nil {
 			var repair map[string]json.RawMessage
 			if err := json.Unmarshal(validation["repair"], &repair); err != nil {
 				return Material{}, err
@@ -388,7 +459,7 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 	}
 	blocks = append(blocks, "[Action input]\n"+string(context), fmt.Sprintf("[Dispatch]\nrole=%s vcs=%s readOnly=%t", input.Handler, input.VCS, value.ReadOnly))
 
-	if planRole || input.Handler == "engine.development.batch.v4" || input.Handler == "engine.repair.v5" || input.Handler == "engine.qa.design.v5" {
+	if planRole || input.Handler == "engine.development.batch.v5" || input.Handler == "engine.repair.v6" || input.Handler == "engine.qa.design.v5" {
 		instructions += " Approved commands run in the registered workspace. Refer to workspace content by relative paths; SHELL may use \"$FORMAL_GATES_WORKSPACE\" for its root. The program supplies that variable; do not copy a physical directory into a command."
 	}
 	if planRole {
@@ -401,9 +472,30 @@ func Render(input protocol.WorkerInput, catalog prompts.PromptCatalog) (Material
 		instructions += " Available route choices are declared in Action input; select by 1-based number, and the program supplies the full gate catalog and actual IDs; per-batch routes, when proposed, use full/custom ordinary gates (not QA modes or reserved merge gates), with a non-empty selected subset for custom; omit unneeded batch routes."
 	}
 	instructions += " The workspace requirement operation reads the complete original confirmed document (optional from/to line range); its path and contentDigest are in Action input. Its published read number selects original value bytes without physical file identity. Keep the full requirement and acceptance scope; read the relevant original sections as your role requires."
-	blocks = append(blocks, "[Result contract]\n"+instructions+"\nCall submit_semantics with the direct semantic body or allowed inability/continuation alternative from its declared tool schema. The program serializes the result. Finish with an ordinary completion message. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters. Read-only VCS inspection remains permitted.\n")
+	blocks = append(blocks, "[Result contract]\n"+instructions+"\nCall submit_semantics with the direct semantic body or allowed inability/continuation alternative from its declared tool schema. The program serializes the result. Finish with an ordinary completion message. inability uses an actual non-empty interruptionReason. Do not return status, paths, transport outcome or role wrappers. Issued identities, bindings, native facts and inherited content are assembled by the program. Preserve honest FAIL judgments and actual semantic evidence. Do not execute any VCS write operation; all VCS writes belong to engine adapters.\n")
 	value.Prompt = strings.Join(blocks, "\n\n") + "\n"
 	return value, nil
+}
+
+// promptCaseManifest supplies current case oracles and their referenced shared
+// instructions. The complete coverage contract remains in Material.Input.
+func promptCaseManifest(original coverage.AcceptanceManifest, ids []string) coverage.AcceptanceManifest {
+	manifest := coverage.AcceptanceManifest{Binding: original.Binding}
+	shared := map[string]bool{}
+	for _, item := range original.Cases {
+		if slices.Contains(ids, item.CaseID) {
+			manifest.Cases = append(manifest.Cases, item)
+			for _, id := range item.SharedSteps {
+				shared[id] = true
+			}
+		}
+	}
+	for _, step := range original.SharedSteps {
+		if shared[step.ID] {
+			manifest.SharedSteps = append(manifest.SharedSteps, step)
+		}
+	}
+	return manifest
 }
 
 func promptWorkerResult(result *protocol.WorkerResult) (any, error) {

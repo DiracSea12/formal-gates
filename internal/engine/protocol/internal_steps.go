@@ -19,6 +19,25 @@ type InternalStep struct {
 	Run    func(*State, compiler.CompiledStep) (bool, error)
 }
 
+const reviewResultPredicate authoring.PredicateID = "pred.review.post"
+
+// ValidateDefinitionConditions binds the closed condition references to the
+// typed worker-result contract; other condition implementations are unavailable.
+func ValidateDefinitionConditions(cd *compiler.CompiledDefinition) error {
+	for _, step := range cd.Steps {
+		_, agent := step.Payload.(compiler.CompiledAgentStep)
+		if len(step.IO.Preconditions) != 0 || !agent && len(step.IO.Postconditions) != 0 || agent && len(step.IO.Postconditions) == 0 {
+			return &compiler.Error{Class: authoring.FailureBlockedBug, Msg: fmt.Sprintf("protocol: step %s predicate position has no implementation", step.Header.ID)}
+		}
+		for _, ref := range step.IO.Postconditions {
+			if ref.ID != reviewResultPredicate || ref.Negated {
+				return &compiler.Error{Class: authoring.FailureBlockedBug, Msg: fmt.Sprintf("protocol: step %s predicate %q (negated=%t) has no implementation", step.Header.ID, ref.ID, ref.Negated)}
+			}
+		}
+	}
+	return nil
+}
+
 func internalStepHandler(step compiler.CompiledStep) authoring.HandlerID {
 	switch payload := step.Payload.(type) {
 	case compiler.CompiledLocalStep:
@@ -31,8 +50,7 @@ func internalStepHandler(step compiler.CompiledStep) authoring.HandlerID {
 
 func bindInternalSteps(cd *compiler.CompiledDefinition, registry *compiler.Registry, supplied map[authoring.HandlerID]InternalStep) (map[authoring.HandlerID]InternalStep, error) {
 	bindings := map[authoring.HandlerID]InternalStep{
-		"engine.entry.parse":      {Runner: authoring.RunnerEngineLocal, Run: entryRegistered},
-		"engine.entry.persist":    {Runner: authoring.RunnerDurableActivity, Run: entryRegistered},
+		"engine.entry.registered": {Runner: authoring.RunnerEngineLocal, Run: entryRegistered},
 		"engine.children.prepare": {Runner: authoring.RunnerEngineLocal, Run: childrenCreated},
 		"engine.children.publish": {Runner: authoring.RunnerEngineLocal, Run: childrenCreated},
 	}
@@ -57,7 +75,7 @@ func bindInternalSteps(cd *compiler.CompiledDefinition, registry *compiler.Regis
 	return bindings, nil
 }
 
-// Entry's parsed and persisted state is the current transaction's State value.
+// Entry registration is the current transaction's initialized State value.
 func entryRegistered(s *State, _ compiler.CompiledStep) (bool, error) {
 	return s.RunProvider != "", nil
 }

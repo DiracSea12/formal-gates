@@ -82,12 +82,8 @@ func (f *Facade) integrationEvidence(s *protocol.State, intent protocol.HostActi
 				return nativeResult{}, false, err
 			}
 		}
-		entries, err := native.IndexEntries()
-		if err != nil {
-			return nativeResult{}, false, err
-		}
-		proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: entries}
-		for _, entry := range entries {
+		proof := &protocol.IntegrationEvidence{Prefix: p.Base, Incoming: p.Integration.Incoming, MergeHead: mergeHead, NativeLineage: observation.Lineage, NativeStarted: observation.Started, Index: observation.Entries}
+		for _, entry := range observation.Entries {
 			if entry.Stage == 0 {
 				continue
 			}

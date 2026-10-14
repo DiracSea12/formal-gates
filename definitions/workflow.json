@@ -1,7 +1,7 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "22",
+  "version": "25",
   "stateSchemaVersion": "2",
   "writer": "engine",
   "transactionOwner": "engine",
@@ -20,9 +20,9 @@
     {
       "id": "children.prepare",
       "nodeId": "children",
-      "ordinal": 4,
+      "ordinal": 3,
       "kind": "LOCAL",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -30,14 +30,7 @@
       "runner": "ENGINE_LOCAL",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.children.prepare"
@@ -46,9 +39,9 @@
     {
       "id": "children.workspace",
       "nodeId": "children",
-      "ordinal": 5,
+      "ordinal": 4,
       "kind": "HOST_ACTION",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "children.prepare"
       ],
@@ -56,29 +49,22 @@
       "runner": "HOST_ADAPTER",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "children.prepare",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.workspace",
         "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
         "operation": "op.workspace",
         "schema": "schema.workspace",
-        "timeoutNs": 60000000000
+        "timeoutNs": 0
       }
     },
     {
       "id": "children.publish",
       "nodeId": "children",
-      "ordinal": 6,
+      "ordinal": 5,
       "kind": "LOCAL",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "children.workspace"
       ],
@@ -86,25 +72,18 @@
       "runner": "ENGINE_LOCAL",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "children.workspace",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.children.publish"
       }
     },
     {
-      "id": "entry.parse",
+      "id": "entry.registered",
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -112,50 +91,17 @@
         "outputCodec": "codec.any.out"
       },
       "payload": {
-        "handler": "engine.entry.parse"
-      }
-    },
-    {
-      "id": "entry.persist",
-      "nodeId": "entry",
-      "ordinal": 1,
-      "kind": "DURABLE",
-      "definitionVersion": "22",
-      "dependencies": [
-        "entry.parse"
-      ],
-      "authority": "ENGINE",
-      "runner": "DURABLE_ACTIVITY",
-      "io": {
-        "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "entry.parse",
-            "output": "out",
-            "to": "in"
-          }
-        ]
-      },
-      "payload": {
-        "handler": "engine.entry.persist",
-        "idempotency": "DETERMINISTIC_INPUT",
-        "reconcileId": "reconcile.entry.persist",
-        "timeoutNs": 30000000000,
-        "retry": {
-          "maxAttempts": 3,
-          "backoffNs": 2000000000
-        }
+        "handler": "engine.entry.registered"
       }
     },
     {
       "id": "review.worker",
       "nodeId": "review",
-      "ordinal": 2,
+      "ordinal": 1,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
-        "entry.persist"
+        "entry.registered"
       ],
       "authority": "AGENT",
       "runner": "AGENT_WORKER",
@@ -165,13 +111,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "entry.persist",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -185,9 +124,9 @@
     {
       "id": "review.readiness",
       "nodeId": "review",
-      "ordinal": 3,
+      "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.worker"
       ],
@@ -200,17 +139,10 @@
           {
             "id": "pred.review.post"
           }
-        ],
-        "inputs": [
-          {
-            "from": "review.worker",
-            "output": "out",
-            "to": "in"
-          }
         ]
       },
       "payload": {
-        "handler": "engine.readiness.plan.v4",
+        "handler": "engine.readiness.plan.v5",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "start-readiness",
         "timeoutNs": 0
@@ -219,9 +151,9 @@
     {
       "id": "candidate.materialize",
       "nodeId": "validation",
-      "ordinal": 7,
+      "ordinal": 6,
       "kind": "HOST_ACTION",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -229,29 +161,22 @@
       "runner": "HOST_ADAPTER",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.candidate.review-range",
         "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
         "operation": "op.candidate",
         "schema": "schema.candidate.review-range",
-        "timeoutNs": 60000000000
+        "timeoutNs": 0
       }
     },
     {
       "id": "check.execute",
       "nodeId": "validation",
-      "ordinal": 8,
+      "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -259,14 +184,7 @@
       "runner": "HOST_ADAPTER",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.check",
@@ -279,9 +197,9 @@
     {
       "id": "cleanup.materialize",
       "nodeId": "validation",
-      "ordinal": 9,
+      "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -289,29 +207,22 @@
       "runner": "HOST_ADAPTER",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.cleanup",
         "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
         "operation": "op.cleanup",
         "schema": "schema.cleanup",
-        "timeoutNs": 60000000000
+        "timeoutNs": 0
       }
     },
     {
       "id": "development.repair",
       "nodeId": "validation",
-      "ordinal": 10,
+      "ordinal": 9,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -324,17 +235,10 @@
           {
             "id": "pred.review.post"
           }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
         ]
       },
       "payload": {
-        "handler": "engine.repair.v5",
+        "handler": "engine.repair.v6",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -345,9 +249,9 @@
     {
       "id": "development.worker",
       "nodeId": "validation",
-      "ordinal": 11,
+      "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -360,17 +264,10 @@
           {
             "id": "pred.review.post"
           }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
         ]
       },
       "payload": {
-        "handler": "engine.development.batch.v4",
+        "handler": "engine.development.batch.v5",
         "nonProgrammableReason": "CREATIVE_IMPLEMENTATION",
         "timeoutNs": 0,
         "retry": {
@@ -381,9 +278,9 @@
     {
       "id": "merge.resolve",
       "nodeId": "validation",
-      "ordinal": 12,
+      "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -395,13 +292,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -417,9 +307,9 @@
     {
       "id": "qa.design",
       "nodeId": "validation",
-      "ordinal": 13,
+      "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -431,13 +321,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -453,9 +336,9 @@
     {
       "id": "qa.execution",
       "nodeId": "validation",
-      "ordinal": 14,
+      "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -467,13 +350,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -489,9 +365,9 @@
     {
       "id": "qa.review",
       "nodeId": "validation",
-      "ordinal": 15,
+      "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -503,13 +379,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -526,9 +395,9 @@
     {
       "id": "repair.verification",
       "nodeId": "validation",
-      "ordinal": 16,
+      "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -540,13 +409,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -562,9 +424,9 @@
     {
       "id": "validation.gate",
       "nodeId": "validation",
-      "ordinal": 17,
+      "ordinal": 16,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -577,17 +439,10 @@
           {
             "id": "pred.review.post"
           }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
         ]
       },
       "payload": {
-        "handler": "engine.gate.v2",
+        "handler": "engine.gate.v3",
         "nonProgrammableReason": "INDEPENDENT_REVIEW",
         "reviewSeries": "unaffiliated",
         "timeoutNs": 0,
@@ -599,9 +454,9 @@
     {
       "id": "validation.observation",
       "nodeId": "validation",
-      "ordinal": 18,
+      "ordinal": 17,
       "kind": "AGENT",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -613,13 +468,6 @@
         "postconditions": [
           {
             "id": "pred.review.post"
-          }
-        ],
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
           }
         ]
       },
@@ -635,9 +483,9 @@
     {
       "id": "workspace.materialize",
       "nodeId": "validation",
-      "ordinal": 19,
+      "ordinal": 18,
       "kind": "HOST_ACTION",
-      "definitionVersion": "22",
+      "definitionVersion": "25",
       "dependencies": [
         "review.readiness"
       ],
@@ -645,21 +493,14 @@
       "runner": "HOST_ADAPTER",
       "io": {
         "inputCodec": "codec.any.in",
-        "outputCodec": "codec.any.out",
-        "inputs": [
-          {
-            "from": "review.readiness",
-            "output": "out",
-            "to": "in"
-          }
-        ]
+        "outputCodec": "codec.any.out"
       },
       "payload": {
         "handler": "engine.workspace",
         "boundary": "EXTERNAL_CAPABILITY_BOUNDARY",
         "operation": "op.workspace",
         "schema": "schema.workspace",
-        "timeoutNs": 60000000000
+        "timeoutNs": 0
       }
     }
   ]

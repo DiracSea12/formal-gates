@@ -51,22 +51,17 @@ function payloadFor(ctx, exec) {
 
 function denyDecision(decision) {
   if (!decision || typeof decision !== 'object') return false
-  return decision.permissionDecision === 'deny' ||
-    decision.PermissionDecision === 'deny' ||
-    decision.decision === 'block' ||
-    decision.Decision === 'block'
+  return decision.permissionDecision === 'deny'
 }
 
 function denyReason(decision) {
   if (!decision || typeof decision !== 'object') return ''
   return decision.permissionDecisionReason ||
-    decision.PermissionDecisionReason ||
     decision.reason ||
-    decision.Reason ||
     'blocked by formal-gates hook'
 }
 
-function runBinary(ctx, binary, args, payload, signal, timeoutMs, dshHome) {
+function runBinary(binary, args, payload, signal, timeoutMs, dshHome) {
   return new Promise((resolve) => {
     let settled = false
     let stdout = ''
@@ -121,17 +116,15 @@ export function apply(ctx, config = {}) {
   const warn = typeof ctx.logger && typeof ctx.logger.warn === 'function'
     ? (message) => ctx.logger.warn(message)
     : () => {}
-  // DSH loads the skill from a replaceable release directory. The configured
-  // config.skillRoot is only the plugin location; hook writes must
-  // instead go through the registry-admitted stable launcher so an upgrade or
-  // rollback cannot leave the plugin executing an unregistered candidate.
+  // DSH resolves the plugin beside its home patch. Hook writes use the
+  // registry-admitted stable launcher throughout upgrades and rollbacks.
   const binary = stableLauncherPath()
   const timeoutMs = Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS
   const dshHome = typeof config.dshHome === 'string' && config.dshHome.trim() !== '' ? config.dshHome : undefined
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
-      const result = await runBinary(ctx, binary, ['hook', 'decide', '--provider', config.provider], payloadFor(ctx, exec), exec.signal, timeoutMs, dshHome)
+      const result = await runBinary(binary, ['hook', 'decide', '--provider', config.provider], payloadFor(ctx, exec), exec.signal, timeoutMs, dshHome)
       const decision = parseDecision(result)
       if (denyDecision(decision)) return { kind: 'deny', reason: denyReason(decision) }
       if (result.error || (typeof result.code === 'number' && result.code !== 0)) {

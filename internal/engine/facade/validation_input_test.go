@@ -18,7 +18,7 @@ func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
 	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-	id, in = d.action("engine.development.batch.v4")
+	id, in = d.action("engine.development.batch.v5")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implement input validation"}})
 	d.materialize()
 	d.materialize()
@@ -84,7 +84,7 @@ func assertValidationInputModes(t *testing.T, d *validationDriver) {
 			if input.Handler == "engine.qa.execution.v3" && (input.Execution == nil || input.Whitelist == nil || len(input.Execution.ExpectedCaseIDs) != 2) {
 				t.Fatal("execution lost approved cases")
 			}
-		case "engine.gate.v2", "engine.development.batch.v4":
+		case "engine.gate.v3", "engine.development.batch.v5":
 			if input.Contract != nil || len(input.Manifest.Cases) != 0 || len(input.Completed) != 0 || input.Execution != nil {
 				t.Fatal("non-QA role received QA materials")
 			}

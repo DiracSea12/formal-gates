@@ -79,7 +79,7 @@ func TestGenerateReproducesCheckedInArtifactsZeroDiff(t *testing.T) {
 	}
 }
 
-// 用例：gen-definition 命令端到端——从快照源码构建生成器二进制，在两个独立
+// 用例：gen-definition 命令端到端——从当前源码构建生成器二进制，在两个独立
 // 进程/工作目录分别执行，产物逐字节相同且等于 checked-in 制品与身份常量
 // （跨进程、重复构建确定性）。
 func TestGenDefinitionCommandDeterministicAcrossProcesses(t *testing.T) {
@@ -91,14 +91,14 @@ func TestGenDefinitionCommandDeterministicAcrossProcesses(t *testing.T) {
 		binName += ".exe"
 	}
 	bin := filepath.Join(tmp, binName)
-	build := exec.Command("go", "build", "-o", bin, "./cmd/gen-definition")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/gen-definition: %v\n%s", err, out)
-	}
-
 	runs := make([][]byte, 2)
+	identities := make([][]byte, len(runs))
 	for i := range runs {
+		build := exec.Command("go", "build", "-o", bin, "./cmd/gen-definition")
+		build.Dir = root
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build ./cmd/gen-definition: %v\n%s", err, out)
+		}
 		workdir := t.TempDir()
 		cmd := exec.Command(bin)
 		cmd.Dir = workdir
@@ -110,6 +110,21 @@ func TestGenDefinitionCommandDeterministicAcrossProcesses(t *testing.T) {
 			t.Fatalf("run %d: %v", i, err)
 		}
 		runs[i] = data
+		identity, err := os.ReadFile(filepath.Join(workdir, "internal", "engine", "definition", "identity_gen.go"))
+		if err != nil {
+			t.Fatalf("run %d: read generated identity: %v", i, err)
+		}
+		identities[i] = identity
+	}
+	if !bytes.Equal(identities[0], identities[1]) {
+		t.Fatal("two gen-definition processes produced different identity bytes")
+	}
+	checkedInIdentity, err := os.ReadFile(filepath.Join(root, "internal", "engine", "definition", "identity_gen.go"))
+	if err != nil {
+		t.Fatalf("read checked-in identity: %v", err)
+	}
+	if !bytes.Equal(identities[0], checkedInIdentity) {
+		t.Fatal("gen-definition identity differs from checked-in identity_gen.go")
 	}
 	if !bytes.Equal(runs[0], runs[1]) {
 		t.Fatal("two gen-definition processes produced different artifact bytes")

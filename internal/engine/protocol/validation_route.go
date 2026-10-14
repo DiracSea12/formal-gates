@@ -12,7 +12,7 @@ func (e *Engine) validateRouteChange(s *State, selected []string) error {
 	}
 	started := false
 	for _, binding := range s.DispatchBindings {
-		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v4" {
+		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v5" {
 			started = true
 		}
 	}
@@ -123,7 +123,7 @@ func (s *State) carryRouteTarget(target *ValidationTarget, prior, current *Valid
 		if !sameTarget(previous, target) || !slices.Contains([]string{"PASS", "FAIL", "DISPOSED", "AUTHORIZED_SKIP"}, previous.Status) {
 			continue
 		}
-		s.carryValidationTarget(target, previous, current)
+		s.carryValidationTarget(target, previous, prior, current)
 		return
 	}
 }
@@ -139,7 +139,10 @@ func manifestAtRoute(manifest coverage.AcceptanceManifest, route string) coverag
 
 // The current target is a projection; original result and wave bindings remain
 // untouched in their evidence records.
-func (s *State) carryValidationTarget(target, previous *ValidationTarget, current *ValidationWave) bool {
+func (s *State) carryValidationTarget(target, previous *ValidationTarget, prior, current *ValidationWave) bool {
+	if !s.sameGateResponsibility(prior, previous, current, target) {
+		return false
+	}
 	carried := *previous
 	if previous.GateImpact != nil {
 		impact := *previous.GateImpact
@@ -168,7 +171,7 @@ func (s *State) carryValidationTarget(target, previous *ValidationTarget, curren
 // targetResponsibility locates the frozen duty behind a current projection or
 // repair-derived verdict. Identity lookup grants no result or scope reuse.
 func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTarget) (*ValidationWave, *ValidationTarget) {
-	if target.GateImpact != nil {
+	if target.GateImpact != nil && target.GateImpact.Decision == "INHERIT" {
 		if source := s.validationWave(target.GateImpact.SourceWave); source != nil {
 			for _, original := range source.Targets {
 				if sameTarget(original, target) {
@@ -184,21 +187,23 @@ func (s *State) targetResponsibility(wave *ValidationWave, target *ValidationTar
 		}
 		return wave, target
 	}
-	source := s.sourceValidationTask(binding.Task)
-	for i := range s.Validation.Waves {
-		original := &s.Validation.Waves[i]
-		if original.Repair == nil || original.Repair.Task != source {
-			continue
-		}
-		for _, prior := range original.Targets {
-			if sameTarget(prior, target) && prior.ResultAction != target.ResultAction {
-				return s.targetResponsibility(original, prior)
-			}
-		}
-	}
 	if original := s.validationWave(binding.WaveID); original != nil {
 		if prior := original.target(binding.Task.String()); prior != nil {
 			return original, prior
+		}
+		if original.Repair != nil {
+			source := s.sourceValidationTask(binding.Task)
+			for _, member := range s.repairExecutions(original) {
+				if s.sourceValidationTask(member.task) != source {
+					continue
+				}
+				for _, prior := range original.Targets {
+					if sameTarget(prior, target) && prior.ResultAction != target.ResultAction {
+						return s.targetResponsibility(original, prior)
+					}
+				}
+				break
+			}
 		}
 	}
 	return wave, target

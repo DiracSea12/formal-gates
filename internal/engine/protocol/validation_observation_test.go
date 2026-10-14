@@ -68,7 +68,7 @@ func TestSemanticObservationUsesOriginalAdmissionAndRecovery(t *testing.T) {
 		t.Fatal("serialized state changed original native/input identity")
 	}
 	s = &reopened
-	accepted, changed, err := e.admitWorkerResultRecord(s, pending.ActionID, &payload, "semantic-result", "", 2, 3, "")
+	accepted, changed, err := e.admitWorkerResultRecord(s, pending.ActionID, &payload, "semantic-result", "", 2, 3, Observation{})
 	if err != nil || !changed || accepted.Status != "ACCEPTED" {
 		t.Fatalf("admission: %#v %v", accepted, err)
 	}
@@ -76,7 +76,7 @@ func TestSemanticObservationUsesOriginalAdmissionAndRecovery(t *testing.T) {
 	if len(f.History) != 1 || f.History[0].AcceptedRevision != 3 || f.History[0].Severity != "P1" || f.History[0].ProblemID != FindingProblemID(ValidationFinding{ID: f.ID}) || s.Results[pending.ActionID].PayloadDigest != "actual-semantic-output" {
 		t.Fatalf("original adjudication/evidence lost: %#v", f)
 	}
-	repeated, changed, err := e.admitWorkerResultRecord(s, pending.ActionID, &payload, "semantic-repeat", "", 3, 4, "")
+	repeated, changed, err := e.admitWorkerResultRecord(s, pending.ActionID, &payload, "semantic-repeat", "", 3, 4, Observation{})
 	if err != nil || changed || repeated.Status != "DUPLICATE" || len(f.History) != 1 {
 		t.Fatalf("repeat changed original judgment: %#v %v", repeated, err)
 	}
@@ -153,7 +153,7 @@ func TestSemanticObservationRejectsStaleAndInvalidOriginalJudgments(t *testing.T
 				if s.WorkerInputs(e.cfg.Definition)[pending.ActionID].Pending.ActionID != "" {
 					t.Fatal("superseded input was offered to a native worker")
 				}
-				if _, err := e.completeResult(s, workerResultRecord(&payload), 3, ""); err != nil {
+				if _, err := e.completeResult(s, workerResultRecord(&payload), 3, Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				if len(s.ObsoleteResults[pending.ActionID]) != 1 || s.ObsoleteResults[pending.ActionID][0].PayloadDigest != payload.PayloadDigest {

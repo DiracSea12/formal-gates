@@ -2,8 +2,6 @@ package acceptance_test
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -64,11 +62,11 @@ func newCandidateDriver(t *testing.T, mode string, requirementPath ...string) *c
 			t.Fatal(err)
 		}
 	}
+	path := p.intake.RequirementSource
 	if len(requirementPath) > 0 {
-		p.intake.RequirementSource = requirementPath[0]
-		p.intake.Artifacts[0].Path = requirementPath[0]
+		path = requirementPath[0]
 	}
-	write(p.intake.RequirementSource, candidateDocument)
+	write(path, candidateDocument)
 	write("go.mod", "module candidate-app\n\ngo 1.22\n")
 	write("old_test.go", "package main\nimport \"testing\"\nfunc TestOld(t *testing.T) {}\n")
 	write("remove_test.go", "package main\nimport \"testing\"\nfunc TestRemove(t *testing.T) {}\n")
@@ -76,10 +74,7 @@ func newCandidateDriver(t *testing.T, mode string, requirementPath ...string) *c
 	p.git(t, "add", "--all")
 	p.git(t, "commit", "-qm", "Candidate project inputs")
 	p.base = p.git(t, "rev-parse", "HEAD")
-	sum := sha256.Sum256([]byte(candidateDocument))
-	p.intake.RequirementRevision = hex.EncodeToString(sum[:])
-	p.intake.Artifacts[0].Revision = p.intake.RequirementRevision
-	writeInstalledJSON(t, p.intakePath, p.intake)
+	p.prepareIntake(t, path)
 	p.install(t, "codex", "global")
 	p.call(t, nil, p.startArgs("candidate", "regular")...)
 	d := &candidateDriver{p: p, t: t, mode: mode}
@@ -296,8 +291,6 @@ func (d *candidateDriver) reviews() {
 		d.submit(event)
 		d.drive()
 	}
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: d.p.intake.RequirementRevision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: d.p.intake.RequirementRevision, Document: candidateDocument}}})
-	d.drive()
 	opened, err := facade.Open(d.p.project, "candidate")
 	if err != nil {
 		d.t.Fatal(err)
@@ -352,7 +345,7 @@ func (d *candidateDriver) business(id string, result protocol.ValidationResult) 
 		d.t.Fatal("worker resource owner is not admitted")
 	}
 	expected := input.Workspace.Identity
-	if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v2" {
+	if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v3" {
 		expected = input.Binding.Candidate
 		if input.Workspace.Source != expected {
 			d.t.Fatal("execution source is not Qn")
@@ -394,7 +387,7 @@ func (d *candidateDriver) write(root, path, body string, mode os.FileMode) {
 	}
 }
 func (d *candidateDriver) develop(id string, input protocol.ValidationInput, extraPaths ...string) {
-	if input.Handler != "engine.development.batch.v4" || input.Development == nil {
+	if input.Handler != "engine.development.batch.v5" || input.Development == nil {
 		d.t.Fatal("wrong development method")
 	}
 	body := d.implementation
@@ -404,7 +397,7 @@ func (d *candidateDriver) develop(id string, input protocol.ValidationInput, ext
 	d.write(input.Workspace.Path, "app.go", body, 0644)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: append([]string{"app.go"}, extraPaths...), Summary: "Implemented input validation", Completion: &protocol.DevelopmentCompletion{DoD: map[string]string{"behavior": "Input contract holds"}, Handoff: "Command ready"}}})
 }
-func (d *candidateDriver) designResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
+func (d *candidateDriver) designResult(input protocol.ValidationInput) protocol.ValidationResult {
 	manifest := input.Manifest
 	manifest.Cases = nil
 	manifest.Edges = nil
@@ -445,7 +438,7 @@ func (d *candidateDriver) designResult(id string, input protocol.ValidationInput
 	return result
 }
 func (d *candidateDriver) design(id string, input protocol.ValidationInput) {
-	d.business(id, d.designResult(id, input))
+	d.business(id, d.designResult(input))
 }
 func (d *candidateDriver) caseReview(id string, input protocol.ValidationInput) {
 	result := coverage.ReviewResult{Binding: input.Manifest.Binding, Scope: coverage.ScopeFull}
@@ -506,7 +499,7 @@ func (d *candidateDriver) untilValidation() {
 		for _, id := range ids {
 			input := d.run.ValidationInputs[id]
 			switch input.Handler {
-			case "engine.development.batch.v4":
+			case "engine.development.batch.v5":
 				d.develop(id, input)
 			case "engine.qa.design.v5":
 				d.design(id, input)
@@ -585,7 +578,7 @@ func (d *candidateDriver) executeWorkers() {
 			}
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
-		} else if input.Handler == "engine.gate.v2" {
+		} else if input.Handler == "engine.gate.v3" {
 			cmd := exec.Command("go", "test", "-timeout=0", "./...")
 			cmd.Dir = input.Workspace.Path
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -831,7 +824,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 	d := newCandidateDriver(t, "both")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			d.develop(id, input)
 		} else if input.Handler == "engine.qa.design.v5" {
 			d.design(id, input)
@@ -856,7 +849,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 	d.assertClean()
 }
 
-func TestInstalledAcceptedEventsReplayDuringTerminalCleanup(t *testing.T) {
+func TestInstalledAcceptedEventsReplayInParallelWithTerminalDrive(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	d.untilValidation()
@@ -934,7 +927,7 @@ func TestInstalledCandidateRejectsUndeclaredContent(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			d.write(input.Workspace.Path, "notes.txt", "unrelated user content\n", 0644)
 			d.develop(id, input)
 			d.expectNativeError("undeclared change: notes.txt")
@@ -954,12 +947,12 @@ func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
 	d.reviews()
 	for n := 0; n < 6; n++ {
 		for id, input := range d.run.ValidationInputs {
-			if input.Handler == "engine.development.batch.v4" {
+			if input.Handler == "engine.development.batch.v5" {
 				d.develop(id, input)
 				continue
 			}
 			if input.Handler == "engine.qa.design.v5" && input.Manifest.Binding.ReviewKind == coverage.ReviewWhitebox {
-				result := d.designResult(id, input)
+				result := d.designResult(input)
 				d.write(input.Workspace.Path, "app.go", "package main\nfunc main() {}\nfunc valid(s string) bool {return true}\n", 0644)
 				result.Development.Paths = append(result.Development.Paths, "app.go")
 				d.business(id, result)
@@ -1009,7 +1002,7 @@ func TestInstalledCandidatePreservesUndeclaredIndexEdit(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler != "engine.development.batch.v4" {
+		if input.Handler != "engine.development.batch.v5" {
 			continue
 		}
 		root := input.Workspace.Path
@@ -1036,7 +1029,7 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 	d.reviews()
 	d.implementation = "package main\nimport (\"os\"; _ \"embed\")\n//go:embed old_test.go\nvar content string\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\"}\n"
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			d.write(input.Workspace.Path, "old_test.go", "package main\nimport \"testing\"\nfunc TestOld(t *testing.T) {t.Log(\"production embed\")}\n", 0644)
 			d.develop(id, input, "old_test.go")
 		}
@@ -1045,7 +1038,7 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 	d.untilValidation()
 	found := false
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.gate.v2" {
+		if input.Handler == "engine.gate.v3" {
 			found = true
 			if input.Gate == nil || slices.Contains(input.Gate.TestOwnedPaths, "old_test.go") {
 				t.Fatalf("production build input removed from gate range: %+v", input.Gate)
@@ -1062,13 +1055,24 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 func TestInstalledRequirementBarrierPreventsCandidateWrites(t *testing.T) {
 	d := newCandidateDriver(t, "none")
 	d.reviews()
+	var workspaces []protocol.NativeResource
 	for id, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.development.batch.v4" {
+		if input.Handler == "engine.development.batch.v5" {
 			d.develop(id, input)
+			workspaces = append(workspaces, *input.Workspace)
 		}
 	}
 	if len(d.run.AdapterIntents) == 0 {
 		t.Fatal("no issued candidate responsibility")
+	}
+	workspaceFacts := make([][4]string, len(workspaces))
+	for i, workspace := range workspaces {
+		workspaceFacts[i] = [4]string{
+			d.p.git(t, "-C", workspace.Path, "rev-parse", "HEAD"),
+			d.p.git(t, "-C", workspace.Path, "write-tree"),
+			d.p.git(t, "-C", workspace.Path, "status", "--porcelain"),
+			d.p.git(t, "show-ref", "--verify", "--hash", workspace.Ref),
+		}
 	}
 	d.control(facade.ControlInput{Request: protocol.ControlRequestRequirementChange})
 	before := d.p.git(t, "worktree", "list", "--porcelain")
@@ -1078,6 +1082,17 @@ func TestInstalledRequirementBarrierPreventsCandidateWrites(t *testing.T) {
 	}
 	if d.p.git(t, "worktree", "list", "--porcelain") != before {
 		t.Fatal("barrier executed candidate write")
+	}
+	for i, workspace := range workspaces {
+		after := [4]string{
+			d.p.git(t, "-C", workspace.Path, "rev-parse", "HEAD"),
+			d.p.git(t, "-C", workspace.Path, "write-tree"),
+			d.p.git(t, "-C", workspace.Path, "status", "--porcelain"),
+			d.p.git(t, "show-ref", "--verify", "--hash", workspace.Ref),
+		}
+		if after != workspaceFacts[i] {
+			t.Fatalf("barrier changed development workspace %s: %v != %v", workspace.ID, after, workspaceFacts[i])
+		}
 	}
 	d.assertTargetUnchanged()
 }

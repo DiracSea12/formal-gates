@@ -97,7 +97,7 @@ func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
 			params.SourceWorkspace = id
 		}
 	}
-	if err := d.f.engine.OpenPromotion(params, emptyFingerprint()); err != nil {
+	if err := d.f.engine.OpenPromotion(params, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := d.f.engine.Load()
@@ -110,7 +110,7 @@ func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
 	}
 	promoted := source.Identity
 	proof := protocol.CandidatePromotionReceipt{OperationID: intent.ActionID, Provider: "git", SourceWorkspace: params.SourceWorkspace, Source: source.Identity, SourceDigest: source.Digest, TargetRoot: params.TargetRoot, TargetBase: params.TargetBase, TargetStart: params.TargetStart, Final: promoted, FinalDigest: source.Digest}
-	if err := d.f.engine.RecordCandidatePromotion(intent.ActionID, proof, emptyFingerprint()); err != nil {
+	if err := d.f.engine.RecordCandidatePromotion(intent.ActionID, proof, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	d.reopen()

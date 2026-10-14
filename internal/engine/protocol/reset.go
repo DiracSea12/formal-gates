@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -102,7 +103,7 @@ func (e *Engine) acceptResetDecision(s *State, ask PendingAsk, d *DecidePayload)
 		return validationError("reset requires the exact preservation/cleanup preview and reason")
 	}
 	current := s.ResetPreview()
-	current.Work = e.requirementWork(s)
+	current.Work = s.requirementWork(e.cfg.Definition)
 	current.RequirementRevision = ask.Reset.RequirementRevision
 	current.Intake = ask.Reset.Intake
 	current.Children = ask.Reset.Children
@@ -145,7 +146,8 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		}
 	}
 	for _, a := range s.EndedAttempts {
-		if a.AwaitingResult && all && !slices.Contains(ids, a.ActionID) {
+		_, obsolete := s.ObsoleteActions[a.ActionID]
+		if a.AwaitingResult && (all || obsolete) && !slices.Contains(ids, a.ActionID) {
 			ids = append(ids, a.ActionID)
 		}
 	}
@@ -153,10 +155,41 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 	changed := false
 	for _, id := range ids {
 		receipt, known := s.SpawnReceipts[id]
-		if !known || receipt.Status == SpawnStatusUnknown {
-			continue
+		stopped := known && (receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop))
+		if !known {
+			failures := s.SpawnFailures[id]
+			stopped = len(failures) > 0 && failures[len(failures)-1].FailureClass != authoring.FailureSideEffectUnknown
+			if !stopped && e.cfg.WorkerExecution != nil {
+				pending, attempt, _ := s.workerActionTarget(id)
+				observed, err := e.cfg.WorkerExecution(pending, attempt)
+				if err != nil {
+					return changed, err
+				}
+				if observed != nil {
+					event, err := NewSpawnReceiptEvent(EventID("native-spawn:"+id), observed.ActionID, observed.Provider, observed.Correlation, observed.Status)
+					if err != nil {
+						return changed, err
+					}
+					digest, err := event.Digest()
+					if err != nil {
+						return changed, err
+					}
+					accepted, _, _, err := e.admit(event, digest, s, revision-1, revision, Observation{})
+					if err != nil {
+						return changed, err
+					}
+					s.Events[string(event.ID)] = EventRecord{Digest: digest, Acceptance: accepted}
+					receipt, known = s.SpawnReceipts[id]
+					changed = true
+					stopped = known && (receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop))
+				} else {
+					_, result := s.Results[id]
+					_, staged := s.StagedResults[id]
+					stopped = !result && !staged && len(s.ObsoleteResults[id]) == 0
+				}
+			}
 		}
-		if receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop) {
+		if stopped {
 			p, retired := s.retireAction(id, "", reason+request)
 			if retired {
 				if err := s.terminalizeTask(p.Task); err != nil {
@@ -166,6 +199,9 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 			}
 			delete(s.EndedAttempts, p.Task)
 			changed = changed || retired
+			continue
+		}
+		if !known || receipt.Status == SpawnStatusUnknown {
 			continue
 		}
 		exists := false
@@ -240,12 +276,12 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	}
 	for id := range s.Results {
 		binding := s.DispatchBindings[id]
-		if id != planSource && s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch.v4" {
+		if id != planSource && s.validationRole(binding.Task, e.cfg.Definition) != "engine.development.batch.v5" {
 			s.archiveDispatchResults(id)
 		}
 	}
 	for id, receipt := range s.SpawnReceipts {
-		if s.validationRole(receipt.Task, e.cfg.Definition) != "engine.development.batch.v4" {
+		if s.validationRole(receipt.Task, e.cfg.Definition) != "engine.development.batch.v5" {
 			s.retireAction(id, "", "Reset authorized by "+d.RequestID)
 		}
 	}
@@ -282,14 +318,16 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 		v := s.Validation
 		s.Validation = &Validation{Document: v.Document, RequirementRevision: v.RequirementRevision, Generation: nextRevision, DevelopmentSnapshot: v.DevelopmentSnapshot, Sets: map[coverage.ReviewKind]*CaseSet{}, Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}}
 	}
-	s.Phase = runtime.PhaseIntakeRegistered
+	if s.Phase != runtime.PhasePreparing {
+		s.Phase = runtime.PhaseIntakeRegistered
+	}
 	d.Reset.Applied = true
 	s.Decisions[d.RequestID] = d
 	request := "reset-confirm:" + d.RequestID
 	pkg := &RequirementDecisionPackage{Intake: preview.Intake, Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil, RedoStartReadiness: s.SliceChild == nil, ResetRequestID: d.RequestID}
-	for _, work := range e.requirementWork(s) {
+	for _, work := range s.requirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkRedo
-		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v4" {
+		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v5" {
 			disposition = RequirementWorkCarry
 		}
 		pkg.WorkDecisions = append(pkg.WorkDecisions, RequirementWorkDecision{Work: work, Disposition: disposition, Reason: d.Reset.Reason})
@@ -297,7 +335,8 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlRequestRequirementChange, BaseRevision: s.RequirementRevision(), BaseGeneration: s.requirementGeneration(), Package: pkg, ResetRequestID: d.RequestID, Options: []AskOption{{ID: "proceed", Label: "Confirm the complete current requirement and solution"}, {ID: "abort", Label: "Leave requirements unconfirmed"}}}
 	return true, nil
 }
-func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) error {
+func (e *Engine) SyncParentReset(parent *State, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -326,13 +365,13 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 		if parent.validationRequirementCurrent() {
 			document = parent.Validation.Document.Content
 		}
-		if err := e.admitRequirementDecision(s, ask, request, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, expectedFingerprint, document); err != nil {
+		if err := e.admitRequirementDecision(s, ask, request, &DecidePayload{Choice: requirementProceedOption, Requirement: payload}, revision+1, input, document); err != nil {
 			return err
 		}
 		ask.Resolved = true
 		s.PendingAsks[request] = ask
 		s.SliceChild.ParentReset.Decision = d
-		_, err = e.commit(s, revision, expectedFingerprint)
+		_, err = e.commit(s, revision, input)
 		return err
 	}
 	local := s.ResetPreview()
@@ -350,40 +389,55 @@ func (e *Engine) SyncParentReset(parent *State, expectedFingerprint string) erro
 	s.SliceChild.ParentReset = &ResetAuthority{Decision: d, Event: parent.Events[d.EventID], Preview: local}
 	s.Decisions[d.RequestID] = copy
 	s.PendingAsks[d.RequestID] = PendingAsk{RequestID: d.RequestID, Control: ControlReset, Reset: &local, Resolved: true}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 
-// RecordChildReset carries the original child decision into the parent receipt
-// qualification. It neither asks again nor rewrites the frozen evidence.
-func (e *Engine) RecordChildReset(child *State, expectedFingerprint string) error {
+// RecordChildControl carries original child controls into the existing parent
+// receipt qualification under the same native window. Checkpoint bytes stay frozen.
+func (e *Engine) RecordChildControl(child *State, input Observation) error {
+	e = e.observing(input)
+	d, reset := child.resetDecision()
+	authority := child.nodeContinuationAuthority()
+	if !reset && authority == nil {
+		return nil
+	}
 	revision, s, err := e.load()
 	if err != nil {
 		return err
 	}
-	d, ok := child.resetDecision()
-	if !ok {
-		return nil
-	}
 	if s.SliceChildren[child.SliceChild.SliceID] != child.RunID {
-		return validationError("child reset has no current master claim")
+		return validationError("child control has no current master claim")
 	}
-	if previous, ok := s.SliceResetAuthorities[child.RunID]; ok && previous.Decision.RequestID == d.RequestID {
+	changed := false
+	if reset {
+		if prior := s.SliceResetAuthorities[child.RunID]; prior.Decision.RequestID != d.RequestID {
+			if s.SliceResetAuthorities == nil {
+				s.SliceResetAuthorities = map[string]ResetAuthority{}
+			}
+			preview := child.PendingAsks[d.RequestID].Reset
+			if preview == nil {
+				return validationError("child reset preview is missing")
+			}
+			authority := ResetAuthority{Decision: d, Event: child.Events[d.EventID], Preview: *preview}
+			if child.SliceChild.ParentReset != nil && child.SliceChild.ParentReset.Decision.RequestID == d.RequestID {
+				authority = *child.SliceChild.ParentReset
+			}
+			s.SliceResetAuthorities[child.RunID] = authority
+			changed = true
+		}
+	}
+	if authority != nil {
+		if receipt, known := s.SliceReceipts[child.RunID]; known && (receipt.Continuation == nil || receipt.Continuation.Decision.Revision < authority.Decision.Revision) {
+			receipt.Continuation = authority
+			s.SliceReceipts[child.RunID] = receipt
+			changed = true
+		}
+	}
+	if !changed {
 		return nil
 	}
-	if s.SliceResetAuthorities == nil {
-		s.SliceResetAuthorities = map[string]ResetAuthority{}
-	}
-	preview := child.PendingAsks[d.RequestID].Reset
-	if preview == nil {
-		return validationError("child reset preview is missing")
-	}
-	authority := ResetAuthority{Decision: d, Event: child.Events[d.EventID], Preview: *preview}
-	if child.SliceChild.ParentReset != nil && child.SliceChild.ParentReset.Decision.RequestID == d.RequestID {
-		authority = *child.SliceChild.ParentReset
-	}
-	s.SliceResetAuthorities[child.RunID] = authority
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }
 

@@ -18,12 +18,12 @@ func observedStoppedWorker(t *testing.T, e *Engine, action string) {
 	}
 	for _, kind := range []string{LifecycleStart, LifecycleStop} {
 		ev := mustLifecycleEvent(t, "observe-"+kind+"-"+action, receipt.Correlation, identity, kind)
-		if _, err := e.Submit(ev, fingerprintOf(t, e)); err != nil {
+		if _, err := e.Submit(ev, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if receipt.Status == SpawnStatusUnknown {
-		if _, _, err := e.ReconcileUnknownReceipt(action, fingerprintOf(t, e)); err != nil {
+		if _, _, err := e.ReconcileUnknownReceipt(action, Observation{}); err != nil {
 			t.Fatal(err)
 		}
 	}

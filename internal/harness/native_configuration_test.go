@@ -30,7 +30,11 @@ func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
 				options["zcodeScript"] = script
 			}
 			originalHome := os.Getenv("HOME")
-			binding, err := NativeBinding(provider, settings.Values{Native: options})
+			frozen, err := settings.Freeze(provider, settings.Effective{Values: settings.Values{Native: options}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding, err := NativeBinding(provider, frozen.Values)
 			if err != nil {
 				t.Fatal(err)
 			}

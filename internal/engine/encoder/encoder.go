@@ -56,7 +56,7 @@ type definitionWire struct {
 
 // stepWire 是单步 wire 结构：公共头（含 compiler 派生的 ordinal 与物化的
 // authority/runner）+ 可选共享 IO 段 + 变体 payload。零值归一化：可选策略
-// 指针化（retry）、空集合省略（dependencies/preconditions/postconditions/inputs/
+// 指针化（retry）、空集合省略（dependencies/preconditions/postconditions/
 // io）、默认枚举位省略（negated）。Payload 用 RawMessage 承载：encode 侧由
 // payload wire 结构内层编码（同一 HTML 转义策略），decode 侧按 kind 严格解析。
 type stepWire struct {
@@ -80,18 +80,11 @@ type ioWire struct {
 	OutputCodec    string          `json:"outputCodec"`
 	Preconditions  []predicateWire `json:"preconditions,omitempty"`
 	Postconditions []predicateWire `json:"postconditions,omitempty"`
-	Inputs         []bindingWire   `json:"inputs,omitempty"`
 }
 
 type predicateWire struct {
 	ID      string `json:"id"`
 	Negated bool   `json:"negated,omitempty"`
-}
-
-type bindingWire struct {
-	From   string `json:"from"`
-	Output string `json:"output"`
-	To     string `json:"to"`
 }
 
 // 变体 payload wire：每变体确切字段，与 IR payload 一一对应；duration 一律
@@ -220,7 +213,7 @@ func Decode(data []byte) (*compiler.CompiledDefinition, error) {
 	cd := &compiler.CompiledDefinition{Version: authoring.DefinitionVersion(w.Version), EntryNode: authoring.NodeID(w.EntryNode)}
 	cd.Steps = make([]compiler.CompiledStep, 0, len(w.Steps))
 	for i := range w.Steps {
-		cs, err := stepFromWire(w.Version, &w.Steps[i])
+		cs, err := stepFromWire(&w.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +350,7 @@ func definitionToWire(cd *compiler.CompiledDefinition) (*definitionWire, error) 
 		}
 		// human/parallel 不物化 IO（compiler 保证零值）；可执行变体必带。
 		if cs.IO.InputCodec != "" || cs.IO.OutputCodec != "" || len(cs.IO.Preconditions) > 0 ||
-			len(cs.IO.Postconditions) > 0 || len(cs.IO.Inputs) > 0 {
+			len(cs.IO.Postconditions) > 0 {
 			sw.IO = ioToWire(&cs.IO)
 		}
 		payload, err := payloadToWire(cs)
@@ -381,12 +374,6 @@ func ioToWire(io *authoring.IO) *ioWire {
 	}
 	if len(io.Postconditions) > 0 {
 		out.Postconditions = predicateWires(io.Postconditions)
-	}
-	if len(io.Inputs) > 0 {
-		out.Inputs = make([]bindingWire, 0, len(io.Inputs))
-		for _, b := range io.Inputs {
-			out.Inputs = append(out.Inputs, bindingWire{From: string(b.From), Output: b.OutputField, To: b.ToField})
-		}
 	}
 	return out
 }

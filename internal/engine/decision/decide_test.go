@@ -12,7 +12,7 @@ import (
 	definition "formal-gates/internal/engine/testkit/workflow"
 )
 
-// testDefinition 构造覆盖全部六变体的测试定义（定义形态的最小复用）：
+// testDefinitionSource 构造覆盖五种变体、六个步骤的测试定义：
 //
 //	boot.local ──→ work.agent ──→ gate.host ──┐
 //	    │────────→ work.ask  ──→ gate.durable ┴→ fin.report
@@ -22,7 +22,7 @@ import (
 // fin.report=5。
 const testDefVersion authoring.DefinitionVersion = "test-1"
 
-func testDefinition(t *testing.T) *compiler.CompiledDefinition {
+func testDefinitionSource(t *testing.T) (*compiler.Definition, *compiler.Registry) {
 	t.Helper()
 	reg := compiler.NewRegistry()
 	for _, h := range []struct {
@@ -62,12 +62,8 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 		t.Fatalf("register ask kind: %v", err)
 	}
 
-	ioWith := func(bindings ...string) authoring.IO {
-		inputs := make([]authoring.InputBinding, 0, len(bindings))
-		for _, b := range bindings {
-			inputs = append(inputs, authoring.InputBinding{From: authoring.StepID(b), OutputField: "out", ToField: "in"})
-		}
-		return authoring.IO{InputCodec: "codec.test.in", OutputCodec: "codec.test.out", Inputs: inputs}
+	ioWith := func() authoring.IO {
+		return authoring.IO{InputCodec: "codec.test.in", OutputCodec: "codec.test.out"}
 	}
 	mk := func(s authoring.Step, err error) authoring.Step {
 		if err != nil {
@@ -82,7 +78,7 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 		}
 		return authoring.Header{ID: authoring.StepID(id), NodeID: authoring.NodeID(node), Dependencies: ds, DefinitionVersion: testDefVersion}
 	}
-	agentIO := ioWith("boot.local")
+	agentIO := ioWith()
 	agentIO.Postconditions = []authoring.PredicateRef{{ID: "pred.test.work"}}
 
 	def := &compiler.Definition{Version: testDefVersion, EntryNode: "boot", Steps: []authoring.Step{
@@ -94,18 +90,24 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 			AskKind: "route", RequestSchema: "schema.test.ask.request",
 			ResponseSchema: "schema.test.ask.response", FreshnessTTL: time.Minute,
 		})),
-		mk(authoring.NewHostActionStep(hdr("gate.host", "gate", "work.agent"), ioWith("work.agent"), authoring.HostActionSpec{
+		mk(authoring.NewHostActionStep(hdr("gate.host", "gate", "work.agent"), ioWith(), authoring.HostActionSpec{
 			Handler: "engine.test.gate", Boundary: authoring.BoundaryExternalCapability,
 			Operation: "op.test.gate", Schema: "schema.test.gate", Timeout: time.Minute,
 		})),
-		mk(authoring.NewDurableStep(hdr("gate.durable", "gate", "work.ask"), ioWith("work.ask"), authoring.DurableSpec{
+		mk(authoring.NewDurableStep(hdr("gate.durable", "gate", "work.ask"), ioWith(), authoring.DurableSpec{
 			Handler: "engine.test.durable", Idempotency: authoring.IdempotencyDeterministicInput,
 			Reconcile: "reconcile.test.durable", Timeout: time.Minute,
 			Retry: authoring.RetryPolicy{MaxAttempts: 1},
 		})),
-		mk(authoring.NewLocalStep(hdr("fin.report", "fin", "gate.host", "gate.durable"), ioWith("gate.host", "gate.durable"),
+		mk(authoring.NewLocalStep(hdr("fin.report", "fin", "gate.host", "gate.durable"), ioWith(),
 			authoring.LocalSpec{Handler: "engine.test.fin"})),
 	}}
+	return def, reg
+}
+
+func testDefinition(t *testing.T) *compiler.CompiledDefinition {
+	t.Helper()
+	def, reg := testDefinitionSource(t)
 	cd, err := compiler.Compile(def, reg)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
@@ -393,12 +395,9 @@ func TestDecideRejectsInconsistentState(t *testing.T) {
 // TestDecideRejectsDiagnosticDefinition 核对携带 MISSING_ENGINE_ADAPTER
 // marker 的 diagnostic-only 定义不得进入 executable plan。
 func TestDecideRejectsDiagnosticDefinition(t *testing.T) {
-	reg := compiler.NewRegistry()
-	def := &compiler.Definition{Version: testDefVersion, EntryNode: "boot"}
+	def, _ := testDefinitionSource(t)
 	// 空 registry + 任意合法定义 → 全部 ID 记为诊断，marker 置位。
-	full := testDefinition(t)
-	def.Steps = stepCopies(t, full)
-	res, err := compiler.CompileDiagnostic(def, reg)
+	res, err := compiler.CompileDiagnostic(def, compiler.NewRegistry())
 	if err != nil {
 		t.Fatalf("diagnostic compile: %v", err)
 	}
@@ -411,61 +410,12 @@ func TestDecideRejectsDiagnosticDefinition(t *testing.T) {
 	}
 }
 
-// stepCopies 从已编译定义还原 authoring 步骤表（复用其构造合法性），
-// 用于以空 registry 重编译出 diagnostic marker。
-func stepCopies(t *testing.T, cd *compiler.CompiledDefinition) []authoring.Step {
-	t.Helper()
-	out := make([]authoring.Step, 0, len(cd.Steps))
-	for i := range cd.Steps {
-		h := cd.Steps[i].Header
-		hdr := authoring.Header{ID: h.ID, NodeID: h.NodeID, Dependencies: h.Dependencies, DefinitionVersion: h.DefinitionVersion}
-		io := cd.Steps[i].IO
-		var (
-			s   authoring.Step
-			err error
-		)
-		switch p := cd.Steps[i].Payload.(type) {
-		case compiler.CompiledLocalStep:
-			s, err = authoring.NewLocalStep(hdr, io, authoring.LocalSpec{Handler: p.Handler, Timeout: p.Timeout, Retry: p.Retry})
-		case compiler.CompiledDurableStep:
-			s, err = authoring.NewDurableStep(hdr, io, authoring.DurableSpec{
-				Handler: p.Handler, Idempotency: p.Idempotency, Reconcile: p.Reconcile,
-				Timeout: p.Timeout, Retry: p.Retry,
-			})
-		case compiler.CompiledHostActionStep:
-			s, err = authoring.NewHostActionStep(hdr, io, authoring.HostActionSpec{
-				Handler: p.Handler, Boundary: p.Boundary, Operation: p.Operation, Schema: p.Schema, Timeout: p.Timeout,
-			})
-		case compiler.CompiledAgentStep:
-			s, err = authoring.NewAgentStep(hdr, io, authoring.AgentSpec{
-				Handler: p.Handler, Reason: p.Reason, Timeout: p.Timeout, Retry: p.Retry,
-			})
-		case compiler.CompiledHumanAskStep:
-			s, err = authoring.NewHumanAskStep(hdr, authoring.HumanAskSpec{
-				AskKind: p.AskKind, RequestSchema: p.RequestSchema,
-				ResponseSchema: p.ResponseSchema, FreshnessTTL: p.FreshnessTTL,
-			})
-		case compiler.CompiledParallelStep:
-			s, err = authoring.NewParallelStep(hdr, authoring.ParallelSpec{
-				Children: p.Children, Join: p.Join, Failure: p.Failure,
-			})
-		default:
-			t.Fatalf("unknown payload %T", p)
-		}
-		if err != nil {
-			t.Fatalf("reconstruct step %s: %v", h.ID, err)
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
-// TestDecideRealWorkflowDefinition 在真实定义上冒烟：初始只剩
+// TestDecideFixtureWorkflowDefinition 在 testkit 工作流夹具上冒烟：初始只剩
 // engine-internal frontier；entry 两步完成后 Ready 携 review.worker。
-func TestDecideRealWorkflowDefinition(t *testing.T) {
+func TestDecideFixtureWorkflowDefinition(t *testing.T) {
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
-		t.Fatalf("compile real definition: %v", err)
+		t.Fatalf("compile fixture definition: %v", err)
 	}
 	s, err := NewState(cd.Version, runtime.PhaseDevelopmentParallel)
 	if err != nil {

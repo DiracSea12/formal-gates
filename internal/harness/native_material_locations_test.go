@@ -84,7 +84,7 @@ func TestNativeComparisonPublishesDeletedSourceLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools.material.Input.Handler = "engine.gate.v2"
+	tools.material.Input.Handler = "engine.gate.v3"
 	tools.material.Input.VCS = "git"
 	tools.material.Input.Validation.Gate = &protocol.GateInput{BaseSnapshot: base, Candidate: coverage.ValidationCandidate{Identity: head}}
 	comparison := callWorkspace(t, tools, `{"action":"comparison"}`)

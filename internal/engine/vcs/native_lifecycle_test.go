@@ -598,3 +598,335 @@ func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 	}
 	t.Logf("original=%s observed=%s completeEntries=%v", base, current, originalEntries)
 }
+
+func TestSVNMissingTreeConflictPreservesChosenMaterialAndLineage(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		for _, lost := range []bool{false, true} {
+			t.Run(fmt.Sprintf("restore=%t/lost=%t", restore, lost), func(t *testing.T) {
+				p, runner := svnFixture(t)
+				base := nativeIdentityAt(t, p)
+				target, th := nativeWorkspaceAt(t, p, base, "deleted-target")
+				source, sh := nativeWorkspaceAt(t, p, base, "modified-source")
+				if err := os.Remove(filepath.Join(target.root, "body.txt")); err != nil {
+					t.Fatal(err)
+				}
+				if err := target.Track([]string{"body.txt"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := target.Commit("delete target node"); err != nil {
+					t.Fatal(err)
+				}
+				prefix := nativeIdentityAt(t, target)
+				if err := os.WriteFile(filepath.Join(source.root, "body.txt"), []byte("incoming material\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := source.Track([]string{"body.txt"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := source.Commit("edit incoming node"); err != nil {
+					t.Fatal(err)
+				}
+				incoming := nativeIdentityAt(t, source)
+				if err := target.Merge(incoming); err != nil {
+					t.Fatal(err)
+				}
+				proof, err := target.ObserveIntegration(prefix, incoming)
+				if err != nil || !proof.Started || !slices.ContainsFunc(proof.Entries, func(e IndexEntry) bool { return e.Path == "body.txt" && e.Stage != 0 && e.Mode == "000000" }) {
+					t.Fatalf("missing native tree conflict omitted: %+v %v", proof, err)
+				}
+				if restore {
+					if err := os.WriteFile(filepath.Join(target.root, "body.txt"), []byte("chosen material\n"), 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if lost {
+					runner.lost = "resolve"
+					runner.didLose = false
+				}
+				err = target.ResolveConflicts([]string{"body.txt"})
+				if lost {
+					if err == nil || !runner.didLose {
+						t.Fatalf("completed resolve response loss absent: %v", err)
+					}
+					runner.lost = ""
+					if err = target.ResolveConflicts([]string{"body.txt"}); err != nil {
+						t.Fatal(err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				resolved, err := target.ObserveIntegration(prefix, incoming)
+				if err != nil || slices.ContainsFunc(resolved.Entries, func(e IndexEntry) bool { return e.Stage != 0 }) {
+					t.Fatalf("chosen resolution remains conflicted: %+v %v", resolved, err)
+				}
+				message := "bound native tree resolution"
+				if lost {
+					runner.lost = "commit"
+					runner.didLose = false
+				}
+				err = target.Commit(message)
+				if lost {
+					if err == nil || !runner.didLose {
+						t.Fatalf("completed commit response loss absent: %v", err)
+					}
+					runner.lost = ""
+					observed, found, err := target.ObservedCommit(prefix, message)
+					if err != nil || !found {
+						t.Fatalf("native resolved commit absent: %t %v", found, err)
+					}
+					if err = target.Synchronize(observed); err != nil {
+						t.Fatal(err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				final := nativeIdentityAt(t, target)
+				if err = target.VerifyIntegration(prefix, incoming, final, message); err != nil {
+					t.Fatal(err)
+				}
+				if err = target.VerifyReady(); err != nil {
+					t.Fatal(err)
+				}
+				entry, err := target.Entry(final, "body.txt")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if restore {
+					var value nativeEntry
+					if err = json.Unmarshal([]byte(entry), &value); err != nil || string(value.Content) != "chosen material\n" {
+						t.Fatalf("restored choice changed: %+v %v", value, err)
+					}
+				} else if entry != "" {
+					t.Fatal("chosen deletion was replaced with content")
+				}
+				count, err := target.CommitCount(prefix, final)
+				if err != nil || count != 1 {
+					t.Fatalf("resolution submitted %d commits: %v", count, err)
+				}
+				if err = p.CleanupWorkspace(target.root, "cleanup resolved target", th); err != nil {
+					t.Fatal(err)
+				}
+				if err = p.CleanupWorkspace(source.root, "cleanup modified source", sh); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestSVNLiteralTargetsPreserveEncodedNativePaths(t *testing.T) {
+	p, runner := svnFixture(t)
+	renamed := filepath.Join(filepath.Dir(p.root), "main @% names")
+	if err := os.Rename(p.root, renamed); err != nil {
+		t.Fatal(err)
+	}
+	p = p.At(renamed)
+	base := nativeIdentityAt(t, p)
+	name := "script file@% names.sh"
+	if err := os.WriteFile(filepath.Join(p.root, name), []byte("echo source\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Track([]string{name}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit("literal path delivery"); err != nil {
+		t.Fatal(err)
+	}
+	source := nativeIdentityAt(t, p)
+	values, err := p.TreeEntries(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value nativeEntry
+	if err = json.Unmarshal([]byte(values[name]), &value); err != nil || value.Properties["svn:executable"] == nil || string(value.Content) != "echo source\n" {
+		t.Fatalf("native path/property bytes differ: %+v %v", value, err)
+	}
+	bound, err := decodeNative(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := svnRepositoryURL(bound.Address, "/project @% names")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeCommand(t, runner, p.root, "svn", "copy", svnURL(bound), svnLiteral(scope), "-m", "fixture project scope")
+	scopedRoot := filepath.Join(nativeFixtureDirectory(t), "scoped @% names")
+	nativeCommand(t, runner, p.root, "svn", "checkout", svnLiteral(scope), scopedRoot)
+	scoped := p.At(scopedRoot)
+	scopedBase := nativeIdentityAt(t, scoped)
+	h := PlanWorkspace("svn", scopedBase, "literal", "candidate")
+	h.URL, err = svnRepositoryURL(bound.Address, "/candidate @% names")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(nativeFixtureDirectory(t), "candidate @% names")
+	if err = scoped.CreateWorkspace(workspace, scopedBase, "bound literal copy", h); err != nil {
+		t.Fatal(err)
+	}
+	candidate := scoped.At(workspace, h)
+	copyID := nativeIdentityAt(t, candidate)
+	if err = candidate.IsAncestorOrEqual(scopedBase, copyID); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(workspace, name), []byte("echo candidate\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = candidate.Track([]string{name}); err != nil {
+		t.Fatal(err)
+	}
+	if err = candidate.Commit("bound literal candidate"); err != nil {
+		t.Fatal(err)
+	}
+	current := nativeIdentityAt(t, candidate)
+	if err = scoped.ApplyArtifact(current, []string{name}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := scoped.Pending(scopedBase, current)
+	if err != nil || !pending.Equal || !pending.Prefix {
+		t.Fatalf("native literal apply differs: %+v %v", pending, err)
+	}
+	if err = scoped.Commit("bound literal promotion"); err != nil {
+		t.Fatal(err)
+	}
+	if nativeDigestAt(t, scoped, nativeIdentityAt(t, scoped)) != nativeDigestAt(t, candidate, current) {
+		t.Fatal("literal promotion changed complete values")
+	}
+	if err = scoped.CleanupWorkspace(workspace, "bound literal cleanup", h); err != nil {
+		t.Fatal(err)
+	}
+	absent, err := scoped.WorkspaceAbsent(workspace, h)
+	if err != nil || !absent {
+		t.Fatalf("literal workspace remains: %t %v", absent, err)
+	}
+	if err = scoped.IsAncestorOrEqual(base, source); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSVNNodeKindReplacementPreservesDeclaredMaterial(t *testing.T) {
+	for _, change := range []struct{ name, path, kind string }{
+		{"file-directory", "body.txt", "dir"}, {"directory-file", "empty", "file"},
+		{"file-link", "body.txt", "link"}, {"link-file", "link", "file"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			p, runner := svnFixture(t)
+			if change.kind == "file" && change.path == "empty" {
+				if err := os.WriteFile(filepath.Join(p.root, "empty", "child"), []byte("old child\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Track([]string{"empty/child"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Commit("fixture directory contents"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			base := nativeIdentityAt(t, p)
+			q, h := nativeWorkspaceAt(t, p, base, "replacement")
+			before := nativeIdentityAt(t, q)
+			target := filepath.Join(q.root, change.path)
+			if err := os.RemoveAll(target); err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{change.path}
+			if change.kind == "file" && change.path == "empty" {
+				paths = append(paths, "empty/child")
+			}
+			switch change.kind {
+			case "dir":
+				if err := os.Mkdir(target, 0755); err != nil {
+					t.Fatal(err)
+				}
+				paths = append(paths, change.path+"/child@value")
+				if err := os.WriteFile(filepath.Join(target, "child@value"), []byte("replacement\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "link":
+				if err := os.Symlink("empty", target); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.WriteFile(target, []byte("replacement\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			actualPaths, err := q.ChangedPathsFrom(before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(actualPaths, paths) {
+				t.Fatalf("mechanical replacement paths=%q declared=%q", actualPaths, paths)
+			}
+			declared, pending, err := q.ValidateDeclaredChanges(before, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(declared) == 0 || pending.Clean {
+				t.Fatal("replacement was not observed")
+			}
+			if change.kind == "dir" {
+				runner.lost = "delete"
+				runner.didLose = false
+			}
+			err = q.Track(paths)
+			if change.kind == "dir" {
+				if err == nil || !runner.didLose {
+					t.Fatalf("completed replacement schedule response loss absent: %v", err)
+				}
+				runner.lost = ""
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if err = q.Track(paths); err != nil {
+				t.Fatal("repeated replacement track", err)
+			}
+			if err = q.Commit("bound replacement"); err != nil {
+				t.Fatal(err)
+			}
+			candidate := nativeIdentityAt(t, q)
+			delta, err := p.Changes(base, candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths = nil
+			for _, change := range delta {
+				paths = append(paths, change.Path)
+			}
+			if change.kind == "file" && change.path == "empty" {
+				note := filepath.Join(p.root, "empty", "private-note")
+				if err := os.WriteFile(note, []byte("private material\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.ApplyArtifact(candidate, paths); err == nil {
+					t.Fatal("replacement removed undeclared directory material")
+				}
+				body, err := os.ReadFile(note)
+				if err != nil || string(body) != "private material\n" {
+					t.Fatalf("undeclared material changed: %q %v", body, err)
+				}
+				if err = os.Remove(note); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = p.ApplyArtifact(candidate, paths); err != nil {
+				t.Fatal(err)
+			}
+			if err = p.ApplyArtifact(candidate, paths); err != nil {
+				t.Fatal("repeated replacement apply", err)
+			}
+			pending, err = p.Pending(base, candidate)
+			if err != nil || !pending.Equal || !pending.Prefix {
+				t.Fatalf("replacement native values differ: %+v %v", pending, err)
+			}
+			if err = p.Commit("bound replacement promotion"); err != nil {
+				t.Fatal(err)
+			}
+			if nativeDigestAt(t, p, nativeIdentityAt(t, p)) != nativeDigestAt(t, q, candidate) {
+				t.Fatal("replacement promotion changed values")
+			}
+			if err = p.CleanupWorkspace(q.root, "bound replacement cleanup", h); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -255,7 +255,7 @@ func (d *validationDriver) drive() {
 			if err := d.f.recordIntakeReceipt(snapshot.State); err != nil {
 				d.t.Fatal(err)
 			}
-			_, _, err = d.f.engine.Drive(emptyFingerprint())
+			_, _, err = d.f.engine.Drive(protocol.Observation{})
 			if err == nil {
 				r, err = d.f.project()
 			}
@@ -334,6 +334,24 @@ func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 	d.t.Helper()
 
 	d.receipt(id)
+	worker, issued := driverState(d.t, d).WorkerInput(id, d.f.definition)
+	if !issued {
+		d.t.Fatalf("positive business fixture has no signed worker input: %s", id)
+	}
+	if p.Status == "PASS" || p.Status == "FAIL" {
+		if p.GranularityReview != nil {
+			fixturePlanRequirements(p.GranularityReview, worker.RequirementPoints)
+		}
+		if p.Development != nil && p.Development.Completion == nil && p.GranularityReview == nil && worker.Validation != nil && worker.Validation.Repair != nil && p.Development.RequirementResults == nil {
+			p.Development.RequirementResults = fixtureImplementedPoints(worker.Validation.Repair.RequiredPoints, p.Development.Summary)
+		}
+		if p.Development != nil && p.Development.Completion != nil && p.Development.Completion.RequirementResults == nil {
+			p.Development.Completion.RequirementResults = fixtureImplementedPoints(worker.RequirementPoints, p.Development.Summary)
+		}
+		if worker.Validation != nil && worker.Validation.Gate != nil && p.RequirementResults == nil {
+			p.RequirementResults = fixtureGatePointDecisions(worker.RequirementPoints, worker.Validation.Gate.Candidate.Identity, p.Findings)
+		}
+	}
 	d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), Validation: &p}})
 	if d.mockNative && p.Development != nil {
 		d.drive()
@@ -384,23 +402,31 @@ func startValidationDriverAt(t *testing.T, root, provider string, inventory *pro
 
 // startValidationDriverAtVCS 以注入的 Git runner 与显式 base 身份建立 regular
 // 驱动；真仓链路传 nil runner（生产 exec），base 由调用方从仓库解析。
-func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory) *validationDriver {
+func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory, solutionPaths ...string) *validationDriver {
 	t.Helper()
 	sum := sha256.Sum256([]byte(validationDocument))
 	// 修订语言＝裸 hex：与 intake 工件绑定校验和 QA 工作区登记的重算同源。
 	revision := fmt.Sprintf("%x", sum)
-	receipt := testReceipt()
+	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
+		t.Fatal(err)
+	}
+	solution := ""
+	if len(solutionPaths) > 0 {
+		solution = solutionPaths[0]
+	}
+	preview, err := PrepareIntake(root, "requirements.md", solution, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := preview.IntakeCandidate
 	receipt.Coverage = inventory
-	receipt.RequirementRevision = revision
-	receipt.Artifacts[0].Revision = revision
 	_, mocked := runner.(*frozenGitRepo)
 	var f *Facade
 	var r Run
-	var err error
 	if mocked {
 		f, r, err = abstractValidationFacade(t, root, provider, runner, base, receipt)
 	} else {
-		f, r, err = Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -473,6 +499,11 @@ func passPreDevelopmentReviews(t *testing.T, d *validationDriver, plan *protocol
 		}
 		e, err := protocol.NewReviewWorkerResultEvent(d.eventID(), id, d.host(), string(d.eventID()), protocol.ReviewResultEvidence{GranularityReview: func() *protocol.GranularityReview {
 			if action == review.StartReadiness {
+				worker, issued := driverState(t, d).WorkerInput(id, d.f.definition)
+				if !issued {
+					t.Fatal("readiness fixture lacks its issued input")
+				}
+				fixturePlanRequirements(plan, worker.RequirementPoints)
 				return plan
 			}
 			return nil
@@ -595,7 +626,7 @@ func (d *validationDriver) reviewReady() {
 }
 func (d *validationDriver) reviewReadyWithManifest(m coverage.AcceptanceManifest) {
 	d.t.Helper()
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	design, qi := d.action("engine.qa.design.v5")
 	if len(d.run.PendingActions) != 2 {
 		d.t.Fatalf("development/design must be concurrent: %+v", d.run.PendingActions)
@@ -654,7 +685,7 @@ func TestValidationPipelineAdmitsCanonicalReceiptFacts(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v3")
-	gate, gi := d.action("engine.gate.v2")
+	gate, gi := d.action("engine.gate.v3")
 	if len(d.run.PendingActions) != 2 {
 		t.Fatal("QA and gates were not issued together")
 	}
@@ -738,7 +769,7 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 	}
 	d := configuredValidationDriver(t, inventory, "blackbox", "quality")
 	design, qi := d.action("engine.qa.design.v5")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	m := simpleManifest(qi)
 	m.Edges = nil
 	for _, link := range qi.SourcePoints {
@@ -765,24 +796,10 @@ func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
 
 func (d *validationDriver) carryFormattingChange() string {
 	d.t.Helper()
-	document := validationDocument + "\n"
-	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))
-	work := []protocol.RequirementWorkDecision{}
-	for _, w := range d.run.RequirementWork {
-		work = append(work, protocol.RequirementWorkDecision{Work: w, Disposition: protocol.RequirementWorkCarry, Reason: "same obligations and execution inputs"})
-	}
-	pkg := protocol.RequirementDecisionPackage{CandidateRevision: revision, DeltaDigest: "sha256:editorial", ImpactDigest: "sha256:unchanged-work", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved, WorkDecisions: work}
-	request, err := protocol.NewRequirementRequestEvent(d.eventID(), pkg, protocol.AskOption{ID: "proceed", Label: "Confirm"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	d.submit(request)
-	ask := d.run.PendingRequirementAsk
-	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{BaseRevision: d.revision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: pkg.Classification, WorkDecisions: work, Reason: "confirmed editorial change with exact work carry"}}})
-	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
-	d.revision = revision
+	confirmValidationDocument(d, "", nil, validationDocument+"\n")
+	d.revision = driverState(d.t, d).RequirementRevision()
 	d.drive()
-	return revision
+	return d.revision
 }
 
 func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
@@ -829,7 +846,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 	id, input = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Review: &r})
-	id, input = d.action("engine.development.batch.v4")
+	id, input = d.action("engine.development.batch.v5")
 	trees := map[string]map[string]string{base: candidateSourceTree(t, d, base)}
 	observe := func(intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 		t.Helper()
@@ -936,7 +953,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 }
 
 func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
-	for _, handler := range []string{"engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v2"} {
+	for _, handler := range []string{"engine.qa.review.rationale.v2", "engine.qa.execution.v3", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			var action string
@@ -993,7 +1010,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 				if len(set.ReviewHistory) != 1 || set.ReviewHistory[0].Review.Binding != result.Review.Binding {
 					t.Fatal("raw review history lost the original binding")
 				}
-			} else if handler == "engine.gate.v2" {
+			} else if handler == "engine.gate.v3" {
 				current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 				state := driverState(t, d)
 				if current.Status != "COMPLETE" || current.Scope != coverage.ScopeFull || current.RequirementRevision != revision || current.Generation != state.Validation.Generation || current.Candidate != before.Validation.Waves[0].Candidate || d.run.Validation.Waves[0].ExpectedDigest != before.Validation.Waves[0].ExpectedDigest || !reflect.DeepEqual(state.Results[action].Validation, &result) {
@@ -1020,7 +1037,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution.v3")
-			gate, gi := d.action("engine.gate.v2")
+			gate, gi := d.action("engine.gate.v3")
 			report := executionFor(qi)
 			d.business(qa, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Execution: &report, Tool: "app-v1", Environment: "isolated-project"})
 			d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "Output ordering needs correction"}}})
@@ -1080,7 +1097,7 @@ func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
 				d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: revision, Validation: &protocol.ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: revision, Document: document}}})
 			}
 			d.drive()
-			_, repair := d.action("engine.repair.v5")
+			_, repair := d.action("engine.repair.v6")
 			if repair.Binding.RequirementRevision != expected {
 				t.Fatal("repair resumed against the wrong confirmed requirement")
 			}
@@ -1111,7 +1128,7 @@ func gateReviewView(params protocol.CandidateParameters) *protocol.GateReviewVie
 // semantic admission tests. Native workspace effects have real-repository
 // public-chain coverage; these fixtures provide typed operation observations.
 func abstractValidationFacade(t *testing.T, root, provider string, runner vcs.Runner, base string, receipt IntakeConfirmationReceipt) (*Facade, Run, error) {
-	return semanticValidationFacade(t, StartOptions{Capacity: 16, Root: root, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	return semanticValidationFacade(t, StartOptions{Capacity: 16, Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 }
 
 // semanticValidationFacade supplies typed native observations in owner tests.
@@ -1146,7 +1163,7 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, Run{}, err
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "promotion.lock"), []byte("0"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "promotion.lock"), nil, 0o600); err != nil {
 		return nil, Run{}, err
 	}
 	store, err := persistence.NewStore(stateDir, persistence.Config{PackageDigest: admitted.PackageDigest, DefinitionSource: DefaultDefinitionSource, InstalledTargetIdentity: admitted.InstalledTargetIdentity, AcquireAdmission: admitted.acquire})
@@ -1156,7 +1173,7 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err := os.WriteFile(filepath.Join(root, req.IntakeConfirmationReceipt.RequirementSource), []byte(validationDocument), 0600); err != nil {
 		return nil, Run{}, err
 	}
-	engine, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID)}, nil)
+	engine, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID)})
 	if err != nil {
 		return nil, Run{}, err
 	}
@@ -1173,7 +1190,15 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err != nil {
 		return nil, Run{}, err
 	}
-	if err := initializeRun(engine, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admitted, cd); err != nil {
+	var initialMaterials *IntakePreview
+	if options.ArtifactRoot != "" {
+		preview, err := captureIntake(options.ArtifactRoot, &req.IntakeConfirmationReceipt)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		initialMaterials = &preview
+	}
+	if err := initializeRun(engine, root, req, initialSnapshot, sliceStart, options.Owner, tokenCap, admitted, cd, initialMaterials); err != nil {
 		return nil, Run{}, err
 	}
 	if err := writeJSONAtomic(filepath.Join(stateDir, "request.json"), req); err != nil {
@@ -1445,7 +1470,7 @@ func (d *validationDriver) assertRequiredValidationComplete(scope coverage.Scope
 		d.drive()
 	} else {
 		for i := 0; i < 12; i++ {
-			if _, _, err := d.f.engine.Drive(emptyFingerprint()); err != nil {
+			if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
 				d.t.Fatal(err)
 			}
 			if _, err := d.f.driveNative(); err != nil {
@@ -1478,7 +1503,7 @@ func (d *validationDriver) assertRequiredValidationComplete(scope coverage.Scope
 		d.t.Fatalf("required validation did not qualify for promotion: scope=%s status=%s next=%+v facts=%s", wave.Scope, wave.Status, d.run.Next, facts)
 	}
 	for _, input := range d.run.ValidationInputs {
-		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v2" {
+		if input.Handler == "engine.qa.execution.v3" || input.Handler == "engine.gate.v3" {
 			d.t.Fatal("completed validation issued an additional QA or gate")
 		}
 	}

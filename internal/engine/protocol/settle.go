@@ -46,7 +46,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 				if step.Header.ID == "children.workspace" {
 					settle = s.creationStepSettled(step.Header.ID)
 				} else if payload.Operation == "op.workspace" || payload.Operation == "op.cleanup" || payload.Operation == "op.check" {
-					settle = s.validationConcluded(compiled) && (payload.Operation != "op.cleanup" || s.SliceChild != nil || s.ResourcesCleaned())
+					settle = s.DeliveryComplete(compiled) && (payload.Operation != "op.cleanup" || s.SliceChild != nil || s.ResourcesCleaned())
 				} else if payload.Operation == "op.candidate" {
 					continue
 				}
@@ -65,7 +65,7 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition, bindi
 				settle = true
 			case compiler.CompiledAgentStep:
 				if validationHandler(*step) != "" {
-					settle = s.validationConcluded(compiled)
+					settle = s.DeliveryComplete(compiled)
 				} else {
 					settle = s.carrierLatched(payload)
 				}

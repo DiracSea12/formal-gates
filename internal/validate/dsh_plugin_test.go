@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDshBootstrapChecksInstalledHookPayload(t *testing.T) {
@@ -127,7 +128,6 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 		"ctx.on('tools/pre-execute'",
 		"['hook', 'decide', '--provider', config.provider]",
 		"normalizeArguments",
-		"config.skillRoot",
 		"process.platform",
 		"permissionDecision",
 	} {
@@ -150,7 +150,7 @@ func TestDshPluginResolvesBesideHomePatch(t *testing.T) {
 		targetPath: filepath.Join(home, "skills", "formal-gates"),
 		hookConfig: filepath.Join(home, dshPatchFileName),
 	}
-	if err := configureDshHook(target); err != nil {
+	if _, err := configureDshHook(target); err != nil {
 		t.Fatal(err)
 	}
 	doc, err := readDshPatch(target.hookConfig)
@@ -158,12 +158,49 @@ func TestDshPluginResolvesBesideHomePatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := dshMappingNode(doc.Content[0].Content[0], "insert").Content[0]
-	_, name := dshPluginRowIdentity(row)
+	name := dshMappingValue(row, "name")
 	resolved := filepath.Clean(filepath.Join(filepath.Dir(target.hookConfig), filepath.FromSlash(name)))
 	if resolved != dshPluginPath(target) {
 		t.Fatalf("DSH resolves plugin to %q, installed at %q", resolved, dshPluginPath(target))
 	}
 	if _, err := os.Stat(resolved); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDshHookReinstallPreservesUnchangedPatch(t *testing.T) {
+	home := t.TempDir()
+	target := installTarget{host: "dsh", targetPath: filepath.Join(home, "skills", "formal-gates"), hookConfig: filepath.Join(home, dshPatchFileName)}
+	if changed, err := configureInstallHook(target); err != nil || !changed {
+		t.Fatalf("initial hook installation changed=%t err=%v", changed, err)
+	}
+	before, err := os.ReadFile(target.hookConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(1234567890, 0)
+	if err := os.Chtimes(target.hookConfig, when, when); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target.hookConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := configureInstallHook(target); err != nil || changed {
+		t.Fatalf("unchanged hook installation changed=%t err=%v", changed, err)
+	}
+	after, err := os.ReadFile(target.hookConfig)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("unchanged patch bytes changed: %v", err)
+	}
+	current, err := os.Stat(target.hookConfig)
+	if err != nil || !current.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("unchanged patch modification time changed: %v", err)
+	}
+	if err := removeInstallHooks(target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target.hookConfig); !os.IsNotExist(err) {
+		t.Fatalf("installer-only patch remains after uninstall: %v", err)
 	}
 }

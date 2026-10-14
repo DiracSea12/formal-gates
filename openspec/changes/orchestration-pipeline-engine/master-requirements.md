@@ -6,11 +6,11 @@
 
 ## 1. 目标
 
-1. 把 formal-gates 的编排决策从主代理收进确定性 Go 引擎；主代理只承担用户接口、受理、机械搬运、证据核实与决定呈现，不临场选择下一条 workflow 命令。
+1. 把 formal-gates 的编排决策从主代理收进确定性 Go 引擎；主代理只承担用户接口、受理、证据核实与决定呈现，不临场选择下一条 workflow 命令。
 2. 两条目标等权：
    - 编排不再因主代理漏步骤、选错分支或选择性忽略并行任务而卡死；
    - 主代理不再消耗 token 推理流程下一步。
-3. token 目标以结构性标准验收：主代理不读迁移表、不判断 pre/parallel、不选择 Ready 子集，宿主搬运只接收固定短指令；不设置固定百分比阈值或大规模 benchmark 门槛。
+3. token 目标以结构性标准验收：主代理不读迁移表、不判断 pre/parallel、不选择 Ready 子集，主代理只调用固定短入口，程序消费完整签发集合；不设置固定百分比阈值或大规模 benchmark 门槛。
 
 ## 2. 本次交付边界
 
@@ -54,14 +54,14 @@
 2. 每个节点编译为有序 `NodeExecutionPlan`。已知顺序、前后置条件、分支、重试、等待、fan-out/fan-in 和副作用协议都由 Controller 机械执行；不得只在代理提示词中描述顺序后期待代理自觉遵守。
 3. 执行责任使用两个正交维度：`DecisionAuthority = ENGINE | AGENT | HUMAN`，`RunnerKind = ENGINE_LOCAL | DURABLE_ACTIVITY | HOST_ADAPTER | AGENT_WORKER`。HOST 只表示外部能力/执行位置，不拥有流程决定权；HUMAN 只能经 Ask。Operator 是当前主代理执行的 `AGENT + AGENT_WORKER + SEMANTIC_JUDGMENT` typed observation，不是 HUMAN 决策，也不能借 Operator 执行 engine/adapter 动作。
 4. 能确定性实现的操作必须由 ENGINE 决定并通过本地 handler、durable activity 或 host adapter 程序化执行。AGENT 只允许用于 `SEMANTIC_JUDGMENT`、`CREATIVE_IMPLEMENTATION`、`INDEPENDENT_REVIEW` 三类不可程序化工作；“实现麻烦”不是理由。缺 adapter 只可在开发期 diagnostic compiler mode 标记为 `MISSING_ENGINE_ADAPTER` 技术债；该定义不得进入 executable plan、不得签发 Ready/HostAction，正常 compile/drive 必须以 `BLOCKED_BUG` 和 diagnose 拒绝。本次范围内的最终候选不得残留该 marker。
-5. 纯内存、廉价、确定性的连续变换，或能够在一个原子/幂等事务中一起恢复的操作，可留在单个 engine handler 内，由代码顺序机械保证，不要求把每条语句都持久化。若步骤涉及独立恢复/重试/超时/补偿/幂等、不可逆副作用或 UNKNOWN receipt、人/代理边界、fan-out/fan-in、独立审计/版本/证据，或必须避免重放已完成前缀，则必须拆成 Controller 跟踪的 `StepSpec`。
-6. 定义的唯一 authoring 形态是封闭 Go 类型变体加 constructor 加显式节点/步骤表（ADR-001）；不引入 JSON/YAML 工作流 DSL、通用 schema 解释器、用户自定义节点插件或任意脚本/表达式扩展点。编译产物为具体结构组成、由 compiler 生成、checked-in 且字节级稳定的 canonical 制品；其步骤同样采用公共头（id/nodeID/ordinal/dependencies/kind/definitionVersion）加封闭变体 payload 的结构，变体不适用的策略字段不得存在于该步骤，不得实现为全字段平铺的单结构。每个步骤（`StepSpec`）在自身变体内包含 `id`、`nodeID`、`ordinal/dependencies`、可执行 pre/postcondition 引用、由变体派生并物化的 decision authority 与 runner kind、typed I/O codec 引用、retry/timeout、idempotency key、side-effect/receipt policy、interrupt policy、parallel group/join policy、failure-class map、definition version 与稳定 registry ID（handler/predicate/codec/reconcile）。制品不含函数、闭包、内存地址、绝对路径、当前时间或无序 map。AGENT 另须合法 `nonProgrammableReason`；可执行 HOST_ADAPTER 的 `hostBoundaryReason` 只能是 `EXTERNAL_CAPABILITY_BOUNDARY | USER_IO_TRANSPORT | AGENT_DISPATCH_API`。`MISSING_ENGINE_ADAPTER` 只是 diagnostic-only definition marker，不是 runner reason。
+5. 纯内存、廉价、确定性的连续变换，或能够在一个原子/幂等事务中一起恢复的操作，可留在单个 engine handler 内，由代码顺序机械保证，不要求把每条语句都持久化。若步骤涉及独立恢复/重试/必要的单次操作限时/补偿/幂等、不可逆副作用或 UNKNOWN receipt、人/代理边界、fan-out/fan-in、独立审计/版本/证据，或必须避免重放已完成前缀，则必须拆成 Controller 跟踪的 `StepSpec`。例外仅限 Ready 的固定派发协议：transport 已由原 native owner、typed SpawnReceipt 和 lifecycle 事实独立持久跟踪时，可与 worker result 共用一个 `CompiledAgentStep`（见第 12 条）。
+6. 定义的唯一 authoring 形态是封闭 Go 类型变体加 constructor 加显式节点/步骤表（ADR-001）；不引入 JSON/YAML 工作流 DSL、通用 schema 解释器、用户自定义节点插件或任意脚本/表达式扩展点。编译产物为具体结构组成、由 compiler 生成、checked-in 且字节级稳定的 canonical 制品；其步骤同样采用公共头（id/nodeID/ordinal/dependencies/kind/definitionVersion）加封闭变体 payload 的结构，变体不适用的策略字段不得存在于该步骤，不得实现为全字段平铺的单结构。每个步骤（`StepSpec`）在自身变体内包含 `id`、`nodeID`、`ordinal/dependencies`、可执行 pre/postcondition 引用、由变体派生并物化的 decision authority 与 runner kind、typed I/O codec 引用、retry/timeout（timeout 仅用于必要的单次操作限时，不限制执行时长）、idempotency key、side-effect/receipt policy、interrupt policy、parallel group/join policy、failure-class map、definition version 与稳定 registry ID（handler/predicate/codec/reconcile）。制品不含函数、闭包、内存地址、绝对路径、当前时间或无序 map。AGENT 另须合法 `nonProgrammableReason`；可执行 HOST_ADAPTER 的 `hostBoundaryReason` 只能是 `EXTERNAL_CAPABILITY_BOUNDARY | USER_IO_TRANSPORT | AGENT_DISPATCH_API`。`MISSING_ENGINE_ADAPTER` 只是 diagnostic-only definition marker，不是 runner reason。
 7. 八类非法定义拒绝结果全部保留，不因实现分层减少：不可达步骤/非法循环、无类型输入输出、仅以自然语言表达的 pre/postcondition、无幂等或 reconcile 的副作用、无 request/schema 的人工等待、无 join/failure policy 的并行组、缺合法理由的 AGENT/HOST，以及未绑定 definition version 的执行计划。局部非法组合优先由封闭类型与 constructor 消除（非法状态在正常 authoring API 下不可构造），全局图不变量由小型 closed-world compiler 校验，runtime loader 对版本绑定做最后防线；executable definition 只有在同一候选包 registry 完整、唯一解析其全部 registry ID 时才能激活。运行时只允许当前 eligible frontier，拒绝乱序、遗漏和重复 step；代理只看到当前已解锁步骤的最小输入、typed output 和 postcondition，不能决定下一步。
 8. 引擎失败不得静默或动态降级给代理/LLM。固定分类为：`TRANSIENT_ENGINE_ERROR` → 有限机械 retry/backoff；外部 agent/host 派发缺显式 retry policy 时使用 canonical `MaxAttempts=2`（首次执行 + 一次自动重试），compiled definition 可声明其他有限值但不得无界；额度或 retry 耗尽进入 typed Ask，不得伪装成 Wait。`BUSINESS_REJECT` → 声明的业务边；`USER_ACTION_REQUIRED` → Ask/Wait；`SIDE_EFFECT_UNKNOWN` → reconcile/Wait/Operator；`INVARIANT_VIOLATION`/`BLOCKED_BUG` → 显式失败并 diagnose；只有定义中预先声明的 `AGENT_RECOVERABLE_SEMANTIC_ERROR` 可进入代理语义修复。
 9. `state.json` 继续作唯一权威工作流投影；新增单调 revision/CAS、`pendingActions`、精确版本字段、按 TaskKey 派生的当前 Attempt、已确认 `granularity_review`/Batch/Subtask 计划及其 digest、持久化已确认 `requiredSources`、`AcceptanceManifest`、source↔point↔case map 及其 digest、typed `ReviewScopeMode` 和逐项 QA approved whitelist，以及产品/技术审分层的 raw candidate、finding adjudication、correction receipt 与 effective review status，不引事件溯源、SQLite、watchdog、OS 定时器、repo 级队列或开放式通用 Effect/Artifact 框架。原始 review candidate 不删除；纠正以绑定精确 result/finding digest、revision、原因和授权来源的有界 typed receipt supersede adjudication，再由 Controller 纯函数重算有效状态与依赖失效。StepSpec 的 side-effect/receipt 与 artifact 仅允许定义中穷举的 typed policy/schema。3.5b guard 额度只由 engine Controller 从当前 revision 的 canonical expected external TaskKey、已确认 route/topology、compiled definition 和有限 retry policy 纯函数计算；主代理、host、用户和 submit event 不得传入底层数字。expected TaskKey 只能由 closed-world definition 与已确认、持久化的 Batch/route/topology、已批准 QA 条目、已选 gate 或已成立 obligation 派生；当前已确认 workflow policy 预授权的 obligation/repair slot 由 Controller 机械加入，其他新增槽位若按现有流程要求用户确认则必须先绑定对应 revision/typed Ask。普通代理结果、host receipt 或 resume 不得直接或静默扩容。计算 basis digest、结果和已用 action/Attempt 账目随同一 state 投影持久化，每次签发前重算；相同 basis 结果不一致、digest/账目不匹配或将要超发时以 `BLOCKED_BUG` 零派发，不得降级给 AI 猜测。run envelope 同时绑定 definitionDigest 与 owning runtime 的 packageDigest/installed-target identity：packageDigest 是执行绑定而非审计附注，loader 在写入前必须校验其与实际执行 runtime 一致（或由 run 绑定的不可变 runtime sibling 执行并验证实际摘要，或持有显式 adopt receipt），不得仅凭 HandlerID 相同接受接管。三类身份职责分离：DefinitionDigest 绑定拓扑/registry ID/策略，PackageDigest 绑定实现字节与安装包，PlanDigest 绑定给定 state+observation 的决策结果；HandlerID 标识可恢复执行合同，合同不兼容变化必须晋升 ID，合同兼容的实现变化保持 ID 并由 PackageDigest 标识。
 10. 动态任务走 `expectedTasks` / `TaskKey` / `TaskTransitionTable`；迁移表只管理 run-level phase。
 11. `NextResult` 只有 Ready、HostAction、Ask、Wait、Operator、Complete 六类外部边界；同一 canonical Plan 的 Kind 唯一。
-12. `Ready`/`HostAction` 只携薄指针和 actionID；主代理必须原样、整批搬运，不能选择或改写。每个 Ready agent action 显式绑定两个 StepSpec 边界：`ENGINE + HOST_ADAPTER + AGENT_DISPATCH_API` 的 spawn transport/SpawnReceipt，以及 `AGENT + AGENT_WORKER + nonProgrammableReason` 的 worker result；spawn 仍属于 Ready，不进入 HostAction。HostAction 是 `RESUME_AGENT | TERMINATE_AGENT | EXECUTE_ADAPTER_OPERATION` 的封闭 typed union；adapter operation 只能引用定义中注册的 operation/schema，不得成为自由 shell 通道。
+12. `Ready`/`HostAction` 只携薄指针和 actionID；程序按原计划整批执行，主代理不能选择或改写。每个 Ready agent action 由同一 `CompiledAgentStep` 绑定 `AGENT + AGENT_WORKER + nonProgrammableReason` 的 worker result 合同，并由 Controller 的固定程序化派发协议承担 `ENGINE + HOST_ADAPTER + AGENT_DISPATCH_API` 的 spawn transport/SpawnReceipt 边界。两边共用同一 actionID、TaskKey 和 Attempt；transport 的完成、未知、失败与恢复由原 native owner、SpawnReceipt 和 lifecycle 事实独立跟踪，worker 完成由原 typed result 跟踪，不另建 transport StepSpec、任务、完成状态或 typed 字段。spawn 仍属于 Ready，不进入 HostAction。HostAction 是 `RESUME_AGENT | TERMINATE_AGENT | EXECUTE_ADAPTER_OPERATION` 的封闭 typed union；adapter operation 只能引用定义中注册的 operation/schema，不得成为自由 shell 通道。
 13. `AskRequest` 只承载用户拥有的决定；`OperatorRequest` 只要求主代理核实证据、分类影响或处理无法自动对账的事实，Operator 本身不能替用户授权。
 14. 所有主动控制先从带 freshness 的 `availableActions` 或受限 `REQUEST_*` 事件创建 pending Ask，再由 `submit` 完成。禁止无 request freshness 的自由 `USER_*` 写事件。
 15. `submit` 校验 request/event/action ID、当前节点、schema、source bindings 与 digest；同 ID 同 digest 幂等返回稳定 acceptance/status，不重新发出已 ISSUED SpawnRequest；同 ID 不同 digest 硬拒绝。
@@ -128,7 +128,7 @@
 
 ### 7.2.1 需求内容确认与回退授权
 
-审查来源的修订由主代理在编辑前保留并核对与上一确认 revision 匹配的完整 base，生成穷尽 review-delta 并逐 hunk 核实来源。用户只确认变更包；完整 candidate revision 绑定为新需求，未变内容继承。首次受理仍确认全文，主动查看全文不改变增量确认范围。Controller 不持有第二份 base/diff 账本，不允许无关 hunk 混入。
+审查来源的修订由程序按上一已确认 receipt 保存并取回与 revision 匹配的完整需求与方案 base，生成穷尽 review-delta；主代理逐 hunk 核实语义与来源。用户只确认变更包；完整 candidate revision 绑定为新需求，未变内容继承。首次受理仍确认全文，主动查看全文不改变增量确认范围。Controller 不持有第二份 base/diff 账本，不允许无关 hunk 混入。
 
 需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。engine 是唯一 writer，其他入口不得绕过校验。
 
@@ -156,7 +156,7 @@
 
 1. `expectedTasks` 计算完整 eligible frontier；canonical Plan 必须包含所有依赖已满足的任务。
 2. 若可用容量为 C、eligible task 为 N，`SelectIssued` 必须按固定顺序签发恰好 `min(C,N)` 个任务；不得留空容量、选择性忽略或把并行组退化为主代理决定的串行。
-3. 主代理必须搬运整个 IssuedSet，不能挑子集。任一 receipt/result 释放容量后，`submit` 立即推进并补满下一批，无需主代理另想起调用。
+3. 程序必须消费整个 IssuedSet，主代理不能选择子集。任一 receipt/result 释放容量后，`submit` 立即推进并补满下一批，无需主代理另想起调用。
 4. 一个并行支路 FAIL/RUNTIME_ERROR 不得停止仍独立 eligible 的其他支路；只有依赖或 snapshot 已失效时才能阻断。
 5. adapter 若因无可靠 correlation 必须串行化启动握手，只能限制未 attach 的 start；已 ACK worker 继续并行，engine 仍须填充其他兼容容量并给出可观察 WaitReason。
 6. 普通非分片开发期并行组含开发 worker 与黑盒 QA 设计/审查；分片开发期为各 child 开发与 master merge QA 设计/审查。普通非分片 run 选择白盒时，开发快照 Dn（S1）只解锁白盒设计；提交测试形成 Qn（S2），QA Review 和 P2/P3 吸收引起的测试变化继续提交。全部 mode 最终 case-set 为 FROZEN、版本绑定最终含测试快照后才 review-ready，再一次冻结 expected-set/digest 并准备全部 eligible QA execution 与门并行派发。
@@ -166,10 +166,10 @@
 
 普通黑盒/白盒 QA 的候选与审查义务适用于非分片 run；child 只冻结完整开发候选与适用普通门结果，分片集中 QA 遵循 §8.1。
 
-1. 每次开发或生产代码返修先冻结只含当轮实现的不可变 `DevelopmentSnapshot Dn`。选择白盒时，Controller 令 VCS adapter 从精确 `Dn` 创建并登记独立的 whitebox authoring workspace（Git worktree/临时分支、SVN working copy/候选路径、P4 client/workspace/候选分支）；白盒设计代理可新增、修改或删除由 `TestOwnershipResolver` 证明为 test-owned 的结构测试、测试辅助文件、fixture 和对应 case 内容，返回 manifest，不执行任何 VCS 写操作。
-2. `TestOwnershipResolver` 由项目/测试框架配置、目录/命名规则、测试发现结果及生产构建输入共同程序化判定；文件名包含 `test` 既非必要也非充分条件。VCS adapter 提供 `Dn → Qn` 每个 added/modified/deleted/renamed 路径及内容摘要。只有全部差异均为 test-owned，且生产代码、运行配置、生产依赖、构建输入和 provider 元数据投影完全相等，才签发 test-only/equal-production-view 证明；任何 UNKNOWN 一律按生产 view 受影响处理。
+1. 每次开发或生产代码返修先冻结只含当轮实现的不可变 `DevelopmentSnapshot Dn`。选择白盒时，Controller 令 VCS adapter 从精确 `Dn` 创建并登记独立的 whitebox authoring workspace（Git worktree/临时分支、SVN working copy/候选路径、P4 client/workspace/候选分支）；白盒设计代理可新增、修改或删除已由 `TestOwnershipResolver` 证明为 test-owned 的结构测试、测试辅助文件、fixture 和对应 case 内容，以及声明测试用途但程序归属 UNKNOWN、仅作为隔离独立 review 输入的测试材料，返回 manifest；已知生产文件不得编辑，白盒设计代理不执行任何 VCS 写操作。
+2. `TestOwnershipResolver` 由项目/测试框架配置、目录/命名规则、测试发现结果及生产构建输入共同程序化判定；文件名包含 `test` 既非必要也非充分条件。源文件、路径身份、版本、manifest 与最终证书由程序处理，UNKNOWN 文件的语义归属由独立白盒 review 判断，FROZEN/PASS 结论绑定精确 candidate、paths、manifest 与 history。VCS adapter 提供 `Dn → Qn` 每个 added/modified/deleted/renamed 路径及内容摘要。只有全部差异均为 test-owned（UNKNOWN 须持该独立 review 结论），且生产代码、运行配置、生产依赖、构建输入和 provider 元数据投影完全相等，才签发 test-only/equal-production-view 证明；程序核验完整差异归属批准 artifacts 且每个路径 Entry 精确相等后才采纳，已知生产文件不可覆盖，未获该证明的 UNKNOWN 仍按生产 view 受影响处理。
 3. Controller 校验 manifest、测试引用、改动范围和 postcondition 后，由 adapter 程序化 track/add/open、commit/submit 并冻结包含 `Dn + 白盒测试 + 所有需纳入 VCS 的已批准最终 artifact` 的原生不可变 `ValidationCandidate Qn`。未选择白盒时 `Qn = Dn + 需物化的最终 artifact`。所有交付路径必须在 `Qn` 中，不能留在主工作树或临时 workspace 里等待 Seal 临时捞取。
-4. 白盒 qa-review 读取完整 `Qn` 并独占测试代码质量、用例与实现引用的审查责任；实现质量门不审 test-owned 文件。FAIL 时回白盒设计形成新的 `Qn+1`，不计开发后 wave。若白盒 agent 需要改变生产代码或无法证明 test-only，该改变必须转交开发/repair 路径形成新 `Dn`，不能伪装成白盒测试增量。
+4. 白盒 qa-review 读取完整 `Qn`，独占测试代码质量、用例与实现引用的审查责任，并独立判断 UNKNOWN 文件的语义归属；实现质量门不审 test-owned 文件。FAIL 时回白盒设计形成新的 `Qn+1`，不计开发后 wave。改变已知生产文件，或 UNKNOWN 文件未获该 review 证明为 test-owned 时，相应改动必须转交开发/repair 路径形成新 `Dn`，不能伪装成白盒测试增量。
 5. 黑盒与门只在最终 review-ready 快照签发；门比较基线到最终候选的完整 diff，不接收 QA 用例正文、逐用例证据或测试实现细节。实现质量门排除 test-owned 文件，测试质量归白盒 QA Review。
 6. 同一 wave 的 expected-set/digest 在最终 Qn 冻结，包含全部所选 QA execution 与门；未收齐、存在 PENDING/在途或运行错误未明确处置时为 COLLECTING，不得返修。route/case-set/目标集变化使旧 wave 失效，不能中途修改集合制造收齐。晚到结果仅留审计，不重开 wave；显式错误处置不伪装成 PASS。
 7. 普通实现返修保持 QA FROZEN，只装配新实现候选并按固定 AFFECTED 子集执行。只有需求含义、对外行为、成功/失败判据或稳定可执行性变化才允许 THAW；环境暂不可用记 RUNTIME_ERROR。合法 QA artifact 修订使旧 Qn 失效，由独立设计/审查链提交测试与建议吸收变化，全部冻结后形成新 review-ready Qn+1，至少重跑修改测试与共享依赖影响项。child 的 SLICE_READY receipt 绑定最终完整候选，master 不从遗留 workspace 补捞。
@@ -196,6 +196,7 @@ QA 覆盖先把同一次需求/方案确认中登记的有限 `requiredSources` 
 4. **验证档位**（随批次计划一并选定并留痕，依据与已拒绝替代见 ADR-002）：批内自测为固定底座（永远启用）；默认为开发完成后单次全量门禁；确有需要时增设组间快照 + 增量审查 checkpoint（冻结中间 `DevelopmentSnapshot`，复用 `ReviewScopeMode` 与 carry 继承判定：未受影响 PASS 直接沿用，只对增量 diff 审查/执行；组间轮不计 repair wave）。档位依据结构性信号：预期生产逻辑是否多模块扩散、独立验收单元数；不依据总行数或批数。split 属 run 拆分机制（见 8.1），不是验证档位，不在此选择。
 5. **不变量**：批次不改变 run 边界、公共入口、Seal 语义或强制并行不变量；不产生额外受理、双审或 Seal 轮次。
 6. **引擎义务与机械接入**：用户确认 `granularity_review` 后，Controller 将其绑定到需求/方案 revision、拆分决定和路线，并把 Batch、Subtask、TaskKey 映射及批间依赖登记为现有任务计划的结构化信息。引擎只校验 ID 唯一、映射无遗漏/重复、依赖无环、TaskKey 归属明确，以及 DoD/验证/恢复/交接字段齐全；它不从自然语言重新判断是否应该拆分。`batch_id` 对应一次 `development-worker` 派发；`subtask_id` 只是该派发内的顺序步骤，不得单独派发或换代理；只有前一 Batch 的成员任务终态、DoD、验证和交接完成后，才解锁下一 Batch。Batch 契约、接口、依赖或 DoD 改变时，旧计划失效，必须重新进行 `granularity_review` 并取得用户确认。Batch 不是独立状态机、receipt 或生命周期，完成状态仍从成员 task 状态派生。
+程序从已确认需求投影共享有序需求点，携完整父要求、验收及来源，供开发、普通 Reviewer 与 QA 使用；计划逐点关联负责批次，开发完成逐点交本批职责或贡献的实际依据，普通门按当前完整职责及本门维度逐点独立核实，失败关联原 finding。编号、原文、revision、身份绑定和机械编排由程序持有。未选择 QA 也必须覆盖开发与普通审阅职责，但不能声称 QA 实测；逐点核齐只证明各点均有结果，不替代代码质量、正确性、可读性、简洁性、解耦、可维护性、冗余、过度设计/防御/抽象与硬编码审查。返修只承担其已确认受影响义务，需求变化与恢复复用同一投影、接纳及既有生命周期。
 7. **批次代理隔离**（宿主纪律，2026-08-23 用户补充）：每个开发批次派发全新的零上下文开发代理（薄启动 + 规范文件），同一开发代理会话不跨批复用；reset 粒度为批次边界（第 2 条的内聚关注点：批内连续、批间不连续）。批次任务书只写不可从仓库恢复的信息（决策理由、已知问题/债务、下一任务），不复制可从 VCS/代码/测试推导的内容。该纪律由包级 SKILL 与流程参考文档持有并对外生效，引擎不新增状态或语义分类器。
 
 ## 9. 程序化 VCS、本地副作用与恢复
@@ -220,13 +221,13 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 1. **迁移表与用户节点**：每条合法边、pre 拒绝、trigger 分类、Ask/Operator/Wait/HostAction/Ready/Complete、主动 `REQUEST_*`、终态与回退；正常入口不存在遗漏用户节点。
 2. **节点内执行计划**：封闭变体 constructor 非法状态拒绝、closed-world compiler 图校验（可达性/循环/依赖/join 覆盖/版本绑定/registry ID 完备性）、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
 3. **失败分类与禁止降级**：每类 engine/business/user/UNKNOWN/invariant/semantic error 只进入声明边；engine/adapter 故障绝不动态改派 AGENT；diagnostic-only `MISSING_ENGINE_ADAPTER` 不可编译/签发并稳定进入 `BLOCKED_BUG` diagnose；最终定义扫描证明本次范围内没有该 marker。
-4. **并行**：eligible N、capacity C 时恰好签发 min(N,C)，整批搬运与及时 refill；白盒最终 FROZEN case-set/review-ready 屏障之后全部 QA execution/门并行，COLLECTING 时不得返修。
+4. **并行**：eligible N、capacity C 时恰好签发 min(N,C)，程序整批消费与及时 refill；白盒最终 FROZEN case-set/review-ready 屏障之后全部 QA execution/门并行，COLLECTING 时不得返修。
 5. **任务与派发**：expected set 漏派/重复、TaskKey、Attempt、旧 Attempt、result-before-receipt、UNKNOWN/lifecycle 对账、同 actionID 不重复 spawn、重复 submit 不重放 SpawnRequest；3.5b guard 对相同 definition/state/route/topology/expected-task basis 重复计算得到相同额度/digest，外部派发无显式策略时按 `MaxAttempts=2`，显式 `MaxAttempts=n` 只允许 `n-1` 次额外 retry；0/1/N 个 external TaskKey 与 `MaxAttempts=1/2/n` 的已知答案 fixtures 直接调用生产 calculation 核对精确结果，增加一个合法 distinct TaskKey 或一个有限 retry 余量只各增加一个槽位，重复 TaskKey 不增加。basis、持久结果或 action/Attempt 账目不一致时以 `BLOCKED_BUG` 零派发。没有 closed-world、已确认计划或当前 workflow policy 预授权 obligation 来源的 TaskKey 被拒绝；按现有流程要求用户确认却未绑定对应 revision/typed Ask 的 task-set 扩张被拒绝，已预授权 repair slot 不重复询问用户。预算 Ask 的继续只解锁一个按既有 admission capacity 裁剪的 canonical Ready batch，重试只增加当前逻辑动作的一个 retry slot，重复 submit 不重复增加，host/主代理/用户提交底层额度字段被拒绝。
 6. **需求变化**：`USER_INITIATED_CHANGE` 在每个非终态 phase 可达；Phase A 全局权威写屏障与 quarantine、确认后 ImpactSet、unknown=affected、Phase B 精确恢复/carry/refill、split cascade、pre-Seal 取消；与 `REVIEW_FINDING_FIX` 完整新鲜复审不可混淆。
 7. **开发前发现项**：P0–P3 验证、逐 ID settle、finding/remedy 双绑定、raw candidate/adjudication/correction/effective status 分层、错误 finding/严重度/裁决的 typed 纠正、原始证据保留与 supersede、全部 blocker 驳回后无空审查直接 PASS、纠正的 CAS/freshness/幂等与下游精确 stale、多个用户选项时重新确认完整文本、P0/P1 完整新鲜复审、P2/P3 修复不因级别复审、dismiss、混合严重度和前提变化；产品/技术两个 `PreDevelopmentReviewSeries` 各自前三轮自动、只有有效完整审查计数、finding 后续裁决不重复/回退计轮且整轮 invalid 才排除、revision/invalidation 不清零、上限后每次只授权一个 action-specific fresh-review TaskKey、correction 不生成 TaskKey 或消耗授权、split child 不另开 series，并与同 TaskKey 的 `MaxAttempts` retry 分离。
 8. **开发后三轮**：验证 §8.3–8.4 的最终候选、逐条 Operator adjudication/P0/P1 rationale、稳定 finding/problem ID 与历史、wave 收集/唯一返修、门审 P2 carry 与 P3 advisory、QA Review P2/P3 吸收/FROZEN/THAW、普通返修 AFFECTED/全部当前必需义务有效通过后完成、完整授权摘要，以及非 wave/wave 无效结果、RETRY_EXHAUSTED 和一次性追加 attempt。
 9. **分片**：拓扑绑定唯一时点（start 无拆分意向声明；start-readiness 后确认、确认前可改、确认后不重切）、topology、child creation/map、继承、逐 child 路线、child 最终完整候选 identity、普通门路线与空的 QA 字段、`SLICE_READY`、durable receipts/cost、master 等待、adapter 集成与语义冲突窄代理边界、集中 merge QA 的完整需求覆盖与设计/审查并行、主线 repair 的 AffectedChildSet 与普通门精确补验、级联终态。
-10. **错误与恢复**：invalid event、retryable I/O、fatal corruption、deadline 重入、provider/bridge/mismatch、HostAction、adopt-external 完整转换、候选 freeze/reuse/promotion/cleanup 与所有本地副作用崩溃窗口；promotion 后 receipt 前恢复不得重复集成。
+10. **错误与恢复**：invalid event、retryable I/O、fatal corruption、必要单次操作限时后的恢复、provider/bridge/mismatch、HostAction、adopt-external 完整转换、候选 freeze/reuse/promotion/cleanup 与所有本地副作用崩溃窗口；promotion 后 receipt 前恢复不得重复集成。
 11. **旧 run 与旧入口**：缺版本和任一版本不匹配稳定 `UNSUPPORTED_RUN_VERSION`；`diagnose` 原始只读；无迁移、legacy 续跑、handoff、旧公开命令、兼容别名或 cleanup 删除后门。
 12. **VCS 程序化契约与 3×2**：三种 provider 的探测/status/diff/track/integrate/commit/snapshot、whitebox workspace、完整候选 freeze、identity-preserving 或 digest-equivalent promotion、resource registry cleanup、冲突窄代理边界、typed artifact、UNKNOWN reconcile 和禁止代理写 VCS；Git、SVN、P4 各跑通非分片与分片 master/child/merge，共六个权威单元格。
 13. **宿主资格**：DSH、Claude Code、Codex、Cursor、ZCode 的受管原生 adapter 与实际宿主能力分别取证；正常正式流程只使用本 run 选定的平台。额度或能力不可用的宿主如实 skip/unverified，不发模型请求、不计为 PASS，不把安装成功视为真实模型或工具前拦截证明。
@@ -242,7 +243,7 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 4. 最终候选不存在旧 run 兼容、迁移、legacy mode、旧公开推进入口、第二写入口、cleanup 后门或 engine→legacy 回退。
 5. 正常流程中不存在本可程序化却交给代理的操作，也不存在 engine/VCS adapter 故障后动态降级给代理的路径。
 6. 安装只使用已授权的当前候选与原事务 owner；实际 post-switch/pre-commit smoke、receipt 与恢复资格成立后提交安装，失败沿同一 journal 恢复。
-7. 删除或改写仍断言已废弃受理/复审/轻量路线文本的旧测试；最终 `go test ./...` 必须在不恢复旧逻辑、旧文案或兼容入口的前提下 PASS。不得为了通过测试回填过时行为。
+7. 删除或改写仍断言已废弃受理/复审/轻量路线文本的旧测试；最终 `go test -timeout=0 ./...` 必须在不恢复旧逻辑、旧文案或兼容入口的前提下 PASS。不得为了通过测试回填过时行为。
 
 ## 12. 非目标
 
@@ -300,4 +301,4 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - WorkBuddy 提供安装、可编程原生启动/续用、等待、采集、取消、身份观察恢复和
   原用量，沿共用生命周期/工具/费用核心，只在薄 adapter 保留平台差异。session store
   不存在先离线拒绝；不可由帮助或模拟推断付费现场通过。真实调用只用用户授权额度
-  与原模型选择；所有执行无总 deadline。
+  与原模型选择；所有执行不设时限；必要的单次操作限时可用。

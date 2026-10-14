@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -232,5 +233,62 @@ func TestControlKindClosedSet(t *testing.T) {
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 	}) {
 		t.Fatal("closed set drifted")
+	}
+}
+
+func TestDevelopmentHandoffRequestSchemaAndDigest(t *testing.T) {
+	event := Event{ID: "handoff-request", Kind: KindRequestControl, Request: &RequestPayload{
+		Control: ControlRecovery, Handoff: &DevelopmentHandoffRequest{ActionID: "current-developer", Reason: "transfer unfinished work"},
+	}}
+	data, err := event.CanonicalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire eventWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Request == nil || !reflect.DeepEqual(wire.Request.Handoff, event.Request.Handoff) || len(wire.Request.Options) != 0 {
+		t.Fatalf("canonical handoff facts lost: %s", data)
+	}
+	original, err := event.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, handoff := range []DevelopmentHandoffRequest{
+		{ActionID: "another-developer", Reason: event.Request.Handoff.Reason},
+		{ActionID: event.Request.Handoff.ActionID, Reason: "a changed actual user reason"},
+	} {
+		changed := event
+		changed.Request = &RequestPayload{Control: ControlRecovery, Handoff: &handoff}
+		digest, err := changed.Digest()
+		if err != nil || digest == original {
+			t.Fatalf("handoff identity/reason did not bind the digest: %+v %v", handoff, err)
+		}
+	}
+	for _, request := range []RequestPayload{
+		{Control: ControlAbort, Handoff: event.Request.Handoff},
+		{Control: ControlRecovery, Handoff: event.Request.Handoff, Options: []AskOption{{ID: "resume", Label: "Resume"}}},
+	} {
+		invalid := event
+		invalid.Request = &request
+		if err := invalid.Validate(); err == nil || rejectionCode(t, err) != CodeEventSchemaInvalid {
+			t.Fatalf("handoff carried another control or external offer: %+v %v", request, err)
+		}
+	}
+}
+
+func TestPublicRecoveryWithoutHandoffRemainsRejected(t *testing.T) {
+	engine, _, _, _ := preparedEngine(t)
+	before := engine.LoadMustSucceed(t)
+	event, err := NewRequestEvent("free-recovery", ControlRecovery, AskOption{ID: "fresh", Label: "Start fresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(event, Observation{}); err == nil || rejectionCode(t, err) != CodeEventSchemaInvalid {
+		t.Fatalf("public recovery without a current handoff=%v", err)
+	}
+	if after := engine.LoadMustSucceed(t); !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected free recovery changed state")
 	}
 }

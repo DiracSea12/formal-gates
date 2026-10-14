@@ -6,6 +6,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -117,12 +118,12 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 			t.Run(fmt.Sprintf("retry=%v/%s", retry, choice), func(t *testing.T) {
 				d, finding, wave := validationWithGateFinding(t)
 				resolveGateFinding(d, finding, wave)
-				id, input := d.action("engine.repair.v5")
+				id, input := d.action("engine.repair.v6")
 				if retry {
 					d.receipt(id)
 					d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomeRuntimeError, FailureClass: "TRANSIENT_ENGINE_ERROR", PayloadDigest: "unavailable-workspace"}})
 					d.drive()
-					id, input = d.action("engine.repair.v5")
+					id, input = d.action("engine.repair.v6")
 				}
 				result := gateRepairResult(input)
 				delivered := protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "verified-repair", Validation: &result}}
@@ -188,7 +189,7 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, wave)
-			id, input := d.action("engine.repair.v5")
+			id, input := d.action("engine.repair.v6")
 			d.receipt(id)
 			if terminal {
 				for _, status := range []runtime.TaskStatus{runtime.TaskRunning, runtime.TaskValidating, runtime.TaskTerminal} {
@@ -227,5 +228,104 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 				t.Fatal("late completion revived a disposed duty")
 			}
 		})
+	}
+}
+
+func TestUnavailableTargetDispositionAfterQARerun(t *testing.T) {
+	for _, choice := range []string{"approve", "waive", "dispose"} {
+		t.Run(choice, func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox", "quality")
+			d.reviewReady()
+			_, qaInput := d.action("engine.qa.execution.v3")
+			var target string
+			var failedBinding protocol.WorkBinding
+			var failures []string
+			for i := 0; i < 2; i++ {
+				id, input := d.gateAction("quality")
+				failedBinding = input.Binding
+				target = input.Binding.Task.String()
+				failures = append(failures, id)
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "INVALID"})
+				d.drive()
+			}
+			before := authorizationSnapshot(d)
+			d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY"}}})
+			decideValidation(d, d.validationAsk("QA_RETRY"), "approve", qaInput.Binding.Task.String())
+			d.reopen()
+			d.drive()
+			current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+			if current.ID == failedBinding.WaveID || current.Targets[target] == nil || current.Targets[target].Status != "RETRY_EXHAUSTED" {
+				t.Fatal("QA rerun did not retain the unavailable original gate duty")
+			}
+			ask := d.validationAsk("RETRY")
+			if choice == "dispose" {
+				d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Dispose unavailable target"}}, Validation: &protocol.ValidationRequest{Kind: "DISPOSE", Target: target}}})
+				ask = d.validationAsk("DISPOSE")
+			}
+			if ask.Validation.Binding.WaveID != current.ID || ask.Validation.Binding.Task != failedBinding.Task {
+				t.Fatal("disposition does not bind the current duty and original TaskKey")
+			}
+			selected := choice
+			if choice == "dispose" {
+				selected = "approve"
+			}
+			event := decideValidation(d, ask, selected, target)
+			d.reopen()
+			d.drive()
+			if choice == "approve" {
+				id, input := d.gateAction("quality")
+				if input.Binding != failedBinding || slices.Contains(failures, id) {
+					t.Fatal("extra attempt changed the original physical work binding")
+				}
+				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
+			} else {
+				want := "AUTHORIZED_SKIP"
+				if choice == "dispose" {
+					want = "DISPOSED"
+				}
+				latest := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+				if latest.Targets[target].Status != want || !d.run.NotGuaranteed {
+					t.Fatal("exact current disposition was not recorded separately from PASS")
+				}
+			}
+			after := authorizationSnapshot(d)
+			for _, action := range failures {
+				if !reflect.DeepEqual(before.State.RejectedResults[action], after.State.RejectedResults[action]) || before.State.DispatchBindings[action] != after.State.DispatchBindings[action] || !reflect.DeepEqual(before.State.SpawnReceipts[action], after.State.SpawnReceipts[action]) {
+					t.Fatal("authorization rewrote original rejected result, work or receipt")
+				}
+			}
+			assertAuthorizationReplay(d, event)
+		})
+	}
+}
+
+func TestUnavailableTargetDisposalRejectsReplacedQADuty(t *testing.T) {
+	d := newValidationDriver(t, "blackbox", "quality")
+	d.reviewReady()
+	var target string
+	for i := 0; i < 2; i++ {
+		id, input := d.action("engine.qa.execution.v3")
+		target = input.Binding.Task.String()
+		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "INVALID"})
+		d.drive()
+	}
+	before := authorizationSnapshot(d)
+	d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY"}}})
+	decideValidation(d, d.validationAsk("QA_RETRY"), "approve", target)
+	d.reopen()
+	d.drive()
+	current := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
+	if current.Targets[target] != nil {
+		t.Fatal("selected QA rerun retained the replaced old duty")
+	}
+	snapshot := authorizationSnapshot(d)
+	event := protocol.Event{ID: d.eventID(), Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Dispose unavailable target"}}, Validation: &protocol.ValidationRequest{Kind: "DISPOSE", Target: target}}}
+	if _, _, err := d.f.Submit(event); err == nil || !reflect.DeepEqual(snapshot, authorizationSnapshot(d)) {
+		t.Fatal("historical unavailable target was accepted or changed current state")
+	}
+	for action, rejected := range before.State.RejectedResults {
+		if !reflect.DeepEqual(rejected, snapshot.State.RejectedResults[action]) || before.State.DispatchBindings[action] != snapshot.State.DispatchBindings[action] || !reflect.DeepEqual(before.State.SpawnReceipts[action], snapshot.State.SpawnReceipts[action]) {
+			t.Fatal("replacing a QA duty rewrote its original failure evidence")
+		}
 	}
 }

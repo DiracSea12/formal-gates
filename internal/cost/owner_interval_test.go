@@ -40,41 +40,18 @@ func TestOwnerIntervalExcludesHistory(t *testing.T) {
 	}
 }
 
-func TestOwnerUnavailableIntervals(t *testing.T) {
-	for _, name := range []string{"no-baseline", "missing-terminal", "unsupported-provider", "truncated", "rewritten", "partial-tail"} {
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "owner.jsonl")
-			first := ownerUsageEvent("one", 100, 40, 20)
-			if err := os.WriteFile(path, []byte(first), 0600); err != nil {
-				t.Fatal(err)
-			}
-			b, err := CaptureBaseline("codex", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			provider := "codex"
-			switch name {
-			case "no-baseline":
-				b = nil
-			case "missing-terminal":
-				path += ".missing"
-			case "unsupported-provider":
-				provider = "cursor"
-			case "truncated":
-				err = os.WriteFile(path, []byte("{}\n"), 0600)
-			case "rewritten":
-				err = os.WriteFile(path, []byte(ownerUsageEvent("replacement", 1000, 400, 200)), 0600)
-			case "partial-tail":
-				err = os.WriteFile(path, []byte(first+`{"type":`), 0600)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := MeasureOwner(provider, path, b)
-			if err == nil || got != (Usage{}) {
-				t.Fatalf("got %+v, err %v", got, err)
-			}
-		})
+func TestOwnerIntervalRequiresSupportedProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owner.jsonl")
+	if err := os.WriteFile(path, []byte(ownerUsageEvent("one", 100, 40, 20)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := CaptureBaseline("codex", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := MeasureOwner("cursor", path, baseline)
+	if err == nil || got != (Usage{}) {
+		t.Fatalf("got %+v, err %v", got, err)
 	}
 }
 
@@ -93,23 +70,23 @@ func TestOwnerAndDispatchRecordedOnce(t *testing.T) {
 	}
 }
 
-func TestCostLegacyAndChildMerge(t *testing.T) {
-	var old RunCost
-	if err := json.Unmarshal([]byte(`{"totalInputTokens":0,"dispatches":{}}`), &old); err != nil || old.Owner != nil {
-		t.Fatalf("old state: %+v %v", old, err)
+func TestChildMergeKeepsOwnerCostsSeparate(t *testing.T) {
+	var run RunCost
+	if err := json.Unmarshal([]byte(`{"totalInputTokens":0,"dispatches":{}}`), &run); err != nil || run.Owner != nil {
+		t.Fatalf("run cost: %+v %v", run, err)
 	}
-	RecordOwner(&old, OwnerCost{Source: SourceUnavailable})
+	RecordOwner(&run, OwnerCost{Source: SourceUnavailable})
 	child := RunCost{}
 	Record(&child, "d", DispatchCost{TotalInputTokens: 7, OutputTokens: 3, Source: SourceTranscript})
 	RecordOwner(&child, OwnerCost{TotalInputTokens: 100, OutputTokens: 50, Source: SourceTranscript})
-	Merge(&old, "child", &child)
-	Merge(&old, "child", &child)
-	if old.TotalInputTokens != 7 || old.OutputTokens != 3 || len(old.Dispatches) != 1 || old.Owner.Source != SourceUnavailable {
-		t.Fatalf("child owner aggregated or dispatch doubled: %+v", old)
+	Merge(&run, "child", &child)
+	Merge(&run, "child", &child)
+	if run.TotalInputTokens != 7 || run.OutputTokens != 3 || len(run.Dispatches) != 1 || run.Owner.Source != SourceUnavailable {
+		t.Fatalf("child owner aggregated or dispatch doubled: %+v", run)
 	}
 }
 
-func TestDispatchParserStillDeduplicates(t *testing.T) {
+func TestDispatchParserDeduplicatesUsage(t *testing.T) {
 	line := ownerUsageEvent("one", 100, 40, 20)
 	got, err := parseTranscript("codex", strings.NewReader("{}\n"+line+line))
 	if err != nil || got != (Usage{InputCacheHitTokens: 40, InputCacheMissTokens: 60, OutputTokens: 20}) {

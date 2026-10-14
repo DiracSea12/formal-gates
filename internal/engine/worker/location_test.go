@@ -12,7 +12,7 @@ import (
 )
 
 func TestFindingLocationsUseOriginalSourceFacts(t *testing.T) {
-	for _, handler := range []string{"engine.review.worker.v2", "engine.gate.v2", "engine.qa.execution.v3"} {
+	for _, handler := range []string{"engine.review.worker.v2", "engine.gate.v3", "engine.qa.execution.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			input := semanticInput()
 			input.Handler = handler

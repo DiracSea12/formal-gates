@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
@@ -45,7 +46,7 @@ type writeBlockPayload struct {
 	filePath     string          // Edit/Write/MultiEdit 的目标路径
 	agentType    string          // 调用者 agent_type；"" = 主线程
 	hasActiveRun bool            // cwd（或其祖先）下存在活动正式 run
-	artifacts    []string        // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
+	artifacts    []string        // 活动 run 的 IntakeConfirmationReceipt.Artifacts 路径
 	repoRoot     string          // 检测到活动 run 的仓库根
 	cwd          string          // host 窗口工作目录，用于解析相对写目标
 	owners       []ownerIdentity // 所有活动 run 的 owner（启动对话 transcript/session）
@@ -125,22 +126,14 @@ func scalarHookString(value any) string {
 	case string:
 		return strings.TrimSpace(typed)
 	case float64, bool:
-		return strings.TrimSpace(toString(typed))
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(data)
 	default:
 		return ""
 	}
-}
-
-func toString(value any) string {
-	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(jsonString(value), `"`, ""), `\`, ""))
-}
-
-func jsonString(value any) string {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 // isWriteTool reports whether a PreToolUse tool is a code/run-state write the
@@ -182,10 +175,17 @@ var vcsWriteMarkers = []string{
 // isVCSWriteCommand reports whether a command carries a VCS state-write marker
 // (git / svn / p4 的提交类或变更工作区状态的命令)。
 func isVCSWriteCommand(command string) bool {
-	lower := strings.ToLower(command)
-	for _, marker := range vcsWriteMarkers {
-		if strings.Contains(lower, marker) {
-			return true
+	for _, segment := range commandSegments(command) {
+		tokens := executableCommandTokens(segment)
+		if len(tokens) == 0 {
+			continue
+		}
+		tokens[0] = filepath.Base(tokens[0])
+		for _, marker := range vcsWriteMarkers {
+			words := strings.Fields(marker)
+			if len(tokens) >= len(words) && slices.EqualFunc(tokens[:len(words)], words, strings.EqualFold) {
+				return true
+			}
 		}
 	}
 	return false
@@ -198,15 +198,23 @@ func commandWritesFiles(command string) bool {
 	if command == "" {
 		return false
 	}
-	lower := strings.ToLower(command)
 	// VCS 状态写入（git / svn / p4）：提交 / 推送 / 合并 / 重置 / 丢弃 / 暂存等。
 	if isVCSWriteCommand(command) {
 		return true
 	}
 	// 文件写入工具与文件系统变更命令（非重定向的写文件写法）。
-	for _, marker := range []string{"tee ", "sed -i", "install ", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
-		if strings.Contains(lower, marker) {
+	for _, segment := range commandSegments(command) {
+		tokens := executableCommandTokens(segment)
+		if len(tokens) == 0 {
+			continue
+		}
+		switch strings.ToLower(filepath.Base(tokens[0])) {
+		case "tee", "install", "touch", "mkdir", "rm", "mv", "cp":
 			return true
+		case "sed":
+			if len(tokens) > 1 && strings.HasPrefix(tokens[1], "-i") {
+				return true
+			}
 		}
 	}
 	// 输出重定向到真实文件（写文件）：> file、>> file、2> file、&> file 等。只读惯用法
@@ -254,8 +262,8 @@ func redirectWriteTargets(command string) []string {
 }
 
 // redirectTarget 从 command[i]（必须是 '>'）解析一个输出重定向，返回目标字符串与目标
-// 之后的扫描位置。支持 >、>>、>|、2>、2>>、&>、&>> 等输出重定向；目标为 '>' 后到空白
-// 或 shell 元字符（< > | & ; ( )）之间的连续字符，两端匹配的引号被剥掉。无真实目标
+// 之后的扫描位置。支持 >、>>、>|、2>、2>>、&>、&>> 等输出重定向；目标到未被引号包围
+// 的空白或 shell 元字符（< > | & ; ( )）为止，引号内空白保留，由共享 splitCommand 解码。无真实目标
 // （命令以 '>' 结尾、目标为空、后随 & 起头的 fd 合并 2>&1 / >&2 等）时返回 ("", i)。
 func redirectTarget(command string, i int) (string, int) {
 	if command[i] != '>' {
@@ -271,14 +279,20 @@ func redirectTarget(command string, i int) (string, int) {
 		j++
 	}
 	start := j
-	for j < len(command) && !isShellSpace(command[j]) && !isShellMeta(command[j]) {
+	var quote byte
+	for j < len(command) {
+		if quote != 0 {
+			if command[j] == quote {
+				quote = 0
+			}
+		} else if command[j] == '\'' || command[j] == '"' {
+			quote = command[j]
+		} else if isShellSpace(command[j]) || isShellMeta(command[j]) {
+			break
+		}
 		j++
 	}
-	dest := strings.TrimSpace(command[start:j])
-	// 剥掉两端匹配的引号（> "my file.txt"、> 'out.log'）。
-	if len(dest) >= 2 && (dest[0] == '"' || dest[0] == '\'') && dest[len(dest)-1] == dest[0] {
-		dest = dest[1 : len(dest)-1]
-	}
+	dest := strings.Join(splitCommand(command[start:j]), "")
 	if dest == "" {
 		return "", i
 	}
@@ -308,18 +322,6 @@ func isShellMeta(c byte) bool {
 	return false
 }
 
-// isFormalGatesCLICommand reports whether the command is a formal-gates CLI
-// invocation（run 状态唯一合法写入者），此类命令放行。
-func isFormalGatesCLICommand(command string) bool {
-	tokens := splitCommand(command)
-	for i := 0; i < len(tokens); i++ {
-		if isFormalGatesExecutableToken(tokens[i]) {
-			return true
-		}
-	}
-	return false
-}
-
 // activeDevelopmentRunArtifacts projects active engine work at cwd or an ancestor.
 // Development scope comes from the current confirmation's issued batch bindings.
 func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []string, owners []ownerIdentity, ok bool) {
@@ -328,7 +330,7 @@ func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []str
 		return "", nil, nil, false
 	}
 	root := cwd
-	for depth := 0; depth < 16; depth++ {
+	for {
 		paths, err := filepath.Glob(filepath.Join(root, ".gates", "engine", "*", "state.json"))
 		if err == nil {
 			for _, statePath := range paths {
@@ -450,7 +452,7 @@ func hookDispatchTarget(statePath, dispatchID string) string {
 			return ""
 		}
 		switch string(agent.Handler) {
-		case "engine.development.batch.v4", "engine.repair.v5", "engine.merge.resolve.v3":
+		case "engine.development.batch.v5", "engine.repair.v6", "engine.merge.resolve.v3":
 			return "development-worker"
 		case "engine.qa.design.v5":
 			return "qa-design"
@@ -483,7 +485,7 @@ func registeredHookArtifacts(statePath string) []string {
 
 // decideWriteBlockValue 对 PreToolUse 载荷执行写阻断判定。返回
 // (decision, true) 表示本载荷属于需要判定的代码/run 状态写入；返回
-// (HookDecision{}, false) 表示非写入（只读）、formal-gates CLI 命令或不属于本判定范围，
+// (HookDecision{}, false) 表示非 shell/文件写入或不属于本判定范围，
 // 交由既有 hook 逻辑处理。从载荷 cwd 定位已进入开发阶段的活动 run；找不到时放行（包括
 // 产品审、技术审等开发前阶段与无活动 run，不干扰文档修订或普通项目）。
 func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool) {
@@ -492,10 +494,6 @@ func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool
 		return HookDecision{}, false
 	}
 	command := hookCommand(decoded)
-	// CLI event and bootstrap admission remains in the engine command owner.
-	if strings.TrimSpace(command) != "" && isFormalGatesCLICommand(command) {
-		return HookDecision{}, false
-	}
 	if !isWriteTool(toolName, command) {
 		return HookDecision{}, false
 	}
@@ -665,62 +663,63 @@ func redirectOperatorStart(token string) int {
 // pipelines/conditionals and other compound forms return complete=false and keep
 // the existing conservative block behavior.
 func explicitBashWriteTargets(command string) ([]string, bool) {
-	lower := strings.ToLower(command)
 	// VCS 状态写入（git / svn / p4）与 sed -i 目标无法可靠解析，保留保守行为。
-	if isVCSWriteCommand(command) || strings.Contains(lower, "sed -i") {
+	tokens := executableCommandTokens(command)
+	if isVCSWriteCommand(command) || len(tokens) > 1 && strings.EqualFold(filepath.Base(tokens[0]), "sed") && strings.HasPrefix(tokens[1], "-i") {
 		return nil, false
 	}
 	if strings.Contains(command, "&&") || strings.Contains(command, "||") || strings.ContainsAny(command, ";|") {
 		return nil, false
 	}
 	targets := redirectWriteTargets(command)
-	tokens := splitCommand(command)
-	for index, token := range tokens {
-		name := strings.ToLower(filepath.Base(token))
-		if name != "tee" && name != "touch" && name != "mkdir" && name != "rm" && name != "mv" && name != "cp" && name != "install" {
+	if len(tokens) == 0 {
+		return targets, len(targets) != 0
+	}
+	name := strings.ToLower(filepath.Base(tokens[0]))
+	switch name {
+	case "tee", "touch", "mkdir", "rm", "mv", "cp", "install":
+	default:
+		return targets, len(targets) != 0
+	}
+	var args []string
+	skipNextTarget := false
+	for _, candidate := range tokens[1:] {
+		candidate = strings.TrimSpace(candidate)
+		if skipNextTarget {
+			skipNextTarget = false
 			continue
 		}
-		var args []string
-		skipNextTarget := false
-		for _, candidate := range tokens[index+1:] {
-			candidate = strings.TrimSpace(candidate)
-			if skipNextTarget {
-				skipNextTarget = false
-				continue
-			}
-			if candidate == "" || strings.HasPrefix(candidate, "-") {
-				continue
-			}
-			if op := redirectOperatorStart(candidate); op >= 0 {
-				// 跳过重定向算符；目标粘连在本 token（2>/dev/null、>file）时整个 token 跳过，
-				// 纯算符（> / >> / 2>）时还要跳过下一个 token（分离的重定向目标）。
-				j := op
-				for j < len(candidate) && candidate[j] == '>' {
-					j++
-				}
-				if j >= len(candidate) {
-					skipNextTarget = true
-				}
-				continue
-			}
-			args = append(args, candidate)
+		if candidate == "" || strings.HasPrefix(candidate, "-") {
+			continue
 		}
-		if len(args) == 0 {
-			return nil, false
+		if op := redirectOperatorStart(candidate); op >= 0 {
+			// 跳过重定向算符；目标粘连在本 token（2>/dev/null、>file）时整个 token 跳过，
+			// 纯算符（> / >> / 2>）时还要跳过下一个 token（分离的重定向目标）。
+			j := op
+			for j < len(candidate) && candidate[j] == '>' {
+				j++
+			}
+			if j >= len(candidate) {
+				skipNextTarget = true
+			}
+			continue
 		}
-		switch name {
-		case "cp", "install":
-			targets = append(targets, args[len(args)-1])
-		case "mv":
-			// mv removes its sources as well as writing its destination, so every
-			// operand is a write target for containment purposes.
-			targets = append(targets, args...)
-		default:
-			targets = append(targets, args...)
-		}
-		return targets, true
+		args = append(args, candidate)
 	}
-	return targets, len(targets) != 0
+	if len(args) == 0 {
+		return nil, false
+	}
+	switch name {
+	case "cp", "install":
+		targets = append(targets, args[len(args)-1])
+	case "mv":
+		// mv removes its sources as well as writing its destination, so every
+		// operand is a write target for containment purposes.
+		targets = append(targets, args...)
+	default:
+		targets = append(targets, args...)
+	}
+	return targets, true
 }
 
 func denyWrite(reason string) HookDecision {
@@ -735,7 +734,7 @@ func denyWrite(reason string) HookDecision {
 
 // isRegisteredArtifact reports whether the edited file path (absolute, or
 // relative to the repo root / cwd) matches one of the active run's registered
-// RequirementArtifacts paths (relative to the repo root).
+// IntakeConfirmationReceipt.Artifacts paths (relative to the repo root).
 func isRegisteredArtifact(filePath, repoRoot string, artifacts []string) bool {
 	filePath = strings.TrimSpace(filePath)
 	if filePath == "" {
@@ -749,7 +748,7 @@ func isRegisteredArtifact(filePath, repoRoot string, artifacts []string) bool {
 			if rel, err := filepath.Rel(repoRoot, filePath); err == nil {
 				filePath = rel
 			}
-		} else if !isPathWithinRoot(filePath, repoRoot) {
+		} else if !isPathWithinRoot(filePath) {
 			if abs := filepath.Join(repoRoot, filePath); filepath.IsAbs(abs) {
 				filePath = filepath.Clean(abs)
 			}
@@ -767,7 +766,7 @@ func isRegisteredArtifact(filePath, repoRoot string, artifacts []string) bool {
 // isPathWithinRoot reports whether the path looks already repo-root-relative
 // (does not escape upward with a leading ../ segment), used to avoid double-joining
 // a path that is already relative to the repo root.
-func isPathWithinRoot(path, repoRoot string) bool {
+func isPathWithinRoot(path string) bool {
 	cleaned := filepath.Clean(path)
 	return cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
 }
@@ -806,8 +805,8 @@ var codeFileExtensions = map[string]bool{
 }
 
 // isCodeOrRunStatePath reports whether a file path is code or run state — the only
-// things blocks for the main thread. 非代码、非状态文件（文档 / 数据 / 配置）不
-// 命中。run 状态指任何 .gates 路径；代码按扩展名识别。
+// things blocked for the main thread. Non-code documents do not match; source,
+// script, build/config extensions and .gates paths follow the shared heuristic.
 func isCodeOrRunStatePath(path string) bool {
 	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
 	if lower == "" {
@@ -842,30 +841,68 @@ func bashWriteTargetsCodeOrState(command string) bool {
 	return fileChangeTargetsCodeOrRunState(command)
 }
 
-// fileChangeTargetsCodeOrRunState reports whether a file-change command (tee /
-// touch / mkdir / rm / mv / cp / sed -i / install) carries a positional path
-// argument naming a code or run-state path. 只检查非 flag 的位置参数（跳过 -x /
-// --x），按 isCodeOrRunStatePath 判定；命令首 token 不是这些工具时返回 false——npm /
-// pip / go install 等首 token 是包管理器，不是文件变更工具，直接放行。
+// fileChangeTargetsCodeOrRunState checks each actual command's write targets.
+// cp/install use destinations; mv includes removed sources. In-place sed keeps
+// its positional target check, while read-only transforms are not writes.
 func fileChangeTargetsCodeOrRunState(command string) bool {
-	tokens := splitCommand(command)
-	for index, token := range tokens {
-		// 用 filepath.Base 归一，兼容全路径（/usr/bin/cp）与带前缀（sudo/env/command cp）
-		// 的写法，避免只认裸首 token 而漏拦。
-		switch strings.ToLower(filepath.Base(token)) {
-		case "tee", "touch", "mkdir", "rm", "mv", "cp", "install", "sed":
-		default:
-			continue
+	for _, segment := range commandSegments(command) {
+		targets, _ := explicitBashWriteTargets(segment)
+		tokens := executableCommandTokens(segment)
+		if len(tokens) > 1 && strings.EqualFold(filepath.Base(tokens[0]), "sed") && strings.HasPrefix(tokens[1], "-i") {
+			targets = tokens[2:]
 		}
-		for _, arg := range tokens[index+1:] {
-			if strings.HasPrefix(arg, "-") {
-				continue
-			}
-			if isCodeOrRunStatePath(arg) {
+		for _, target := range targets {
+			if isCodeOrRunStatePath(target) {
 				return true
 			}
 		}
-		return false
 	}
 	return false
+}
+
+// commandSegments keeps quoted arguments intact while separating native shell
+// command boundaries. Each segment retains the original command bytes.
+func commandSegments(command string) []string {
+	segments := []string{}
+	start := 0
+	var quote byte
+	for index := 0; index < len(command); index++ {
+		char := command[index]
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+		} else if char == ';' || char == '|' || char == '&' || char == '\n' {
+			segments = append(segments, command[start:index])
+			start = index + 1
+		}
+	}
+	return append(segments, command[start:])
+}
+
+// executableCommandTokens uses the shared quote parser and the existing native
+// execution prefixes; arguments after the executable remain arguments.
+func executableCommandTokens(command string) []string {
+	tokens := splitCommand(command)
+	for len(tokens) != 0 {
+		prefix := strings.ToLower(filepath.Base(tokens[0]))
+		switch prefix {
+		case "sudo", "env", "command":
+			tokens = tokens[1:]
+		default:
+			return tokens
+		}
+		for len(tokens) != 0 && (strings.HasPrefix(tokens[0], "-") || strings.Contains(tokens[0], "=")) {
+			option := tokens[0]
+			tokens = tokens[1:]
+			if prefix == "sudo" && option == "-u" && len(tokens) != 0 {
+				tokens = tokens[1:]
+			}
+		}
+	}
+	return tokens
 }

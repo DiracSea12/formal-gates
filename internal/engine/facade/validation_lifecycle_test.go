@@ -60,7 +60,7 @@ func (d *validationDriver) chooseValidation(req protocol.ValidationRequest, reme
 // Accepted design work, semantic reviews and execution retries retain separate identities.
 func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 	d := newValidationDriver(t, "whitebox", "quality")
-	dev, input := d.action("engine.development.batch.v4")
+	dev, input := d.action("engine.development.batch.v5")
 	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input rejection"}})
 	d.materialize()
 	d.materialize()
@@ -129,7 +129,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	var task string
 	for i := 0; i < 2; i++ {
-		id, input := d.action("engine.development.batch.v4")
+		id, input := d.action("engine.development.batch.v5")
 		task = input.Binding.Task.String()
 		d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		d.drive()
@@ -159,7 +159,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 	}
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "approve", Validation: &protocol.ValidationDecision{Reason: "one corrected execution", Digest: ask.Validation.Digest, StateRevision: d.run.Revision}}})
 	d.drive()
-	id, input = d.action("engine.development.batch.v4")
+	id, input = d.action("engine.development.batch.v5")
 	if input.Binding.Task.String() != task {
 		t.Fatal("extra attempt changed the obligation")
 	}
@@ -199,7 +199,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 			}
 			d.reviewReadyWithManifest(manifest)
 			qa, qi := d.action("engine.qa.execution.v3")
-			gate, gi := d.action("engine.gate.v2")
+			gate, gi := d.action("engine.gate.v3")
 			report := executionFor(qi)
 			var failed coverage.ExecutionRecord
 			for i := range report.Records {
@@ -278,7 +278,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 				id, input = d.action("engine.qa.execution.v3")
 				rerun := executionFor(input)
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &rerun, Tool: "app-v1", Environment: "isolated-project"})
-				id, input = d.action("engine.gate.v2")
+				id, input = d.action("engine.gate.v3")
 				d.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 				d.drive()
 				if d.run.Validation.Waves[len(d.run.Validation.Waves)-1].Status != "COMPLETE" {
@@ -300,7 +300,7 @@ func TestGateInputExcludesQAMaterialsAcrossReopen(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	for i := 0; i < 2; i++ {
-		_, gate := d.action("engine.gate.v2")
+		_, gate := d.action("engine.gate.v3")
 		_, qa := d.action("engine.qa.execution.v3")
 		if gate.Contract != nil || len(gate.Manifest.Cases) != 0 || len(gate.Manifest.SharedSteps) != 0 || gate.Execution != nil || len(gate.Completed) != 0 || gate.Whitelist != nil {
 			t.Fatal("gate received QA materials")

@@ -32,10 +32,12 @@ const (
 // SliceChildBinding 是 child run 状态上的继承事实：分片身份（master run 与
 // 分片名）加上继承结论绑定的需求 revision。产品审/技术审的整体结论来源就
 // 是 MasterRunID——child 继承 master 的整体产品/技术审，不自行增加 series。
+// InheritedIntake 保存创建时完整材料确认，不随后续 ParentChange 替换。
 type SliceChildBinding struct {
 	MasterRunID         string                      `json:"masterRunId"`
 	SliceID             string                      `json:"sliceId"`
 	RequirementRevision string                      `json:"requirementRevision"`
+	InheritedIntake     *IntakeConfirmationReceipt  `json:"inheritedIntake,omitempty"`
 	Coverage            *CoverageInventory          `json:"coverage,omitempty"`
 	ParentChange        *ParentRequirementAuthority `json:"parentChange,omitempty"`
 	ParentReset         *ResetAuthority             `json:"parentReset,omitempty"`
@@ -53,8 +55,37 @@ type SliceRunStart struct {
 
 // SliceReceipt binds the frozen checkpoint to its canonical content digest.
 type SliceReceipt struct {
-	Receipt SliceTerminalReceipt `json:"receipt"`
-	Digest  string               `json:"digest"`
+	Continuation *NodeContinuationAuthority `json:"continuation,omitempty"`
+	Receipt      SliceTerminalReceipt       `json:"receipt"`
+	Digest       string                     `json:"digest"`
+}
+
+type NodeContinuationAuthority struct {
+	Decision RecordedDecision        `json:"decision"`
+	Preview  NodeContinuationPreview `json:"preview"`
+	Event    EventRecord             `json:"event"`
+}
+
+func (s *State) nodeContinuationAuthority() *NodeContinuationAuthority {
+	d, ok := s.nodeContinuationDecision()
+	if !ok {
+		return nil
+	}
+	return &NodeContinuationAuthority{Decision: d, Preview: *s.PendingAsks[d.RequestID].Continuation, Event: s.Events[d.EventID]}
+}
+
+// Reopening retains the frozen checkpoint as evidence and resumes the same
+// child work owner. The caller has accepted its user's exact work authority.
+func (s *State) reopenSliceCheckpoint() error {
+	if s.Phase != runtime.PhaseSliceReady {
+		return nil
+	}
+	if s.SliceChild == nil || s.SliceReceipt == nil || s.SliceReceipt.verify() != nil {
+		return validationError("重开片内工作需要原 checkpoint 证据")
+	}
+	s.SliceReceiptHistory = append(s.SliceReceiptHistory, *s.SliceReceipt)
+	s.SliceReceipt = nil
+	return s.TransitionPhase(runtime.PhaseDevelopmentParallel)
 }
 
 // SliceTerminalReceipt carries the successful child evidence needed by its
@@ -140,7 +171,8 @@ func (s *State) requestDigest(requestID string) string {
 // CheckpointSlice commits successful child evidence, phase, owner cost and its
 // closed interval together. Native observation and measurement belong to facade;
 // this transaction rechecks the existing validation/promotion admission owner.
-func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, endedAt, expectedFingerprint string) error {
+func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, endedAt string, input Observation) error {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -160,7 +192,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err := state.errWriteBarrier("slice checkpoint"); err != nil {
 		return err
 	}
-	if state.Phase == runtime.PhaseTerminal || state.abortRequested() || state.pendingControl() || state.nativeDebt() || !state.validationConcluded(e.cfg.Definition) {
+	if state.Phase == runtime.PhaseTerminal || state.abortRequested() || state.pendingControl() || state.nativeDebt() || !state.DeliveryComplete(e.cfg.Definition) {
 		return &RejectedError{Code: CodeEventNotCurrent, Detail: "slice checkpoint requires the concluded validation pipeline without an abort decision"}
 	}
 	if snapshot == "" || snapshot != state.PromotedSnapshot || tree == "" || tree != state.PromotedDigest {
@@ -240,7 +272,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err := json.Unmarshal(data, &frozen); err != nil {
 		return err
 	}
-	state.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest()}
+	state.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest(), Continuation: state.nodeContinuationAuthority()}
 	if state.Phase == runtime.PhaseDevelopmentParallel {
 		if err := state.TransitionPhase(runtime.PhaseSnapshotReady); err != nil {
 			return err
@@ -254,7 +286,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err := state.TransitionPhase(runtime.PhaseSliceReady); err != nil {
 		return err
 	}
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 
@@ -298,7 +330,8 @@ func (r SliceReceipt) verify() error {
 // AcceptSliceReceipt is the sole master acceptance transaction. Its receipt map
 // owns deduplication for cases and both cost contributions; no caller supplies
 // increments. Discovery supplies the frozen evidence of a loader-validated child.
-func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint string) error {
+func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, input Observation) error {
+	e = e.observing(input)
 	revision, state, err := e.load()
 	if err != nil {
 		return err
@@ -311,6 +344,9 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint st
 	}
 	r := receipt.Receipt
 	accepted, exists := state.SliceReceipts[r.ChildRunID]
+	if exists && accepted.Continuation != nil && (receipt.Continuation == nil || accepted.Continuation.Decision.Revision >= receipt.Continuation.Decision.Revision) {
+		receipt.Continuation = accepted.Continuation
+	}
 	if exists && accepted.Digest == receipt.Digest {
 		return nil
 	}
@@ -349,7 +385,7 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, expectedFingerprint st
 		id := "slice-aborted:" + r.ChildRunID + ":" + receipt.Digest
 		state.PendingAsks[id] = PendingAsk{RequestID: id, Control: ControlAbort, Options: []AskOption{{ID: "abort", Label: "Abort master because slice " + r.SliceID + " (" + r.ChildRunID + ") aborted by " + r.Abort.Decision.RequestID + "; request reset/rebuild or requirement change to continue"}}}
 	}
-	_, err = e.commit(state, revision, expectedFingerprint)
+	_, err = e.commit(state, revision, input)
 	return err
 }
 
@@ -373,6 +409,17 @@ func (s *State) abortedSliceMember(receipt SliceReceipt) bool {
 // after the active write window has closed.
 func (s *State) SliceReceiptQualified(receipt SliceReceipt) bool {
 	r := receipt.Receipt
+	if authority := receipt.Continuation; authority != nil && (authority.Decision.Continuation.changesExecutionEpoch(authority.Preview.To) || authority.Preview.To.Kind == "route") {
+		if r.LastRequest == nil || r.LastRequest.Revision < authority.Decision.Revision {
+			return false
+		}
+		if r.LastRequest.Revision == authority.Decision.Revision && (r.LastRequest.RequestID != authority.Decision.RequestID || r.LastRequest.DecisionDigest != authority.Event.Digest) {
+			return false
+		}
+	}
+	if authority := receipt.Continuation; authority != nil && authority.Preview.To.Kind == "abort" && r.Status != "ABORTED" {
+		return false
+	}
 	return s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
 		r.MasterRunID == s.RunID && slices.Contains(s.Topology.Slices, r.SliceID) && s.SliceChildren[r.SliceID] == r.ChildRunID &&
 		(r.RequirementRevision == s.RequirementRevision() || s.childReceiptCarried(receipt) || r.Status == "ABORTED") && (digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology) || s.childReceiptCarried(receipt)) && (r.Status == "ABORTED" || s.SliceResetAuthorities[r.ChildRunID].Decision.RequestID == r.ResetRequestID)
@@ -487,7 +534,8 @@ func (s *State) inheritedReviewPass(series review.Series) bool {
 // FreezeAbortedSlice replaces a success checkpoint with the abort authority only
 // after registered cleanup is proven. Its frozen value survives state deletion
 // in the ordinary terminal summary and is discovered through the same claim.
-func (e *Engine) FreezeAbortedSlice(endedAt, expectedFingerprint string) error {
+func (e *Engine) FreezeAbortedSlice(endedAt string, input Observation) error {
+	e = e.observing(input)
 	revision, s, err := e.load()
 	if err != nil {
 		return err
@@ -517,6 +565,6 @@ func (e *Engine) FreezeAbortedSlice(endedAt, expectedFingerprint string) error {
 		return err
 	}
 	s.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest()}
-	_, err = e.commit(s, revision, expectedFingerprint)
+	_, err = e.commit(s, revision, input)
 	return err
 }

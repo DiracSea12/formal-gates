@@ -39,11 +39,30 @@ func ProjectRuntimeFiles(root string) (vcs.RuntimeFiles, error) {
 	} else if err != nil {
 		return vcs.RuntimeFiles{}, err
 	}
-	admission, err := ResolveEngineAdmission(root, "", registry)
-	if errors.Is(err, errNoEngineAdmission) {
-		return vcs.RuntimeFiles{}, nil
+	doc, err := LoadRegistry(registry)
+	if err != nil {
+		return vcs.RuntimeFiles{}, err
 	}
-	return admission.RuntimeFiles, err
+	files := vcs.RuntimeFiles{}
+	for _, record := range doc.Records {
+		if record.Scope == "global" && strings.Contains(record.ID, "-project-") {
+			continue
+		}
+		if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) || !launcherInvocationMatches(record.LauncherPath) {
+			continue
+		}
+		if _, applicable := admissionRecordRootMatch(record, root, true); !applicable {
+			continue
+		}
+		installed, err := verifyRegisteredTargetIdentity(record)
+		if err != nil {
+			return vcs.RuntimeFiles{}, err
+		}
+		runtimeFiles := registeredRuntimeFiles(record, installed)
+		files.Files = append(files.Files, runtimeFiles.Files...)
+		files.EmptyDirectories = append(files.EmptyDirectories, runtimeFiles.EmptyDirectories...)
+	}
+	return files, nil
 }
 
 // ResolveEngineAdmission reads the existing install registry and resolves the
@@ -112,9 +131,6 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 			continue
 		}
 		target := canonicalRegistryPath(record.Target)
-		if target == "" {
-			target = canonicalRegistryPath(record.CanonicalPaths["target"])
-		}
 		if !autoResolve && target != want {
 			continue
 		}
@@ -178,12 +194,6 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 		}
 	}
 	packageDigest := strings.TrimSpace(record.PackageDigest)
-	if packageDigest == "" {
-		packageDigest = strings.TrimSpace(record.InstalledDigest)
-	}
-	if packageDigest == "" {
-		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q has no package digest", record.ID)
-	}
 	if err := verifyEngineBootstrapReceipt(registryPath, record, packageDigest); err != nil {
 		return EngineAdmission{}, err
 	}
@@ -191,6 +201,11 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if err != nil {
 		return EngineAdmission{}, fmt.Errorf("UNREGISTERED_INSTALL: registry host cannot be resolved: %w", err)
 	}
+	runtimeFiles := registeredRuntimeFiles(record, installed)
+	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token, RuntimeFiles: runtimeFiles}, nil
+}
+
+func registeredRuntimeFiles(record RegistryRecord, installed PackageReceiptReport) vcs.RuntimeFiles {
 	runtimeFiles := vcs.RuntimeFiles{}
 	for _, entry := range installed.Entries {
 		runtimeFiles.Files = append(runtimeFiles.Files, entry.RealPath)
@@ -201,7 +216,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string, registr
 	if record.ResourceRoot != "" {
 		runtimeFiles.EmptyDirectories = []string{canonicalRegistryPath(record.ResourceRoot)}
 	}
-	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), Provider: descriptor.ID, PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token, RuntimeFiles: runtimeFiles}, nil
+	return runtimeFiles
 }
 
 // Project installations bind their exact root; canonical global installations

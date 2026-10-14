@@ -135,7 +135,7 @@ func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
 	decideValidation(d, offers[0], "approve")
 	d.reopen()
 	d.drive()
-	id, input = d.action("engine.repair.v5")
+	id, input = d.action("engine.repair.v6")
 	if input.Binding.WaveID != current.ID || input.Repair == nil || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
 		t.Fatal("approved repair lost its actual wave or retained problem input")
 	}
@@ -197,7 +197,7 @@ func decideValidation(d *validationDriver, ask PendingAskFace, choice string, ob
 
 func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "quality")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	failCaseReviews(d, 3)
 	ask := d.validationAsk("QA_REVIEW")
 	for _, option := range ask.Options {
@@ -206,7 +206,7 @@ func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 		}
 	}
 	for _, in := range d.run.ValidationInputs {
-		if in.Handler != "engine.development.batch.v4" {
+		if in.Handler != "engine.development.batch.v5" {
 			t.Fatalf("unapproved work after third failure: %s", in.Handler)
 		}
 	}
@@ -319,7 +319,7 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 				if delivery == "receipt-first" {
 					d.receipt(id)
 				}
-				if in.Handler == "engine.development.batch.v4" {
+				if in.Handler == "engine.development.batch.v5" {
 					staged = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "delivered-development", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "completed development"}}}}
 				}
 			}
@@ -468,7 +468,7 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: resolutions}}})
 		d.drive()
 		if index < 2 {
-			id, in := d.action("engine.repair.v5")
+			id, in := d.action("engine.repair.v6")
 			if !d.mockNative {
 				body := fmt.Sprintf("package main\nimport \"os\"\nfunc main() { if len(os.Args) < 3 || os.Args[1] != \"run\" || os.Args[2] != \"valid\" { os.Exit(%d) } }\n", index+1)
 				if err := os.WriteFile(filepath.Join(in.Workspace.Path, "app.go"), []byte(body), 0600); err != nil {
@@ -484,6 +484,107 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 	d.reopen()
 	d.drive()
 	return d
+}
+
+func TestRepairAuthorizationRetainsValidationAndRepairHistory(t *testing.T) {
+	d := postwaveRepairOffer(t)
+	ask := d.validationAsk("REPAIR")
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := snapshot.State
+	before, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary struct {
+		Detail struct {
+			WavesUsed int
+			History   []struct {
+				Wave                string
+				RequirementRevision string
+				Generation          uint64
+				Candidate           coverage.ValidationCandidate
+				WaveScope           string
+				Status              string
+				Counted             bool
+				Repair              *protocol.ValidationRepair
+				Results             []protocol.WorkerResult
+				Checks              []protocol.CheckEvidence
+			}
+		}
+	}
+	if err := json.Unmarshal(ask.Validation.Summary, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Validation.Waves) != 3 || summary.Detail.WavesUsed != 3 || len(summary.Detail.History) != 2 {
+		t.Fatal("extra repair offer does not retain the three actual validation rounds")
+	}
+	for index, prior := range state.Validation.Waves[:2] {
+		history := summary.Detail.History[index]
+		if !prior.Counted || prior.Status != "REPAIRED" || history.Wave != prior.ID || history.Candidate != prior.Candidate || history.RequirementRevision != prior.RequirementRevision || history.Generation != prior.Generation || history.Status != prior.Status || history.Counted != prior.Counted || history.WaveScope != string(prior.Scope) || !reflect.DeepEqual(history.Repair, prior.Repair) {
+			t.Fatalf("historical round or repair responsibility changed: %+v", history)
+		}
+		actual := map[string]protocol.WorkerResult{}
+		for _, result := range history.Results {
+			if _, duplicate := actual[result.ActionID]; duplicate {
+				t.Fatal("history duplicated an original result")
+			}
+			actual[result.ActionID] = result
+		}
+		for _, target := range prior.Targets {
+			if target.ResultAction == "" || !reflect.DeepEqual(actual[target.ResultAction], state.Results[target.ResultAction]) {
+				t.Fatalf("original validation evidence changed for %s", target.Task.String())
+			}
+		}
+		repairs := map[string]bool{}
+		for action, result := range state.Results {
+			v := result.Validation
+			if v != nil && v.Binding.WaveID == prior.ID && (v.Development != nil || v.GranularityReview != nil) {
+				if !reflect.DeepEqual(actual[action], result) {
+					t.Fatalf("original repair plan/member/completion changed for %s", action)
+				}
+				if v.Development != nil {
+					repairs[action] = true
+				}
+			}
+		}
+		if len(repairs) == 0 || len(history.Checks) == 0 {
+			t.Fatal("actual repair completion or executed check evidence missing")
+		}
+		for _, check := range history.Checks {
+			if !repairs[check.SourceActionID] || check.ExitCode != 0 || check.Error != "" || check.SourceIdentity == "" || check.SourceDigest == "" || check.Stdout.SHA256 == "" || check.Stderr.SHA256 == "" {
+				t.Fatalf("repair check does not retain its actual source/exit/streams: %+v", check)
+			}
+			found := false
+			for _, receipt := range state.HostActionReceipts {
+				if receipt.AdapterOperation != "op.check" || receipt.Status != protocol.HostActionStatusExecuted || receipt.AdapterEvidence == nil {
+					continue
+				}
+				var original protocol.CheckEvidence
+				raw, err := json.Marshal(receipt.AdapterEvidence.Values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(raw, &original); err != nil {
+					t.Fatal(err)
+				}
+				found = found || reflect.DeepEqual(check, original)
+			}
+			if !found {
+				t.Fatal("history fabricated check evidence absent from original native receipts")
+			}
+		}
+	}
+	reopened, err := d.f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(reopened.State)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("authorization history display changed the original persisted state")
+	}
 }
 
 func TestExactWaiverAndQARetryPreserveUnselectedProblems(t *testing.T) {
@@ -564,7 +665,7 @@ func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
 	for _, remedy := range []string{"redesign", "waive"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
-			dev, di := d.action("engine.development.batch.v4")
+			dev, di := d.action("engine.development.batch.v5")
 			d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input checks"}})
 			d.materialize()
 			id, in := d.action("engine.qa.design.v5")
@@ -790,7 +891,7 @@ func TestAbortReconcilesUnknownIdentitiesBeforeCleanup(t *testing.T) {
 			}
 			d.submit(event)
 		}
-		_, _, err := d.f.engine.ReconcileUnknownReceipt(id, emptyFingerprint())
+		_, _, err := d.f.engine.ReconcileUnknownReceipt(id, protocol.Observation{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -813,7 +914,7 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-			dev, di := d.action("engine.development.batch.v4")
+			dev, di := d.action("engine.development.batch.v5")
 			design, qi := d.action("engine.qa.design.v5")
 			manifest := simpleManifest(qi)
 			d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
@@ -911,7 +1012,7 @@ func qaModeAction(d *validationDriver, handler string, mode coverage.ReviewKind)
 
 func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
@@ -1012,7 +1113,7 @@ func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
 	decideValidation(d, ask, "approve")
 	d.reopen()
 	d.drive()
-	id, in = d.action("engine.repair.v5")
+	id, in = d.action("engine.repair.v6")
 	if in.Binding.WaveID != issuedWave || in.Repair == nil || !reflect.DeepEqual(in.Repair.Obligation.Problems, []string{second}) {
 		t.Fatalf("newly issued repair changed its current obligation: binding=%+v intendedWave=%s input=%+v", in.Binding, issuedWave, in.Repair)
 	}
@@ -1169,7 +1270,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 					}
 					decideValidation(d, current, "approve")
 				}
-				_, input := d.action("engine.repair.v5")
+				_, input := d.action("engine.repair.v6")
 				if input.Binding.WaveID != ask.Validation.Binding.WaveID || !reflect.DeepEqual(input.Repair.Obligation.Problems, problems) {
 					t.Fatal("actual signed repair input differs from current displayed obligations")
 				}
@@ -1377,7 +1478,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 						t.Fatal("repair authorization omits remaining or fresh obligations")
 					}
 					decideValidation(d, offer, "approve")
-					repair, repairInput := d.action("engine.repair.v5")
+					repair, repairInput := d.action("engine.repair.v6")
 					if repairInput.Binding.Task != ask.Validation.Binding.Task || repairInput.Binding.WaveID != current.ID || !reflect.DeepEqual(repairInput.Repair.Obligation.Problems, remaining) {
 						t.Fatal("actual repair input differs from unique current plan")
 					}
@@ -1414,7 +1515,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.receipt(qa)
 	ask := d.validationAsk("REPAIR")
 	event := decideValidation(d, ask, "approve")
-	repair, input := d.action("engine.repair.v5")
+	repair, input := d.action("engine.repair.v6")
 	d.receipt(repair)
 	before := authorizationSnapshot(d)
 	report := executionFor(qaInput)
@@ -1422,7 +1523,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 	d.reopen()
 	d.drive()
 	after := authorizationSnapshot(d)
-	actual, actualInput := d.action("engine.repair.v5")
+	actual, actualInput := d.action("engine.repair.v6")
 	if actual != repair || !reflect.DeepEqual(actualInput, input) || after.State.DispatchBindings[repair] != before.State.DispatchBindings[repair] || after.State.DispatchIssueRevisions[repair] != before.State.DispatchIssueRevisions[repair] || !reflect.DeepEqual(after.State.PendingAsks[ask.RequestID], before.State.PendingAsks[ask.RequestID]) || !reflect.DeepEqual(after.State.Decisions[ask.RequestID], before.State.Decisions[ask.RequestID]) {
 		t.Fatal("fresh QA result moved an already signed repair, request or decision")
 	}
@@ -1486,7 +1587,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 					t.Fatal("control choice fabricated repair completion or rewrote results")
 				}
 				for _, in := range d.run.ValidationInputs {
-					if in.Handler == "engine.repair.v5" {
+					if in.Handler == "engine.repair.v6" {
 						t.Fatal("decline or requirement granted repair authorization")
 					}
 				}
@@ -1561,7 +1662,7 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 	before := authorizationSnapshot(d)
 	ask := d.validationAsk("REPAIR")
 	decideValidation(d, ask, "approve")
-	d.action("engine.repair.v5")
+	d.action("engine.repair.v6")
 	after := authorizationSnapshot(d)
 	retired := after.State.PendingAsks[prior.RequestID]
 	if !retired.Resolved {
@@ -1592,7 +1693,7 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 
 func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
-	dev, devInput := d.action("engine.development.batch.v4")
+	dev, devInput := d.action("engine.development.batch.v5")
 	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
 	d.materialize()
 	d.materialize()
@@ -1654,7 +1755,7 @@ func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
-	dev, di := d.action("engine.development.batch.v4")
+	dev, di := d.action("engine.development.batch.v5")
 	design, qi := d.action("engine.qa.design.v5")
 	manifest := simpleManifest(qi)
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})

@@ -49,7 +49,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 				if delivery == "native-resume" {
 					start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
 					d.submit(start)
-					plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, emptyFingerprint())
+					plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR"}, protocol.Observation{})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -128,7 +128,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 			d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 			d.reopen()
 			d.drive()
-			repair, ri := d.action("engine.repair.v5")
+			repair, ri := d.action("engine.repair.v6")
 			if len(ri.Repair.Problems) != 1 || len(ri.Repair.ExecutionFailures) != 2 || ri.Repair.Obligation.PureP2 {
 				t.Fatalf("wrong repair diagnosis: %+v", ri.Repair)
 			}
@@ -166,7 +166,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 					case "engine.qa.execution.v3":
 						r := executionFor(input)
 						d.business(action, nativeExecutionResult(input, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Execution: &r}))
-					case "engine.gate.v2":
+					case "engine.gate.v3":
 						d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 					}
 				}
@@ -186,7 +186,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d, finding, origin := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, origin)
-	action, input := d.action("engine.repair.v5")
+	action, input := d.action("engine.repair.v6")
 	originalTask := input.Binding.Task
 	repairResult := gateRepairResult(input)
 	d.business(action, repairResult)
@@ -218,7 +218,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 	d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: origin, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{correction}}}})
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair.v5")
+	_, repair := d.action("engine.repair.v6")
 	if repair.Binding.Task == originalTask || repair.Binding.Candidate != completed.Candidate.Identity || repair.Repair == nil {
 		t.Fatal("new problem did not follow the repaired candidate's unique duty")
 	}
@@ -247,7 +247,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 	id, in = d.action("engine.qa.review.rationale.v2")
 	r := approvedReview(m)
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Review: &r})
-	id, in = d.action("engine.development.batch.v4")
+	id, in = d.action("engine.development.batch.v5")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "input validation"}})
 	d.materialize()
 	d.materialize()
@@ -299,7 +299,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 		d.submit(protocol.Event{Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave.ID, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{resolution}}}})
 	}
 	d.drive()
-	_, repair := d.action("engine.repair.v5")
+	_, repair := d.action("engine.repair.v6")
 	if len(repair.Repair.Problems) != 2 || len(repair.Repair.ExecutionFailures) != 2 {
 		t.Fatal("independent mode diagnoses lost their responsibilities")
 	}
@@ -338,7 +338,7 @@ func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
 	}
 	d.reopen()
 	d.drive()
-	_, repair := d.action("engine.repair.v5")
+	_, repair := d.action("engine.repair.v6")
 	problem := d.run.Validation.Findings[caseID].History[0].ProblemID
 	if len(repair.Repair.Obligation.Problems) != 1 || repair.Repair.Obligation.Problems[0] != problem {
 		t.Fatal("independent advisory was promoted into mandatory repair")

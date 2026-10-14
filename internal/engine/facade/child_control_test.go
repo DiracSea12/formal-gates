@@ -137,7 +137,7 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := child.f.engine.SyncParentRequirement(driverState(t, master), emptyFingerprint()); err != nil {
+		if err := child.f.engine.SyncParentRequirement(driverState(t, master), protocol.Observation{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,7 +281,7 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 		master.receipt(id)
 	}
 	resetControl(t, master)
-	settleResetWorkerStops(t, master)
+	master.completeWorkerTerminations()
 	child.drive()
 	confirmResetControl(t, master)
 	child.drive()
@@ -294,32 +294,93 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 	}
 }
 
-func settleResetWorkerStops(t *testing.T, d *validationDriver) {
-	t.Helper()
-	for {
-		var action string
-		var intent protocol.HostActionIntent
-		for id, pending := range d.run.AdapterIntents {
-			if pending.Terminate != nil {
-				action, intent = id, pending
-				break
-			}
-		}
-		if action == "" {
-			return
-		}
-		for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-			event, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), intent.Terminate.Identity, edge)
+func TestMasterResetPreservesPlannedAndPreparingChildren(t *testing.T) {
+	for _, created := range []int{0, 1} {
+		t.Run(fmt.Sprint(created), func(t *testing.T) {
+			master := splitMaster(t)
+			unlock, err := master.f.acquireNativeWindow()
 			if err != nil {
 				t.Fatal(err)
 			}
-			d.submit(event)
-		}
-		event, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), action, intent.Operation, d.host(), action, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.submit(event)
+			var child *Facade
+			err = func() error {
+				defer unlock()
+				state := driverState(t, master)
+				digest, err := master.f.vcs.TreeDigest(state.AcceptedNativeSnapshot())
+				if err != nil {
+					return err
+				}
+				if err := master.f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
+					return err
+				}
+				if created == 0 {
+					return nil
+				}
+				state = driverState(t, master)
+				child, err = master.f.prepareChild(state, state.ChildCreation.Children[0], OwnerBinding{})
+				return err
+			}()
+			if err != nil {
+				t.Fatal(err)
+			}
+			planned := driverState(t, master).ChildCreation
+			master.reopen()
+			reset := resetControl(t, master)
+			state := driverState(t, master)
+			preview := state.PendingAsks[string(reset.Decide.Request)].Reset
+			var ids []string
+			for _, plan := range planned.Children {
+				ids = append(ids, plan.RunID)
+			}
+			if !reflect.DeepEqual(preview.Children, ids) || len(preview.ChildPreviews) != created || preview.Digest != preview.CanonicalDigest() {
+				t.Fatal("reset preview confused planned members with established child scope")
+			}
+			if child != nil {
+				approved := preview.ChildPreviews[0]
+				if approved.RunID != child.runID || approved.Digest != approved.CanonicalDigest() {
+					t.Fatal("reset omitted the exact preparing child scope")
+				}
+			}
+			assertScope := func(confirmed bool) {
+				state := driverState(t, master)
+				if !reflect.DeepEqual(state.ChildCreation, planned) || len(state.SliceChildren) != 0 {
+					t.Fatal("reset changed planned identities or released child authority")
+				}
+				for i, plan := range planned.Children {
+					established, err := runDirectoryEstablished(filepath.Join(master.f.root, EngineNamespace, plan.RunID))
+					if err != nil || established != (i < created) {
+						t.Fatal("reset bootstrapped a missing planned child", plan.RunID, err)
+					}
+					resource := state.NativeResources[plan.ResourceID]
+					if _, err := os.Stat(resource.Path); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("reset created an unstarted child workspace", resource.Path, err)
+					}
+				}
+				if child == nil {
+					return
+				}
+				current, err := child.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				authority := current.State.SliceChild.ParentReset
+				local := current.State.Decisions[string(reset.Decide.Request)].Reset
+				if current.State.Phase != runtime.PhasePreparing || authority == nil || !reflect.DeepEqual(authority.Preview, preview.ChildPreviews[0]) || local == nil || !local.Applied || local.Confirmed != confirmed || authority.Decision.Reset.Confirmed != confirmed {
+					t.Fatal("preparing child did not retain the original parent reset scope and phase")
+				}
+			}
+			assertScope(false)
+			master.reopen()
+			master.drive()
+			assertScope(false)
+			confirmResetControl(t, master)
+			assertScope(true)
+			if _, _, err := master.f.Submit(reset); err != nil {
+				t.Fatal("reset decision replay lost its original acceptance", err)
+			}
+			master.reopen()
+			assertScope(true)
+		})
 	}
 }
 
@@ -375,7 +436,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 				d.receipt(id)
 			}
 			reset := resetControl(t, d)
-			settleResetWorkerStops(t, d)
+			d.completeWorkerTerminations()
 			d.reopen()
 			confirmResetControl(t, d)
 			d.drive()
@@ -929,11 +990,11 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 		master.receipt(id)
 	}
 	reset := resetControl(t, master)
-	settleResetWorkerStops(t, master)
+	master.completeWorkerTerminations()
 	master.drive()
 	for _, child := range children {
 		child.drive()
-		settleResetWorkerStops(t, child)
+		child.completeWorkerTerminations()
 		child.drive()
 	}
 	master.drive()

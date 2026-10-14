@@ -12,6 +12,7 @@ import (
 
 // streamAdapter supplies platform differences to the shared print-mode lifecycle.
 type streamAdapter struct {
+	usageTranscript    func(string, map[string]any, string, []string) (string, error)
 	stdinPrompt        bool
 	checkResult        func(any) error
 	checkMessage       func(any) error
@@ -26,7 +27,7 @@ type streamAdapter struct {
 	cleanup            func(string)
 }
 
-func streamExecute(adapter streamAdapter, request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
+func streamExecute(adapter streamAdapter, request any, directory string, probe bool) (map[string]any, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
@@ -219,6 +220,7 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 	var terminal map[string]any
 	var selection map[string]any
 	var initialization map[string]any
+	assistantIDs := []string{}
 	for {
 		line, readErr := readNativeLine(reader)
 		if line != "" || readErr == nil {
@@ -248,6 +250,9 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 					if initialization == nil {
 						initialization = event
 					}
+				}
+				if adapter.usageTranscript != nil && valuesEqual(event["type"], "assistant") {
+					assistantIDs = append(assistantIDs, textOf(event["uuid"]))
 				}
 				if valuesEqual(event["type"], "result") {
 					if !valuesEqual(event["session_id"], identity) || !valuesEqual(event["is_error"], false) {
@@ -285,9 +290,17 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 	if terminal["usage"] != nil || terminal["modelUsage"] != nil {
 		usage = nativePickParams(terminal, "usage", "modelUsage")
 	}
-	return evidenceSource(directory, adapter.provider, identity, map[string]any{
-		"selection": selection, "native_result": terminal, "usage_evidence": usage,
-	})
+	extra := map[string]any{"selection": selection, "native_result": terminal, "usage_evidence": usage, "transcript": filepath.Join(directory, "native-events.jsonl")}
+	if adapter.usageTranscript != nil {
+		path, err := adapter.usageTranscript(directory, objectOrEmpty(request), identity, assistantIDs)
+		if err != nil {
+			delete(extra, "transcript")
+			extra["usage_evidence"] = map[string]any{"native": usage, "unavailableReason": err.Error()}
+		} else {
+			extra["transcript"] = path
+		}
+	}
+	return evidenceSource(directory, adapter.provider, identity, extra)
 }
 
 func streamReconcile(adapter streamAdapter, directory string, process any) (map[string]any, error) {

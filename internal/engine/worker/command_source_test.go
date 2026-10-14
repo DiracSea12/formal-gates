@@ -2,18 +2,22 @@ package worker
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
 )
 
 func TestReadinessCommandsSelectOriginalReadBytes(t *testing.T) {
 	command := "./checks/project-check --label \"原命令 two words\" '' \\\n\t--next 'second line'\n"
 	facts := []LocationFact{{Kind: "listing", Paths: []string{"README.md"}}, {Kind: "read", Paths: []string{"README.md"}, Content: []byte("Project check:\n" + command + "Other text\n")}}
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", RunID: "project", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "issued"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed behavior"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v5", RunID: "project", Provider: "codex", Pending: protocol.PendingAction{ActionID: "readiness", AttemptID: "issued"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed behavior"}, Review: &protocol.WorkerReviewInput{Action: review.StartReadiness, RequirementRevision: "confirmed"}}
 	value := Review{Findings: []Finding{}, GranularityReview: &Granularity{Reason: "One cohesive duty", VerificationTier: "FINAL", Batches: []Batch{{Artifacts: []Location{{Read: 2}}, Subtasks: []Subtask{{Description: "Implement public behavior"}}, DoD: []Criterion{{Description: "Public behavior holds"}}, Deliverable: "Confirmed behavior", PublicEntry: "Product entry", Interfaces: "Public interface", StateBoundary: "Project files", Risk: "Local change", Rollback: "Restore base", Recovery: "Resume duty", Handoff: "Ready for validation", ContextCost: "One duty", Checks: []Check{{Read: 2, From: 2, To: 3, Purpose: protocol.CheckEdit}, {Goal: "Complete project build", Purpose: protocol.CheckFullBuild}, {Goal: "Complete project tests", Purpose: protocol.CheckFullTests}}}}}}
 	for _, key := range review.RequiredVerificationChecks() {
 		value.Verification = append(value.Verification, "Fixture evidence for "+key)
@@ -187,7 +191,7 @@ func TestOriginalTextColumnsAndPartsPreservePublishedBytes(t *testing.T) {
 
 func TestReadinessAndRepairChecksShareOriginalFragmentAssembly(t *testing.T) {
 	facts := []LocationFact{{Kind: "read", Content: []byte("前🙂 命令 尾\r\n甲\r\n末🙂")}}
-	for _, handler := range []string{"engine.readiness.plan.v4", "engine.repair.v5"} {
+	for _, handler := range []string{"engine.readiness.plan.v5", "engine.repair.v6"} {
 		t.Run(handler, func(t *testing.T) {
 			var value Granularity
 			body := `{"batches":[{"checks":[{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5,"purpose":"FULL_BUILD"},{"parts":[{"read":1,"from":1,"to":1,"fromColumn":4,"toColumn":5},"/new/",{"read":1,"from":3,"to":3}]}]}]}`
@@ -217,7 +221,7 @@ func TestReadinessAndRepairChecksShareOriginalFragmentAssembly(t *testing.T) {
 func TestRepairSourceCommandsKeepApprovedInheritanceAndLocalPolicy(t *testing.T) {
 	approved := []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "build\n"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "tests\n"}, {ID: "edit", Purpose: protocol.CheckEdit, Command: "edit ''\n"}, {ID: "local", Command: "approved-local\n"}}
 	facts := []LocationFact{{Kind: "read", Content: []byte("Local check:\nnew-local '' \"中文\"\n")}, {Kind: "read", Content: []byte(approved[3].Command)}}
-	input := protocol.WorkerInput{Handler: "engine.repair.v5", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: approved, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: approved, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	continued, err := DecodeResultWithFacts(input, "partial", []byte(`{"summary":"Mapped repair","remainingWork":"Implement the approved change"}`), "verified-partial-source", []string{}, facts)
 	if err != nil || continued.Result.Validation.Status != "CONTINUE" {
 		t.Fatalf("repair continuation failed: %v", err)
@@ -262,5 +266,59 @@ func TestRepairSourceCommandsKeepApprovedInheritanceAndLocalPolicy(t *testing.T)
 				t.Fatalf("repair policy was relaxed for %+v", check)
 			}
 		}
+	}
+}
+
+// Missing shared values use the original read assembly and ordered model wire.
+func TestSharedInvocationInputRetainsProceduresAndOriginalValueSelections(t *testing.T) {
+	input := semanticInput()
+	input.Handler = "engine.qa.execution.v3"
+	input.RequirementDocument.Content = "Complete confirmed requirement"
+	input.Pending.AttemptID = "current-attempt"
+	v := input.Validation
+	v.CommandCases = []string{"approved", "approved", "approved"}
+	v.CommandSources = []string{"shared:first", "shared:second", "case:approved"}
+	v.RequiredCases = []string{"approved"}
+	v.PendingCases = []string{"approved"}
+	v.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved", Oracle: "approved oracle", SharedSteps: []string{"first", "second"}}}
+	v.Manifest.SharedSteps = []coverage.SharedStep{{ID: "first", Procedure: "first original procedure"}, {ID: "second", Procedure: "second original procedure"}}
+	facts := qaRecipeFacts(t)
+	raw := []byte(`{"commands":[` + qaSourceOperations + `,` + qaSourceOperations + `,` + qaSourceOperations + `]}`)
+	assertQARecipeReplay(t, input, raw, facts, func(event protocol.Event) {
+		got := event.Result.Validation.QACommands
+		if len(got) != 3 {
+			t.Fatal("duties changed")
+		}
+		for i, command := range got {
+			want := []string{"shared:first", "shared:second", ""}[i]
+			if command.CaseID != "approved" || command.Source != want || !reflect.DeepEqual(command.Operations, qaExpectedOperations()) {
+				t.Fatalf("source/read bytes changed %+v", command)
+			}
+		}
+	})
+	schema, err := ResultSchema(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := schema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
+	entries := fields["commands"].(map[string]any)["prefixItems"].([]any)
+	if len(entries) != 3 || !strings.Contains(entries[0].(map[string]any)["description"].(string), "shared preparation first") || !strings.Contains(entries[2].(map[string]any)["description"].(string), "approved case approved") {
+		t.Fatal("schema duties do not follow actual missing plans")
+	}
+	for _, forbidden := range []string{"caseId", "source", "stepId", "revision"} {
+		if fields[forbidden] != nil {
+			t.Fatal("model schema requests engine identity", forbidden)
+		}
+	}
+	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, projection := comparisonMaterial(t, input, catalog)
+	if !reflect.DeepEqual(projection.Validation.CommandCases, v.CommandCases) || !reflect.DeepEqual(projection.Validation.CommandSources, v.CommandSources) || !reflect.DeepEqual(projection.Validation.Manifest.SharedSteps, v.Manifest.SharedSteps) {
+		t.Fatal("material lost original missing responsibilities/procedures")
+	}
+	if !strings.Contains(material.Prompt, "first original procedure") || !strings.Contains(material.Prompt, "second original procedure") || !strings.Contains(material.Prompt, "Supply only these missing invocation values") {
+		t.Fatal("missing invocation author cannot read original shared procedures")
 	}
 }

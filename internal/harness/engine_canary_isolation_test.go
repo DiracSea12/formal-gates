@@ -227,7 +227,7 @@ func TestCanaryPreparationPreservesNativeSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			overlay, err := zcodeAccountProviderConfiguration(c.hostPaths()["catalogue"], wanted)
+			overlay, err := zcodeAccountProviderConfiguration(c.hostPaths()["catalogue"], wanted, zcodeTestAccountClient(t, c.home))
 			if tc.provisioned && !tc.catalogue {
 				if err == nil || err.Error() != "ZCODE_ACCOUNT_CONFIG: cannot read provider rules from "+c.hostPaths()["catalogue"] {
 					t.Fatalf("native catalogue requirement: %v", err)
@@ -391,6 +391,7 @@ func TestCanaryAccountOverlayFollowsNativeBootstrap(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available")
 	}
+	zcodeTestCredentialHelper(t)
 	consumer := readTestFile(t, canaryNativeReleaseConsumer(t))
 	prelude, _, found := strings.Cut(consumer, "async function consume()")
 	if !found {
@@ -584,7 +585,7 @@ func TestCanaryProviderReleaseKeepsPrivateActiveAndNativeBundle(t *testing.T) {
 					if err != nil || native["revision"] != revision || native["activeFilePath"] != environment[zcodeBuiltinCatalogueEnv] || native["bundledFilePath"] != canaryCanonicalPath(bundled) || !valuesEqual(native["providers"], config["providers"]) || !valuesEqual(decodeTestJSON(t, readTestFile(t, c.hostPaths()["catalogue"])), release) {
 						t.Fatalf("native persistent release/revision identity: native=%#v error=%v", native, err)
 					}
-					overlay, err := zcodeAccountProviderConfiguration(zcodePinnedCatalogue(c.binding), nil)
+					overlay, err := zcodeAccountProviderConfiguration(zcodePinnedCatalogue(c.binding), nil, zcodeTestAccountClient(t, c.home))
 					if err != nil || getOf(overlay, "based_on") != native["revision"] || getOf(overlay, "current") != "p2" || getOf(overlay, "current_source") != "provisioning-order" || getOf(getOf(overlay, "configuration"), "basedOnZCodeBuiltinRevision") != native["revision"] {
 						t.Fatalf("native account revision identity: %#v %v", overlay, err)
 					}
@@ -726,7 +727,7 @@ func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
 	if c.home != canaryCanonicalPath(candidate) || zcodeHostDataDirectory() != c.home || os.Getenv("HOME") != c.home || os.Getenv("USERPROFILE") != c.home {
 		t.Fatal("installation and native host did not share the prepared root")
 	}
-	for _, path := range []string{target.TargetPath, target.LauncherPath, target.HookConfig, target.ManagedRulePath, c.installed.Registry, zcodeCredentialStore()} {
+	for _, path := range []string{target.TargetPath, target.LauncherPath, target.HookConfig, target.ManagedRulePath, c.installed.Registry, os.Getenv(zcodeCredentialHelperEnv)} {
 		if !canaryPathWithin(c.home, path) {
 			t.Fatalf("installed or native path leaves the candidate: %s", path)
 		}

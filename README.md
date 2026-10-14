@@ -19,12 +19,15 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
    首次 drive 自动登记确认；后续产品审、技术审、开发与 QA 消费同一确认 revision。
 3. **独立双审。** 先产品审、再技术审。Operator 逐项核实 finding，用户处置有效问题。
    技术审形成 Batch→Subtask、依赖、DoD 与恢复计划。
-4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再选择 full/custom。
+4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再确认 default/full/custom。
+   非分片 run 的 default 选全部普通门、不含黑盒/白盒 QA；full 选全部普通门与双 QA
+   （QA 阶段较重，适合大型任务）；custom 可选当前候选的非空子集或全集。推荐仍须确认。
+   每个 child 独立决定；child 不选普通 QA，default/full 均选全部普通门，master 强制合并验证。
    start 不预判 split，child 由 engine 创建。
-5. **并发开发。** 开发与黑盒设计/审查并发。黑盒只读基线，开发者与审查者隔离。
+5. **并发开发。** 选择黑盒时，开发与其设计/审查并发。黑盒只读基线，开发者与审查者隔离。
    每个 Batch 新建开发会话，批内重试与恢复沿用原身份。
-6. **冻结候选。** adapter 校验 manifest 后跟踪、提交和快照；白盒独立核对覆盖与测试。
-   全部 FROZEN 用例与交付文件纳入最终候选，Git 压缩在最后必需验证前完成。
+6. **冻结候选。** adapter 校验 manifest 后跟踪、提交和快照；选择白盒时独立核对覆盖与测试。
+   全部已选 QA 的 FROZEN 用例与交付文件纳入最终候选，Git 压缩在最后必需验证前完成。
 7. **并行验证。** engine 冻结完整 expected-set，按容量并行执行 QA 与各门，及时补位。
    门看基线到最终候选完整 diff，独立 QA 的用例与执行证据不作为门审输入。
 8. **统一返修。** wave 收齐、错误处置与问题裁决完成后，只建一份 repair。普通返修
@@ -49,8 +52,8 @@ lightweight 只留下明确“本 run 未经任何验证”的 unverified 记录
 `replan` / `handoff` / `diagnose` / `guard-preview`。
 
 start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与用户确认；
-message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 只读准备计划重审确认。
-其他入口只读。设置见[用户与项目设置](references/user-configuration.md)。需求变化、路线调整、reset、abort、waiver/skip 和 HUMAN 合法节点跳转通过当前
+message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 准备并保存计划重审确认载荷。
+show/status/diagnose/guard-preview 只读；next 的语义选择准备确认载荷，progress 可显式保存进度载荷。准备或保存不代表用户确认。设置见[用户与项目设置](references/user-configuration.md)。需求变化、路线调整、reset、abort、waiver/skip 和 HUMAN 合法节点跳转通过当前
 availableActions 的 typed Ask 提交。UNKNOWN 先对账，不能盲目重派或重做 VCS 副作用。
 
 版本、定义/包摘要或安装身份不匹配时拒绝正常读取与写入；diagnose 可原始只读检查。
@@ -74,7 +77,7 @@ canary。发布与全局切换分别保留独立验收证据；六宿主与 Git/
 
 ### 从 release 安装（推荐）
 
-不需要 Go 工具链。下载最新 release 的源码包，解压后在包内运行安装脚本（macOS/Linux 用 `install.command`，Windows 用 `install.bat`）。脚本会下载匹配当前平台的正式二进制、canary 与 SHA256 校验和，校验后组装本地包并调用同一个原生安装器：
+不需要 Go 工具链。下载目标 release 的源码包，解压后在包内运行安装脚本（macOS/Linux 用 `install.command`，Windows 用 `install.bat`）。macOS/Linux 用 `--version <目标 tag>`，Windows 用 `-Version <目标 tag>` 指定要安装的版本；未指定时读取 `FORMAL_GATES_VERSION`，再缺省为 `v0.1.0`。运行某个源码包内的脚本不会自动选择该包版本。脚本下载所选 tag 的源码及匹配当前平台的正式二进制、canary 与 SHA256 校验和，校验后组装本地包并调用同一个原生安装器：
 
 ```bash
 ./install.command --host claude --scope global
@@ -83,9 +86,11 @@ canary。发布与全局切换分别保留独立验收证据；六宿主与 Git/
 
 ### 从源码构建（只读验证）
 
-源码构建产物是候选 binary，只用于包验证和隔离 canary，不能执行安装、bootstrap、
-卸载或 workflow 写入。正式安装统一使用上面的 release 引导脚本，由脚本把校验后的
-binary 放到固定 stable launcher 后再进入唯一原生事务：
+源码构建产物是候选 binary，用于包验证和隔离 canary，不接受普通安装、bootstrap、
+卸载或 workflow 写入。release 引导脚本在固定 stable launcher 不存在时放入校验后的 binary，
+由该 launcher 执行唯一原生事务。只有既有 launcher 拒绝 release 安装的新参数且显式传
+`--force`（Windows 为 `-Force`）时，脚本才由已校验 release 源码包内的 binary 执行同一事务，
+更新默认固定 launcher；替换前备份由原 journal 持有。详见[安装与 Hook](references/install-and-hooks.md#原生安装)。源码验证：
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates

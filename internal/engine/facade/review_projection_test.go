@@ -7,7 +7,6 @@ package facade
 import (
 	"reflect"
 	"testing"
-	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -16,6 +15,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/worker"
 )
 
 // TestReviewFaceProjectsLedgerAndBindings：投影纯函数逐项断言。
@@ -278,8 +278,8 @@ func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
 	registry := compiler.NewRegistry()
 	for _, err := range []error{
 		registry.RegisterHandler("development.worker", authoring.RunnerAgentWorker),
-		registry.RegisterCodec("work.input"), registry.RegisterCodec("work.output"),
-		registry.RegisterPredicate("work.complete"),
+		registry.RegisterCodec(protocol.WorkerInputCodec), registry.RegisterCodec(worker.OutputCodec),
+		registry.RegisterPredicate("pred.review.post"),
 	} {
 		if err != nil {
 			t.Fatalf("register worker: %v", err)
@@ -287,8 +287,8 @@ func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
 	}
 	worker, err := authoring.NewAgentStep(
 		authoring.Header{ID: "development.worker", NodeID: "development", DefinitionVersion: definition.Version},
-		authoring.IO{InputCodec: "work.input", OutputCodec: "work.output", Postconditions: []authoring.PredicateRef{{ID: "work.complete"}}},
-		authoring.AgentSpec{Handler: "development.worker", Reason: authoring.ReasonCreativeImplementation, Timeout: time.Minute})
+		authoring.IO{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Postconditions: []authoring.PredicateRef{{ID: "pred.review.post"}}},
+		authoring.AgentSpec{Handler: "development.worker", Reason: authoring.ReasonCreativeImplementation, Timeout: 0})
 	if err != nil {
 		t.Fatalf("worker: %v", err)
 	}
@@ -296,18 +296,15 @@ func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile worker: %v", err)
 	}
-	f.engine, err = protocol.New(f.store, protocol.Config{Definition: compiled, Registry: registry, Capacity: 4}, nil)
+	f.engine, err = protocol.New(f.store, protocol.Config{Definition: compiled, Registry: registry, Capacity: 4})
 	if err != nil {
 		t.Fatalf("worker engine: %v", err)
 	}
-	plan, _, err := f.engine.Plan()
+	plan, _, err := f.engine.Plan(protocol.Observation{})
 	if err != nil {
 		t.Fatalf("worker plan: %v", err)
 	}
-	fingerprint, err := f.engine.ObserveFingerprint()
-	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
-	}
+	fingerprint := protocol.Observation{}
 	issued, _, err := f.engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fingerprint)
 	if err != nil || len(issued) != 1 {
 		t.Fatalf("issue worker: %+v %v", issued, err)

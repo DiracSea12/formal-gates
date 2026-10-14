@@ -214,7 +214,7 @@ func (p *Provider) ObservedWorkspaceCleanup(source, message string, h WorkspaceH
 	}
 	if p.name == "svn" {
 		var log svnLog
-		if err := p.svnXML(&log, "log", "--xml", "-v", "-r", "HEAD:"+strconv.Itoa(id.Revision), id.Address); err != nil {
+		if err := p.svnXML(&log, "log", "--xml", "-v", "-r", "HEAD:"+strconv.Itoa(id.Revision), svnLiteral(id.Address)); err != nil {
 			return false, err
 		}
 		for _, entry := range log.Entries {
@@ -222,7 +222,11 @@ func (p *Provider) ObservedWorkspaceCleanup(source, message string, h WorkspaceH
 				continue
 			}
 			for _, change := range entry.Paths {
-				if change.Action == "D" && id.Address+change.Path == h.URL {
+				target, err := svnURLPath(id.Address, h.URL)
+				if err != nil {
+					return false, err
+				}
+				if change.Action == "D" && change.Path == target {
 					return true, nil
 				}
 			}
@@ -284,7 +288,7 @@ func (p *Provider) ObserveIntegration(base, incoming string) (IntegrationObserva
 		return IntegrationObservation{Started: head == incoming, Lineage: head, Entries: entries}, err
 	}
 	if p.name == "svn" {
-		return p.svnObserveIntegration(base, incoming)
+		return p.svnObserveIntegration(incoming)
 	}
 	return p.p4ObserveIntegration(base, incoming)
 }
@@ -293,8 +297,28 @@ func (p *Provider) ResolveConflicts(paths []string) error {
 		return p.Track(paths)
 	}
 	if p.name == "svn" {
-		_, err := p.runner.Run(p.root, "svn", append([]string{"resolve", "--accept", "working", "--"}, paths...)...)
-		return err
+		if len(paths) == 0 {
+			return nil
+		}
+		status, err := p.svnStatuses()
+		if err != nil {
+			return err
+		}
+		var unresolved []string
+		for _, target := range status.Targets {
+			for _, entry := range target.Entries {
+				key := p.svnPath(entry.Path)
+				if slices.Contains(paths, key) && (entry.Status.TreeConflict || entry.Status.Item == "conflicted" || entry.Status.Props == "conflicted") {
+					unresolved = append(unresolved, key)
+				}
+			}
+		}
+		if len(unresolved) > 0 {
+			if _, err := p.runner.Run(p.root, "svn", append([]string{"resolve", "--accept", "working", "--"}, svnLiterals(unresolved)...)...); err != nil {
+				return err
+			}
+		}
+		return p.Track(paths)
 	}
 	return p.p4ResolveConflicts(paths)
 }
@@ -383,7 +407,7 @@ func (p *Provider) ObservedCommit(base, message string) (string, bool, error) {
 	if p.name == "svn" {
 		var log svnLog
 		// HEAD is valid before the operation exists; base is excluded below.
-		if err = p.svnXML(&log, "log", "--xml", "-r", "HEAD:"+strconv.Itoa(id.Revision), id.Scope); err != nil {
+		if err = p.svnXML(&log, "log", "--xml", "-r", "HEAD:"+strconv.Itoa(id.Revision), svnLiteral(id.Scope)); err != nil {
 			return "", false, err
 		}
 		var found string
@@ -428,11 +452,28 @@ func (p *Provider) Synchronize(identity string) error {
 		return err
 	}
 	if p.name == "svn" {
-		_, err = p.runner.Run(p.root, "svn", "update", "-r", strconv.Itoa(id.Revision), p.root)
+		_, err = p.runner.Run(p.root, "svn", "update", "-r", strconv.Itoa(id.Revision), svnLiteral(p.root))
 		return err
 	}
 	_, err = p.p4Raw(nil, "sync", "-f", "//"+p.p4Client()+"/...@"+strconv.Itoa(id.Revision))
 	return err
+}
+
+// WorkspaceSynchronized proves the exact native base independently of later edits.
+func (p *Provider) WorkspaceSynchronized(identity string) (bool, error) {
+	head, err := p.Resolve()
+	if err != nil || head != identity {
+		return false, err
+	}
+	if p.name != "svn" {
+		return true, nil
+	}
+	id, err := decodeNative(identity)
+	if err != nil {
+		return false, err
+	}
+	revisions, err := p.svnWorkingRevisions()
+	return len(revisions) == 1 && revisions[id.Revision], err
 }
 
 func workingBytes(path string) ([]byte, error) {

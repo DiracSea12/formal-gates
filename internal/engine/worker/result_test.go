@@ -2,19 +2,86 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 )
 
+func TestDefinitionCodecsBindSchemaAndSemanticDecoding(t *testing.T) {
+	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDefinition(cd); err != nil {
+		t.Fatal(err)
+	}
+	for _, changed := range []string{"input-codec", "output-codec"} {
+		t.Run(changed, func(t *testing.T) {
+			source, registry := definition.Workflow(), definition.Registry()
+			for _, id := range []authoring.CodecID{"codec.unsupported.in", "codec.unsupported.out"} {
+				if err := registry.RegisterCodec(id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, value := range source.Steps {
+				step, agent := value.(authoring.AgentStep)
+				if !agent {
+					continue
+				}
+				switch changed {
+				case "input-codec":
+					step.IO.InputCodec = "codec.unsupported.in"
+				case "output-codec":
+					step.IO.OutputCodec = "codec.unsupported.out"
+				}
+				source.Steps[i] = step
+				break
+			}
+			candidate, err := compiler.Compile(source, registry)
+			if err != nil {
+				t.Fatal("registered I/O candidate failed compiler before runtime binding", err)
+			}
+			if err := ValidateDefinition(candidate); err == nil {
+				t.Fatal("unsupported declared I/O silently selected the worker union")
+			}
+		})
+	}
+	input := semanticInput()
+	raw := []byte(`{"interruptionReason":"Cannot finish the issued design"}`)
+	for _, changed := range []string{"supported", "input-codec", "output-codec"} {
+		t.Run(changed, func(t *testing.T) {
+			issued := input
+			switch changed {
+			case "input-codec":
+				issued.InputCodec = authoring.CodecID("codec.unsupported.in")
+			case "output-codec":
+				issued.OutputCodec = authoring.CodecID("codec.unsupported.out")
+			}
+			_, schemaErr := ResultSchema(issued)
+			_, stableErr := StableResultSchema(issued)
+			_, decodeErr := DecodeResultWithPaths(issued, "result", raw, "original-answer", nil)
+			validateErr := ValidateSemanticBody(issued, raw)
+			for _, err := range []error{schemaErr, stableErr, decodeErr, validateErr} {
+				if (err == nil) != (changed == "supported") {
+					t.Fatalf("schema and decoder did not share declared I/O binding: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func semanticInput() protocol.WorkerInput {
 	binding := coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "issued-run", RequirementRevision: "original-revision", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox, RouteScope: "approved-route", TopologyScope: "original-topology"}
 	manifest := coverage.AcceptanceManifest{Binding: binding, Sources: []string{"alpha", "beta"}, Points: []coverage.AcceptancePoint{{PointID: "one", ObservableBehavior: "first behavior", Oracle: "first oracle"}, {PointID: "two", ObservableBehavior: "second behavior", Oracle: "second oracle"}}, Cases: []coverage.AcceptanceCase{{CaseID: "new"}, {CaseID: "prior"}}, SharedSteps: []coverage.SharedStep{{ID: "setup", Procedure: "real setup"}}}
-	return protocol.WorkerInput{RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{manifest}}, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
+	return protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v5", Provider: "native-provider", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Binding: protocol.WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "work", Scope: "issued-scope"}, RequirementRevision: "original-revision", Generation: 7}, Manifest: manifest, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{manifest}}, SourcePoints: []protocol.SourcePoint{{SourceID: "alpha", PointID: "one"}, {SourceID: "beta", PointID: "one"}, {SourceID: "beta", PointID: "two"}}, ReviewScope: coverage.ScopeAffected}}
 }
 func decodeSemantic(t *testing.T, input protocol.WorkerInput, result any) protocol.WorkerResultPayload {
 	t.Helper()
@@ -131,12 +198,12 @@ func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 		{"engine.qa.design.v5", `{"binding":{"generation":9},"cases":[],"coverage":{}}`},
 		{"engine.qa.design.v5", `{"sources":["wrong"],"cases":[],"coverage":{}}`},
 		{"engine.qa.design.v5", `{"cases":[{"caseId":"new","mode":"WHITEBOX","oracle":"actual"}],"coverage":{}}`},
-		{"engine.gate.v2", `{"status":"PASS","findings":[{"id":"wrong","severity":"P3","message":"real finding"}]}`},
+		{"engine.gate.v3", `{"status":"PASS","findings":[{"id":"wrong","severity":"P3","message":"real finding"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"id":"wrong","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"decision":"ACCEPT","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"scope":"FULL","sourceDecisions":[],"pointDecisions":[],"caseDecisions":[]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[{"id":"wrong","status":"PASS","reason":"actual"}],"pointDecisions":[],"caseDecisions":[]}`},
-		{"engine.repair.v5", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
+		{"engine.repair.v6", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
 		{"engine.qa.execution.v3", `{"binding":{"candidate":{"identity":"wrong"}},"records":{}}`},
 		{"engine.qa.execution.v3", `{"records":[{"sourceId":"wrong","result":"EXECUTED_PASS"}]}`},
 	} {
@@ -205,5 +272,47 @@ func TestWhiteboxDesignPreservesCapturedDeliveryAndMaterialRelations(t *testing.
 	raw = append(raw[:len(raw)-1], []byte(`,"development":{"paths":["analytics_test.go"],"summary":"duplicate path declaration"}}`)...)
 	if _, err = DecodeResultWithPaths(input, "result", raw, "original-raw-digest", []string{}); err == nil {
 		t.Fatal("QA model supplied duplicate development fields")
+	}
+}
+
+func TestDefinitionConditionsRequireResultImplementation(t *testing.T) {
+	for _, condition := range []string{"supported", "unknown", "negated", "precondition", "local", "host"} {
+		t.Run(condition, func(t *testing.T) {
+			cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range cd.Steps {
+				step := &cd.Steps[i]
+				_, agent := step.Payload.(compiler.CompiledAgentStep)
+				_, local := step.Payload.(compiler.CompiledLocalStep)
+				_, host := step.Payload.(compiler.CompiledHostActionStep)
+				if condition == "local" && !local || condition == "host" && !host || condition != "local" && condition != "host" && !agent {
+					continue
+				}
+				switch condition {
+				case "unknown":
+					step.IO.Postconditions = []authoring.PredicateRef{{ID: "pred.unimplemented.post"}}
+				case "negated":
+					step.IO.Postconditions[0].Negated = true
+				case "precondition":
+					step.IO.Preconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
+				case "local", "host":
+					step.IO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
+				}
+				break
+			}
+			err = ValidateDefinition(cd)
+			if condition == "supported" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			var rejected *compiler.Error
+			if !errors.As(err, &rejected) || rejected.Class != authoring.FailureBlockedBug {
+				t.Fatalf("unimplemented condition activated: %v", err)
+			}
+		})
 	}
 }

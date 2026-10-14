@@ -17,10 +17,10 @@ import (
 
 func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 	roles := map[string][]string{
-		"engine.development.batch.v4": {"summary"}, "engine.repair.v5": {"summary", "granularityReview"}, "engine.merge.resolve.v3": {"summary"}, "engine.qa.design.v5": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v3": {"records", "findings"}, "engine.gate.v2": {"findings"},
+		"engine.development.batch.v5": {"summary"}, "engine.repair.v6": {"summary", "granularityReview"}, "engine.merge.resolve.v3": {"summary"}, "engine.qa.design.v5": {"cases", "coverage", "sharedSteps", "replace", "removeCases", "removeSharedSteps", "checkpoint"}, "engine.qa.review.rationale.v2": {"sourceDecisions", "pointDecisions", "caseDecisions", "sharedStepDecisions", "suggestions"}, "engine.qa.execution.v3": {"records", "findings"}, "engine.gate.v3": {"findings"},
 	}
 	for handler, names := range roles {
-		input := protocol.WorkerInput{Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 		schema, err := ResultSchema(input)
 		if err != nil {
 			t.Fatal(err)
@@ -48,9 +48,9 @@ func TestResultSchemaUsesSemanticRoleContract(t *testing.T) {
 
 func TestFindingSchemasPublishSeverityChoices(t *testing.T) {
 	for _, input := range []protocol.WorkerInput{
-		{Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
-		{Handler: "engine.gate.v2", Validation: &protocol.ValidationInput{}},
-		{Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{}},
+		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.review.worker.v2", Review: &protocol.WorkerReviewInput{Action: review.ProductReview}},
+		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}},
+		{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{}},
 	} {
 		t.Run(input.Handler, func(t *testing.T) {
 			schema, err := ResultSchema(input)
@@ -76,7 +76,7 @@ func TestDesignSchemasPublishScenarioChoicesForNewAndExistingCases(t *testing.T)
 	for _, kind := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox} {
 		for _, scope := range []string{"initial", "full", "affected"} {
 			t.Run(string(kind)+"/"+scope, func(t *testing.T) {
-				input := protocol.WorkerInput{Handler: "engine.qa.design.v5", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
+				input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.design.v5", Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: kind}}}}
 				if scope != "initial" {
 					input.Validation.Manifest.Cases = []coverage.AcceptanceCase{{CaseID: "approved", Scenario: "SUCCESS", Oracle: "approved oracle"}}
 				}
@@ -124,6 +124,7 @@ func TestDesignSchemasPublishScenarioChoicesForNewAndExistingCases(t *testing.T)
 
 func TestObservationSchemaRequiresOrdinarySeverityAndExcludesExecutionSeverity(t *testing.T) {
 	input := observationWorkerInput()
+	input.InputCodec, input.OutputCodec = protocol.WorkerInputCodec, OutputCodec
 	input.Validation.Observation.Findings[0].Finding.Raw = &review.Finding{Severity: "P1"}
 	input.Validation.Observation.Findings[1].Finding.ExecutionFailure = &protocol.ExecutionFailure{CaseID: "failed-case"}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "validation-observation"}}}
@@ -188,12 +189,17 @@ func TestReviewMaterialRequiresEveryVerificationEvidence(t *testing.T) {
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
 		handler := "engine.review.worker.v2"
 		if action == review.StartReadiness {
-			handler = "engine.readiness.plan.v4"
+			handler = "engine.readiness.plan.v5"
 		}
-		input := protocol.WorkerInput{RunID: "run", Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: action, RequirementRevision: "revision"}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: handler, Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "requirement"}, Review: &protocol.WorkerReviewInput{Action: action, RequirementRevision: "revision"}}
 		material, err := Render(input, catalog)
 		if err != nil {
 			t.Fatal(err)
+		}
+		for _, internal := range []string{"inputCodec", "outputCodec"} {
+			if strings.Contains(material.Prompt, internal) {
+				t.Fatalf("model prompt exposes internal I/O binding %s", internal)
+			}
 		}
 		fields := material.ResultSchema["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
 		for _, key := range []string{"action", "dispatchId", "requirementRevision", "authorizationId"} {
@@ -239,8 +245,8 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 		kind    coverage.ReviewKind
 		author  bool
 	}{
-		{"engine.development.batch.v4", "", true},
-		{"engine.repair.v5", "", true},
+		{"engine.development.batch.v5", "", true},
+		{"engine.repair.v6", "", true},
 		{"engine.merge.resolve.v3", "", true},
 		{"engine.qa.design.v5", coverage.ReviewWhitebox, true},
 		{"engine.qa.design.v5", coverage.ReviewBlackbox, false},
@@ -248,7 +254,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 		{"engine.qa.review.rationale.v2", "", false},
 	} {
 		t.Run(role.handler+string(role.kind), func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: role.handler, Provider: "zcode", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: role.kind}}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: role.handler, Provider: "zcode", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: role.kind}}}}
 			material, err := Render(input, catalog)
 			if err != nil {
 				t.Fatal(err)
@@ -286,7 +292,7 @@ func TestAuthorMaterialRequiresCleanArtifactDelivery(t *testing.T) {
 
 func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 	for _, handler := range []string{"engine.qa.design.v5", "engine.qa.review.rationale.v2", "engine.qa.execution.v3"} {
-		input := protocol.WorkerInput{Handler: handler, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}, PendingCases: []string{"case"}, RequiredCases: []string{"case"}}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}, Sources: []string{"source"}, Points: []coverage.AcceptancePoint{{PointID: "point"}}, Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}, PendingCases: []string{"case"}, RequiredCases: []string{"case"}}}
 		input.Validation.ExecutionFacts = []protocol.ExecutionFact{{CaseID: "case"}}
 		schema, err := ResultSchema(input)
 		if err != nil {
@@ -331,9 +337,9 @@ func TestQASchemaExcludesIssuedFacts(t *testing.T) {
 func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	batch := protocol.DevelopmentBatch{ID: "owned", DoD: []protocol.DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}, {ID: "interface", Description: "declared interface"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Command: "go build ./..."}, {ID: "behavior-test", Command: "go test ./..."}}}
 	catalog := prompts.PromptCatalog{Actions: []prompts.PromptDefinition{{ID: "development-worker", Content: "Develop the issued duty"}}}
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(role, func(t *testing.T) {
-			input := protocol.WorkerInput{RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: role, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Development: &protocol.DevelopmentInput{Batch: batch}}}
 			before, _ := json.Marshal(input)
 			material, err := Render(input, catalog)
 			if err != nil {
@@ -362,7 +368,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 	}
 	for _, name := range []string{"no-batch", "empty-batch", "unfrozen-repair", "final-verification", "other-role"} {
 		t.Run(name, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: "engine.repair.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued"}, Validation: &protocol.ValidationInput{}}
 			switch name {
 			case "empty-batch":
 				input.Validation.Development = &protocol.DevelopmentInput{}
@@ -414,7 +420,7 @@ func TestCompletionSchemaUsesIssuedBatchKeys(t *testing.T) {
 }
 
 func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "repair"}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}, Contract: &coverage.CoverageContract{Manifests: []coverage.AcceptanceManifest{{Cases: []coverage.AcceptanceCase{{CaseID: "normal-input"}}}}}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -471,7 +477,7 @@ func TestUnplannedRepairCompletionRequiresSingleProposal(t *testing.T) {
 }
 
 func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v5", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "approved-build"}}}
 	schema, err := ResultSchema(input)
 	if err != nil {
 		t.Fatal(err)
@@ -520,10 +526,10 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 }
 
 func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
-	for _, handler := range []string{"engine.readiness.plan.v4", "engine.repair.v5"} {
+	for _, handler := range []string{"engine.readiness.plan.v5", "engine.repair.v6"} {
 		t.Run(handler, func(t *testing.T) {
-			input := protocol.WorkerInput{Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
-			if handler == "engine.readiness.plan.v4" {
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
+			if handler == "engine.readiness.plan.v5" {
 				input.Review = &protocol.WorkerReviewInput{Action: review.StartReadiness}
 			} else {
 				input.Validation = &protocol.ValidationInput{Repair: &protocol.RepairInput{}}
@@ -577,7 +583,7 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 }
 
 func TestRepairCompletionSchemaRequiresSummaryWithoutChangingAlternatives(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.repair.v5", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.repair.v6", Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	for _, scenario := range []string{"proposed", "issued"} {
 		t.Run(scenario, func(t *testing.T) {
 			if scenario == "issued" {
@@ -637,9 +643,9 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 	for _, role := range []struct {
 		handler  string
 		statuses []string
-	}{{"engine.development.batch.v4", nil}, {"engine.repair.v5", nil}, {"engine.merge.resolve.v3", nil}, {"engine.qa.design.v5", nil}, {"engine.gate.v2", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v3", nil}} {
+	}{{"engine.development.batch.v5", nil}, {"engine.repair.v6", nil}, {"engine.merge.resolve.v3", nil}, {"engine.qa.design.v5", nil}, {"engine.gate.v3", nil}, {"engine.qa.review.rationale.v2", nil}, {"engine.qa.execution.v3", nil}} {
 		t.Run(role.handler, func(t *testing.T) {
-			input := protocol.WorkerInput{RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
+			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: role.handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}, Gate: &protocol.GateInput{Gate: "quality"}}}
 			material, err := Render(input, catalog)
 			if err != nil {
 				t.Fatal(err)
@@ -665,7 +671,7 @@ func TestValidationRoleStatusUsesOnlyOwnedFiniteValues(t *testing.T) {
 		})
 	}
 	t.Run("whitebox-design-vcs-owner", func(t *testing.T) {
-		input := protocol.WorkerInput{RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
+		input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, RunID: "run", Handler: "engine.qa.design.v5", Provider: "host", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}}}}
 		material, err := Render(input, catalog)
 		if err != nil {
 			t.Fatal(err)
@@ -744,7 +750,7 @@ func TestOrderedSchemaPreservesExactEmptyAndNonemptyDuties(t *testing.T) {
 }
 
 func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T) {
-	commands := protocol.WorkerInput{Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{CommandCases: []string{"first"}}}
+	commands := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.qa.execution.v3", Validation: &protocol.ValidationInput{CommandCases: []string{"first"}}}
 	judgments := commands
 	judgments.Validation = &protocol.ValidationInput{PendingCases: []string{"first", "second"}}
 	first, err := StableResultSchema(commands)
@@ -777,7 +783,7 @@ func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T
 	if fields["records"].(map[string]any)["type"] != "array" {
 		t.Fatal("judgment record type is not constrained")
 	}
-	development := protocol.WorkerInput{Handler: "engine.development.batch.v4", Validation: &protocol.ValidationInput{}}
+	development := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.development.batch.v5", Validation: &protocol.ValidationInput{}}
 	stable, err := StableResultSchema(development)
 	if err != nil {
 		t.Fatal(err)
@@ -799,7 +805,7 @@ func TestStableResultSchemaRetainsOnlyRoleShapesAcrossContinuations(t *testing.T
 }
 
 func TestReadinessExposesOnlyOriginalCallsAndVerificationGoals(t *testing.T) {
-	input := protocol.WorkerInput{Handler: "engine.readiness.plan.v4", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: "engine.readiness.plan.v5", Review: &protocol.WorkerReviewInput{Action: review.StartReadiness}}
 	for _, generate := range []func(protocol.WorkerInput) (map[string]any, error){ResultSchema, StableResultSchema} {
 		schema, err := generate(input)
 		if err != nil {

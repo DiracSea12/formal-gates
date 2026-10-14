@@ -1,5 +1,5 @@
-// mutation_acceptance_test.go 覆盖两类拒绝性判据（对象均为
-// checked-in 定义源 definition.Workflow()）：
+// mutation_acceptance_test.go 对 testkit/workflow 的十步骤、六变体协议图
+// 覆盖两类拒绝性判据：
 //
 //  1. registry 完备性：缺失 ID、重复 ID、kind 不匹配三类全拒；只有完整解析
 //     才产出 CompiledDefinition；
@@ -19,8 +19,8 @@ import (
 )
 
 // TestAcceptanceRegistryCompleteness：registry 三类失败全拒；完整解析才产出
-// CompiledDefinition。无 skip 的复刻注册表编译产物必须等于 checked-in 身份，
-// 把夹具钉死在真实注册表上。
+// CompiledDefinition。无 skip 的复刻注册表编译产物必须等于协议图的完整
+// registry 编译身份，校验复刻与夹具注册表一致。
 func TestAcceptanceRegistryCompleteness(t *testing.T) {
 	t.Run("complete resolution produces CompiledDefinition", func(t *testing.T) {
 		cd, _, digest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
@@ -31,7 +31,7 @@ func TestAcceptanceRegistryCompleteness(t *testing.T) {
 			t.Fatalf("step count = %d, want 10", len(cd.Steps))
 		}
 		if digest != definition.WorkflowDefinitionDigest {
-			t.Fatalf("fixture registry digest = %s, want checked-in identity %s (fixture drifted from definition.Registry)", digest, definition.WorkflowDefinitionDigest)
+			t.Fatalf("fixture registry digest = %s, want fixture identity %s (fixture drifted from definition.Registry)", digest, definition.WorkflowDefinitionDigest)
 		}
 	})
 
@@ -101,36 +101,29 @@ func TestAcceptanceMutationEnumerationRejected(t *testing.T) {
 		mutate func(d *compiler.Definition)
 		want   string
 	}{
-		{"delete dependency keep binding", func(d *compiler.Definition) {
-			// report.cost 删依赖但保留 input binding：inputs 集合 != deps 集合。
-			i := stepIndex(t, d, "report.cost")
-			if !dropDep(d, i, "ask.decide") {
-				t.Fatal("dependency not found")
-			}
-		}, `input binding source "ask.decide" is not a dependency`},
-		{"delete dependency and binding", func(d *compiler.Definition) {
-			// report.cost 删掉全部依赖与 binding：自身失去可满足的依赖路径，
+		{"delete all nonentry dependencies", func(d *compiler.Definition) {
+			// report.cost 删掉全部依赖：自身失去可满足的依赖路径，
 			// 又不在入口节点，成为不可达步骤。
 			i := stepIndex(t, d, "report.cost")
 			for _, dep := range []string{"fan.join", "ask.decide"} {
-				if !dropDep(d, i, dep) || !dropBinding(d, i, dep) {
-					t.Fatalf("dependency/binding %q not found", dep)
+				if !dropDep(d, i, dep) {
+					t.Fatalf("dependency %q not found", dep)
 				}
 			}
 		}, "unreachable steps [report.cost]"},
 		{"delete fan child dependency", func(d *compiler.Definition) {
 			// fan.slice 删对 fan-out 锚点的依赖：不在入口节点，成为不可达步骤。
 			i := stepIndex(t, d, "fan.slice")
-			if !dropDep(d, i, "fan.split") || !dropBinding(d, i, "fan.split") {
-				t.Fatal("dependency/binding not found")
+			if !dropDep(d, i, "fan.split") {
+				t.Fatal("dependency not found")
 			}
 		}, "unreachable steps [fan.slice]"},
 		{"delete join edge", func(d *compiler.Definition) {
-			// fan.join 删对一名 child 的依赖 + binding：join 覆盖不完整
+			// fan.join 删对一名 child 的依赖：join 覆盖不完整
 			// （children 集合 ⊃ join 依赖集合）。
 			i := stepIndex(t, d, "fan.join")
-			if !dropDep(d, i, "fan.transport") || !dropBinding(d, i, "fan.transport") {
-				t.Fatal("dependency/binding not found")
+			if !dropDep(d, i, "fan.transport") {
+				t.Fatal("dependency not found")
 			}
 		}, `(fan-out coverage)`},
 		{"delete join policy", func(d *compiler.Definition) {
@@ -189,7 +182,7 @@ func TestAcceptanceMutationEnumerationRejected(t *testing.T) {
 // 每轮 compiler 必拒（INVARIANT_VIOLATION）。
 //
 // 可靠性论证：菜单每一项单独必拒，且菜单只含删除/置零类操作——版本绑定、
-// join/failure 策略必填、reconcile 必填、inputs==deps、join 覆盖与可达性
+// join/failure 策略必填、reconcile 必填、join 覆盖与可达性
 // 都是单调不变量（一旦违反，删除/置零类操作无法修复），因此任意非空组合
 // 必拒。种子固定，失败可复现。
 func TestAcceptanceMutationFuzzRejected(t *testing.T) {
@@ -226,25 +219,25 @@ func TestAcceptanceMutationFuzzRejected(t *testing.T) {
 				t.Fatalf("step %d not editable", i)
 			}
 		}},
-		{"drop dependency keep binding", func(d *compiler.Definition, rng *rand.Rand) {
-			// 随机依赖边：只删头部的依赖、保留 input binding（inputs != deps）。
-			// 每轮至多删 2 条边（本项与 join 边各一），全图 10 条边必有剩余。
+		{"drop sole nonentry dependency", func(d *compiler.Definition, rng *rand.Rand) {
+			// 未变异图中非入口步骤的唯一依赖，删除即破坏可达性。
+			// join 有两条依赖，不进入本菜单，join 边可独立随机删除。
 			type edge struct {
 				step int
 				dep  string
 			}
 			var edges []edge
-			for i, s := range d.Steps {
+			for i, s := range definition.Workflow().Steps {
 				h, ok := stepHeader(s)
 				if !ok {
 					t.Fatalf("step %d has no header", i)
 				}
-				for _, dep := range h.Dependencies {
-					edges = append(edges, edge{i, string(dep)})
+				if h.NodeID != d.EntryNode && len(h.Dependencies) == 1 {
+					edges = append(edges, edge{i, string(h.Dependencies[0])})
 				}
 			}
 			if len(edges) == 0 {
-				t.Fatal("no dependency edges left to drop (menu math broken)")
+				t.Fatal("no sole nonentry dependency to drop")
 			}
 			e := edges[rng.Intn(len(edges))]
 			if !dropDep(d, e.step, e.dep) {
@@ -252,7 +245,7 @@ func TestAcceptanceMutationFuzzRejected(t *testing.T) {
 			}
 		}},
 		{"drop join child edge", func(d *compiler.Definition, rng *rand.Rand) {
-			// fan.join 删对一名 child 的依赖 + 对应 binding（join 覆盖被破坏）。
+			// fan.join 删对一名 child 的依赖（join 覆盖被破坏）。
 			i := fanJoinIndex(d)
 			var childDeps []string
 			if h, ok := stepHeader(d.Steps[i]); ok {
@@ -266,7 +259,7 @@ func TestAcceptanceMutationFuzzRejected(t *testing.T) {
 				t.Fatal("fan.join has no child dependency left (menu math broken)")
 			}
 			dep := childDeps[rng.Intn(len(childDeps))]
-			if !dropDep(d, i, dep) || !dropBinding(d, i, dep) {
+			if !dropDep(d, i, dep) {
 				t.Fatalf("drop join edge %q failed", dep)
 			}
 		}},

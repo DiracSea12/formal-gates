@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -373,6 +374,137 @@ func TestRevisionCASConflict(t *testing.T) {
 		t.Fatalf("CAS conflict overwrote committed content: %v", content)
 	}
 	assertNothingWritten(t, store, stateBytes(t, store))
+}
+
+// A new writer reconciles durable input before CAS, so stale content cannot
+// replace it. Save and Recover share that boundary under concurrent entry.
+func TestSaveReconcilesPendingCommitBeforeCAS(t *testing.T) {
+	for _, point := range []FaultPoint{FaultIntentAfter, FaultExecuteBefore, FaultExecuteAfter} {
+		for _, concurrent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/concurrent=%t", point, concurrent), func(t *testing.T) {
+				store := newTestStore(t)
+				baseline := saveOne(t, store, map[string]any{"request": "baseline"})
+				original := map[string]any{"request": "original", "barrier": true, "work": "retained"}
+				store.cfg.FaultInjector = func(at FaultPoint) error {
+					if at == point {
+						return &InjectedCrashError{Point: at}
+					}
+					return nil
+				}
+				_, err := store.Save(Transaction{ExpectedRevision: baseline.Revision, ExpectedFingerprint: "fp", CollectFingerprint: staticFingerprint("fp"), Content: original})
+				if !errors.Is(err, ErrInjectedCrash) {
+					t.Fatalf("original save: %v", err)
+				}
+				intentBytes, err := os.ReadFile(store.intentPath())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var intent intentRecord
+				if err := json.Unmarshal(intentBytes, &intent); err != nil {
+					t.Fatal(err)
+				}
+				if intent.ExpectedRevision != baseline.Revision || intent.NextRevision != baseline.Revision+1 {
+					t.Fatalf("intent revisions: %+v", intent)
+				}
+				store.cfg.FaultInjector = nil
+				writers := 1
+				if concurrent {
+					writers = 2
+				}
+				start := make(chan struct{})
+				results := make(chan error, writers+1)
+				recoverObserved := make(chan struct{})
+				recoveryStore := store
+				processLock := transactionLock(store.dir)
+				if concurrent {
+					cfg := store.cfg
+					cfg.AcquireAdmission = func() (func(), error) {
+						close(recoverObserved)
+						return func() {}, nil
+					}
+					recoveryStore, err = NewStore(store.dir, cfg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					// Hold writers until Recover has observed the durable intent;
+					// its clean read path is outside the transaction lock.
+					processLock.Lock()
+				}
+				var group sync.WaitGroup
+				for i := 0; i < writers; i++ {
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						<-start
+						_, err := store.Save(Transaction{ExpectedRevision: baseline.Revision, ExpectedFingerprint: "fp", CollectFingerprint: func() (string, error) {
+							return "", fmt.Errorf("stale transaction reached fingerprint collection")
+						}, Content: map[string]any{"request": "independent"}})
+						var conflict *RevisionConflictError
+						if !errors.As(err, &conflict) || conflict.Expected != baseline.Revision || conflict.Observed != intent.NextRevision {
+							results <- fmt.Errorf("stale save: %v, want CAS %d/%d", err, baseline.Revision, intent.NextRevision)
+						}
+					}()
+				}
+				if concurrent {
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						<-start
+						report, err := recoveryStore.Recover()
+						if err != nil || report.Revision != intent.NextRevision {
+							results <- fmt.Errorf("concurrent recover: %+v %v", report, err)
+						}
+					}()
+				}
+				close(start)
+				if concurrent {
+					<-recoverObserved
+					processLock.Unlock()
+				}
+				group.Wait()
+				close(results)
+				for err := range results {
+					t.Error(err)
+				}
+				snapshot, err := store.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var content map[string]any
+				if err := json.Unmarshal(snapshot.Content, &content); err != nil {
+					t.Fatal(err)
+				}
+				if snapshot.Revision != intent.NextRevision || snapshot.ContentDigest != intent.ContentDigest || !reflect.DeepEqual(content, original) {
+					t.Fatalf("original durable input changed: %+v content=%v", snapshot, content)
+				}
+				assertStateDirExact(t, store.dir, stateFileName, lockFileName)
+				before := stateBytes(t, store)
+				for i := 0; i < 2; i++ {
+					report, err := store.Recover()
+					if err != nil || report.Outcome != RecoveryClean || report.Revision != snapshot.Revision {
+						t.Fatalf("repeat recovery: %+v %v", report, err)
+					}
+				}
+				assertNothingWritten(t, store, before)
+				content["independent"] = "accepted after fresh read"
+				result, err := store.Save(Transaction{ExpectedRevision: snapshot.Revision, ExpectedFingerprint: "fp", CollectFingerprint: staticFingerprint("fp"), Content: content})
+				if err != nil || result.Revision != snapshot.Revision+1 {
+					t.Fatalf("fresh save: %+v %v", result, err)
+				}
+				after, err := store.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var actual map[string]any
+				if err := json.Unmarshal(after.Content, &actual); err != nil {
+					t.Fatal(err)
+				}
+				if after.Revision != result.Revision || !reflect.DeepEqual(actual, content) {
+					t.Fatalf("fresh save lost original or independent content: %v", actual)
+				}
+			})
+		}
+	}
 }
 
 // TestFingerprintBeforeWriteRejects：写前重验发现外部事实已变，直接拒绝，

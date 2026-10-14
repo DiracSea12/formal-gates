@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/requirement"
 	"reflect"
 	"sort"
 	"strings"
@@ -168,7 +169,7 @@ type AcceptanceCase struct {
 }
 
 // CoverageEdge is the single source of truth for source↔point↔case
-// relationships.  Reverse lookups are derived from these triples.
+// relationships.
 type CoverageEdge struct {
 	ReviewKind ReviewKind `json:"reviewKind,omitempty"`
 	SourceID   string     `json:"sourceId"`
@@ -202,114 +203,6 @@ type AcceptanceManifest struct {
 	Points      []AcceptancePoint `json:"points"`
 	Cases       []AcceptanceCase  `json:"cases"`
 	Edges       []CoverageEdge    `json:"edges"`
-}
-
-// CoverageMap is a named projection of a manifest's edge relation.  It does
-// not create a second source of truth: edges remain owned by the manifest and
-// this value is produced on demand for map validation/digest binding.
-type CoverageMap struct {
-	Binding ManifestBinding `json:"binding"`
-	Edges   []CoverageEdge  `json:"edges"`
-}
-
-// MapDigest computes a canonical digest for this map projection.
-func (m CoverageMap) MapDigest() (string, error) {
-	if !validManifestBinding(m.Binding) {
-		return "", invalid(CodeInvalidBinding, "map.binding", "map binding is incomplete")
-	}
-	edges := append([]CoverageEdge(nil), m.Edges...)
-	sort.Slice(edges, func(i, j int) bool { return edges[i].key() < edges[j].key() })
-	seen := make(map[string]struct{}, len(edges))
-	for i, edge := range edges {
-		if !nonempty(edge.SourceID, "source") || !nonempty(edge.PointID, "point") || !nonempty(edge.CaseID, "case") {
-			return "", invalid(CodeOrphanEdge, fmt.Sprintf("map.edges[%d]", i), "edge IDs are required")
-		}
-		if _, duplicate := seen[edge.key()]; duplicate {
-			return "", invalid(CodeDuplicateID, fmt.Sprintf("map.edges[%d]", i), "duplicate edge")
-		}
-		seen[edge.key()] = struct{}{}
-	}
-	return canonicalDigest(CoverageMap{Binding: m.Binding, Edges: edges})
-}
-
-// Map returns the manifest's edge relation with its binding attached.
-func (m AcceptanceManifest) Map() CoverageMap {
-	return CoverageMap{Binding: m.Binding, Edges: append([]CoverageEdge(nil), m.Edges...)}
-}
-
-// ValidateCoverageMap verifies a map projection against its manifest.
-func ValidateCoverageMap(manifest AcceptanceManifest, coverageMap CoverageMap) error {
-	if !coverageMap.Binding.equal(manifest.Binding) {
-		return invalid(CodeInvalidBinding, "map.binding", "map binding does not match manifest")
-	}
-	if len(coverageMap.Edges) != len(manifest.Edges) {
-		return invalid(CodeMissingCoverage, "map.edges", "map edge set does not match manifest")
-	}
-	want := make(map[string]struct{}, len(manifest.Edges))
-	for i, edge := range manifest.Edges {
-		if edge.ReviewKind != "" && edge.ReviewKind != manifest.Binding.ReviewKind {
-			return invalid(CodeInvalidBinding, fmt.Sprintf("manifest.edges[%d].reviewKind", i), "manifest edge review kind does not match manifest binding")
-		}
-		want[edge.key()] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(coverageMap.Edges))
-	for i, edge := range coverageMap.Edges {
-		if edge.ReviewKind != "" && edge.ReviewKind != manifest.Binding.ReviewKind {
-			return invalid(CodeInvalidBinding, fmt.Sprintf("map.edges[%d].reviewKind", i), "map edge review kind does not match manifest binding")
-		}
-		if _, ok := want[edge.key()]; !ok {
-			return invalid(CodeUnknownID, "map.edges", "map contains an edge not declared by manifest")
-		}
-		if _, duplicate := seen[edge.key()]; duplicate {
-			return invalid(CodeDuplicateID, "map.edges", "map contains a duplicate edge")
-		}
-		seen[edge.key()] = struct{}{}
-	}
-	if len(seen) != len(want) {
-		return invalid(CodeMissingCoverage, "map.edges", "map omits a manifest edge")
-	}
-	return nil
-}
-
-// MapDigest returns the canonical digest for this manifest's map projection.
-func (m AcceptanceManifest) MapDigest() (string, error) {
-	if err := ValidateCoverageMap(m, m.Map()); err != nil {
-		return "", err
-	}
-	return m.Map().MapDigest()
-}
-
-// PointsForSource derives the forward source→point view from Edges.
-func (m AcceptanceManifest) PointsForSource(sourceID string) []string {
-	seen := make(map[string]struct{})
-	for _, edge := range m.Edges {
-		if edge.SourceID == sourceID {
-			seen[edge.PointID] = struct{}{}
-		}
-	}
-	return sortedKeys(seen)
-}
-
-// CasesForPoint derives the point→case view from Edges.
-func (m AcceptanceManifest) CasesForPoint(pointID string) []string {
-	seen := make(map[string]struct{})
-	for _, edge := range m.Edges {
-		if edge.PointID == pointID {
-			seen[edge.CaseID] = struct{}{}
-		}
-	}
-	return sortedKeys(seen)
-}
-
-// SourcesForCase derives the reverse case→source view from Edges.
-func (m AcceptanceManifest) SourcesForCase(caseID string) []string {
-	seen := make(map[string]struct{})
-	for _, edge := range m.Edges {
-		if edge.CaseID == caseID {
-			seen[edge.SourceID] = struct{}{}
-		}
-	}
-	return sortedKeys(seen)
 }
 
 // AlternativeVerification closes a non-QA source.  A PASS with evidence is
@@ -412,10 +305,6 @@ type ExecutionRecord struct {
 	ReuseEvidence          string          `json:"reuseEvidence,omitempty"`
 }
 
-// ExecutionReport is the actual execution/identical inheritance accounting.
-// NotExecuted is an explicit projection for callers that want a separate
-// collection; records with ProvenanceNotExecuted must still be present in
-// Records so the complete partition can be checked.
 // ExecutionVerdict aggregates complete semantic case judgments. Unfinished or
 // unknown judgments never establish a passing result.
 func ExecutionVerdict(records []ExecutionRecord) DecisionStatus {
@@ -427,6 +316,10 @@ func ExecutionVerdict(records []ExecutionRecord) DecisionStatus {
 	return StatusPass
 }
 
+// ExecutionReport is the actual execution/identical inheritance accounting.
+// NotExecuted is an explicit projection for callers that want a separate
+// collection; records with ProvenanceNotExecuted must still be present in
+// Records so the complete partition can be checked.
 type ExecutionReport struct {
 	Binding     ExecutionBinding  `json:"binding"`
 	Records     []ExecutionRecord `json:"records"`
@@ -468,14 +361,14 @@ const (
 	CodeExecutionNotPass     = "EXECUTION_NOT_PASS"
 )
 
-func nonempty(value, label string) bool { return strings.TrimSpace(value) != "" }
+func nonempty(value string) bool { return strings.TrimSpace(value) != "" }
 
 func validBinding(b SourceBinding) bool {
-	return nonempty(b.RunID, "run") && nonempty(b.RequirementRevision, "requirement revision") && nonempty(b.SolutionRevision, "solution revision")
+	return nonempty(b.RunID) && nonempty(b.RequirementRevision) && nonempty(b.SolutionRevision)
 }
 
 func validManifestBinding(b ManifestBinding) bool {
-	if !validBinding(b.SourceBinding) || !nonempty(b.RouteScope, "route") || !nonempty(b.TopologyScope, "topology") {
+	if !validBinding(b.SourceBinding) || !nonempty(b.RouteScope) || !nonempty(b.TopologyScope) {
 		return false
 	}
 	return b.ReviewKind == ReviewBlackbox || b.ReviewKind == ReviewWhitebox || b.ReviewKind == ReviewMerge
@@ -484,7 +377,7 @@ func validManifestBinding(b ManifestBinding) bool {
 func uniqueStrings(values []string) (map[string]struct{}, string) {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if !nonempty(value, "id") {
+		if !nonempty(value) {
 			return nil, value
 		}
 		if _, ok := seen[value]; ok {
@@ -534,7 +427,7 @@ func ValidateRequiredSources(required RequiredSources) error {
 	}
 	for i, source := range required.Sources {
 		path := fmt.Sprintf("requiredSources.sources[%d]", i)
-		if !nonempty(source.SourceID, "source") {
+		if !nonempty(source.SourceID) {
 			return invalid(CodeInvalidSource, path+".sourceId", "source ID is required")
 		}
 		if _, exists := seen[source.SourceID]; exists {
@@ -631,7 +524,7 @@ func (c CoverageContract) Validate() error {
 		pointByID := make(map[string]AcceptancePoint, len(manifest.Points))
 		for pi, point := range manifest.Points {
 			ppath := fmt.Sprintf("%s.points[%d]", path, pi)
-			if !nonempty(point.PointID, "point") || !nonempty(point.ObservableBehavior, "behavior") || !nonempty(point.Oracle, "oracle") {
+			if !nonempty(point.PointID) || !nonempty(point.ObservableBehavior) || !nonempty(point.Oracle) {
 				return invalid(CodeInvalidSource, ppath, "point ID, observable behavior, and oracle are required")
 			}
 			if _, exists := pointByID[point.PointID]; exists {
@@ -676,7 +569,7 @@ func (c CoverageContract) Validate() error {
 					return invalid(CodeUnknownID, cpath+".sharedSteps", "unknown shared step")
 				}
 			}
-			if !nonempty(qaCase.CaseID, "case") || !nonempty(qaCase.Oracle, "oracle") {
+			if !nonempty(qaCase.CaseID) || !nonempty(qaCase.Oracle) {
 				return invalid(CodeInvalidCaseBinding, cpath, "case ID and oracle are required")
 			}
 			if _, exists := caseByID[qaCase.CaseID]; exists {
@@ -698,7 +591,7 @@ func (c CoverageContract) Validate() error {
 				return invalid(CodeInvalidCaseBinding, cpath+".mode", "case mode does not match review kind")
 			}
 			if qaCase.Mode == CaseWhitebox {
-				if !nonempty(qaCase.TestRef, "test") && len(qaCase.Operations) == 0 || nonempty(qaCase.PublicEntry, "entry") || nonempty(qaCase.Preconditions, "preconditions") || nonempty(qaCase.Steps, "steps") {
+				if !nonempty(qaCase.TestRef) && len(qaCase.Operations) == 0 || nonempty(qaCase.PublicEntry) || nonempty(qaCase.Preconditions) || nonempty(qaCase.Steps) {
 					return invalid(CodeInvalidCaseBinding, cpath, "whitebox cases require a test reference or approved operations and oracle")
 				}
 				if _, duplicate := seenWhiteboxRefs[qaCase.TestRef]; qaCase.TestRef != "" && duplicate {
@@ -707,7 +600,7 @@ func (c CoverageContract) Validate() error {
 				if qaCase.TestRef != "" {
 					seenWhiteboxRefs[qaCase.TestRef] = struct{}{}
 				}
-			} else if !nonempty(qaCase.PublicEntry, "entry") || !nonempty(qaCase.Preconditions, "preconditions") || !nonempty(qaCase.Steps, "steps") || nonempty(qaCase.TestRef, "test") {
+			} else if !nonempty(qaCase.PublicEntry) || !nonempty(qaCase.Preconditions) || !nonempty(qaCase.Steps) || nonempty(qaCase.TestRef) {
 				return invalid(CodeInvalidCaseBinding, cpath, "blackbox/merge cases require public entry, preconditions, steps, and oracle")
 			}
 		}
@@ -783,7 +676,7 @@ func (c CoverageContract) Validate() error {
 			return invalid(CodeDuplicateID, path+".sourceId", "duplicate alternative verification")
 		}
 		verificationBySource[verification.SourceID] = struct{}{}
-		if !nonempty(verification.Reason, "reason") || !nonempty(verification.Method, "method") || verification.Status != StatusPass || !nonempty(verification.Evidence, "evidence") {
+		if !nonempty(verification.Reason) || !nonempty(verification.Method) || verification.Status != StatusPass || !nonempty(verification.Evidence) {
 			return invalid(CodeInvalidAlternative, path, "non-QA verification requires reason, method, PASS, and evidence")
 		}
 	}
@@ -797,21 +690,9 @@ func (c CoverageContract) Validate() error {
 	return nil
 }
 
-// ValidateManifest validates a manifest against the authoritative source list
-// as a convenience for design-time callers.  Cross-manifest coverage is
-// checked by CoverageContract.Validate.
-func ValidateManifest(required RequiredSources, manifest AcceptanceManifest) error {
-	return (CoverageContract{RequiredSources: required, Manifests: []AcceptanceManifest{manifest}, SelectedKinds: []ReviewKind{manifest.Binding.ReviewKind}}).Validate()
-}
-
 // Validate is the package-level spelling used by adapters that treat the
 // contract as a standalone value.
 func Validate(contract CoverageContract) error { return contract.Validate() }
-
-// Validate checks this manifest against a required source list.
-func (m AcceptanceManifest) Validate(required RequiredSources) error {
-	return ValidateManifest(required, m)
-}
 
 // RequiredSourcesDigest returns a canonical digest of the authoritative list.
 func (c CoverageContract) RequiredSourcesDigest() (string, error) {
@@ -824,18 +705,11 @@ func (c CoverageContract) RequiredSourcesDigest() (string, error) {
 	return canonicalDigest(copyValue)
 }
 
-// RequiredSourcesDigest is also available directly on the source projection.
-func (r RequiredSources) Digest() (string, error) {
-	return (CoverageContract{RequiredSources: r}).RequiredSourcesDigest()
-}
-
-// ContractDigests groups the independently bound digests consumed by review
-// and execution.  WhitelistDigest is populated only after review projection.
+// ContractDigests groups the independently bound pre-review digests.
 type ContractDigests struct {
 	RequiredSourcesDigest string
 	ManifestDigest        string
 	MapDigest             string
-	WhitelistDigest       string
 }
 
 // Digests computes all pre-review contract digests in one deterministic call.
@@ -877,11 +751,6 @@ func (c CoverageContract) ManifestDigest() (string, error) {
 	return canonicalDigest(manifests)
 }
 
-// Digest computes the canonical manifest digest for a single manifest.
-func (m AcceptanceManifest) Digest(required RequiredSources) (string, error) {
-	return (CoverageContract{RequiredSources: required, SelectedKinds: []ReviewKind{m.Binding.ReviewKind}, Manifests: []AcceptanceManifest{m}}).ManifestDigest()
-}
-
 // MapDigest returns a canonical digest of all source-point-case edges.
 func (c CoverageContract) MapDigest() (string, error) {
 	if err := c.Validate(); err != nil {
@@ -913,10 +782,6 @@ func canonicalDigest(value any) (string, error) {
 // struct field order.  Callers should sort semantically unordered slices
 // before invoking it; the component digest methods in this package do so.
 func CanonicalJSON(value any) ([]byte, error) { return json.Marshal(value) }
-
-// CanonicalDigest is exported for callers that need the same sha256: encoding
-// for already-validated, map-free contract projections.
-func CanonicalDigest(value any) (string, error) { return canonicalDigest(value) }
 
 // Verdict derives the outcome of a structurally validated review from its item decisions.
 func (r ReviewResult) Verdict() DecisionStatus {
@@ -989,7 +854,7 @@ func (c CoverageContract) validateReviews(reviews []ReviewResult, requirePass bo
 		for i := range manifest.Points {
 			pointIDs[i] = manifest.Points[i].PointID
 		}
-		if err := validateDecisions(review.PointDecisions, pointIDs, path+".pointDecisions", "point", requirePass); err != nil {
+		if err := validatePointDecisions(review.PointDecisions, pointIDs, path+".pointDecisions", requirePass); err != nil {
 			return ApprovedWhitelist{}, err
 		}
 		caseIDs := make([]string, len(manifest.Cases))
@@ -1065,6 +930,33 @@ func (c CoverageContract) validateReviews(reviews []ReviewResult, requirePass bo
 	return w, nil
 }
 
+func validatePointDecisions(decisions []ReviewDecision, expected []string, path string, requirePass bool) error {
+	results := make([]requirement.PointResult, len(decisions))
+	for i, decision := range decisions {
+		results[i] = requirement.PointResult{PointID: decision.ID, Status: string(decision.Status), Evidence: decision.Reason}
+	}
+	if err := requirement.ValidatePointResults(expected, results); err != nil {
+		mismatch := err.(*requirement.PointResultError)
+		code := map[string]string{"INCOMPLETE": CodeIncompleteReview, "UNKNOWN": CodeUnknownID, "DUPLICATE": CodeDuplicateID, "STATUS": CodeReviewNotPass}[mismatch.Kind]
+		if mismatch.Index >= 0 {
+			suffix := "id"
+			if mismatch.Kind == "STATUS" {
+				suffix = "status"
+			}
+			path = fmt.Sprintf("%s[%d].%s", path, mismatch.Index, suffix)
+		}
+		return invalid(code, path, err.Error())
+	}
+	if requirePass {
+		for i, decision := range decisions {
+			if decision.Status != StatusPass {
+				return invalid(CodeReviewNotPass, fmt.Sprintf("%s[%d].status", path, i), "point decision is not PASS")
+			}
+		}
+	}
+	return nil
+}
+
 func validateDecisions(decisions []ReviewDecision, expected []string, path, label string, requirePass bool) error {
 	if len(decisions) != len(expected) {
 		return invalid(CodeIncompleteReview, path, "review must contain exactly one decision for every "+label)
@@ -1099,15 +991,10 @@ func ProjectWhitelist(c CoverageContract, reviews []ReviewResult) (ApprovedWhite
 	return c.ValidateReviews(reviews)
 }
 
-// ValidateReviews is the package-level spelling of CoverageContract.ValidateReviews.
-func ValidateReviews(c CoverageContract, reviews []ReviewResult) (ApprovedWhitelist, error) {
-	return c.ValidateReviews(reviews)
-}
-
 // WhitelistDigest computes the digest of a projected whitelist after checking
 // that all required digest bindings are present.
 func (w ApprovedWhitelist) WhitelistDigest() (string, error) {
-	if !nonempty(w.RequiredSourcesDigest, "required") || !nonempty(w.ManifestDigest, "manifest") || !nonempty(w.MapDigest, "map") {
+	if !nonempty(w.RequiredSourcesDigest) || !nonempty(w.ManifestDigest) || !nonempty(w.MapDigest) {
 		return "", invalid(CodeDigestMismatch, "whitelist", "whitelist digest bindings are incomplete")
 	}
 	copyValue := w
@@ -1116,7 +1003,7 @@ func (w ApprovedWhitelist) WhitelistDigest() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !nonempty(w.Digest, "whitelist") || w.Digest != digest {
+	if !nonempty(w.Digest) || w.Digest != digest {
 		return "", invalid(CodeDigestMismatch, "whitelist.digest", "whitelist digest does not match its projection")
 	}
 	return digest, nil
@@ -1197,7 +1084,7 @@ func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report 
 	if report.Binding.RequiredSourcesDigest != requiredDigest || report.Binding.ManifestDigest != manifestDigest || report.Binding.MapDigest != mapDigest || report.Binding.WhitelistDigest != whitelistDigest {
 		return invalid(CodeDigestMismatch, "execution.binding", "execution does not match current contract/whitelist digests")
 	}
-	if !nonempty(report.Binding.Candidate.Identity, "candidate") {
+	if !nonempty(report.Binding.Candidate.Identity) {
 		return invalid(CodeCandidateMismatch, "execution.binding.candidate.identity", "candidate identity is required")
 	}
 	if c.Candidate == nil {
@@ -1234,7 +1121,6 @@ func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report 
 	}
 	seen := make(map[string]struct{}, len(report.Records))
 	passByEdge := make(map[string]struct{}, len(report.Records))
-	passByPoint := make(map[string]int)
 	notExecutedByKey := make(map[string]struct{})
 	actualCaseSet := make(map[string]struct{})
 	for i, record := range report.Records {
@@ -1262,16 +1148,14 @@ func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report 
 				return invalid(CodeExecutionSetMismatch, path, "executed record cannot carry inheritance evidence")
 			}
 			passByEdge[key] = struct{}{}
-			passByPoint[string(record.ReviewKind)+"\x00"+record.PointID]++
 		} else if record.Provenance == ProvenanceInherited {
 			if record.Result == AuthorizedSkip {
 				return invalid(CodeExecutionNotPass, path, fmt.Sprintf("inherited result %q is not EXECUTED_PASS", record.Result))
 			}
-			if record.Result != ExecutedPass || !nonempty(record.InheritedFromCandidate, "source candidate") || !nonempty(record.ReuseEvidence, "reuse evidence") || record.InheritedFromCandidate == report.Binding.Candidate.Identity {
+			if record.Result != ExecutedPass || !nonempty(record.InheritedFromCandidate) || !nonempty(record.ReuseEvidence) || record.InheritedFromCandidate == report.Binding.Candidate.Identity {
 				return invalid(CodeExecutionNotPass, path, "inherited PASS requires a distinct source candidate and reuse evidence")
 			}
 			passByEdge[key] = struct{}{}
-			passByPoint[string(record.ReviewKind)+"\x00"+record.PointID]++
 		} else {
 			if record.Result == ExecutedPass {
 				return invalid(CodeExecutionNotPass, path+".result", "not-executed record cannot be EXECUTED_PASS")
@@ -1328,10 +1212,6 @@ func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report 
 		return nil
 	}
 	for _, edge := range whitelist.Entries {
-		pointKey := string(edge.ReviewKind) + "\x00" + edge.PointID
-		if passByPoint[pointKey] == 0 {
-			return invalid(CodeExecutionNotPass, "execution.records", "point has no PASS for edge "+edge.PointID)
-		}
 		if _, ok := passByEdge[executionEdgeKey(edge.ReviewKind, edge.SourceID, edge.PointID, edge.CaseID)]; !ok {
 			return invalid(CodeExecutionNotPass, "execution.records", "edge has no PASS for case "+edge.CaseID)
 		}
@@ -1341,12 +1221,5 @@ func (c CoverageContract) validateExecution(whitelist ApprovedWhitelist, report 
 
 // ValidateExecution is also available as a package-level helper.
 func ValidateExecution(c CoverageContract, whitelist ApprovedWhitelist, report ExecutionReport) error {
-	return c.ValidateExecution(whitelist, report)
-}
-
-// ValidateExecutionForCandidate is the explicit form used when the caller
-// keeps the current candidate outside the coverage contract value.
-func ValidateExecutionForCandidate(c CoverageContract, whitelist ApprovedWhitelist, report ExecutionReport, candidate ValidationCandidate) error {
-	c.Candidate = &candidate
 	return c.ValidateExecution(whitelist, report)
 }

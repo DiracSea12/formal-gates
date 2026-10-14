@@ -16,12 +16,12 @@ import (
 func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 	// 候选含内建 QA 的路线 Ask 在接纳处拒绝（普通 QA 不进 child 候选）。
 	engine, _ := sliceChildEngine(t)
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	for name, gates := range map[string][]string{
 		"with-blackbox": {"blackbox", "gate.quality"},
 		"with-whitebox": {"whitebox", "gate.quality"},
 	} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), fp); err == nil {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), observedInput); err == nil {
 			t.Fatalf("QA-carrying child route ask %s accepted", name)
 		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 			t.Fatalf("QA-carrying ask %s code = %q (%v)", name, code, err)
@@ -58,9 +58,9 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security"}
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	for _, requestID := range []string{"req-child-bind", "req-child-coexist"} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}}, routeOptions()), fp); err != nil {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}}, routeOptions()), observedInput); err != nil {
 			t.Fatalf("submit ask %s: %v", requestID, err)
 		}
 	}
@@ -72,7 +72,7 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(binding, fp); err != nil {
+	if _, err := engine.Submit(binding, observedInput); err != nil {
 		t.Fatalf("submit binding decide: %v", err)
 	}
 	coexist, err := engine.Freshness("req-child-coexist")
@@ -83,7 +83,7 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(decision, fingerprintOf(t, engine)); err != nil {
+	if _, err := engine.Submit(decision, Observation{}); err != nil {
 		t.Fatalf("coexisting child route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
@@ -121,7 +121,7 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
-	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4}, nil)
+	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -129,7 +129,7 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}
-	fp := fingerprintOf(t, engine)
+	observedInput := Observation{}
 	confirmation := reviewConfirmation()
 	sliceStart := &SliceRunStart{
 		Binding: SliceChildBinding{MasterRunID: "run-master", SliceID: "lane-core", RequirementRevision: "rev-1"},
@@ -140,10 +140,10 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 			ACOwners: map[string]string{"AC-001": "lane-core", "AC-002": "lane-tooling"},
 		},
 	}
-	if err := engine.InitWithMetadata(view, testProvider, fp, "run-child", "", confirmation, "", "", sliceStart); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-child", "", confirmation, "", "", sliceStart); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
+	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {
 		t.Fatalf("intake receipt: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)

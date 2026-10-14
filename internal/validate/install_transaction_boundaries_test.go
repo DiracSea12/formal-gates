@@ -167,9 +167,7 @@ func installPathWithin(parent, path string) bool {
 }
 
 // installAssertNoTransactionArtifacts 验证事务结束（提交或回滚）后没有
-// 残留。.formal-gates-install.lock 例外：它是内核文件锁的持久工件（释放
-// ＝关闭描述符，锁文件永不删除），属于运行期输出而非事务状态，因此显式
-// 豁免该文件，改验“留下的确为普通锁文件，且事务已释放它”。
+// 残留。普通事务释放锁描述符，最终卸载同时退役未使用的锁路径。
 func installAssertNoTransactionArtifacts(t *testing.T, registry, target string) {
 	t.Helper()
 	for _, pattern := range []string{
@@ -365,7 +363,7 @@ func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claudeDigest, err := PackageDigest(claudeTarget[0].targetPath)
+	claudeReceipt, err := PackageReceipt(claudeTarget[0].targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,8 +388,8 @@ func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
 	if secondDocument.Epoch <= firstDocument.Epoch {
 		t.Fatalf("registry epoch did not advance monotonically: before=%d after=%d", firstDocument.Epoch, secondDocument.Epoch)
 	}
-	if got, err := PackageDigest(claudeTarget[0].targetPath); err != nil || got != claudeDigest {
-		t.Fatalf("second install changed the existing runtime: before=%s after=%s err=%v", claudeDigest, got, err)
+	if got, err := PackageReceipt(claudeTarget[0].targetPath); err != nil || got.Digest != claudeReceipt.Digest {
+		t.Fatalf("second install changed the existing runtime: before=%s after=%s err=%v", claudeReceipt.Digest, got.Digest, err)
 	}
 	if got := installRawRecordByID(t, installReadFile(t, registry), claudeBefore.ID); !bytes.Equal(got, claudeRawBeforeSecond) {
 		t.Fatalf("second host install changed the original record bytes: before=%q after=%q", claudeRawBeforeSecond, got)
@@ -522,7 +520,7 @@ func TestAdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
 			}
 			// 判据是“无业务命名空间残留”，不是“.gates 不存在”：Start 在
 			// 准入校验前就持有内核 run 锁，.gates/run-locks/<run>.lock 是
-			// 运行期工件（内核文件锁永不删除），不是命名空间状态。逐项枚
+			// 运行期工件（普通释放保留锁文件），不是命名空间状态。逐项枚
 			// 举 .gates 下的残留，除该锁工件外的任何条目都说明被拒准入
 			// 写入了业务命名空间。
 			residue := installWorkflowNamespaceResidue(t, root)
@@ -694,7 +692,7 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 		t.Fatalf("uninstall did not use the shared lock: %v", err)
 	}
 	unlock()
-	// 内核文件锁永不删除：释放判据是锁可被再次获取，而非锁文件消失。
+	// 普通释放保留文件，并允许再次获取内核锁。
 	if info, statErr := os.Lstat(lockPath); statErr == nil && !info.Mode().IsRegular() {
 		t.Fatalf("install lock artifact is not a regular file: %s", lockPath)
 	}
@@ -710,7 +708,7 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeDigest, err := PackageDigest(targets[0].targetPath)
+	beforeReceipt, err := PackageReceipt(targets[0].targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,13 +721,18 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 		t.Fatalf("installed uninstall did not honor the shared lock: %v", err)
 	}
 	unlock()
-	if got, err := PackageDigest(targets[0].targetPath); err != nil || got != beforeDigest || !bytes.Equal(installReadFile(t, registry), registryBefore) {
-		t.Fatalf("busy uninstall changed transaction identity: digest=%s err=%v", got, err)
+	if got, err := PackageReceipt(targets[0].targetPath); err != nil || got.Digest != beforeReceipt.Digest || !bytes.Equal(installReadFile(t, registry), registryBefore) {
+		t.Fatalf("busy uninstall changed transaction identity: digest=%s err=%v", got.Digest, err)
 	}
 	if _, err := Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
 		t.Fatal(err)
 	}
-	// 同上：完成的卸载事务释放共享锁，锁文件按内核锁语义持久保留。
+	for _, path := range []string{lockPath, registryLockPath(registry)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("completed final uninstall retained its lock path: %s (%v)", path, err)
+		}
+	}
+	// A new maintenance request can establish a fresh canonical lock path.
 	if relock, relockErr := acquireInstallLock(registry); relockErr != nil {
 		t.Fatalf("completed uninstall left the shared lock held: %v", relockErr)
 	} else {

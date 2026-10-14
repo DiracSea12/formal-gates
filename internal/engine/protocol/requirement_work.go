@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
@@ -15,7 +16,7 @@ const (
 )
 
 // RequirementWork identifies an issued or queued worker obligation and any
-// result available when its requirement-change decision is requested.
+// result available when its work disposition is requested.
 // IssuedRevision is zero only for authorized work awaiting initial issuance.
 // RequirementRevision is the original issuance revision; carry never rewrites it.
 type RequirementWork struct {
@@ -28,7 +29,7 @@ type RequirementWork struct {
 
 // RequirementWorkDecision is the user's disposition of exactly one dispatch.
 // An empty result digest authorizes its in-flight result by dispatch identity.
-// The containing ConfirmedRevision binds the decision to its new revision and Ask.
+// The authorization binds that work to confirmed content and its original Ask.
 type RequirementWorkDecision struct {
 	Work        RequirementWork `json:"work"`
 	Disposition string          `json:"disposition"`
@@ -46,17 +47,17 @@ func (e *Engine) RequirementWork() ([]RequirementWork, error) {
 	if state == nil {
 		return nil, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	return e.requirementWork(state), nil
+	return state.requirementWork(e.cfg.Definition), nil
 }
 
-func (e *Engine) requirementWork(state *State) []RequirementWork {
+func (state *State) requirementWork(cd *compiler.CompiledDefinition) []RequirementWork {
 	if d, ok := state.resetDecision(); ok && d.Reset.Applied && !d.Reset.Confirmed {
 		// Reset has already retired its old QA, gate and repair duties. The
 		// accepted preview retains each original development dispatch, including
 		// queued or stopped work whose PASS has not been accepted.
 		var work []RequirementWork
 		for _, item := range state.PendingAsks[d.RequestID].Reset.Work {
-			if state.validationRole(item.Task, e.cfg.Definition) == "engine.development.batch.v4" {
+			if state.validationRole(item.Task, cd) == "engine.development.batch.v5" {
 				work = append(work, item)
 			}
 		}
@@ -76,7 +77,7 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 	}
 	ended := map[string]Attempt{}
 	for _, attempt := range state.EndedAttempts {
-		if state.endedWorkCurrent(attempt, e.cfg.Definition) {
+		if state.endedWorkCurrent(attempt, cd) {
 			tasks[attempt.ActionID] = attempt.Task
 			ended[attempt.ActionID] = attempt
 		}
@@ -94,7 +95,7 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 				continue
 			}
 		}
-		series := e.reviewSeriesOf(task.Step)
+		series := reviewSeriesOf(cd, task.Step)
 		if series == review.ProductReview || series == review.StartReadiness {
 			continue
 		}
@@ -141,7 +142,7 @@ func (e *Engine) requirementWork(state *State) []RequirementWork {
 			}
 		}
 	}
-	for _, key := range state.planTasks(e.cfg.Definition) {
+	for _, key := range state.planTasks(cd) {
 		if !slices.Contains(queued, key) && state.developmentResult(key) == nil {
 			queued = append(queued, key)
 		}
@@ -186,7 +187,7 @@ func validateWorkDecisionShape(decisions []RequirementWorkDecision) error {
 }
 
 func (e *Engine) validateRequirementWork(state *State, decisions []RequirementWorkDecision, requesting bool) error {
-	current := e.requirementWork(state)
+	current := state.requirementWork(e.cfg.Definition)
 	reject := func(detail string) error {
 		return &RejectedError{Code: CodeRequirementDecisionRejected, Detail: detail}
 	}
@@ -249,7 +250,7 @@ func replacementWorkTask(entry ConfirmedRevision, index int) runtime.TaskKey {
 }
 
 func (s *State) requirementRevisionForTask(key runtime.TaskKey) string {
-	for _, entry := range s.RequirementRevisions {
+	for _, entry := range s.workAuthorizations() {
 		for i, choice := range entry.WorkDecisions {
 			if choice.Disposition == RequirementWorkRedo && replacementWorkTask(entry, i) == key {
 				return entry.Revision
@@ -259,11 +260,11 @@ func (s *State) requirementRevisionForTask(key runtime.TaskKey) string {
 	return ""
 }
 
-// requiredWorkTasks derives obligations from the confirmation ledger. Runtime
+// requiredWorkTasks derives obligations from recorded work authorizations. Runtime
 // TERMINAL alone never discharges work: the accepted result must be PASS.
 func (s *State) requiredWorkTasks() []runtime.TaskKey {
 	required := map[runtime.TaskKey]bool{}
-	for _, entry := range s.RequirementRevisions {
+	for _, entry := range s.workAuthorizations() {
 		if !s.requirementWorkRevisionCurrent(entry.StateRevision) {
 			continue
 		}
@@ -294,31 +295,30 @@ func (s *State) requiredWorkTasks() []runtime.TaskKey {
 	return keys
 }
 
-func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDecision, requestID string) error {
-	entry := state.RequirementRevisions[len(state.RequirementRevisions)-1]
+func (e *Engine) applyWorkAuthorization(state *State, entry ConfirmedRevision) error {
+	choices, requestID := entry.WorkDecisions, entry.RequestID
 	e.invalidateValidationWork(state, choices)
 	for i, choice := range choices {
 		if choice.Disposition == RequirementWorkCarry {
 			continue
 		}
 		work := choice.Work
-		delete(state.EndedAttempts, work.Task)
 		state.archiveDispatchResults(work.ActionID)
-		if _, live := state.PendingActions[work.ActionID]; live {
-			state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
-		} else if _, pending := state.retireAction(work.ActionID, "", "superseded by requirement decision "+requestID); !pending {
-			if _, recorded := state.ObsoleteActions[work.ActionID]; !recorded {
-				state.ObsoleteActions[work.ActionID] = ObsoleteAction{ActionID: work.ActionID, Task: work.Task, Reason: "superseded by requirement decision " + requestID}
+		key := replacementWorkTask(entry, i)
+		replacedBy := "act:" + key.String()
+		reason := "superseded by confirmed work decision " + requestID
+		if pending, attempt, live := state.workerActionTarget(work.ActionID); live {
+			state.recordObsoleteAction(pending, attempt, replacedBy, reason)
+		} else {
+			if _, retired := state.retireAction(work.ActionID, replacedBy, reason); !retired {
+				state.recordObsoleteAction(PendingAction{ActionID: work.ActionID, Task: work.Task}, state.EndedAttempts[work.Task], replacedBy, reason)
+			}
+			delete(state.EndedAttempts, work.Task)
+			if err := state.terminalizeTask(work.Task); err != nil {
+				return err
 			}
 		}
-		if err := state.terminalizeTask(work.Task); err != nil {
-			return err
-		}
-		key := replacementWorkTask(entry, i)
 		state.Tasks[key] = runtime.TaskQueued
-		obsolete := state.ObsoleteActions[work.ActionID]
-		obsolete.ReplacedBy = "act:" + key.String()
-		state.ObsoleteActions[work.ActionID] = obsolete
 	}
 	e.reconcileWorkerRetryAsks(state)
 	return nil
@@ -326,7 +326,7 @@ func (e *Engine) applyRequirementWork(state *State, choices []RequirementWorkDec
 
 func (s *State) requirementWorkReplacement(task runtime.TaskKey) (runtime.TaskKey, bool) {
 	authorized := false
-	for _, entry := range s.RequirementRevisions {
+	for _, entry := range s.workAuthorizations() {
 		for i, choice := range entry.WorkDecisions {
 			if choice.Work.Task != task {
 				continue

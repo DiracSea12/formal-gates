@@ -15,7 +15,7 @@ func TestChildProjectionDistinguishesPlannedAndEstablishedRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := master.f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+	if err := master.f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := master.f.engine.Load()
@@ -58,7 +58,7 @@ func TestAbortBeforeChildBootstrapKeepsOriginalCleanupAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := master.f.engine.PrepareChildren(digest, emptyFingerprint()); err != nil {
+	if err := master.f.engine.PrepareChildren(digest, protocol.Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	abortRun(t, master)

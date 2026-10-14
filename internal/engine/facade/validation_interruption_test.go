@@ -153,7 +153,7 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 	d.submit(start)
 	original := d.run.Attempts[input.Binding.Task]
 	for _, cause := range []string{"worker tool interrupted\n尚未完成下一项  ", ""} {
-		plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR", InterruptionReason: cause}, emptyFingerprint())
+		plan, _, err := d.f.engine.RecoverAttempt(id, protocol.Interruption{Class: "TRANSIENT_ENGINE_ERROR", InterruptionReason: cause}, protocol.Observation{})
 		if err != nil {
 			t.Fatal(err)
 		}

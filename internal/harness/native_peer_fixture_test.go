@@ -111,7 +111,13 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 	case "cursor":
 		testName, key = "TestCursorCLI", "CURSOR_PEER_SCRIPT"
 	}
-	if err := os.WriteFile(wrapper, []byte(canaryPeerWrapper(testName, key, script)), 0755); err != nil {
+	wrapperBody := canaryPeerWrapper(testName, key, script)
+	if c.nativeName() == "zcode" {
+		quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+		wrapperBody = "#!/bin/sh\ncase \"$1\" in\n*/zcode_credential.mjs) exec " + quote(textOf(launch["executable"])) +
+			" \"$@\" ;;\n*)\n" + strings.TrimPrefix(wrapperBody, "#!/bin/sh\n") + ";;\nesac\n"
+	}
+	if err := os.WriteFile(wrapper, []byte(wrapperBody), 0755); err != nil {
 		return err
 	}
 	launch["executable"] = wrapper
@@ -121,6 +127,9 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		return err
 	}
 	binding["environment"] = environment
+	if c.nativeName() == "zcode" {
+		binding["cataloguePinned"] = getOf(request["binding"], "cataloguePinned")
+	}
 	request["binding"] = binding
 	paths := c.hostPaths()
 	answerJSON := mustCanonical(e.t, answer)
@@ -183,7 +192,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		if mode, _ := request["permission_mode"].(string); mode != "" {
 			steps = append(steps, peerStep{On: `"method":"session/setMode"`, Params: map[string]any{"sessionId": identity, "mode": mode}, Send: `{"id":"@ID@","result":{"settings":{"mode":{"current":` + strconv.Quote(mode) + `}}}}`})
 		}
-		delivered, err := zcodeAccountProviderConfiguration(paths["catalogue"], nil)
+		delivered, err := zcodeAccountProviderConfiguration(paths["catalogue"], nil, zcodeTestAccountClient(e.t, c.home))
 		if err != nil {
 			return err
 		}

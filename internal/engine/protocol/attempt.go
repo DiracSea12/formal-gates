@@ -73,13 +73,14 @@ func (s *State) endedWorkCurrent(a Attempt, cd *compiler.CompiledDefinition) boo
 	}
 	if result, ok := s.Results[a.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") {
 		role := s.validationRole(a.Task, cd)
-		checksRequired := (role == "engine.development.batch.v4" || role == "engine.repair.v5") && s.editResultCurrent(result)
+		checksRequired := (role == "engine.development.batch.v5" || role == "engine.repair.v6") && s.editResultCurrent(result)
 		if !checksRequired || s.developmentChecksPassed(result) {
 			return false
 		}
 	}
-	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
-		for _, choice := range s.RequirementRevisions[i].WorkDecisions {
+	entries := s.workAuthorizations()
+	for i := len(entries) - 1; i >= 0; i-- {
+		for _, choice := range entries[i].WorkDecisions {
 			if choice.Work.Task == a.Task && choice.Disposition == RequirementWorkRedo {
 				return false
 			}

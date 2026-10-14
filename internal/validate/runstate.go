@@ -7,20 +7,6 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-type Finding struct {
-	ID                string              `json:"id,omitempty"`
-	Severity          string              `json:"severity,omitempty"`
-	SeverityRationale string              `json:"severityRationale,omitempty"`
-	Category          string              `json:"category,omitempty"`
-	Requirement       string              `json:"requirement,omitempty"`
-	NormalPath        string              `json:"normalPath,omitempty"`
-	ActualError       string              `json:"actualError,omitempty"`
-	DeferralImpact    string              `json:"deferralImpact,omitempty"`
-	Verification      FindingVerification `json:"verification,omitempty"`
-	Message           string              `json:"message"`
-	Locations         []string            `json:"locations,omitempty"`
-}
-
 // FindingVerification is intentionally per finding. One batch-level operator
 // paragraph cannot stand in for independent scope, severity, causality,
 // reproduction, and (for Start Readiness) classification checks.

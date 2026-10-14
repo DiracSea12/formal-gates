@@ -33,7 +33,7 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 			}
 			abort := &protocol.AbortAuthority{Decision: decision, Event: authority, RequestDigest: request.Digest}
 			if lost {
-				if err := child.f.engine.CancelChild(driverState(t, master), emptyFingerprint()); err != nil {
+				if err := child.f.engine.CancelChild(driverState(t, master), protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
 				responseLost := errors.New("native cleanup response lost")

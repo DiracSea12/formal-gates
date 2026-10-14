@@ -246,7 +246,7 @@ func (e *Engine) acceptWorkerObservations(s *State, record WorkerResult, nextRev
 // NextWorkflowChoice names only a current user decision. Semantic evidence is
 // handled by issued workers, while topology and route stay explicit typed Asks.
 func (s *State) NextWorkflowChoice(cd *compiler.CompiledDefinition) ControlKind {
-	if !pipelineEnabled(s, cd) || !s.dualReviewPass() || s.pendingControl() || s.abortRequested() || s.resetPending() {
+	if !pipelineEnabled(s, cd) || !s.dualReviewPass() || s.hasPendingAsks() || s.abortRequested() || s.resetPending() {
 		return ""
 	}
 	if s.SliceChild == nil && s.Topology == nil {

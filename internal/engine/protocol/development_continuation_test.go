@@ -17,13 +17,13 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 	t.Helper()
 	cd := compiledCanonicalWorkflow(t)
 	s, _, task := developmentCheckState(t)
-	if role == "engine.repair.v5" {
+	if role == "engine.repair.v6" {
 		task = pipelineTask(cd, role, "repair-candidate")
 		s.Validation.Waves = []ValidationWave{{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}
 	}
 	binding := s.DispatchBindings["edit-action"]
 	binding.Task = task
-	if role == "engine.repair.v5" {
+	if role == "engine.repair.v6" {
 		binding.WaveID = "wave"
 	}
 	s.DispatchBindings["edit-action"] = binding
@@ -48,7 +48,7 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 }
 
 func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
-	for _, role := range []string{"engine.development.batch.v4", "engine.repair.v5"} {
+	for _, role := range []string{"engine.development.batch.v5", "engine.repair.v6"} {
 		t.Run(role, func(t *testing.T) {
 			e, s, pending := unfinishedDevelopmentState(t, role)
 			originalAttempt := s.Attempts[pending.Task]
@@ -56,7 +56,7 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 			partial := WorkerResultPayload{ActionID: pending.ActionID, Provider: "host", Outcome: OutcomePass, PayloadDigest: "actual-partial-output", Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Read the confirmed contract", RemainingWork: "Implement app.txt"}}}
 			admit := func(payload *WorkerResultPayload, event string, want string) {
 				t.Helper()
-				accepted, _, err := e.admitWorkerResultRecord(s, pending.ActionID, payload, event, "", 1, 2, "")
+				accepted, _, err := e.admitWorkerResultRecord(s, pending.ActionID, payload, event, "", 1, 2, Observation{})
 				if err != nil || accepted.Status != want {
 					t.Fatalf("%s: %#v %v", event, accepted, err)
 				}
@@ -69,12 +69,12 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 			if _, ready := s.nextEditSource(e.cfg.Definition); ready {
 				t.Fatal("partial froze source")
 			}
-			if _, ready := s.nextCheckParameters(pending.ActionID, e.cfg.Definition); ready {
+			if _, ready := s.nextCheckParameters(pending.ActionID); ready {
 				t.Fatal("partial ran approved checks")
 			}
 			input := s.WorkerInputs(e.cfg.Definition)[pending.ActionID]
 			var projected *WorkerResult
-			if role == "engine.repair.v5" {
+			if role == "engine.repair.v6" {
 				projected = input.Validation.Repair.Result
 			} else {
 				projected = input.Validation.Development.Result
@@ -111,11 +111,11 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 			}
 			stale := second
 			stale.PayloadDigest = "actual-stale-output"
-			if _, _, err := e.admitWorkerResultRecord(s, pending.ActionID, &stale, "stale", "", 2, 3, ""); err == nil {
+			if _, _, err := e.admitWorkerResultRecord(s, pending.ActionID, &stale, "stale", "", 2, 3, Observation{}); err == nil {
 				t.Fatal("stale source replaced current progress")
 			}
 			admit(&partial, "repeat-original", "DUPLICATE")
-			if role == "engine.development.batch.v4" {
+			if role == "engine.development.batch.v5" {
 				final := second
 				final.PayloadDigest = "actual-final-output"
 				final.SourceResult = s.Results[pending.ActionID].Digest
@@ -132,7 +132,7 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 				}
 				addDevelopmentSource(t, s)
 				for {
-					check, ready := s.nextCheckParameters(pending.ActionID, e.cfg.Definition)
+					check, ready := s.nextCheckParameters(pending.ActionID)
 					if !ready {
 						break
 					}
@@ -162,7 +162,7 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 }
 
 func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 	partial := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Actual progress", RemainingWork: "Remaining behavior"}}}
 	claimed := *partial.Validation.Development
 	claimed.Completion = &DevelopmentCompletion{Handoff: "done"}
@@ -174,7 +174,7 @@ func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) 
 	if err := e.acceptValidationResult(s, partial, 2); err == nil {
 		t.Fatal("complete result retained unfinished work")
 	}
-	for _, role := range []string{"engine.qa.design.v5", "engine.qa.execution.v3", "engine.gate.v2", "engine.repair.verify.v2"} {
+	for _, role := range []string{"engine.qa.design.v5", "engine.qa.execution.v3", "engine.gate.v3", "engine.repair.verify.v2"} {
 		task := pipelineTask(e.cfg.Definition, role, "candidate")
 		binding := partial.Validation.Binding
 		binding.Task = task
@@ -188,7 +188,7 @@ func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) 
 }
 
 func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
-	_, s, pending := unfinishedDevelopmentState(t, "engine.repair.v5")
+	_, s, pending := unfinishedDevelopmentState(t, "engine.repair.v6")
 	original := RequirementWork{Task: pending.Task}
 	entry := ConfirmedRevision{Revision: "req", StateRevision: 1, WorkDecisions: []RequirementWorkDecision{{Work: original, Disposition: RequirementWorkRedo}}}
 	task := replacementWorkTask(entry, 0)
@@ -208,7 +208,7 @@ func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
 }
 
 func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.repair.v5")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.repair.v6")
 	plan := plannedReviewEvidence(review.StartReadiness, "plan", "", "PASS", "approved member", nil).GranularityReview
 	origin := pending.Task
 	s.Results["plan"] = WorkerResult{ActionID: "plan", Outcome: OutcomePass, Validation: &ValidationResult{Binding: WorkBinding{Task: origin}, Status: "PASS", GranularityReview: plan}}
@@ -223,7 +223,7 @@ func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
 	binding.Task, binding.PlanRequest, binding.BatchID = member.task, "plan", member.batch.ID
 	s.DispatchBindings[pending.ActionID] = binding
 	partial := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Digest: "actual-partial", PayloadDigest: "native-output", Validation: &ValidationResult{Binding: binding, Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Implemented command parsing", RemainingWork: "Implement output contract"}}}
-	if _, err := e.completeResult(s, partial, 2, ""); err != nil {
+	if _, err := e.completeResult(s, partial, 2, Observation{}); err != nil {
 		t.Fatal(err)
 	}
 	input := s.WorkerInputs(e.cfg.Definition)[pending.ActionID]
@@ -250,7 +250,7 @@ func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
 }
 
 func TestDevelopmentCompletionRequiresChangesOrNewCalls(t *testing.T) {
-	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v4")
+	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v5")
 	record := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "PASS", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Claimed completion", Completion: &DevelopmentCompletion{DoD: map[string]string{}, Handoff: "Ready"}}}}
 	if err := e.acceptValidationResult(s, record, 2); err == nil {
 		t.Fatal("completion without changes or new calls admitted")

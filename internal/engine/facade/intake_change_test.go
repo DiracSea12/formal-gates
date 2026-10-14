@@ -6,12 +6,181 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 )
+
+// User edits use the same complete material preview and typed confirmation at
+// review, route, development and validation boundaries on a native microproject.
+func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testing.T) {
+	second := "\n### REQ-002：错误输入\n\n#### 要求\n错误输入拒绝。\n\n#### 验收条件\n- AC-002：错误输入退出码非零。\n\n#### 来源\n用户要求。\n"
+	original := strings.Replace(validationDocument, "正常输入成功，错误输入拒绝。", "正常输入退出码零。", 1) + second
+	for _, boundary := range []string{"product-review", "route-selection", "development", "validation"} {
+		for _, edit := range []string{"add", "delete", "modify"} {
+			t.Run(boundary+"/"+edit, func(t *testing.T) {
+				root := t.TempDir()
+				snapshotRepoCommits(t, root)
+				path := filepath.Join(root, "requirements.md")
+				if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+					t.Fatal(err)
+				}
+				for _, args := range [][]string{{"add", "requirements.md"}, {"commit", "-m", "Confirmed command requirements"}} {
+					if _, err := (vcs.ExecRunner{}).Run(root, "git", args...); err != nil {
+						t.Fatal(err)
+					}
+				}
+				base, err := vcs.New(root, nil).Resolve()
+				if err != nil {
+					t.Fatal(err)
+				}
+				intake, err := PrepareIntake(root, "requirements.md", "", nil, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "user-edit-runtime", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "user-edit", Route: "regular", BaseSnapshot: base, IntakeConfirmationReceipt: intake.IntakeCandidate}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d := &validationDriver{t: t, f: f, run: run, revision: intake.Revision, git: vcs.New(root, nil)}
+				d.drive()
+				if boundary != "product-review" {
+					passPreDevelopmentReviews(t, d, commandPlan())
+					d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command contract"}})
+				}
+				if boundary == "development" || boundary == "validation" {
+					d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))
+					d.drive()
+				}
+				if boundary == "validation" {
+					design, input := d.action("engine.qa.design.v5")
+					manifest := simpleManifest(input)
+					manifest.Edges = []coverage.CoverageEdge{{SourceID: "REQ-001", PointID: "AC-001", CaseID: "normal"}, {SourceID: "REQ-001", PointID: "AC-001", CaseID: "invalid"}, {SourceID: "REQ-002", PointID: "AC-002", CaseID: "normal"}, {SourceID: "REQ-002", PointID: "AC-002", CaseID: "invalid"}}
+					dev, di := d.action("engine.development.batch.v5")
+					d.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
+					if len(d.run.RejectedResults) != 0 {
+						t.Fatalf("native QA preparation rejected its source manifest: %+v", d.run.RejectedResults)
+					}
+					d.drive()
+					reviewID, ri := d.action("engine.qa.review.rationale.v2")
+					r := approvedReview(manifest)
+					d.business(reviewID, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Review: &r})
+					d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "command implements both confirmed input conditions"}})
+					d.drive()
+				}
+				statePath := filepath.Join(f.stateDir, "state.json")
+				readState := func() []byte {
+					t.Helper()
+					data, err := os.ReadFile(statePath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return data
+				}
+				before := readState()
+				old, err := f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				request, err := f.PrepareCurrentControl(ControlInput{Request: protocol.ControlRequestRequirementChange})
+				if err != nil || !bytes.Equal(before, readState()) {
+					t.Fatal("request preview wrote workflow facts", err)
+				}
+				if _, d.run, err = f.SubmitControl(request); err != nil {
+					t.Fatal(err)
+				}
+				d.drive()
+				frozen, err := f.engine.Load()
+				if err != nil || frozen.State.RequirementRevision() != intake.Revision || !reflect.DeepEqual(old.State.PendingActions, frozen.State.PendingActions) || frozen.State.Phase != old.State.Phase {
+					t.Fatal("clarification advanced the revision, phase or execution", err)
+				}
+				document := original
+				switch edit {
+				case "add":
+					document += "\n### REQ-003：重复输入\n\n#### 要求\n重复正常输入仍成功。\n\n#### 验收条件\n- AC-003：连续两次正常输入退出码均为零。\n\n#### 来源\n用户新增要求。\n"
+				case "delete":
+					document = strings.TrimSuffix(original, second)
+				case "modify":
+					document = strings.Replace(original, "错误输入退出码非零。", "错误输入退出码为一。", 1)
+				}
+				if err := os.WriteFile(path, []byte(document), 0600); err != nil {
+					t.Fatal(err)
+				}
+				work := make([]WorkChoice, len(d.run.RequirementWork))
+				for i := range work {
+					work[i] = WorkChoice{Disposition: protocol.RequirementWorkRedo, Reason: "user explicitly requests fresh work for this changed contract"}
+				}
+				before = readState()
+				prepared, err := f.PrepareCurrentControl(ControlInput{Request: protocol.ControlRequestRequirementChange, Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Requirement: &RequirementChangeInput{Classification: protocol.RequirementClassificationChanged, Redo: []string{"product-review", "start-readiness"}, Work: work, Impact: protocol.RequirementImpact{ChangedItems: []string{edit}, TransitiveImpacts: []string{"command implementation and acceptance cases"}}}})
+				if err != nil || !bytes.Equal(before, readState()) {
+					t.Fatal("impact suggestion wrote execution or authority", err)
+				}
+				if prepared.Intake.Content != document || prepared.Intake.RequirementDocument.ContentDigest != prepared.Intake.Revision {
+					t.Fatal("suggestion lost the complete original candidate bytes")
+				}
+				for i, choice := range prepared.Event.Request.Package.WorkDecisions {
+					if !reflect.DeepEqual(choice.Work, d.run.RequirementWork[i]) {
+						t.Fatal("suggestion changed original work identity")
+					}
+				}
+				if _, d.run, err = f.SubmitControl(prepared); err != nil {
+					t.Fatal(err)
+				}
+				bound, err := f.engine.Load()
+				if err != nil || bound.State.RequirementRevision() != intake.Revision || !reflect.DeepEqual(frozen.State.ReviewSeries, bound.State.ReviewSeries) || !reflect.DeepEqual(frozen.State.PendingActions, bound.State.PendingActions) {
+					t.Fatal("package binding executed the suggested redo before confirmation", err)
+				}
+				before = readState()
+				confirmation, err := f.PrepareCurrentControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "user confirms the complete changed document and each fresh-work decision"})
+				if err != nil || !bytes.Equal(before, readState()) {
+					t.Fatal("confirmation preview authorized the suggestion", err)
+				}
+				if edit == "modify" {
+					another, err := f.PrepareCurrentControl(ControlInput{Request: protocol.ControlAbort})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, d.run, err = f.SubmitControl(another); err != nil {
+						t.Fatal(err)
+					}
+					before = readState()
+					if _, _, err = f.SubmitControl(confirmation); err == nil || !strings.Contains(err.Error(), protocol.CodeStaleFreshness) || !bytes.Equal(before, readState()) {
+						t.Fatal("stale confirmation changed workflow or source authority", err)
+					}
+					confirmation, err = f.PrepareCurrentControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "user confirms the complete changed document on the current Ask"})
+					if err != nil || !bytes.Equal(before, readState()) {
+						t.Fatal("fresh confirmation preview changed workflow", err)
+					}
+					bound, err = f.engine.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				accepted, _, err := f.SubmitControl(confirmation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				updated, err := f.engine.Load()
+				if err != nil || updated.Revision != bound.Revision+1 || updated.State.RequirementRevision() != confirmation.Intake.Revision || !reflect.DeepEqual(updated.State.Validation.Document, *confirmation.Intake.RequirementDocument) || !reflect.DeepEqual(old.State.IntakeReceipt, updated.State.IntakeReceipt) {
+					t.Fatal("confirmation separated source, revision, projection or original intake", err)
+				}
+				before = readState()
+				reopened, err := Open(root, d.run.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				replay, _, err := reopened.SubmitControl(confirmation)
+				if err != nil || !reflect.DeepEqual(accepted, replay) || !bytes.Equal(before, readState()) {
+					t.Fatal("reopened original confirmation replay changed durable facts", err)
+				}
+			})
+		}
+	}
+}
 
 func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 	for _, scenario := range []string{"independent", "same-content", "updated-solution", "changed-solution", "changed-reference"} {

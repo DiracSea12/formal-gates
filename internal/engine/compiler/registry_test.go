@@ -46,15 +46,14 @@ func TestRegistryRegister(t *testing.T) {
 			t.Fatalf("first register: %v", err)
 		}
 		for _, row := range []struct {
-			name string
-			reg  func() error
+			reg func() error
 		}{
-			{"predicate", func() error { return reg.RegisterPredicate("engine.cross") }},
-			{"codec", func() error { return reg.RegisterCodec("engine.cross") }},
-			{"reconciler", func() error { return reg.RegisterReconciler("engine.cross") }},
-			{"schema", func() error { return reg.RegisterSchema("engine.cross") }},
-			{"operation", func() error { return reg.RegisterOperation("engine.cross") }},
-			{"askKind", func() error { return reg.RegisterAskKind("engine.cross") }},
+			{func() error { return reg.RegisterPredicate("engine.cross") }},
+			{func() error { return reg.RegisterCodec("engine.cross") }},
+			{func() error { return reg.RegisterReconciler("engine.cross") }},
+			{func() error { return reg.RegisterSchema("engine.cross") }},
+			{func() error { return reg.RegisterOperation("engine.cross") }},
+			{func() error { return reg.RegisterAskKind("engine.cross") }},
 		} {
 			wantErr(t, row.reg(), `duplicate id "engine.cross"`)
 		}
@@ -92,7 +91,7 @@ func TestRegistryResolve(t *testing.T) {
 		if err := reg.RegisterPredicate("pred.x"); err != nil {
 			t.Fatalf("register predicate: %v", err)
 		}
-		if err := reg.ResolvePredicate("pred.x"); err != nil {
+		if _, err := reg.resolve("pred.x", KindPredicate); err != nil {
 			t.Fatalf("resolve predicate: %v", err)
 		}
 	})
@@ -100,11 +99,16 @@ func TestRegistryResolve(t *testing.T) {
 		reg := NewRegistry()
 		_, err := reg.ResolveHandler("engine.ghost")
 		wantErr(t, err, `handler "engine.ghost" not found (closed world)`)
-		wantErr(t, reg.ResolvePredicate("pred.ghost"), "not found (closed world)")
-		wantErr(t, reg.ResolveCodec("codec.ghost"), "not found (closed world)")
-		wantErr(t, reg.ResolveReconciler("reconcile.ghost"), "not found (closed world)")
-		wantErr(t, reg.ResolveSchema("schema.ghost"), "not found (closed world)")
-		wantErr(t, reg.ResolveOperation("op.ghost"), "not found (closed world)")
+		_, err = reg.resolve("pred.ghost", KindPredicate)
+		wantErr(t, err, "not found (closed world)")
+		_, err = reg.resolve("codec.ghost", KindCodec)
+		wantErr(t, err, "not found (closed world)")
+		_, err = reg.resolve("reconcile.ghost", KindReconciler)
+		wantErr(t, err, "not found (closed world)")
+		_, err = reg.resolve("schema.ghost", KindSchema)
+		wantErr(t, err, "not found (closed world)")
+		_, err = reg.resolve("op.ghost", KindOperation)
+		wantErr(t, err, "not found (closed world)")
 	})
 	t.Run("kind mismatch", func(t *testing.T) {
 		// 单一命名空间的收益：handler ID 填进 predicate 槽报 kind 不匹配，
@@ -113,10 +117,15 @@ func TestRegistryResolve(t *testing.T) {
 		if err := reg.RegisterHandler("engine.x", authoring.RunnerEngineLocal); err != nil {
 			t.Fatalf("register: %v", err)
 		}
-		wantErr(t, reg.ResolvePredicate("engine.x"), `id "engine.x" registered as handler, want predicate`)
-		wantErr(t, reg.ResolveCodec("engine.x"), "registered as handler, want codec")
-		wantErr(t, reg.ResolveReconciler("engine.x"), "registered as handler, want reconciler")
-		wantErr(t, reg.ResolveSchema("engine.x"), "registered as handler, want schema")
-		wantErr(t, reg.ResolveOperation("engine.x"), "registered as handler, want operation")
+		_, err := reg.resolve("engine.x", KindPredicate)
+		wantErr(t, err, `id "engine.x" registered as handler, want predicate`)
+		_, err = reg.resolve("engine.x", KindCodec)
+		wantErr(t, err, "registered as handler, want codec")
+		_, err = reg.resolve("engine.x", KindReconciler)
+		wantErr(t, err, "registered as handler, want reconciler")
+		_, err = reg.resolve("engine.x", KindSchema)
+		wantErr(t, err, "registered as handler, want schema")
+		_, err = reg.resolve("engine.x", KindOperation)
+		wantErr(t, err, "registered as handler, want operation")
 	})
 }

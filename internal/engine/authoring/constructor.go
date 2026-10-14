@@ -85,11 +85,6 @@ func checkIO(id StepID, io IO) error {
 			return fmt.Errorf("step %q: postcondition predicate id required", id)
 		}
 	}
-	for _, b := range io.Inputs {
-		if b.From == "" {
-			return fmt.Errorf("step %q: input binding source step required", id)
-		}
-	}
 	return nil
 }
 

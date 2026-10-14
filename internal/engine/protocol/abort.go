@@ -27,7 +27,9 @@ func (s *State) AbortDecision() (RecordedDecision, bool) {
 	}
 	var chosen RecordedDecision
 	for _, d := range s.Decisions {
-		if d.Choice == "abort" && (d.Control == ControlAbort || d.Control == ControlValidation || d.Control == ControlRecovery) && (chosen.Revision == 0 || d.Revision < chosen.Revision) {
+		ordinary := d.Choice == "abort" && (d.Control == ControlAbort || d.Control == ControlValidation || d.Control == ControlRecovery)
+		continuation := d.Control == ControlContinueNode && d.Choice == "approve" && d.Continuation != nil && s.PendingAsks[d.RequestID].Continuation != nil && s.PendingAsks[d.RequestID].Continuation.To.Kind == "abort"
+		if (ordinary || continuation) && (chosen.Revision == 0 || d.Revision < chosen.Revision) {
 			chosen = d
 		}
 	}
@@ -57,7 +59,7 @@ func (s *State) cleanupRetryRequest(r *ValidationRequest) bool {
 }
 
 // advanceAbort stops business progression and reconciles signed external work.
-// Termination uses the same typed intent and receipt path as TerminateAgent.
+// Termination records the typed agentHostIntent result in PendingHostActions.
 func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
 	d, ok := s.AbortDecision()
 	if !ok || s.Phase == runtime.PhaseTerminal {

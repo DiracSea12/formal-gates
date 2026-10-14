@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
@@ -110,5 +111,80 @@ func TestSharedTestMaterialInheritanceRequiresCandidateContent(t *testing.T) {
 				t.Fatalf("shared approval admission=%v, expected approval=%v", err, allowed)
 			}
 		})
+	}
+}
+
+func TestIntakeConfirmationFollowsSignedWorkEpoch(t *testing.T) {
+	initial := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "initial-solution"}
+	confirmed := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "confirmed-solution"}
+	latest := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "latest-solution"}
+	for _, variant := range []string{"initial", "confirmed", "retry", "unissued", "before-confirmation", "missing-epoch", "wrong-requirement", "missing-intake"} {
+		t.Run(variant, func(t *testing.T) {
+			binding := WorkBinding{Task: runtime.TaskKey{Node: "qa", Step: "review"}, RequirementRevision: "same-requirement", Generation: 5}
+			issued := uint64(6)
+			want := confirmed
+			switch variant {
+			case "initial":
+				binding.Generation, want = 0, initial
+			case "retry":
+				issued = 20
+			case "unissued":
+				issued, want = 0, nil
+			case "before-confirmation":
+				issued, want = 4, nil
+			case "missing-epoch":
+				binding.Generation, want = 4, nil
+			case "wrong-requirement":
+				binding.RequirementRevision, want = "another-requirement", nil
+			case "missing-intake":
+				want = nil
+			}
+			state := &State{IntakeConfirmationReceipt: initial, RequirementRevisions: []ConfirmedRevision{{Revision: initial.RequirementRevision, StateRevision: 1}, {Revision: confirmed.RequirementRevision, StateRevision: 5, Intake: confirmed}, {Revision: latest.RequirementRevision, StateRevision: 10, Intake: latest}}, DispatchBindings: map[string]WorkBinding{"original": binding}, DispatchIssueRevisions: map[string]uint64{"original": issued}}
+			if variant == "missing-intake" {
+				state.RequirementRevisions[1].Intake = nil
+			}
+			if got := state.intakeConfirmationForWork(binding); got != want {
+				t.Fatalf("signed confirmation = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestCarriedReviewRequiresOriginalCasesAndCandidate(t *testing.T) {
+	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{NodeID: "qa", ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v5"}}, {Header: compiler.CompiledHeader{NodeID: "qa", ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
+	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
+		for _, variant := range []string{"carry", "no-carry", "redo", "missing-intake", "case-content", "candidate-content", "reopened"} {
+			t.Run(string(mode)+"/"+variant, func(t *testing.T) {
+				original := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: "run", RequirementRevision: "original", SolutionRevision: "original-solution"}, ReviewKind: mode, RouteScope: "original-route"}, Cases: []coverage.AcceptanceCase{{CaseID: "case", Oracle: "documented result"}}}
+				set := &CaseSet{Status: "REVIEW", DesignTask: pipelineTask(cd, "engine.qa.design.v5", fmt.Sprintf("0:%s:1", mode)), Manifest: original, Candidate: "original-candidate"}
+				state := &State{RunID: "run", SelectedGates: []string{"blackbox", "whitebox", mergeQAGateID}, IntakeConfirmationReceipt: &IntakeConfirmationReceipt{RequirementRevision: "original", SolutionRevision: "original-solution"}, Validation: &Validation{Generation: 10, RequirementRevision: "current", Sets: map[coverage.ReviewKind]*CaseSet{mode: set}}}
+				binding := WorkBinding{Task: state.reviewTask(mode, 0, digestOfCanonical(original), cd), RequirementRevision: "original", RouteScope: "original-route", CaseVersion: digestOfCanonical(original), Candidate: "original-candidate"}
+				choice := RequirementWorkDecision{Work: RequirementWork{ActionID: "review", Task: binding.Task, RequirementRevision: "original", IssuedRevision: 2}, Disposition: RequirementWorkCarry, Reason: "unchanged review duty"}
+				state.RequirementRevisions = []ConfirmedRevision{{Revision: "original", StateRevision: 1}, {Revision: "current", StateRevision: 10, Intake: &IntakeConfirmationReceipt{RequirementRevision: "current", SolutionRevision: "current-solution"}, WorkDecisions: []RequirementWorkDecision{choice}}}
+				state.DispatchBindings = map[string]WorkBinding{"review": binding}
+				state.DispatchIssueRevisions = map[string]uint64{"review": 2}
+				set.Manifest.Binding.RequirementRevision, set.Manifest.Binding.SolutionRevision, set.Manifest.Binding.RouteScope = "current", "current-solution", "current-route"
+				switch variant {
+				case "no-carry":
+					state.RequirementRevisions[1].WorkDecisions = nil
+				case "redo":
+					state.RequirementRevisions[1].WorkDecisions[0].Disposition = RequirementWorkRedo
+				case "missing-intake":
+					state.IntakeConfirmationReceipt = nil
+				case "case-content":
+					set.Manifest.Cases[0].Oracle = "another result"
+				case "candidate-content":
+					set.Candidate = "changed-candidate"
+				case "reopened":
+					set.Status = "THAWED"
+					state.PendingAsks = map[string]PendingAsk{"reopen": {Validation: &ValidationRequest{Kind: "THAW", Mode: mode}}}
+					state.Decisions = map[string]RecordedDecision{"reopen": {Choice: "approve", Revision: 11}}
+				}
+				allowed := variant == "carry" || variant == "candidate-content" && mode != coverage.ReviewWhitebox
+				if got := state.prewaveWorkCurrent(binding, cd); got != allowed {
+					t.Fatalf("review applicability = %t, want %t", got, allowed)
+				}
+			})
+		}
 	}
 }

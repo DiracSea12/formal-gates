@@ -137,3 +137,55 @@ func installedAdmissionTarget(t *testing.T) (string, string) {
 	}
 	return report.Targets[0].TargetPath, report.PackageDigest
 }
+
+func TestProjectRuntimeFilesCollectsInstalledHosts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", "")
+	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
+	fixtureLauncherInvocation(t, launcher)
+	source := copyPackageFixture(t)
+	var targets []string
+	for _, name := range []string{"claude", "codex"} {
+		report, err := Install(InstallOptions{Source: source, Host: name, Scope: "global", BinaryTarget: launcher, Force: true, SkipHooks: true})
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		targets = append(targets, report.Targets[0].TargetPath)
+	}
+	note := filepath.Join(home, ".codex", "user-notes.md")
+	const content = "Original user material\n"
+	if err := os.WriteFile(note, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for count := 0; count < 2; count++ {
+		files, err := ProjectRuntimeFiles(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range targets {
+			installed, err := PackageReceipt(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range installed.Entries {
+				if !files.ContainsFile(entry.RealPath) {
+					t.Fatal("registered leaf was omitted", entry.RealPath)
+				}
+			}
+		}
+		if !files.ContainsFile(launcher) || files.ContainsFile(note) {
+			t.Fatal("inventory lost launcher or hid adjacent user material", files)
+		}
+	}
+	if data, err := os.ReadFile(note); err != nil || string(data) != content {
+		t.Fatal("discovery changed original user material", string(data), err)
+	}
+	if _, err := os.Stat(installRegistryPath(InstallOptions{}) + ".bootstrap.json"); !os.IsNotExist(err) {
+		t.Fatal("read-only inventory required workflow bootstrap", err)
+	}
+	if _, err := ResolveEngineAdmission(home, ""); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
+		t.Fatal("read-only inventory weakened formal admission conflict", err)
+	}
+}

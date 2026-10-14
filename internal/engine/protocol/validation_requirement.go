@@ -9,11 +9,12 @@ import (
 	"strings"
 )
 
-// sourceValidationTask follows the existing requirement confirmation ledger.
+// sourceValidationTask follows the recorded work authorizations.
 // Redo changes the execution identity while preserving the business duty.
 func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
-	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
-		entry := s.RequirementRevisions[i]
+	entries := s.workAuthorizations()
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
 		for j, choice := range entry.WorkDecisions {
 			if choice.Disposition == RequirementWorkRedo && replacementWorkTask(entry, j) == key {
 				return s.sourceValidationTask(choice.Work.Task)
@@ -23,7 +24,7 @@ func (s *State) sourceValidationTask(key runtime.TaskKey) runtime.TaskKey {
 	return key
 }
 func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave, cd *compiler.CompiledDefinition) runtime.TaskKey {
-	if s.validationRole(key, cd) == "engine.development.batch.v4" {
+	if s.validationRole(key, cd) == "engine.development.batch.v5" {
 		return key
 	}
 	for action, pending := range s.PendingActions {
@@ -82,7 +83,7 @@ func (s *State) sameValidationDuty(binding WorkBinding, current *ValidationWave)
 }
 func sameRequiredDuty(role string, source, current runtime.TaskKey) bool {
 	switch role {
-	case "engine.gate.v2":
+	case "engine.gate.v3":
 		_, sourceScope, _ := strings.Cut(source.Scope, ":")
 		_, currentScope, _ := strings.Cut(current.Scope, ":")
 		return sourceScope == currentScope
@@ -107,7 +108,7 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 			invalidated = true
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
-		case "engine.development.batch.v4", "engine.repair.v5":
+		case "engine.development.batch.v5", "engine.repair.v6":
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
 		case "engine.qa.design.v5", "engine.qa.review.rationale.v2":
@@ -165,8 +166,9 @@ func (s *State) validationCarryAuthorized(action string) bool {
 	return s.validationWorkCarryAuthorized(action, binding.Task)
 }
 func (s *State) validationWorkCarryAuthorized(action string, task runtime.TaskKey) bool {
-	for i := len(s.RequirementRevisions) - 1; i >= 0; i-- {
-		for _, choice := range s.RequirementRevisions[i].WorkDecisions {
+	entries := s.workAuthorizations()
+	for i := len(entries) - 1; i >= 0; i-- {
+		for _, choice := range entries[i].WorkDecisions {
 			if action != "" && choice.Work.ActionID == action || task != (runtime.TaskKey{}) && choice.Work.Task == task {
 				return choice.Disposition == RequirementWorkCarry
 			}
@@ -216,9 +218,9 @@ func (s *State) carryRequirementTarget(target *ValidationTarget, prior, current 
 				carried.Execution = &report
 			}
 			carried.RequiredCases, carried.ScopeReason = nil, assembly
-			return s.carryValidationTarget(target, &carried, current)
+			return s.carryValidationTarget(target, &carried, prior, current)
 		}
-		return s.carryValidationTarget(target, previous, current)
+		return s.carryValidationTarget(target, previous, prior, current)
 	}
 	return false
 }
@@ -236,7 +238,7 @@ func (s *State) carryRequirementTargets(current *ValidationWave) bool {
 		if prior.Generation != current.Generation {
 			changed = s.carryRequirementTarget(target, prior, current) || changed
 		} else if target.Kind != "QA" || prior.Scope == current.Scope && sameWaveCases(prior, current, target.Mode) {
-			changed = s.carryValidationTarget(target, previous, current) || changed
+			changed = s.carryValidationTarget(target, previous, prior, current) || changed
 		}
 	}
 	return changed

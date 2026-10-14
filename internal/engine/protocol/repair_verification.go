@@ -39,9 +39,8 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 		return contexts
 	}
 	for _, work := range s.repairWork() {
-
 		r := s.developmentEditResult(work.task)
-		if r == nil || !s.editResultCurrent(*r) || !r.Validation.Binding.PureP2 || !s.developmentChecksPassed(*r) {
+		if r == nil || !s.editResultCurrent(*r) || !r.Validation.Binding.PureP2 || !s.developmentChecksPassed(*r) || len(r.Validation.Development.AffectedCases) == 0 {
 			continue
 		}
 		proof, ready := s.editSourceProof(r.ActionID)
@@ -206,10 +205,9 @@ func (s *State) repairComparisonPlans(context repairComparison, cd *compiler.Com
 		if !found {
 			return nil, validationError("repair case is outside the frozen approved set: " + id)
 		}
-		if len(qaCase.Operations) == 0 {
-			qaCase.Operations = s.qaApprovedRecipe(context.wave, manifest.Binding.ReviewKind, id)
-		}
-		operations, err := caseOperationPlans(manifest, qaCase)
+		operations, err := caseOperationPlans(manifest, qaCase, func(source string) []coverage.Operation {
+			return s.qaApprovedRecipe(context.wave, manifest.Binding.ReviewKind, id, source)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +333,7 @@ func (e *Engine) advanceRepairComparisons(s *State, revision uint64) (bool, erro
 
 func (s *State) projectRepairComparisons(view *decision.State, cd *compiler.CompiledDefinition) {
 	for _, context := range s.repairComparisonContexts(cd) {
-		if s.repairComparisonResult(context.binding.Task) != nil {
+		if len(context.affected) == 0 || s.repairComparisonResult(context.binding.Task) != nil {
 			continue
 		}
 		reason := decision.WaitDependencies
@@ -441,6 +439,9 @@ func (s *State) repairSourceComparisonPassed(work repairWork) bool {
 	original := s.developmentEditResult(work.task)
 	if original == nil || !original.Validation.Binding.PureP2 {
 		return original != nil
+	}
+	if len(original.Validation.Development.AffectedCases) == 0 {
+		return s.editResultCurrent(*original) && s.developmentChecksPassed(*original)
 	}
 	for id, result := range s.Results {
 		if _, obsolete := s.ObsoleteActions[id]; obsolete {

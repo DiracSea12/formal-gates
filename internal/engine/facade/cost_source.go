@@ -149,7 +149,12 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 		}
 		path, _ := source["transcript"].(string)
 		if path == "" {
-			missing = errors.Join(missing, fmt.Errorf("native completion has no metering stream"))
+			usageEvidence, _ := source["usage_evidence"].(map[string]any)
+			reason, _ := usageEvidence["unavailableReason"].(string)
+			if reason == "" {
+				reason = "native completion has no metering stream"
+			}
+			missing = errors.Join(missing, errors.New(reason))
 			continue
 		}
 		if _, err := cost.ParseTranscript(ref.Provider, path); err != nil {

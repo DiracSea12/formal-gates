@@ -37,12 +37,12 @@ type NonProgrammableReason string
 type ReviewSeriesAction string
 
 const (
-	// ReviewSeriesProductReview 断言本步骤是产品审系列的复审派发。
+	// ReviewSeriesProductReview 断言本步骤是产品审系列的审查派发。
 	ReviewSeriesProductReview ReviewSeriesAction = "product-review"
 	// ReviewSeriesStartReadiness 断言本步骤是技术审（开工就绪）系列的
-	// 复审派发。
+	// 审查派发。
 	ReviewSeriesStartReadiness ReviewSeriesAction = "start-readiness"
-	// ReviewSeriesUnaffiliated 断言本步骤是独立复审派发但不属于任何一条
+	// ReviewSeriesUnaffiliated 断言本步骤是独立审查派发但不属于任何一条
 	// 开发前审查系列。
 	ReviewSeriesUnaffiliated ReviewSeriesAction = "unaffiliated"
 )

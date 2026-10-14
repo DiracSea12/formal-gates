@@ -58,6 +58,7 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 	}
 	text("request", &a.request, "control", "semantic control request")
 	number("ask", &a.value.Ask, "control", "current Ask number")
+	number("node", &a.value.Node, "control", "current business node number to continue from")
 	text("choice", &a.value.Choice, "control", "offered semantic choice")
 	text("reason", &a.value.Reason, "control", "decision reason")
 	list("gate", &a.gates, "control", "current gate number")
@@ -192,6 +193,9 @@ func (a *controlArguments) input() (facade.ControlInput, bool, error) {
 	})
 	out := a.value
 	out.Request = protocol.ControlKind(a.request)
+	if out.Node != 0 && out.Request == "" {
+		out.Request = protocol.ControlContinueNode
+	}
 	var err error
 	if out.Gates, err = controlNumbers(a.gates); err != nil {
 		return out, provided, fmt.Errorf("--gate: %w", err)

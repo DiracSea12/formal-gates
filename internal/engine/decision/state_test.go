@@ -117,6 +117,16 @@ func TestStateCanonicalBytesOrderIndependent(t *testing.T) {
 	if string(ba) != string(bb) {
 		t.Fatal("task map insertion order must not leak into canonical bytes")
 	}
+	if err := sa.TransitionTask(runtime.TaskKey{Node: "work", Step: "work.agent"}, runtime.TaskRunning); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	baRunning, err := sa.CanonicalBytes()
+	if err != nil {
+		t.Fatalf("bytes: %v", err)
+	}
+	if string(baRunning) == string(ba) {
+		t.Fatal("task status change must change canonical bytes")
+	}
 }
 
 func TestStateTransitions(t *testing.T) {
@@ -128,7 +138,7 @@ func TestStateTransitions(t *testing.T) {
 	if err := s.TransitionPhase(runtime.PhaseDevelopmentParallel); err == nil {
 		t.Error("phase backward transition must be rejected")
 	}
-	// task：QUEUED→ISSUED 合法；QUEUED→RUNNING 跳步非法；终态无出边。
+	// task：QUEUED→ISSUED→TERMINAL 合法；终态不能回到 QUEUED。
 	key := runtime.TaskKey{Node: "work", Step: "work.agent"}
 	if err := s.TransitionTask(key, runtime.TaskIssued); err != nil {
 		t.Fatalf("legal task transition: %v", err)
