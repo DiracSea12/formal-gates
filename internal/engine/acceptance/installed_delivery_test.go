@@ -32,6 +32,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 		{name: "abort", tier: "FINAL", mode: "none", abort: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, scenario.mode)
 			d.plan = candidatePlan(nil)
 			command := d.plan.Batches[0]

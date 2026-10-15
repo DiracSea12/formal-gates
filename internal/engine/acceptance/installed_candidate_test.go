@@ -884,6 +884,7 @@ func TestInstalledCandidateLifecycle(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"none", "blackbox", "whitebox", "both"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, mode)
 			d.reviews()
 			d.untilValidation()
@@ -932,6 +933,7 @@ func TestInstalledCandidateResumesNativeWrites(t *testing.T) {
 	t.Parallel()
 	for _, stage := range []string{"workspace", "track", "artifact", "pin", "unknown", "freeze", "promotion", "squash", "delivery", "cleanup"} {
 		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, "both")
 			if stage == "unknown" {
 				d.breakNative("pin")
