@@ -29,7 +29,7 @@ func TestResetRequirementConfirmationRechecksLiveFileBeforeRegistration(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(request)
+			_, d.run, err = submitControlWithHost(t, d.f, request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,7 +37,7 @@ func TestResetRequirementConfirmationRechecksLiveFileBeforeRegistration(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(decision)
+			_, d.run, err = submitControlWithHost(t, d.f, decision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,7 +91,7 @@ func TestResetRequirementConfirmationRechecksLiveFileBeforeRegistration(t *testi
 				t.Fatal(err)
 			}
 			d.f.store, d.f.engine = store, engine
-			_, _, observedErr := d.f.SubmitControl(confirm)
+			_, _, observedErr := submitControlWithHost(t, d.f, confirm)
 			after, err := d.f.engine.Load()
 			if err != nil {
 				t.Fatal(err)
@@ -140,7 +140,7 @@ func TestControlMaterialObservationRechecksSelectedSolution(t *testing.T) {
 						t.Fatal(err)
 					}
 					if boundary == "reset-decision" {
-						_, d.run, err = d.f.SubmitControl(candidate)
+						_, d.run, err = submitControlWithHost(t, d.f, candidate)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -163,7 +163,7 @@ func TestControlMaterialObservationRechecksSelectedSolution(t *testing.T) {
 						t.Fatal(err)
 					}
 					if boundary == "requirement-confirmation" {
-						_, d.run, err = d.f.SubmitControl(candidate)
+						_, d.run, err = submitControlWithHost(t, d.f, candidate)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -209,7 +209,7 @@ func TestControlMaterialObservationRechecksSelectedSolution(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				accepted, _, observedErr := d.f.SubmitControl(candidate)
+				accepted, _, observedErr := submitControlWithHost(t, d.f, candidate)
 				after, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)
@@ -260,7 +260,7 @@ func TestControlMaterialObservationRechecksSelectedSolution(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, current := range []*Facade{d.f, reopened} {
-					replay, _, err := current.SubmitControl(originalCandidate)
+					replay, _, err := submitControlWithHost(t, current, originalCandidate)
 					if err != nil || !reflect.DeepEqual(accepted, replay) {
 						t.Fatal("accepted original control replay read changed material or lost acceptance", err)
 					}

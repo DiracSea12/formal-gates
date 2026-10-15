@@ -284,14 +284,28 @@ func (c *engineCanary) install(base string, intake facade.IntakeConfirmationRece
 	if precheckErr != nil || projection.ContentDigest != intake.RequirementRevision || len(intake.Artifacts) != 1 || intake.Artifacts[0].Path != "requirements.md" || intake.SolutionRevision != intake.RequirementRevision {
 		c.fail("confirmed canonical intake lost its single-document precheck: %v", precheckErr)
 	}
-	c.t.Logf("authorized canary user stand-in confirms this complete requirement/solution file before start: requirements.md revision=%s\n%s", intake.RequirementRevision, string(c.doc))
+	c.t.Logf("simulated MCP host will confirm this complete requirement/solution file before start: requirements.md revision=%s\n%s", intake.RequirementRevision, string(c.doc))
 	path := filepath.Join(c.jobs, "intake.json")
 	data, _ := json.Marshal(intake)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		c.fail("intake: %v", err)
 	}
+	command := exec.Command(c.binary, "workflow", "serve")
+	command.Dir = c.project
+	command.Env = os.Environ()
+	for key, value := range c.hostEnvironment() {
+		command.Env = append(command.Env, key+"="+value)
+	}
+	started, err := confirmInstalledFixtureStart(c.t, command, c.project, string(c.doc))
+	if err != nil {
+		c.fail("installed start through the simulated MCP host: %v", err)
+	}
+	c.run = started
+	var request facade.StartRequest
+	if err := json.Unmarshal(readTestFileBytes(c.t, filepath.Join(c.project, facade.EngineNamespace, c.run.RunID, "request.json")), &request); err != nil || c.run.BaseSnapshot != base || request.VCS != c.vcs.Name() {
+		c.fail("native start changed the original baseline/provider: %s %s %v", c.run.BaseSnapshot, request.VCS, err)
+	}
 	c.promotion = installCanaryPromotionRecovery(c)
-	c.cli(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--vcs", c.vcs.Name(), "--base-snapshot", base, "--intake-receipt", path)
 	if err := c.recordIsolation(); err != nil {
 		c.fail("candidate isolation proof: %v", err)
 	}
@@ -556,7 +570,7 @@ func (c *engineCanary) recordIsolation() error {
 	})
 }
 
-func (c *engineCanary) currentRunID() string { return firstNonEmpty(c.run.RunID, "engine-canary") }
+func (c *engineCanary) currentRunID() string { return c.run.RunID }
 
 func canaryValuesEqual(a, b any) bool {
 	left, _ := json.Marshal(a)

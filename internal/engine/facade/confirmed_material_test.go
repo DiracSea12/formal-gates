@@ -284,7 +284,7 @@ func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(request)
+	_, run, err = submitControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(decision)
+	_, run, err = submitControlWithHost(t, f, decision)
 	if err != nil {
 		t.Fatal(err)
 	}

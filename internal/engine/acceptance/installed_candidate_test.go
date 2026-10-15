@@ -28,18 +28,20 @@ import (
 const candidateDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：Command\n\n#### 要求\nThe command validates its input.\n\n#### 验收条件\n- AC-001：Valid input succeeds and invalid input is rejected.\n\n#### 来源\nUser contract.\n"
 
 // candidateDriver supplies simulated host and worker facts through the typed
-// facade. User controls and native effects use the installed CLI; Git calls
-// create project inputs or independently inspect those effects.
+// facade. User controls use the installed MCP service and native effects use
+// its CLI; Git calls create project inputs or independently inspect those effects.
 type candidateAcceptance struct {
 	event        protocol.Event
 	receipt      protocol.Acceptance
-	confirmation string
+	confirmation int
+	candidate    facade.ControlCandidate
 }
 
 type candidateDriver struct {
 	p                                 installedStartProject
 	t                                 *testing.T
 	run                               facade.Run
+	runID                             string
 	seq                               int
 	mode                              string
 	plan                              *protocol.GranularityReview
@@ -78,8 +80,8 @@ func newCandidateDriver(t *testing.T, mode string, requirementPath ...string) *c
 	p.base = p.git(t, "rev-parse", "HEAD")
 	p.prepareIntake(t, path)
 	p.install(t, "codex", "global")
-	p.call(t, nil, p.startArgs("candidate", "regular")...)
-	d := &candidateDriver{p: p, t: t, mode: mode}
+	runID := p.start(t, "regular")
+	d := &candidateDriver{p: p, t: t, mode: mode, runID: runID}
 	d.drive()
 	return d
 }
@@ -92,7 +94,7 @@ func (d *candidateDriver) submit(e protocol.Event) {
 	if e.ID == "" {
 		e.ID = d.id()
 	}
-	opened, err := facade.Open(d.p.project, "candidate")
+	opened, err := facade.Open(d.p.project, d.runID)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -107,16 +109,23 @@ func (d *candidateDriver) submit(e protocol.Event) {
 	d.accepted = append(d.accepted, candidateAcceptance{event: e, receipt: acceptance})
 }
 
+func (d *candidateDriver) prepareControl(input facade.ControlInput) candidateAcceptance {
+	d.t.Helper()
+	body := d.call(installedJSON(d.t, input), "workflow", "next", "--machine", "--root", d.p.project, "--run-id", d.runID, "--decision", "-")
+	var response struct {
+		facade.ControlCandidate
+		Position int `json:"confirmationCandidate"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil || response.Position < 1 {
+		d.t.Fatalf("prepare original control: %v %s", err, body)
+	}
+	return candidateAcceptance{event: response.Event, confirmation: response.Position, candidate: response.ControlCandidate}
+}
+
 func (d *candidateDriver) control(input facade.ControlInput) candidateAcceptance {
 	d.t.Helper()
-	path := filepath.Join(d.t.TempDir(), "confirmation.json")
-	body := d.call(installedJSON(d.t, input), "workflow", "next", "--machine", "--root", d.p.project, "--run-id", "candidate", "--decision", "-", "--save-candidate", path)
-	var candidate facade.ControlCandidate
-	if err := json.Unmarshal(body, &candidate); err != nil {
-		d.t.Fatal(err)
-	}
-	record := candidateAcceptance{event: candidate.Event, confirmation: path}
-	record.receipt, d.run = d.replay(record)
+	record := d.prepareControl(input)
+	record.receipt, d.run = d.confirmControl(record)
 	if strings.Contains(record.receipt.Status, "REJECTED") || record.receipt.Status == "OBSOLETE_RESULT" {
 		d.t.Fatalf("confirmed control was not accepted: %+v", record.receipt)
 	}
@@ -124,24 +133,67 @@ func (d *candidateDriver) control(input facade.ControlInput) candidateAcceptance
 	return record
 }
 
-func (d *candidateDriver) replay(record candidateAcceptance) (protocol.Acceptance, facade.Run) {
+func (d *candidateDriver) confirmControl(record candidateAcceptance) (protocol.Acceptance, facade.Run) {
 	d.t.Helper()
-	if record.confirmation != "" {
-		body := d.call(nil, "workflow", "submit", "--machine", "--root", d.p.project, "--run-id", "candidate", "--confirmation", record.confirmation)
-		var response struct {
-			Acceptance protocol.Acceptance `json:"acceptance"`
-			Run        facade.Run          `json:"run"`
+	displayed := false
+	body, err := d.p.confirmation(d.t, "confirm_control", map[string]any{"root": d.p.project, "candidate": record.confirmation}, func(original map[string]any) {
+		displayed = true
+		candidate := record.candidate
+		var displayed struct {
+			Root  string              `json:"root"`
+			Input facade.ControlInput `json:"input"`
+			Run   struct {
+				RunID    string `json:"runId"`
+				Revision uint64 `json:"revision"`
+			} `json:"run"`
+			Proposal   *protocol.GranularityReview `json:"proposal"`
+			PlanDigest string                      `json:"planDigest"`
 		}
-		if err := json.Unmarshal(body, &response); err != nil {
-			d.t.Fatal(err)
+		if err := json.Unmarshal(installedJSON(d.t, original), &displayed); err != nil || displayed.Root != candidate.Root || displayed.Run.RunID != candidate.Run.RunID || displayed.Run.Revision != candidate.Run.Revision || !reflect.DeepEqual(displayed.Input, candidate.Input) {
+			d.t.Fatal("confirmation changed the original control target, revision or choice", original, err)
 		}
-		return response.Acceptance, response.Run
-	}
-	opened, err := facade.Open(d.p.project, "candidate")
+		if plan := candidate.DevelopmentPlan; plan != nil && (displayed.PlanDigest != plan.Confirmation.Digest || !reflect.DeepEqual(displayed.Proposal, &plan.Proposal)) {
+			d.t.Fatal("confirmation omitted the complete original development plan", original)
+		}
+	}, d.env...)
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	acceptance, run, err := opened.Submit(record.event)
+	if record.event.Decide != nil && !displayed {
+		d.t.Fatal("new user decision bypassed the original native form")
+	}
+	var response struct {
+		Acceptance struct {
+			Status   string `json:"status"`
+			Revision uint64 `json:"revision"`
+		} `json:"acceptance"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		d.t.Fatal(err)
+	}
+	_, state := d.p.bindings(d.t, d.runID, "codex")
+	receipt := state.Events[string(record.event.ID)].Acceptance
+	if receipt.EventID != string(record.event.ID) || receipt.Status != response.Acceptance.Status || receipt.Revision != response.Acceptance.Revision {
+		d.t.Fatalf("native control response changed its durable event receipt: %s %+v", body, receipt)
+	}
+	return receipt, d.p.run(d.t, "show", d.runID)
+}
+
+// replayAccepted exercises the retained event ledger after candidate payloads
+// have been reclaimed, using each already recorded original control or worker event.
+func (d *candidateDriver) replayAccepted(record candidateAcceptance) (protocol.Acceptance, facade.Run) {
+	d.t.Helper()
+	opened, err := facade.Open(d.p.project, d.runID)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	var acceptance protocol.Acceptance
+	var run facade.Run
+	if record.confirmation != 0 {
+		acceptance, run, err = opened.SubmitControl(record.candidate)
+	} else {
+		acceptance, run, err = opened.Submit(record.event)
+	}
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -192,7 +244,7 @@ func (d *candidateDriver) drive() {
 
 func (d *candidateDriver) driveOnce() {
 	d.t.Helper()
-	args := []string{"workflow", "drive", "--machine", "--root", d.p.project, "--run-id", "candidate"}
+	args := []string{"workflow", "drive", "--machine", "--root", d.p.project, "--run-id", d.runID}
 	cmd := d.p.command(nil, args...)
 	cmd.Env = append(cmd.Env, d.env...)
 	started := time.Now()
@@ -229,7 +281,7 @@ func (d *candidateDriver) driveOnce() {
 			var stored struct {
 				Content protocol.State `json:"content"`
 			}
-			raw := readInstalledFile(d.t, filepath.Join(d.p.project, facade.EngineNamespace, "candidate", "state.json"))
+			raw := readInstalledFile(d.t, filepath.Join(d.p.project, facade.EngineNamespace, d.runID, "state.json"))
 			if err := json.Unmarshal(raw, &stored); err != nil {
 				d.t.Fatal(err)
 			}
@@ -239,7 +291,7 @@ func (d *candidateDriver) driveOnce() {
 			d.t.Logf("durable uncertain responsibility: action=%s state=%s", intent.ActionID, raw)
 		}
 		if d.pauseOnInterrupt {
-			output = d.call(nil, "workflow", "status", "--machine", "--root", d.p.project, "--run-id", "candidate")
+			output = d.call(nil, "workflow", "status", "--machine", "--root", d.p.project, "--run-id", d.runID)
 			d.run = facade.Run{}
 			if err := json.Unmarshal(output, &d.run); err != nil {
 				d.t.Fatal(err)
@@ -342,20 +394,20 @@ func (d *candidateDriver) reviews() {
 		}}})
 		d.drive()
 	}
-	opened, err := facade.Open(d.p.project, "candidate")
-	if err != nil {
-		d.t.Fatal(err)
+	if len(d.run.WorkerMaterials) != 0 {
+		d.t.Fatal("topology entry still has native worker material")
 	}
-	if _, err = opened.RequestWorkflowChoice(); err != nil {
-		d.t.Fatal(err)
+	body := d.call(nil, "workflow", "drive", "--machine", "--root", d.p.project, "--run-id", d.runID, "--single-step=false")
+	var consumed struct {
+		Run      facade.Run `json:"run"`
+		Boundary string     `json:"boundary"`
 	}
-	d.run, err = opened.Show()
-	if err != nil {
-		d.t.Fatal(err)
+	if err := json.Unmarshal(body, &consumed); err != nil || consumed.Boundary != string(decision.KindAsk) || len(consumed.Run.WorkerMaterials) != 0 {
+		d.t.Fatalf("public drive did not reach the engine-owned topology Ask: %v %s", err, body)
 	}
+	d.run = consumed.Run
 	d.control(facade.ControlInput{Ask: d.ask(protocol.ControlConfirmTopology), Choice: "no-split", Reason: "One command project"})
 	d.drive()
-	choice := "custom"
 	var names []string
 	switch d.mode {
 	case "none":
@@ -364,26 +416,22 @@ func (d *candidateDriver) reviews() {
 		names = []string{"quality", "blackbox"}
 	case "whitebox":
 		names = []string{"quality", "whitebox"}
-	case "both":
-		choice = "full"
 	}
-	if _, err = opened.RequestWorkflowChoice(); err != nil {
-		d.t.Fatal(err)
+	preview := d.prepareControl(facade.ControlInput{Request: protocol.ControlSelectRoute})
+	catalog := preview.candidate.Event.Request.RouteGates
+	if d.mode == "both" {
+		names = slices.Clone(catalog)
 	}
-	d.run, err = opened.Show()
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	ask := d.ask(protocol.ControlSelectRoute)
 	var gates []int
 	for _, name := range names {
-		index := slices.Index(d.run.PendingAsks[ask-1].RouteGates, name)
+		index := slices.Index(catalog, name)
 		if index < 0 {
 			d.t.Fatalf("declared validation gate %s is not in the original route choices", name)
 		}
 		gates = append(gates, index+1)
 	}
-	d.control(facade.ControlInput{Ask: ask, Choice: choice, Gates: gates, Reason: "Confirmed command validation route"})
+	d.control(facade.ControlInput{Request: protocol.ControlSelectRoute, Gates: gates, Reason: "Select the confirmed command validation gates"})
+	d.control(facade.ControlInput{Ask: d.ask(protocol.ControlSelectRoute), Choice: "approve", Reason: "Confirm the original selected gates and development plan"})
 	d.drive()
 }
 func (d *candidateDriver) business(id string, result protocol.ValidationResult) {
@@ -392,7 +440,7 @@ func (d *candidateDriver) business(id string, result protocol.ValidationResult) 
 	if !ok || input.Binding != result.Binding || input.Workspace == nil || input.Workspace.ID != input.Binding.WorkspaceID || input.Workspace.Path == d.p.project {
 		d.t.Fatalf("worker input lacks its exact isolated binding: %+v", input)
 	}
-	if input.Workspace.Status != "READY" || input.Workspace.Owner != "candidate" {
+	if input.Workspace.Status != "READY" || input.Workspace.Owner != d.runID {
 		d.t.Fatal("worker resource owner is not admitted")
 	}
 	expected := input.Workspace.Identity
@@ -427,7 +475,7 @@ func (d *candidateDriver) observeLifecycle(action string) {
 		}
 		d.submit(fact)
 	}
-	if err := lifecycle.ObserveNativeCompletion(d.p.project, "candidate", action, "codex", action); err != nil {
+	if err := lifecycle.ObserveNativeCompletion(d.p.project, d.runID, action, "codex", action); err != nil {
 		d.t.Fatal(err)
 	}
 }
@@ -521,7 +569,7 @@ func (d *candidateDriver) caseReview(id string, input protocol.ValidationInput) 
 		result.CaseDecisions = append(result.CaseDecisions, coverage.ReviewDecision{ID: item.CaseID, Status: coverage.StatusPass, Reason: "Concrete command or Go test oracle"})
 	}
 	if input.Manifest.Binding.ReviewKind == coverage.ReviewBlackbox {
-		expected := protocol.BlackboxCasesMarkdown("candidate", input.Manifest)
+		expected := protocol.BlackboxCasesMarkdown(d.runID, input.Manifest)
 		if body := readInstalledFile(d.t, filepath.Join(input.Workspace.Path, ".gates", "cases", "blackbox.md")); string(body) != expected {
 			d.t.Fatal("isolated blackbox mirror does not match review manifest")
 		}
@@ -757,7 +805,7 @@ func (d *candidateDriver) assertClean() {
 // byte, including events accepted before the final gate or abort decision.
 func (d *candidateDriver) assertAcceptedReplay(terminal bool) {
 	d.t.Helper()
-	dir := filepath.Join(d.p.project, facade.EngineNamespace, "candidate")
+	dir := filepath.Join(d.p.project, facade.EngineNamespace, d.runID)
 	before := map[string][]byte{}
 	for _, name := range []string{"state.json", "terminal-summary.intent.json", "terminal-summary.json"} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
@@ -772,7 +820,7 @@ func (d *candidateDriver) assertAcceptedReplay(terminal bool) {
 		trace = readInstalledFile(d.t, d.breakLog)
 	}
 	for _, original := range d.accepted {
-		acceptance, _ := d.replay(original)
+		acceptance, _ := d.replayAccepted(original)
 		if !reflect.DeepEqual(acceptance, original.receipt) {
 			d.t.Fatalf("accepted %s receipt changed: %+v != %+v", original.event.ID, acceptance, original.receipt)
 		}
@@ -806,7 +854,7 @@ func (d *candidateDriver) assertAcceptedReplay(terminal bool) {
 			event protocol.Event
 			code  string
 		}{{conflict, string(protocol.CodeDuplicateEventMismatch)}, {unknown, string(protocol.CodeNotInitialized)}} {
-			opened, err := facade.Open(d.p.project, "candidate")
+			opened, err := facade.Open(d.p.project, d.runID)
 			if err != nil {
 				d.t.Fatal(err)
 			}
@@ -925,7 +973,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate")
+			cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID)
 			out, err := cmd.CombinedOutput()
 			if err != nil && !strings.Contains(string(out), "REVISION_CONFLICT") && !strings.Contains(string(out), "LOCK_HELD") {
 				t.Errorf("concurrent public drive: %v %s", err, out)
@@ -951,7 +999,7 @@ func TestInstalledAcceptedEventsReplayInParallelWithTerminalDrive(t *testing.T) 
 	group.Add(1)
 	go func() {
 		defer group.Done()
-		out, err := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate").CombinedOutput()
+		out, err := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID).CombinedOutput()
 		if err != nil {
 			t.Errorf("parallel terminal drive: %v %s", err, out)
 		}
@@ -960,7 +1008,7 @@ func TestInstalledAcceptedEventsReplayInParallelWithTerminalDrive(t *testing.T) 
 		group.Add(1)
 		go func(original candidateAcceptance) {
 			defer group.Done()
-			acceptance, _ := d.replay(original)
+			acceptance, _ := d.replayAccepted(original)
 			if !bytes.Equal(installedJSON(t, original.receipt), installedJSON(t, acceptance)) {
 				t.Errorf("parallel event %s receipt changed", original.event.ID)
 			}
@@ -1005,7 +1053,7 @@ func TestInstalledCandidateAbortCleansRegisteredResources(t *testing.T) {
 
 func (d *candidateDriver) expectNativeError(fragment string) {
 	d.t.Helper()
-	cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate")
+	cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID)
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), fragment) {
 		d.t.Fatalf("native boundary accepted invalid content: %v %s", err, out)
@@ -1075,7 +1123,7 @@ func TestInstalledPromotionRejectsTargetChanges(t *testing.T) {
 			head := d.p.git(t, "rev-parse", "HEAD")
 			index := d.p.git(t, "write-tree")
 			body := readInstalledFile(t, filepath.Join(d.p.project, "app.go"))
-			cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate")
+			cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID)
 			out, err := cmd.CombinedOutput()
 			if err == nil || !strings.Contains(string(out), expectedError) {
 				t.Fatalf("target boundary accepted %s: %v %s", change, err, out)

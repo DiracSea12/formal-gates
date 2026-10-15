@@ -44,6 +44,22 @@ $HOME/.local/bin/formal-gates uninstall \
 关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
+Codex 和 ZCode 同一安装事务还登记 `formal-gates` 控制 MCP，命令是固定 stable launcher
+加 `workflow serve`，不冻结项目 root。Codex 写所选作用域的 `.codex/config.toml` 自有区块；
+ZCode 全局写 `.zcode/cli/config.json`、项目写 `.zcode/config.json` 的 `mcp.servers` 自有项。
+无关配置与服务器保留；名称已被其他命令占用时安装拒绝覆盖。`--skip-hooks` 同时跳过此注册。
+卸载删除自有项及只由安装器创建的空配置文件，故障恢复沿同一安装 journal，不留下配置备份。
+
+DSH global 的既有 Cordis 插件从同一控制服务发现工具合同，使用当前根代理的
+`ctx.userQuestions.ask` 显示原生问题；只有实际选择“确认并执行”才回应原请求。
+无默认预选、自定义文字不充当批准，取消后不接纳迟到回答。DSH project 仍不加载 home 插件，
+需要此交互时使用 global。接入需要宿主实际加载配置并提供真人 UI；安装成功只证明配置事务。
+
+Claude Code 原生 MCP elicitation 有用户对话框，但其 Elicitation/ElicitationResult hooks 可以
+自动回答或改写结果，本安装器未声明隔离该来源的主宿主确认接入。WorkBuddy、Cursor 的通用
+真人表单接入同样未验证。缺少真实主宿主确认通道时，HUMAN 操作不可执行，不回退到模型回答、
+自动批准权限、CLI 自报确认或 headless `NativeRespond`。
+
 只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
 host 的全局安装当作回退。
 
@@ -121,17 +137,20 @@ $HOME/.local/bin/formal-gates hook decide
 ```
 
 Codex 的安装命令会附加 `--provider codex`，Claude Code 附加 `--provider claude-code`；
-两者的 owner 计量由此绑定同一启动 transcript 的解析器。既有 Claude 安装通过普通更新
-替换旧 hook 后获得该来源字段；缺 provider 的 run 仍将 owner 记为 unavailable。
+该参数用于选择对应的 hook 决策协议。
 Codex 要求阻断结果通过 JSON 的
 `decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code、Cursor 和
 DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON 决策。ZCode 使用
 嵌套的 `hookSpecificOutput`/`permissionDecision` 决策对象，允许时不输出 JSON，拒绝时
 使用文档化的退出码 2 快速阻断。
 
+启动 owner 来自当前宿主 MCP metadata；DSH 插件从真实 session 与 `sessionPersistence`
+提供转录路径。Codex/ZCode 只有 session、没有持久 transcript 时，owner 计量记为
+unavailable；其他宿主缺少的 owner 来源不补造。
+
 维护时可给同一入口加 `--record-dir <dir>`，保存原始 stdin 字节及该次决策的 provider、
 response 与退出码；记录不会重新调用 Hook。这些文件证明本地决策，不证明宿主实际阻断。
-`canary codex-hook-probe` 只保存载荷，不执行决策或捕获 workflow start owner。
+`canary codex-hook-probe` 只保存载荷，不执行决策。
 
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
@@ -152,7 +171,8 @@ QA 设计角色按已绑定身份工作；主代理编辑已确认需求/方案�
 
 安装器配置写墙拦截。Claude Code、Codex 和 Cursor 的 hook，以及 DSH 的
 `tools/pre-execute` 插件事件和 ZCode 全局 `PreToolUse`，均使用该决策入口。
-ZCode 当前运行时不读取项目级 hook 配置，项目安装只写 skill 与 `AGENTS.md` 指令。
+ZCode 当前运行时不读取项目级 hook 配置，项目安装写入 skill、`AGENTS.md` 指令与
+`.zcode/config.json` 中的 MCP 配置。
 
 生命周期由 engine 受管原生派发观察：已签发 action 与 SpawnReceipt 绑定真实身份，
 原生启动回执与完成来源经宿主适配器核验后，通过同一执行与恢复路径提交 engine

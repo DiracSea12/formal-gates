@@ -3,12 +3,16 @@ package acceptance_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	_ "formal-gates/internal/harness" // Register native adapters for trusted program Start recovery.
 	"formal-gates/internal/validate"
 )
 
@@ -23,8 +28,10 @@ import (
 // Hooks are skipped: controls and native effects cross the installed process
 // boundary; simulated host observations use the typed facade without a model.
 type installedStartProject struct {
-	binary, home, source, project, intakePath, base string
-	intake                                          facade.IntakeConfirmationReceipt
+	binary, home, source, project, base string
+	intakePosition                      int
+	preview                             facade.IntakePreview
+	intake                              facade.IntakeConfirmationReceipt
 }
 
 func newInstalledStartProject(t *testing.T) installedStartProject {
@@ -58,19 +65,21 @@ func newInstalledStartProject(t *testing.T) installedStartProject {
 		p.git(t, args...)
 	}
 	p.base = p.git(t, "rev-parse", "HEAD")
-	p.intakePath = filepath.Join(t.TempDir(), "intake.json")
 	p.prepareIntake(t, "requirements.md")
 	return p
 }
 
 func (p *installedStartProject) prepareIntake(t *testing.T, requirementPath string) {
 	t.Helper()
-	preview, err := facade.PrepareIntake(p.project, requirementPath, "design.md", nil, true)
-	if err != nil {
-		t.Fatal(err)
+	output := p.call(t, nil, "workflow", "start", "--machine", "--precheck", "--root", p.project, "--requirement", requirementPath, "--solution", "design.md")
+	var response struct {
+		facade.IntakePreview
+		Position int `json:"intake"`
 	}
-	p.intake = preview.IntakeCandidate
-	writeInstalledJSON(t, p.intakePath, p.intake)
+	if err := json.Unmarshal(output, &response); err != nil || response.Position < 1 {
+		t.Fatalf("prepare original intake: %v %s", err, output)
+	}
+	p.preview, p.intake, p.intakePosition = response.IntakePreview, response.IntakeCandidate, response.Position
 }
 
 func (p installedStartProject) git(t *testing.T, args ...string) string {
@@ -85,7 +94,7 @@ func (p installedStartProject) git(t *testing.T, args ...string) string {
 }
 
 func (p installedStartProject) command(input []byte, args ...string) *exec.Cmd {
-	if len(args) > 1 && args[0] == "workflow" && (args[1] == "drive" || args[1] == "submit") {
+	if len(args) > 1 && args[0] == "workflow" && (args[1] == "drive" || args[1] == "submit") && !slices.Contains(args, "--single-step=false") {
 		args = append(args, "--single-step")
 	}
 	cmd := exec.Command(p.binary, args...)
@@ -123,15 +132,159 @@ func (p installedStartProject) install(t *testing.T, host, scope string) {
 	}
 }
 
-func (p installedStartProject) startArgs(runID, route string) []string {
-	args := []string{"workflow", "start", "--root", p.project, "--run-id", runID, "--intake-receipt", p.intakePath}
-	if route != "" {
-		args = append(args, "--route", route)
+// confirmation simulates the host's native form reply over the installed MCP
+// process. Its observations prove protocol identity, not a human UI interaction.
+func (p installedStartProject) confirmation(t *testing.T, tool string, arguments any, check func(map[string]any), environment ...string) ([]byte, error) {
+	t.Helper()
+	cmd := p.command(nil, "workflow", "serve")
+	cmd.Env = append(cmd.Env, environment...)
+	cmd.Stdin = nil
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
 	}
-	if route == "regular" {
-		args = append(args, "--base-snapshot", p.base)
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
 	}
-	return args
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	defer cmd.Process.Kill()
+	body, exchangeErr := exchangeInstalledConfirmation(input, output, tool, arguments, check)
+	_ = input.Close()
+	waitErr := cmd.Wait()
+	if exchangeErr != nil {
+		return body, fmt.Errorf("%w; service stderr=%s", exchangeErr, &stderr)
+	}
+	if waitErr != nil {
+		return body, fmt.Errorf("%w; service stderr=%s", waitErr, &stderr)
+	}
+	return body, nil
+}
+
+func exchangeInstalledConfirmation(input io.Writer, output io.Reader, tool string, arguments any, check func(map[string]any)) ([]byte, error) {
+	encoder, decoder := json.NewEncoder(input), json.NewDecoder(output)
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}}); err != nil {
+		return nil, err
+	}
+	var initialized struct {
+		ID     int `json:"id"`
+		Result struct {
+			ServerInfo any `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := decoder.Decode(&initialized); err != nil {
+		return nil, err
+	}
+	if initialized.ID != 1 || initialized.Result.ServerInfo == nil {
+		return nil, fmt.Errorf("service initialization lost its original identity: %+v", initialized)
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		return nil, err
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": arguments}}); err != nil {
+		return nil, err
+	}
+	for {
+		var frame struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Mode    string `json:"mode"`
+				Message string `json:"message"`
+				Schema  struct {
+					Required   []string `json:"required"`
+					Properties map[string]struct {
+						Type    string `json:"type"`
+						Default any    `json:"default"`
+					} `json:"properties"`
+				} `json:"requestedSchema"`
+			} `json:"params"`
+			Error  any `json:"error"`
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+		}
+		if err := decoder.Decode(&frame); err != nil {
+			return nil, err
+		}
+		if frame.Method != "" {
+			field := frame.Params.Schema.Properties["confirmOperation"]
+			if frame.Method != "elicitation/create" || len(frame.ID) == 0 || frame.Params.Mode != "form" || !reflect.DeepEqual(frame.Params.Schema.Required, []string{"confirmOperation"}) || field.Type != "boolean" || field.Default != nil {
+				return nil, fmt.Errorf("service omitted the original explicit confirmation form: %+v", frame)
+			}
+			var original map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(frame.Params.Message, "Confirm this exact operation:\n")), &original); err != nil {
+				return nil, err
+			}
+			if check != nil {
+				check(original)
+			}
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if string(frame.ID) != "2" {
+			return nil, fmt.Errorf("response lost original tool call identity: %s", frame.ID)
+		}
+		if frame.Error != nil {
+			return nil, fmt.Errorf("%v", frame.Error)
+		}
+		var body []byte
+		for _, content := range frame.Result.Content {
+			if content.Type == "text" {
+				body = append(body, content.Text...)
+			}
+		}
+		if frame.Result.IsError {
+			return body, fmt.Errorf("%s", body)
+		}
+		return body, nil
+	}
+}
+
+func (p installedStartProject) start(t *testing.T, route string, base ...string) string {
+	t.Helper()
+	displayedID := ""
+	expectedBase := p.base
+	if route == "lightweight" {
+		expectedBase = ""
+	} else if len(base) != 0 && base[0] != "" {
+		expectedBase = base[0]
+	}
+	arguments := map[string]any{"root": p.project, "intake": p.intakePosition, "route": route, "baseSnapshot": p.base}
+	if len(base) != 0 {
+		arguments["baseSnapshot"] = base[0]
+	}
+	body, err := p.confirmation(t, "confirm_start", arguments, func(original map[string]any) {
+		var materials facade.IntakePreview
+		data := installedJSON(t, original["materials"])
+		if err := json.Unmarshal(data, &materials); err != nil || materials.Content != p.preview.Content || materials.Revision != p.preview.Revision || !reflect.DeepEqual(materials.Materials, p.preview.Materials) || !reflect.DeepEqual(materials.IntakeCandidate, p.preview.IntakeCandidate) || original["root"] != p.project || original["route"] != route || original["baseSnapshot"] != expectedBase {
+			t.Fatalf("start form changed its original source, revision, project or route: %v %s", err, data)
+		}
+		displayedID, _ = original["runId"].(string)
+		if displayedID == "" {
+			t.Fatal("start form omitted its generated run identity")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil || response.RunID == "" || response.RunID != displayedID {
+		t.Fatalf("start response changed its displayed run identity: %v %s", err, body)
+	}
+	return response.RunID
 }
 
 func (p installedStartProject) run(t *testing.T, command, runID string) facade.Run {
@@ -217,15 +370,15 @@ func readInstalledFile(t *testing.T, path string) []byte {
 func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	p.call(t, nil, p.startArgs("native-review", "regular")...)
-	request, _ := p.bindings(t, "native-review", "zcode")
+	runID := p.start(t, "regular")
+	request, _ := p.bindings(t, runID, "zcode")
 	if request.BaseSnapshot != p.base || request.Route != "regular" {
 		t.Fatalf("native request=%+v", request)
 	}
-	statePath := filepath.Join(p.project, facade.EngineNamespace, "native-review", "state.json")
+	statePath := filepath.Join(p.project, facade.EngineNamespace, runID, "state.json")
 	before := readInstalledFile(t, statePath)
 	for _, command := range []string{"show", "status", "next", "diagnose"} {
-		p.call(t, nil, "workflow", command, "--root", p.project, "--run-id", "native-review")
+		p.call(t, nil, "workflow", command, "--root", p.project, "--run-id", runID)
 	}
 	repository, err := filepath.Abs(repoRoot(t))
 	if err != nil {
@@ -236,7 +389,7 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("public queries changed the authoritative state")
 	}
-	driven := p.run(t, "drive", "native-review")
+	driven := p.run(t, "drive", runID)
 	if driven.Next.Kind != decision.KindWait || driven.Next.Wait.Reason != decision.WaitTasksInFlight || len(driven.PendingActions) == 0 || driven.IntakeReceipt == nil || driven.IntakeReceipt.IntakeDigest != request.IntakeConfirmationReceipt.Digest {
 		t.Fatalf("regular drive did not reach the external worker boundary: %+v", driven)
 	}
@@ -251,7 +404,7 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	}
 	wrong := event
 	wrong.Spawn = &protocol.SpawnReceiptPayload{ActionID: actions[0], Provider: "codex", Correlation: "declared-worker", Status: protocol.SpawnStatusSpawned}
-	opened, err := facade.Open(p.project, "native-review")
+	opened, err := facade.Open(p.project, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,19 +420,19 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	if _, _, err = opened.Submit(event); err != nil {
 		t.Fatal(err)
 	}
-	_, state := p.bindings(t, "native-review", "zcode")
+	_, state := p.bindings(t, runID, "zcode")
 	if receipt := state.SpawnReceipts[actions[0]]; receipt.Provider != "zcode" || receipt.Correlation != "declared-worker" || receipt.Status != protocol.SpawnStatusSpawned {
 		t.Fatalf("submitted receipt lost its identity: %+v", receipt)
 	}
 	// A second installed host shares the launcher. Reopening selects the run's
 	// exact record; a sibling's host never replaces its persisted binding.
 	p.install(t, "codex", "project")
-	p.call(t, nil, p.startArgs("project-review", "regular")...)
-	projectRequest, _ := p.bindings(t, "project-review", "codex")
+	projectRunID := p.start(t, "regular")
+	projectRequest, _ := p.bindings(t, projectRunID, "codex")
 	if projectRequest.InstalledTargetIdentity == request.InstalledTargetIdentity {
 		t.Fatal("global and project installations shared a record identity")
 	}
-	for _, item := range []struct{ run, provider string }{{"native-review", "zcode"}, {"project-review", "codex"}} {
+	for _, item := range []struct{ run, provider string }{{runID, "zcode"}, {projectRunID, "codex"}} {
 		p.run(t, "show", item.run)
 		p.run(t, "drive", item.run)
 		p.bindings(t, item.run, item.provider)
@@ -293,7 +446,7 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	p.install(t, "zcode", "global")
 	data := installedJSON(t, facade.ControlInput{Request: protocol.ControlAbort})
 	for _, command := range []string{"show", "drive", "submit"} {
-		output, err := p.command(data, "workflow", command, "--root", p.project, "--run-id", "native-review").CombinedOutput()
+		output, err := p.command(data, "workflow", command, "--root", p.project, "--run-id", runID).CombinedOutput()
 		if err == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL") {
 			t.Fatalf("old fence %s: err=%v output=%s", command, err, output)
 		}
@@ -305,40 +458,59 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 
 func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	p := newInstalledStartProject(t)
-	assertRejected := func(name string, args []string, want string) {
+	namespaces := func() map[string][]string {
 		t.Helper()
-		output, err := p.command(nil, args...).CombinedOutput()
-		if err == nil || !strings.Contains(string(output), want) {
-			t.Fatalf("%s: err=%v output=%s, want %s", name, err, output, want)
-		}
+		names := map[string][]string{}
 		for _, namespace := range []string{facade.EngineNamespace, ".gates/tmp"} {
-			if _, err := os.Stat(filepath.Join(p.project, namespace, name)); !os.IsNotExist(err) {
-				t.Fatalf("%s created state in %s: %v", name, namespace, err)
+			entries, err := os.ReadDir(filepath.Join(p.project, namespace))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				names[namespace] = append(names[namespace], entry.Name())
 			}
 		}
+		return names
 	}
-	assertRejected("uninstalled", p.startArgs("uninstalled", "regular"), "UNREGISTERED_INSTALL")
+	assertRejected := func(name string, args map[string]any, want string) {
+		t.Helper()
+		before := namespaces()
+		output, err := p.confirmation(t, "confirm_start", args, func(original map[string]any) { t.Fatal("invalid start reached host confirmation", original) })
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err=%v output=%s, want %s", name, err, output, want)
+		}
+		if !reflect.DeepEqual(before, namespaces()) {
+			t.Fatalf("%s created a run or state namespace", name)
+		}
+	}
+	arguments := func(route string) map[string]any {
+		return map[string]any{"root": p.project, "intake": p.intakePosition, "route": route}
+	}
+	assertRejected("uninstalled", arguments("regular"), "UNREGISTERED_INSTALL")
 	p.install(t, "zcode", "global")
-	resolvedBase := p.startArgs("resolved-base", "regular")
-	p.call(t, nil, resolvedBase[:len(resolvedBase)-2]...)
-	request, _ := p.bindings(t, "resolved-base", "zcode")
+	runID := p.start(t, "regular", "")
+	request, _ := p.bindings(t, runID, "zcode")
 	if request.BaseSnapshot != p.base {
 		t.Fatalf("program resolved base=%q want native HEAD %q", request.BaseSnapshot, p.base)
 	}
 	t.Logf("isolated home=%s project=%s resolved original native HEAD=%s", p.home, p.project, request.BaseSnapshot)
-	wrongBase := p.startArgs("wrong-base", "regular")
-	wrongBase[len(wrongBase)-1] = strings.Repeat("f", 40)
+	wrongBase := arguments("regular")
+	wrongBase["baseSnapshot"] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
-	assertRejected("missing-route", p.startArgs("missing-route", ""), "workflow start requires --route regular or lightweight")
-	assertRejected("unknown-route", p.startArgs("unknown-route", "unsupported"), "workflow start supports --route regular or lightweight")
-	for _, flag := range []string{"--split=no", "--master=parent", "--retained-overall=false", "--from-sealed-run=sealed"} {
-		name := strings.Split(strings.TrimPrefix(flag, "--"), "=")[0]
-		assertRejected(name, append(p.startArgs(name, "regular"), flag), "flag provided but not defined")
+	assertRejected("missing-route", arguments(""), "workflow start requires --route regular or lightweight")
+	assertRejected("unknown-route", arguments("unsupported"), "workflow start supports --route regular or lightweight")
+	for _, field := range []string{"split", "master", "retainedOverall", "fromSealedRun", "runId"} {
+		args := arguments("regular")
+		args[field] = "agent-authored"
+		assertRejected(field, args, "unknown field")
+	}
+	if output, err := p.command(nil, "workflow", "start", "--root", p.project, "--run-id", "agent-authored", "--intake", fmt.Sprint(p.intakePosition), "--route", "regular").CombinedOutput(); err == nil || !strings.Contains(string(output), "NATIVE_CONFIRMATION_UNAVAILABLE") {
+		t.Fatalf("agent-authored start bypassed the native channel: %v %s", err, output)
 	}
 	if err := os.WriteFile(filepath.Join(p.project, "design.md"), []byte("# Revised solution\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	assertRejected("stale-intake", p.startArgs("stale-intake", "regular"), facade.InvalidIntakeConfirmation)
+	assertRejected("stale-intake", arguments("regular"), facade.InvalidIntakeConfirmation)
 	if head := p.git(t, "rev-parse", "HEAD"); head != p.base {
 		t.Fatalf("rejected starts changed native history: %s", head)
 	}
@@ -351,22 +523,22 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(p.project, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	p.call(t, nil, append(p.startArgs("lightweight-record", "lightweight"), "--base-snapshot", "not-a-native-snapshot")...)
-	request, _ := p.bindings(t, "lightweight-record", "zcode")
+	lightweightID := p.start(t, "lightweight", "not-a-native-snapshot")
+	request, _ := p.bindings(t, lightweightID, "zcode")
 	if request.Route != "lightweight" || request.BaseSnapshot != "" {
 		t.Fatalf("lightweight acquired native semantics: %+v", request)
 	}
-	if run := p.run(t, "drive", "lightweight-record"); run.Next.Kind != decision.KindComplete || !run.Unverified {
+	if run := p.run(t, "drive", lightweightID); run.Next.Kind != decision.KindComplete || !run.Unverified {
 		t.Fatalf("lightweight completion=%+v", run)
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"add", "."}, {"commit", "-qm", "Application"}} {
 		p.git(t, args...)
 	}
 	p.base = p.git(t, "rev-parse", "HEAD")
-	p.call(t, nil, p.startArgs("native-reference", "regular")...)
-	referenceRequest, referenceState := p.bindings(t, "native-reference", "zcode")
+	referenceID := p.start(t, "regular")
+	referenceRequest, referenceState := p.bindings(t, referenceID, "zcode")
 	// Construct the durable prefix of Start's request-before-state window.
-	// Recovery removes that prefix and uses the same public Start owner.
+	// Recovery uses the trusted program Start API for that exact issued identity.
 	runID := "native-recovered"
 	dir := filepath.Join(p.project, facade.EngineNamespace, runID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -380,7 +552,18 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 		PackageDigest: partial.PackageDigest, InstalledTargetIdentity: partial.InstalledTargetIdentity,
 		Generation: partial.AdmissionGeneration, Lease: partial.AdmissionLease, Token: partial.AdmissionToken,
 	}, "definitionSource": partial.DefinitionSource, "definitionDigest": partial.DefinitionDigest})
-	p.call(t, nil, p.startArgs(runID, "regular")...)
+	admission := facade.Admission{
+		RegistryPath: partial.AdmissionRegistryPath, Target: partial.AdmissionTarget, Root: partial.AdmissionRoot, Provider: partial.Provider,
+		PackageDigest: partial.PackageDigest, InstalledTargetIdentity: partial.InstalledTargetIdentity,
+		Generation: partial.AdmissionGeneration, Lease: partial.AdmissionLease, Token: partial.AdmissionToken,
+	}
+	options := facade.StartOptions{Root: p.project, ArtifactRoot: p.project, Request: partial, Admission: &admission, Settings: referenceState.Settings}
+	if partial.RuntimeFiles != nil {
+		options.RuntimeFiles = *partial.RuntimeFiles
+	}
+	if _, _, err := facade.Start(options); err != nil {
+		t.Fatal(err)
+	}
 	recoveredRequest, recoveredState := p.bindings(t, runID, "zcode")
 	if _, err := os.Stat(dir + ".start.intent.json"); !os.IsNotExist(err) {
 		t.Fatalf("recovery left start intent: %v", err)
@@ -405,37 +588,47 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	if !reflect.DeepEqual(referenceRequest, recoveredRequest) || !reflect.DeepEqual(referenceState, recoveredState) {
 		t.Fatal("normal and recovered starts produced different request/protocol bindings")
 	}
-	// Concurrent same-id starts are serialized. The rejected invocation cannot
-	// remove the established run or alter its admitted identity.
-	args := p.startArgs("native-concurrent", "regular")
-	commands := []*exec.Cmd{p.command(nil, args...), p.command(nil, args...)}
-	var outputs [2]bytes.Buffer
-	for i, cmd := range commands {
-		cmd.Stdout, cmd.Stderr = &outputs[i], &outputs[i]
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
+	// Program callers can retry an issued identity; serialization preserves it.
+	options.Request.RunID = "native-concurrent"
+	var results [2]error
+	var workers sync.WaitGroup
+	for i := range results {
+		workers.Add(1)
+		go func(i int) { defer workers.Done(); _, _, results[i] = facade.Start(options) }(i)
 	}
+	workers.Wait()
 	successes := 0
-	for i, cmd := range commands {
-		if err := cmd.Wait(); err == nil {
+	for _, err := range results {
+		if err == nil {
 			successes++
-		} else if !strings.Contains(outputs[i].String(), "already exists") && !strings.Contains(outputs[i].String(), "LOCK_HELD") {
-			t.Fatalf("concurrent start: %v\n%s", err, outputs[i].String())
+		} else if !strings.Contains(err.Error(), "already exists") && !strings.Contains(err.Error(), "LOCK_HELD") {
+			t.Fatal("concurrent program start", err)
 		}
 	}
 	if successes != 1 {
-		t.Fatalf("concurrent start successes=%d", successes)
+		t.Fatalf("concurrent program start successes=%d", successes)
 	}
-	p.bindings(t, "native-concurrent", "zcode")
-	statePath := filepath.Join(p.project, facade.EngineNamespace, "native-concurrent", "state.json")
+	p.bindings(t, options.Request.RunID, "zcode")
+	statePath := filepath.Join(p.project, facade.EngineNamespace, options.Request.RunID, "state.json")
 	before := readInstalledFile(t, statePath)
-	if output, err := p.command(nil, args...).CombinedOutput(); err == nil || !strings.Contains(string(output), "already exists") {
-		t.Fatalf("repeated start: err=%v output=%s", err, output)
+	if _, _, err := facade.Start(options); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatal("repeated program start", err)
 	}
-	after := readInstalledFile(t, statePath)
-	if !bytes.Equal(before, after) {
-		t.Fatal("repeated start changed established state")
+	if after := readInstalledFile(t, statePath); !bytes.Equal(before, after) {
+		t.Fatal("repeated program start changed established state")
+	}
+	// Independent public starts each receive their own program-generated identity.
+	var publicIDs [2]string
+	for i := range publicIDs {
+		workers.Add(1)
+		go func(i int) { defer workers.Done(); publicIDs[i] = p.start(t, "regular") }(i)
+	}
+	workers.Wait()
+	if publicIDs[0] == "" || publicIDs[1] == "" || publicIDs[0] == publicIDs[1] {
+		t.Fatalf("public start identities=%v", publicIDs)
+	}
+	for _, id := range publicIDs {
+		p.bindings(t, id, "zcode")
 	}
 }
 
@@ -445,8 +638,7 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	runID := "delayed-submit"
-	p.call(t, nil, p.startArgs(runID, "regular")...)
+	runID := p.start(t, "regular")
 	p.run(t, "drive", runID)
 	request, _ := p.bindings(t, runID, "zcode")
 	files := func() map[string]string {
@@ -520,6 +712,6 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	if !reflect.DeepEqual(before, files()) {
 		t.Fatal("stale CLI changed owning state, intent, receipt or sidecar bytes")
 	}
-	p.call(t, nil, p.startArgs("current-installation", "regular")...)
-	p.bindings(t, "current-installation", "zcode")
+	currentID := p.start(t, "regular")
+	p.bindings(t, currentID, "zcode")
 }

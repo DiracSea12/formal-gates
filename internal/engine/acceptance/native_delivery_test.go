@@ -52,11 +52,11 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 			}
 			p.prepareIntake(t, p.intake.RequirementSource)
 			p.install(t, "codex", "global")
-			p.call(t, nil, p.startArgs("candidate", "regular")...)
-			d := &candidateDriver{p: p, t: t, mode: "none"}
+			runID := p.start(t, "regular")
+			d := &candidateDriver{p: p, t: t, mode: "none", runID: runID}
 			d.drive()
 			d.reviews()
-			_, state := p.bindings(t, "candidate", "codex")
+			_, state := p.bindings(t, d.runID, "codex")
 			if state.InitialSnapshot != head || state.BaseSnapshot != p.base {
 				t.Fatalf("startup identities: initial=%s base=%s, want %s %s", state.InitialSnapshot, state.BaseSnapshot, head, p.base)
 			}

@@ -24,7 +24,7 @@ type canaryPromotionRecovery struct {
 	final      string
 	recovered  bool
 }
-type canaryPromotionCommand struct{ Native, Root, Directory, Provider string }
+type canaryPromotionCommand struct{ Native, Root, RunID, Directory, Provider string }
 type canaryPromotionWindow struct {
 	Argv           []string                     `json:"argv"`
 	Directory      string                       `json:"directory"`
@@ -48,7 +48,7 @@ func installCanaryPromotionRecovery(c *engineCanary) *canaryPromotionRecovery {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		c.fail("promotion evidence directory: %v", err)
 	}
-	spec := canaryPromotionCommand{Native: native, Root: c.project, Directory: directory, Provider: c.vcs.Name()}
+	spec := canaryPromotionCommand{Native: native, Root: c.project, RunID: c.currentRunID(), Directory: directory, Provider: c.vcs.Name()}
 	data, _ := json.Marshal(spec)
 	path := filepath.Join(directory, "native-command.json")
 	if err := os.WriteFile(path, data, 0600); err != nil {
@@ -95,7 +95,7 @@ func TestCanaryPromotionNativeCommand(t *testing.T) {
 	}
 	var window *canaryPromotionWindow
 	if cwd == spec.Root {
-		snapshot, readErr := os.ReadFile(filepath.Join(spec.Root, ".gates", "engine", "engine-canary", "state.json"))
+		snapshot, readErr := os.ReadFile(filepath.Join(spec.Root, ".gates", "engine", spec.RunID, "state.json"))
 		if readErr == nil {
 			var envelope struct {
 				Content protocol.State `json:"content"`
@@ -185,7 +185,7 @@ func (r *canaryPromotionRecovery) recover(c *engineCanary, args []string, comman
 	if err := json.Unmarshal(data, &window); err != nil {
 		c.fail("native interruption evidence: %v", err)
 	}
-	snapshot, err := os.ReadFile(filepath.Join(c.project, ".gates", "engine", "engine-canary", "state.json"))
+	snapshot, err := os.ReadFile(filepath.Join(c.project, ".gates", "engine", c.currentRunID(), "state.json"))
 	if err != nil {
 		c.fail("original promotion snapshot: %v", err)
 	}

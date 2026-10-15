@@ -86,7 +86,7 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 			runID := strings.ReplaceAll(test.name, " ", "-")
 			args := []string{"workflow", "start", "--root", root, "--run-id", runID, "--route", "lightweight", "--intake-receipt", candidatePath, "--machine"}
 			args = append(args, test.flags...)
-			if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || stderr.Len() != 0 {
+			if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || stderr.Len() != 0 {
 				t.Fatalf("start: %d %s %s", code, &out, &stderr)
 			}
 			var run facade.Run
@@ -115,7 +115,7 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 	var out, stderr bytes.Buffer
 	streams := IO{Stdout: &out, Stderr: &stderr}
 	candidatePath := filepath.Join(t.TempDir(), "intake.json")
-	if code := Run("formal-gates", []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "requirements.md", "--save-candidate", candidatePath}, streams); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "requirements.md", "--save-candidate", candidatePath}, streams); code != 0 {
 		t.Fatal(code, stderr.String())
 	}
 	var preview facade.IntakePreview
@@ -147,7 +147,7 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 		out.Reset()
 		stderr.Reset()
 		args := []string{"workflow", "start", "--root", root, "--run-id", "selected-" + route, "--intake-receipt", candidatePath, "--route", route, "--vcs", "git", "--machine"}
-		if code := Run("formal-gates", args, streams); code != 0 {
+		if code := runWithHostConfirmation(t, args, streams); code != 0 {
 			t.Fatalf("explicit %s start: %d %s", route, code, &stderr)
 		}
 		var run facade.Run

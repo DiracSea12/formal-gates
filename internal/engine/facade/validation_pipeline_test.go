@@ -1615,7 +1615,7 @@ func verifyReviewFixture(t *testing.T, d *validationDriver, event protocol.Event
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, run, err := d.f.SubmitControl(candidate)
+	accepted, run, err := submitControlWithHost(t, d.f, candidate)
 	if err != nil || accepted.Status != "ACCEPTED" {
 		t.Fatalf("independent fixture verification: %+v %v", accepted, err)
 	}

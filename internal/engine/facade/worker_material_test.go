@@ -417,7 +417,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := reopened.SubmitControl(candidate); err != nil {
+			if _, _, err := submitControlWithHost(t, reopened, candidate); err != nil {
 				t.Fatal(err)
 			}
 			snap, err = reopened.engine.Load()

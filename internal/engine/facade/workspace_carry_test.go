@@ -58,7 +58,7 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(request); err != nil {
+			if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
 				t.Fatal(err)
 			}
 			// Replacing an ordinary gate is legal before any development dispatch.
@@ -66,7 +66,7 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(choice); err != nil || !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[3:4]) {
+			if _, d.run, err = submitControlWithHost(t, d.f, choice); err != nil || !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[3:4]) {
 				t.Fatal("queued workspace blocked confirmed route replacement", err)
 			}
 			d.reopen()
@@ -368,14 +368,14 @@ func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(request); err != nil {
+			if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
 				t.Fatal(err)
 			}
 			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(choice); err != nil {
+			if _, d.run, err = submitControlWithHost(t, d.f, choice); err != nil {
 				t.Fatal(err)
 			}
 			d.reopen()

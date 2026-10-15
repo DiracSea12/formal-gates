@@ -51,6 +51,132 @@ func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
 	}
 }
 
+func TestWorkflowConfirmationShowsOnlyTheRequestedRecoveryEvidence(t *testing.T) {
+	f, root, _ := startEngineRunForWriterTest(t)
+	run, err := f.Drive()
+	if err != nil || len(run.WorkerMaterials) != 1 {
+		t.Fatal("the original worker was not issued", err, run.WorkerMaterials)
+	}
+	var action, provider string
+	for id, material := range run.WorkerMaterials {
+		action = id
+		var issued worker.Material
+		if err := readJSONFileInto(material.Path, &issued); err != nil {
+			t.Fatal(err)
+		}
+		provider = issued.Input.Provider
+	}
+	spawn, err := protocol.NewSpawnReceiptEvent("recovery-view-spawn", action, provider, action, protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Submit(spawn); err != nil {
+		t.Fatal(err)
+	}
+	const cause = "The native invocation stopped before completing its original review."
+	failure, err := protocol.NewWorkerResultEvent("recovery-view-failure", action, provider, protocol.OutcomeRuntimeError, "original-recovery-view-evidence", "USER_ACTION_REQUIRED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure.Result.InterruptionReason = cause
+	_, run, err = f.Submit(failure)
+	if err != nil || len(run.PendingAsks) != 1 || run.PendingAsks[0].Control != protocol.ControlRecovery {
+		t.Fatal("the original interruption did not create its recovery Ask", err, run.PendingAsks)
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original protocol.RecoveryRecord
+	for _, record := range candidate.Run.RecoveryRecords {
+		if record.Action == protocol.RecoveryAsk && record.RequestID == string(candidate.Event.Decide.Request) {
+			original = record
+		}
+	}
+	if original.ActionID != action || original.AttemptID == "" || original.InterruptionReason != cause {
+		t.Fatal("the recovery lost its original execution evidence", original)
+	}
+	historical := original
+	historical.RequestID, historical.InterruptionReason = "another-request", "unrelated historical interruption"
+	nonAsk := original
+	nonAsk.Action, nonAsk.InterruptionReason = protocol.RecoveryResumeAttempt, "another recovery route"
+	candidate.Run.RecoveryRecords = append([]protocol.RecoveryRecord{historical, nonAsk}, candidate.Run.RecoveryRecords...)
+	before, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, run.RunID, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := workflowConfirmationView(candidate)
+	questions := view["run"].(map[string]any)["questions"].([]map[string]any)
+	want := map[string]any{"actionId": original.ActionID, "attemptId": original.AttemptID, "task": original.Task, "interruptionReason": cause, "detail": original.Detail}
+	if len(questions) != 1 || !reflect.DeepEqual(questions[0]["recovery"], want) {
+		t.Fatal("confirmation did not select its original recovery record", questions)
+	}
+	body, err := json.Marshal(view)
+	if err != nil || strings.Contains(string(body), historical.InterruptionReason) || strings.Contains(string(body), nonAsk.InterruptionReason) {
+		t.Fatal("confirmation included unrelated recovery history", string(body), err)
+	}
+	after, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, run.RunID, "state.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("recovery confirmation display changed authoritative state", err)
+	}
+}
+
+func TestWorkflowAbortConfirmationIncludesOnlyItsCurrentOperation(t *testing.T) {
+	f, root, _ := startEngineRunForWriterTest(t)
+	run, err := f.Drive()
+	if err != nil || len(run.WorkerMaterials) == 0 {
+		t.Fatal("the original run did not issue worker material", err)
+	}
+	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.SubmitControl(request)
+	if err != nil || len(run.PendingAsks) != 1 {
+		t.Fatal("the original abort request did not create its Ask", err, run.PendingAsks)
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: string(run.PendingAsks[0].Options[0].ID), Reason: "Stop the current workflow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Run.Settings == nil || len(candidate.Run.FlowNodes) == 0 || len(candidate.Run.ExecutionNodes) == 0 || len(candidate.Run.BusinessNodes) == 0 || len(candidate.Run.WorkerMaterials) == 0 {
+		t.Fatal("the original run omitted the unrelated projection used by this check")
+	}
+	before, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := workflowConfirmationView(candidate)
+	current := view["run"].(map[string]any)
+	questions := current["questions"].([]map[string]any)
+	if view["root"] != root || !reflect.DeepEqual(view["input"], candidate.Input) || len(current) != 5 || current["runId"] != candidate.Run.RunID || current["revision"] != candidate.Run.Revision || current["route"] != candidate.Run.Route || current["status"] != candidate.Run.Status || len(questions) != 1 || questions[0]["control"] != protocol.ControlAbort || !reflect.DeepEqual(questions[0]["options"], workflowRunView(candidate.Run)["questions"].([]map[string]any)[0]["options"]) {
+		t.Fatal("abort confirmation lost its exact operation, run or original options", view)
+	}
+	body, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{`"settings"`, `"configuration"`, `"sources"`, `"files"`, `"summaryPath"`, `"workers"`, `"workerMaterials"`, `"businessNodes"`, `"flowNodes"`, `"executionNodes"`, `"availableActions"`, `"next"`} {
+		if strings.Contains(string(body), forbidden) {
+			t.Fatal("abort confirmation exposed unrelated run details", forbidden, string(body))
+		}
+	}
+	for _, path := range candidate.Run.Settings.Files {
+		if path != "" && strings.Contains(string(body), path) {
+			t.Fatal("abort confirmation exposed a host settings path", path)
+		}
+	}
+	for _, material := range candidate.Run.WorkerMaterials {
+		if material.Path != "" && strings.Contains(string(body), material.Path) {
+			t.Fatal("abort confirmation exposed another role's material", material.Path)
+		}
+	}
+	after, err := json.Marshal(candidate)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("confirmation display changed the original saved candidate", err)
+	}
+}
+
 func TestWorkflowPublicViewKeepsMachineOutputAndSavedCandidate(t *testing.T) {
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
@@ -118,7 +244,7 @@ func TestWorkflowNodeSelectionSavesOriginalPreviewWithoutWriting(t *testing.T) {
 	var out, stderr bytes.Buffer
 	saved := filepath.Join(t.TempDir(), "node-choice.json")
 	args := []string{"workflow", "next", "--root", root, "--run-id", run.RunID, "--node", "1", "--save-candidate", saved}
-	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	body, err := os.ReadFile(saved)
@@ -126,8 +252,20 @@ func TestWorkflowNodeSelectionSavesOriginalPreviewWithoutWriting(t *testing.T) {
 	if err != nil || json.Unmarshal(body, &candidate) != nil || candidate.Continuation == nil || candidate.Continuation.To.ID != run.BusinessNodes[0].ID || candidate.Event.Request.Control != protocol.ControlContinueNode {
 		t.Fatal("selected number lost its exact program-generated preview", err)
 	}
-	if !strings.Contains(out.String(), "businessNodes") || strings.Contains(out.String(), candidate.Continuation.Digest) {
+	if strings.Contains(out.String(), "businessNodes") || strings.Contains(out.String(), candidate.Continuation.Digest) || strings.Contains(out.String(), string(candidate.Event.ID)) || strings.Contains(out.String(), `"freshnessToken"`) {
 		t.Fatal("default view did not present semantic choices", out.String())
+	}
+	var view struct {
+		Root         string `json:"root"`
+		Continuation struct {
+			From    []string                           `json:"from"`
+			To      protocol.BusinessNode              `json:"to"`
+			Work    []protocol.RequirementWorkDecision `json:"work"`
+			Effects []string                           `json:"effects"`
+		} `json:"continuation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &view); err != nil || view.Root != root || !reflect.DeepEqual(view.Continuation.From, candidate.Continuation.From) || !reflect.DeepEqual(view.Continuation.To, candidate.Continuation.To) || !reflect.DeepEqual(view.Continuation.Work, candidate.Continuation.Work) || !reflect.DeepEqual(view.Continuation.Effects, candidate.Continuation.Effects) {
+		t.Fatal("continuation display lost the actual project or effects", err, view)
 	}
 	after, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(before, after) {
@@ -224,7 +362,7 @@ func TestWorkflowConfirmationUsesPreparedAskAndPreservesPreparationErrors(t *tes
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("preparation or error display changed run state", err)
 	}
-	_, run, err := f.SubmitControl(request)
+	_, run, err := submitCLIControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +384,7 @@ func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
 	f := startAdmittedEngineRun(t, root)
 	saved := filepath.Join(t.TempDir(), "confirmation.json")
 	var out, stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--run-id", "writer-exclusive", "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"request":"ABORT"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "next", "--root", root, "--run-id", "writer-exclusive", "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"request":"ABORT"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -269,14 +407,14 @@ func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
 			}
 			out.Reset()
 			stderr.Reset()
-			if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--run-id", run.RunID, "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"ask":1,"choice":"decline","reason":"Keep the active run"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
+			if code := runWithHostConfirmation(t, []string{"workflow", "next", "--root", root, "--run-id", run.RunID, "--decision", "-", "--save-candidate", saved}, IO{Stdin: strings.NewReader(`{"ask":1,"choice":"decline","reason":"Keep the active run"}`), Stdout: &out, Stderr: &stderr}); code != 0 {
 				t.Fatal(stderr.String())
 			}
 		}
 		out.Reset()
 		stderr.Reset()
 		args := []string{"workflow", "submit", "--confirmation", saved, "--single-step"}
-		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+		if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 			t.Fatalf("saved target did not submit: %d %s", code, stderr.String())
 		}
 		accepted := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -287,7 +425,7 @@ func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
 		}
 		out.Reset()
 		stderr.Reset()
-		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || !reflect.DeepEqual(accepted, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+		if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || !reflect.DeepEqual(accepted, snapshotEngineRunTree(t, root, "writer-exclusive")) {
 			t.Fatalf("reopened replay changed the original event or run: %d %s", code, stderr.String())
 		}
 	}
@@ -391,7 +529,7 @@ func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "submit", "--confirmation", saved, "--single-step"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "submit", "--confirmation", saved, "--single-step"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	current, err = child.Show()
@@ -530,7 +668,7 @@ func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		accepted, next, err := f.SubmitControl(candidate)
+		accepted, next, err := submitCLIControlWithHost(t, f, candidate)
 		if err != nil || accepted.Status != "ACCEPTED" {
 			t.Fatal("independent original review acceptance failed", accepted, err)
 		}

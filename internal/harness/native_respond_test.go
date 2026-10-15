@@ -2,9 +2,12 @@ package harness
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -36,6 +39,81 @@ func respondCLI(t *testing.T, args ...string) (int, string) {
 	code := NativeRespond(args, &errors)
 	return code, errors.String()
 }
+
+func respondWithHost(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	var candidate nativeAnswerCandidate
+	decision := ""
+	for i, arg := range args {
+		if arg == "--decision-file" && i+1 < len(args) {
+			decision = args[i+1]
+		}
+	}
+	if body, err := os.ReadFile(decision); err == nil {
+		if err := StrictDecode(body, &candidate); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal(err)
+	}
+	expected, err := json.MarshalIndent(candidate, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, client := io.Pipe()
+	host, output := io.Pipe()
+	t.Cleanup(func() { input.Close(); client.Close(); host.Close(); output.Close() })
+	var errors, transportErrors bytes.Buffer
+	code := -1
+	done := make(chan int, 1)
+	go func() {
+		served := ServeTools(input, output, &transportErrors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
+			var identity any
+			if name != "answer" || json.Unmarshal(arguments, &identity) != nil || !valuesEqual(identity, candidate.Pending["request_id"]) {
+				return nil, fmt.Errorf("unexpected original answer call: %s %s", name, arguments)
+			}
+			code = NativeRespondWithConfirmation(args, &errors, confirm)
+			return code, nil
+		}, nil)
+		output.Close()
+		done <- served
+	}()
+	encoder, decoder := json.NewEncoder(client), json.NewDecoder(host)
+	if err := encoder.Encode(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	var initialized any
+	if err := decoder.Decode(&initialized); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Encode(map[string]any{"id": 2, "method": "tools/call", "params": map[string]any{"name": "answer", "arguments": candidate.Pending["request_id"]}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var frame map[string]any
+		if err := decoder.Decode(&frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["method"] == nil {
+			break
+		}
+		params := objectOrEmpty(frame["params"])
+		schema := objectOrEmpty(params["requestedSchema"])
+		property := objectOrEmpty(getOf(schema["properties"], "confirmOperation"))
+		if frame["method"] != "elicitation/create" || frame["id"] == nil || params["mode"] != "form" || params["message"] != "Confirm this exact operation:\n"+string(expected) || !reflect.DeepEqual(schema["required"], []any{"confirmOperation"}) || property["type"] != "boolean" || property["default"] != nil {
+			t.Fatal("confirmation differs from the original native answer", frame)
+		}
+		if err := encoder.Encode(map[string]any{"id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client.Close()
+	if served := <-done; served != 0 {
+		t.Fatal(served, transportErrors.String())
+	}
+
+	return code, errors.String()
+}
 func prepareHeldTest(t *testing.T, directory string, position int, selection nativeSelection) (nativeAnswerCandidate, error) {
 	t.Helper()
 	records, err := readNativePendings(directory)
@@ -65,7 +143,9 @@ func confirmHeldQuestion(t *testing.T, directory string, position int, selection
 	if err := writeAtomicJSON(path, candidate); err != nil {
 		t.Fatal(err)
 	}
-	return NativeRespond([]string{"--decision-file", path}, errout)
+	code, message := respondWithHost(t, "--decision-file", path)
+	errout.WriteString(message)
+	return code
 }
 func TestNativeRespondPreparesAndConfirmsOriginalAnswer(t *testing.T) {
 	run := t.TempDir()
@@ -81,14 +161,20 @@ func TestNativeRespondPreparesAndConfirmsOriginalAnswer(t *testing.T) {
 	if _, err := os.Stat(nativeAnswerPath(job)); !os.IsNotExist(err) {
 		t.Fatal("preparation delivered a vote")
 	}
-	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+	if code, errors := respondCLI(t, "--decision-file", file); code != 1 || !strings.Contains(errors, "NATIVE_CONFIRMATION_UNAVAILABLE") {
+		t.Fatal("CLI approved its own candidate", code, errors)
+	}
+	if _, err := os.Stat(nativeAnswerPath(job)); !os.IsNotExist(err) {
+		t.Fatal("unconfirmed CLI delivered an answer")
+	}
+	if code, errors := respondWithHost(t, "--decision-file", file); code != 0 {
 		t.Fatal(code, errors)
 	}
 	answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
 	if answer["request_id"] != "41" || answer["option"] != "allow-once" || answer["cancel"] != false || answer["written_at"] == nil {
 		t.Fatal(answer)
 	}
-	if code, errors := respondCLI(t, "--decision-file", file); code != 1 || !strings.Contains(errors, "previous answer") {
+	if code, errors := respondWithHost(t, "--decision-file", file); code != 1 || !strings.Contains(errors, "previous answer") {
 		t.Fatal("duplicate vote", code, errors)
 	}
 }
@@ -186,7 +272,7 @@ func TestNativeFormEnumsUseOriginalFieldAndOptionValues(t *testing.T) {
 	if code, errors := respondCLI(t, "--run", run, "--choice", "1", "--form-field", "1", "--form-choice", "2", "--save-decision", file); code != 0 {
 		t.Fatal(code, errors)
 	}
-	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+	if code, errors := respondWithHost(t, "--decision-file", file); code != 0 {
 		t.Fatal(code, errors)
 	}
 	confirmed := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))

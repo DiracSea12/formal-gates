@@ -18,7 +18,7 @@ func confirmConfiguration(t *testing.T, f *Facade, input ConfigurationInput) (Co
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := f.SubmitControl(request)
+	_, run, err := submitControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func confirmConfiguration(t *testing.T, f *Facade, input ConfigurationInput) (Co
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(candidate)
+	_, run, err = submitControlWithHost(t, f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestConfigurationControlPinsSavedSuiteDuringReviewBeforeTopology(t *testing
 	if err != nil || request.Event.Request.Configuration.Name != "工作" || request.DevelopmentPlan != nil {
 		t.Fatal("pre-topology configuration request lost its saved identity or required a plan", request.Event, err)
 	}
-	_, run, err := f.SubmitControl(request)
+	_, run, err := submitControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestConfigurationControlPinsSavedSuiteDuringReviewBeforeTopology(t *testing
 	if err != nil || !reflect.DeepEqual(candidate.Event.Decide.Review.Route.Configuration, ask.Configuration) || candidate.DevelopmentPlan != nil {
 		t.Fatal("confirmation reloaded the saved suite or fabricated an initial plan", candidate.Event, err)
 	}
-	if _, _, err := f.SubmitControl(candidate); err != nil {
+	if _, _, err := submitControlWithHost(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(root, f.runID)
@@ -189,7 +189,7 @@ func TestConfigurationEnablingSkippedReadinessWaitsForItsOriginalReview(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, run, err = f.SubmitControl(candidate); err != nil {
+		if _, run, err = submitControlWithHost(t, f, candidate); err != nil {
 			t.Fatal(err)
 		}
 	}

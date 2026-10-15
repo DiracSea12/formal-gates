@@ -41,7 +41,7 @@ func materialFindingDriver(t *testing.T, severity string) *validationDriver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(request)
+	_, d.run, err = submitControlWithHost(t, d.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func materialFindingDriver(t *testing.T, severity string) *validationDriver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(decision)
+	_, d.run, err = submitControlWithHost(t, d.f, decision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func prepareMaterialRevision(t *testing.T, d *validationDriver, document, soluti
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(freeze)
+	_, d.run, err = submitControlWithHost(t, d.f, freeze)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func prepareMaterialRevision(t *testing.T, d *validationDriver, document, soluti
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(candidate)
+	_, d.run, err = submitControlWithHost(t, d.f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestReviewFindingMaterialDeltaRetainsLatestSolutionWithoutFreshWorker(t *te
 	if err := json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
-	accepted, run, err := d.f.SubmitControl(restored)
+	accepted, run, err := submitControlWithHost(t, d.f, restored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +151,14 @@ func TestReviewFindingMaterialDeltaRetainsLatestSolutionWithoutFreshWorker(t *te
 	if len(second.ReviewDelta) != 1 || second.ReviewDelta[0].Path != "solution.md" || second.ReviewDelta[0].BaseRevision != stored.Materials[1].Revision {
 		t.Fatal("next revision used an old worker solution")
 	}
-	if _, d.run, err = d.f.SubmitControl(second); err != nil {
+	if _, d.run, err = submitControlWithHost(t, d.f, second); err != nil {
 		t.Fatal(err)
 	}
 	before, err := d.f.engine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, _, err := d.f.SubmitControl(restored)
+	replay, _, err := submitControlWithHost(t, d.f, restored)
 	if err != nil || !reflect.DeepEqual(replay, accepted) {
 		t.Fatal("late exact original confirmation lost stable acceptance", err)
 	}
@@ -175,7 +175,7 @@ func TestReviewFindingMaterialDeltaRejectsStaleConfirmationWithoutStateChange(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(request)
+	_, d.run, err = submitControlWithHost(t, d.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestReviewFindingMaterialDeltaRejectsStaleConfirmationWithoutStateChange(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = d.f.SubmitControl(confirm); err == nil {
+	if _, _, err = submitControlWithHost(t, d.f, confirm); err == nil {
 		t.Fatal("accepted obsolete confirmation token")
 	}
 	after, err := d.f.engine.Load()
@@ -198,7 +198,7 @@ func TestReviewFindingBlockingMaterialPackageUsesOriginalPublicProducer(t *testi
 	if confirm.Event.Decide.Requirement.Source != protocol.RequirementSourceReviewFindingP1 || !confirm.Event.Decide.Requirement.RedoProductReview {
 		t.Fatal("public producer lost confirmed blocking source")
 	}
-	if _, _, err := d.f.SubmitControl(confirm); err != nil {
+	if _, _, err := submitControlWithHost(t, d.f, confirm); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -210,7 +210,7 @@ func TestReviewFindingUnchangedMaterialsDoNotCreateConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := d.f.SubmitControl(confirm); err == nil {
+	if _, _, err := submitControlWithHost(t, d.f, confirm); err == nil {
 		t.Fatal("unchanged material package became a new confirmation")
 	}
 	after, err := d.f.engine.Load()
@@ -238,7 +238,7 @@ func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(request)
+	_, run, err = submitControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if len(candidate.ReviewDelta) != 1 || candidate.ReviewDelta[0].Path != "design.txt" || candidate.Intake.Revision != preview.Revision {
 		t.Fatal("ordinary material change lost its actual solution-only difference")
 	}
-	_, run, err = f.SubmitControl(candidate)
+	_, run, err = submitControlWithHost(t, f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, run, err := f.SubmitControl(confirm)
+	accepted, run, err := submitControlWithHost(t, f, confirm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if stored.Materials[0].Content != "新完整方案🙂" || stored.Materials[1].Content != preview.Content {
 		t.Fatal("ordinary latest full material lost after reopen")
 	}
-	replay, _, err := reopened.SubmitControl(confirm)
+	replay, _, err := submitControlWithHost(t, reopened, confirm)
 	if err != nil || !reflect.DeepEqual(replay, accepted) {
 		t.Fatal("ordinary exact confirmation replay changed acceptance", err)
 	}

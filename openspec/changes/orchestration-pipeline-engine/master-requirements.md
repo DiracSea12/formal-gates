@@ -65,6 +65,7 @@
 13. `AskRequest` 只承载用户拥有的决定；`OperatorRequest` 只要求主代理核实证据、分类影响或处理无法自动对账的事实，Operator 本身不能替用户授权。
 14. 所有主动控制先从带 freshness 的 `availableActions` 或受限 `REQUEST_*` 事件创建 pending Ask，再由 `submit` 完成。禁止无 request freshness 的自由 `USER_*` 写事件。
 15. `submit` 校验 request/event/action ID、当前节点、schema、source bindings 与 digest；同 ID 同 digest 幂等返回稳定 acceptance/status，不重新发出已 ISSUED SpawnRequest；同 ID 不同 digest 硬拒绝。
+    HUMAN 决定须经当前主宿主的原生真人确认；自然语言仅提出申请，模型选择或保存候选不构成批准。程序向同一宿主连接展示绑定具体操作及原材料的确认表单，真人明确选择后直接提交原对象，继续沿原 freshness 和幂等接纳路径。启动、typed 控制 Ask 与受管原生问题均遵循此合同；普通 CLI 自报确认、模型填写批准字段或确认收据、自动批准 hook、headless client 自行回答均不作为真人来源。表单无默认批准；拒绝、取消、空回答、能力缺失及取消后的迟到回答均不得执行。
 16. provider 身份、bridge 安装/可用性与 lifecycle 配对分开建模。宿主是什么就绑定什么；bridge 缺失不允许把 provider 降级为 default，provider mismatch 硬拒绝。
 
 ## 6. 用户节点、Operator 与自动分支
@@ -73,7 +74,7 @@
 
 1. 普通修改请求由插件提醒一次；复杂请求在完整需求/方案确认后、动手前再提醒一次。两次都不要求用户回应，不阻塞普通直接处理。
 2. 用户明确提出 formal-gates 时直接进入完整受理，不在完整需求/方案确认后重复询问“是否进入正式流程”。用户可随时主动取消，但引擎不得制造重复 yes/no Ask。
-3. 受理阶段逐项澄清重大需求与技术选择，并单独确认完整整合后的需求和方案。确认后如未明确模式，再选择 lightweight 或 regular；具体流程配置、开发计划和门集合仍在相应原 typed 确认节点确认。
+3. 受理阶段逐项澄清重大需求与技术选择，展示完整整合后的需求和方案及精确 revision，明确 lightweight 或 regular 后，以绑定原材料和具体启动操作的原生真人确认完成受理。具体流程配置、开发计划和门集合仍在相应原 typed 确认节点确认。
 4. `start` 后首个 drive 自动登记已确认 intake receipt/digest，不重复询问同一份需求确认。
 5. regular 不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一正式 UTF-8 Markdown 需求案，不新增草稿或人工覆盖清单；自然语言正文保留，唯一 `## 需求点` 章节以固定 `REQ → 要求/验收条件/来源` 和唯一 `AC` 结构声明全部必须实现、改变产品/流程行为或需要 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界；通过后仍由用户确认当前完整文件及 revision，后续产品审、技术审、开发和 QA 只消费该确认 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，保留在方案正文并交由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 不写该正式需求案。
 

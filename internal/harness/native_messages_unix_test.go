@@ -135,7 +135,7 @@ func TestCodexSupplementaryReceiptRecoversOriginalAcknowledgement(t *testing.T) 
 	f, ref, scenario, binary := engineNativeFixture(t, true)
 	scenario.peer.Mode = "bad_json"
 	scenario.save(t)
-	command := exec.Command(binary, "workflow", "drive", "--root", scenario.workspace, "--run-id", "native-execution", "--machine")
+	command := exec.Command(binary, "workflow", "drive", "--root", scenario.workspace, "--run-id", scenario.runID, "--machine")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("original native failure: %v %s", err, output)
 	}
@@ -160,7 +160,7 @@ func TestCodexSupplementaryReceiptRecoversOriginalAcknowledgement(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(candidate)
+	_, run, err = confirmFacadeFixtureControl(t, f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestCodexSupplementaryReceiptRecoversOriginalAcknowledgement(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(directory, "source.json")); !os.IsNotExist(err) {
 		t.Fatal("interrupted invocation fabricated a completed result")
 	}
-	f, err = facade.Open(scenario.workspace, "native-execution")
+	f, err = facade.Open(scenario.workspace, scenario.runID)
 	if err != nil {
 		t.Fatal(err)
 	}

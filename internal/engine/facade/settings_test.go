@@ -137,7 +137,7 @@ func TestNamedConfigurationsFreezeFlowExecutionAndGateSelections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(topology); err != nil {
+	if _, _, err := submitControlWithHost(t, f, topology); err != nil {
 		t.Fatal(err)
 	}
 	if requested, err := f.RequestWorkflowChoice(); err != nil || !requested {
@@ -156,7 +156,7 @@ func TestNamedConfigurationsFreezeFlowExecutionAndGateSelections(t *testing.T) {
 			t.Fatal("retired route choice remains available", retired)
 		}
 	}
-	if _, _, err := f.SubmitControl(configured); err != nil {
+	if _, _, err := submitControlWithHost(t, f, configured); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := json.Marshal(snapshot.State.Settings)
@@ -248,7 +248,7 @@ func TestChildKeepsItsParentsFrozenConfigurationAfterSavedDefaultChanges(t *test
 	if err != nil || !slices.Equal(candidate.Event.Decide.Review.Route.Selected, gates) || slices.Contains(candidate.Event.Decide.Review.Route.Gates, "blackbox") || candidate.DevelopmentPlan == nil {
 		t.Fatal("child lost inherited gate selection or its independent exact plan confirmation", candidate.Event, err)
 	}
-	if _, _, err := child.SubmitControl(candidate); err != nil {
+	if _, _, err := submitControlWithHost(t, child, candidate); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(root, child.runID)

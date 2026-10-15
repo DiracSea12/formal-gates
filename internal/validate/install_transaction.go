@@ -441,6 +441,7 @@ type outerTargetSnapshot struct {
 	Hook            outerFileSnapshot `json:"hook"`
 	HookState       outerFileSnapshot `json:"hookState"`
 	Rule            outerFileSnapshot `json:"rule"`
+	Control         outerFileSnapshot `json:"control"`
 }
 
 func installOuterJournalPath(registryPath string) string {
@@ -616,6 +617,9 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 			firstErr = err
 		}
 		if err := restoreOuterFile(target.Rule); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := restoreOuterFile(target.Control); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		if journal.Operation == "uninstall" && target.ResourceExisted && target.ResourcePath != "" {

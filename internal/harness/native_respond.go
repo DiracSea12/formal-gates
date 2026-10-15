@@ -4,6 +4,7 @@ package harness
 // saves their complete bindings before an explicit confirmation can deliver them.
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -281,7 +282,7 @@ func submitNativeAnswer(candidate nativeAnswerCandidate) error {
 
 // NativeRespondFlags shares the native argument owner with the semantic entry.
 // onPosition receives the original input or form position selected during parsing.
-func NativeRespondFlags(errout io.Writer, onPosition func(string, int)) (*flag.FlagSet, func() int) {
+func NativeRespondFlags(errout io.Writer, onPosition func(string, int), confirmation ...func(any) error) (*flag.FlagSet, func() int) {
 	flags := flag.NewFlagSet("native-respond", flag.ContinueOnError)
 	flags.SetOutput(errout)
 	run := flags.String("run", "", "original run directory")
@@ -384,7 +385,18 @@ func NativeRespondFlags(errout io.Writer, onPosition func(string, int)) (*flag.F
 				var candidate nativeAnswerCandidate
 				err = StrictDecode(body, &candidate)
 				if err == nil {
-					err = submitNativeAnswer(candidate)
+					if len(confirmation) != 1 || confirmation[0] == nil {
+						err = fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: request confirm_native through the current host's formal-gates MCP service")
+					} else if err = confirmation[0](candidate); err == nil {
+						var current []byte
+						current, err = os.ReadFile(*confirmed)
+						if err == nil && !bytes.Equal(body, current) {
+							err = fmt.Errorf("native decision candidate changed while awaiting the host")
+						}
+						if err == nil {
+							err = submitNativeAnswer(candidate)
+						}
+					}
 				}
 			}
 			if err != nil {
@@ -468,7 +480,13 @@ func NativeRespondFlags(errout io.Writer, onPosition func(string, int)) (*flag.F
 }
 
 func NativeRespond(args []string, errout io.Writer) int {
-	flags, execute := NativeRespondFlags(errout, nil)
+	return NativeRespondWithConfirmation(args, errout, nil)
+}
+
+// NativeRespondWithConfirmation delivers the original answer directly after
+// the current host accepts it; the public CLI supplies no confirmation source.
+func NativeRespondWithConfirmation(args []string, errout io.Writer, confirmation func(any) error) int {
+	flags, execute := NativeRespondFlags(errout, nil, confirmation)
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
 	}

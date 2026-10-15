@@ -161,7 +161,7 @@ func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T
 		stderr.Reset()
 		args = append([]string{"workflow"}, args...)
 		args = append(args, "--root", root)
-		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+		if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 			t.Fatal(args, stderr.String())
 		}
 	}
@@ -265,7 +265,7 @@ func TestNativePayloadSelectionBindsOriginalRequestAndTextBytes(t *testing.T) {
 		out.Reset()
 		stderr.Reset()
 		args = append([]string{"native", "respond", "--root", root}, args...)
-		return Run("formal-gates", args, IO{Stdin: strings.NewReader(input), Stdout: &out, Stderr: &stderr})
+		return runWithHostConfirmation(t, args, IO{Stdin: strings.NewReader(input), Stdout: &out, Stderr: &stderr})
 	}
 	if code := call("", "--question", "1", "--choice", "1"); code != 0 {
 		t.Fatal(stderr.String())
@@ -395,7 +395,7 @@ func TestNativeOriginalTextSelectionFollowsEachInputQuestion(t *testing.T) {
 		out.Reset()
 		stderr.Reset()
 		args = append([]string{"native", "respond", "--root", root}, args...)
-		if code := Run("formal-gates", args, IO{Stdin: strings.NewReader(input), Stdout: &out, Stderr: &stderr}); code != 0 {
+		if code := runWithHostConfirmation(t, args, IO{Stdin: strings.NewReader(input), Stdout: &out, Stderr: &stderr}); code != 0 {
 			t.Fatal(args, stderr.String())
 		}
 	}

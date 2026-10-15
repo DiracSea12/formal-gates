@@ -199,7 +199,7 @@ func TestWorkflowPendingAskStartsOriginalWorkerAndReusesOwnership(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(candidate); err != nil {
+	if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	var stored struct {
@@ -347,7 +347,21 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := f.SubmitControl(candidate); err != nil {
+				_, pending, err := submitCLIControlWithHost(t, f, candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ask := 0
+				for index, value := range pending.PendingAsks {
+					if value.Control == protocol.ControlSelectExecution {
+						ask = index + 1
+					}
+				}
+				confirmation, err := f.PrepareControl(facade.ControlInput{Ask: ask, Choice: "approve"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := submitCLIControlWithHost(t, f, confirmation); err != nil {
 					t.Fatal(err)
 				}
 				issued, _, directory, selected, err := f.WorkerExecutionRequest(ready, "")
@@ -443,7 +457,7 @@ func TestWorkflowWorkerStartHonorsActualCancellationAndRequirementBarrier(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := f.SubmitControl(candidate); err != nil {
+				if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
 					t.Fatal(err)
 				}
 				if cause == "authorized-abort" {
@@ -451,7 +465,7 @@ func TestWorkflowWorkerStartHonorsActualCancellationAndRequirementBarrier(t *tes
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, _, err := f.SubmitControl(candidate); err != nil {
+					if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
 						t.Fatal(err)
 					}
 					var stored struct {
@@ -555,7 +569,7 @@ func TestWorkflowConsumerStartsRequirementReplacementPreparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err := f.SubmitControl(request)
+	_, run, err := submitCLIControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,14 +588,14 @@ func TestWorkflowConsumerStartsRequirementReplacementPreparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(request); err != nil {
+	if _, _, err := submitCLIControlWithHost(t, f, request); err != nil {
 		t.Fatal(err)
 	}
 	confirmation, err := f.PrepareControl(facade.ControlInput{Ask: askPosition, Choice: "proceed", Reason: "Confirm the changed run binding and all original redo dispositions"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(confirmation); err != nil {
+	if _, _, err := submitCLIControlWithHost(t, f, confirmation); err != nil {
 		t.Fatal(err)
 	}
 	f, err = facade.Open(root, "consumer")
@@ -653,7 +667,7 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if accepted, _, err := child.SubmitControl(candidate); err != nil || accepted.Status != "ACCEPTED" {
+		if accepted, _, err := submitCLIControlWithHost(t, child, candidate); err != nil || accepted.Status != "ACCEPTED" {
 			t.Fatal("normal child route was not accepted", accepted, err)
 		}
 		issued, err := child.Drive()
@@ -677,7 +691,7 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(candidate); err != nil {
+	if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	processes := map[string]string{}
@@ -776,7 +790,7 @@ func workflowResumeFixture(t *testing.T) (*facade.Facade, string, facade.WorkerM
 	if err != nil {
 		t.Fatal(err)
 	}
-	if accepted, _, err := f.SubmitControl(candidate); err != nil || accepted.Status != "ACCEPTED" {
+	if accepted, _, err := submitCLIControlWithHost(t, f, candidate); err != nil || accepted.Status != "ACCEPTED" {
 		t.Fatal("original resume choice was rejected", accepted, err)
 	}
 	run, err = f.Drive()
@@ -806,7 +820,7 @@ func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(candidate); err != nil {
+	if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	var originalProcess string
@@ -907,14 +921,14 @@ func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := f.SubmitControl(request); err != nil {
+			if _, _, err := submitCLIControlWithHost(t, f, request); err != nil {
 				t.Fatal(err)
 			}
 			confirmation, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "abort", Reason: "Stop the original signed native resume"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			accepted, run, err := f.SubmitControl(confirmation)
+			accepted, run, err := submitCLIControlWithHost(t, f, confirmation)
 			if err != nil || accepted.Status != "ACCEPTED" || len(run.PendingActions) != 1 {
 				t.Fatal("control dropped its original resume before observing its native execution", accepted, run.PendingActions, err)
 			}
@@ -935,7 +949,7 @@ func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "consumer", "state.json")); !os.IsNotExist(err) {
 				t.Fatal("abort retained active state", err)
 			}
-			if replay, _, err := f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, accepted) {
+			if replay, _, err := submitCLIControlWithHost(t, f, confirmation); err != nil || !reflect.DeepEqual(replay, accepted) {
 				t.Fatal("original typed abort did not replay", replay, err)
 			}
 			receipt, executed := run.Termination.HostActionReceipts[resume.ActionID]

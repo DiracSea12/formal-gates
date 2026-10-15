@@ -72,3 +72,23 @@ func TestWorkBuddyDescriptorProvidesNativeInstallationWithoutGlobalHooks(t *test
 		t.Fatalf("native WorkBuddy install contract=%+v", descriptor)
 	}
 }
+
+func TestConversationSessionReadsNativeToolMetadata(t *testing.T) {
+	for _, test := range []struct {
+		metadata, session string
+		wantError         bool
+	}{
+		{metadata: ""},
+		{metadata: `{"com.zcode/request-context":{"session_id":"zcode-session","turn_id":"original-turn"}}`, session: "zcode-session"},
+		{metadata: `{"x-codex-turn-metadata":{"thread_id":"codex-session","turn_id":"original-turn"}}`, session: "codex-session"},
+		{metadata: `{"x-codex-turn-metadata":"{\"thread_id\":\"codex-string-session\",\"turn_id\":\"original-turn\"}"}`, session: "codex-string-session"},
+		{metadata: `{"thread_id":"codex-flat-session","threadId":"codex-flat-session"}`, session: "codex-flat-session"},
+		{metadata: `{"threadId":"codex-camel-session"}`, session: "codex-camel-session"},
+		{metadata: `{"x-codex-turn-metadata":"invalid-json"}`, wantError: true},
+	} {
+		session, err := ConversationSession([]byte(test.metadata))
+		if session != test.session || (err != nil) != test.wantError {
+			t.Fatalf("metadata %s: session=%q err=%v, want session=%q error=%v", test.metadata, session, err, test.session, test.wantError)
+		}
+	}
+}

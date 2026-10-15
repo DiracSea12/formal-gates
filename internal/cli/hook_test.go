@@ -17,24 +17,6 @@ import (
 	"testing"
 )
 
-func TestRunHookPassesOwnerProviderToStartBridge(t *testing.T) {
-	root := t.TempDir()
-	payload := fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":%q},"transcript_path":"/owner.jsonl","session_id":"owner"}`, "formal-gates workflow start --root "+fmt.Sprintf("%q", root)+" --run-id owner")
-	var out, errOut bytes.Buffer
-	code := Run("formal-gates", []string{"hook", "decide", "--provider", "codex"}, IO{Stdin: strings.NewReader(payload), Stdout: &out, Stderr: &errOut})
-	if code != 0 {
-		t.Fatalf("hook failed: %s", errOut.String())
-	}
-	data, err := os.ReadFile(filepath.Join(root, ".gates", "tmp", "owner.start-owner.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var source map[string]string
-	if err := json.Unmarshal(data, &source); err != nil || source["provider"] != "codex" || source["transcript"] != "/owner.jsonl" {
-		t.Fatalf("lost explicit owner provider: %s, %v", data, err)
-	}
-}
-
 func TestRunHookPrecheckMatchesStartCLI(t *testing.T) {
 	root := t.TempDir()
 	for _, flags := range [][]string{{"-precheck"}, {"--precheck=true"}, {"--precheck=false", "-precheck=1"}} {
@@ -52,7 +34,7 @@ func TestRunHookPrecheckMatchesStartCLI(t *testing.T) {
 			t.Fatalf("precheck CLI failed: argv=%q code=%d stdout=%q stderr=%q", argv, code, out.String(), errOut.String())
 		}
 		if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
-			t.Fatalf("read-only precheck wrote bootstrap payload: %v", err)
+			t.Fatalf("read-only precheck wrote project state: %v", err)
 		}
 	}
 }
@@ -173,19 +155,15 @@ func TestRunHookRecordsOriginalPayloadAndEmittedDecision(t *testing.T) {
 	}
 }
 
-func TestRunHookRecordingRetainsStartOwnerAndAllowNoop(t *testing.T) {
+func TestRunHookRecordingPreservesAllowedInput(t *testing.T) {
 	root, dir := t.TempDir(), t.TempDir()
-	payload := fmt.Sprintf(`{"hook_event_name":"PreToolUse","tool_name":"exec","tool_input":{"command":%q},"transcript_path":"/owner.jsonl","session_id":"owner"}`, "formal-gates workflow start --root "+fmt.Sprintf("%q", root)+" --run-id owner") + "\n"
+	payload := fmt.Sprintf(`{"hook_event_name":"PreToolUse","tool_name":"exec","tool_input":{"command":%q},"transcript_path":"/owner.jsonl","session_id":"owner"}`, "formal-gates workflow show --root "+fmt.Sprintf("%q", root)) + "\n"
 	var out, errOut bytes.Buffer
 	code := Run("formal-gates", []string{"hook", "decide", "--provider", "codex", "--record-dir", dir}, IO{
 		Stdin: strings.NewReader(payload), Stdout: &out, Stderr: &errOut,
 	})
 	if code != 0 || out.Len() != 0 {
 		t.Fatalf("allow protocol changed: %d %q %s", code, out.String(), errOut.String())
-	}
-	owner, err := os.ReadFile(filepath.Join(root, ".gates", "tmp", "owner.start-owner.json"))
-	if err != nil || string(owner) != `{"provider":"codex","session":"owner","transcript":"/owner.jsonl"}` {
-		t.Fatalf("owner capture bytes changed: %q %v", owner, err)
 	}
 	paths, _ := filepath.Glob(filepath.Join(dir, "*.decision.json"))
 	if len(paths) != 1 {
@@ -204,6 +182,6 @@ func TestRunHookRecordingRetainsStartOwnerAndAllowNoop(t *testing.T) {
 	}
 	raw, err := os.ReadFile(record.PayloadPath)
 	if err != nil || string(raw) != payload {
-		t.Fatalf("raw owner input changed: %q %v", raw, err)
+		t.Fatalf("raw input changed: %q %v", raw, err)
 	}
 }

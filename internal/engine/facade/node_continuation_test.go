@@ -44,7 +44,7 @@ func continueBusinessNode(d *validationDriver, id string) ControlCandidate {
 	if err != nil || !bytes.Equal(before, after) {
 		d.t.Fatal("node suggestion wrote state", err)
 	}
-	_, d.run, err = d.f.SubmitControl(request)
+	_, d.run, err = submitControlWithHost(d.t, d.f, request)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func continueBusinessNode(d *validationDriver, id string) ControlCandidate {
 	if err = json.Unmarshal(raw, &saved); err != nil {
 		d.t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(saved)
+	_, d.run, err = submitControlWithHost(d.t, d.f, saved)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestNodeContinuationEntersExistingReviewAndRouteOwners(t *testing.T) {
 				t.Fatal(err)
 			}
 			d.reopen()
-			_, d.run, err = d.f.SubmitControl(decision)
+			_, d.run, err = submitControlWithHost(d.t, d.f, decision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +239,7 @@ func TestNodeContinuationRepeatedChoiceRetainsAuthorizedReplacement(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(first); err != nil {
+			if _, d.run, err = submitControlWithHost(d.t, d.f, first); err != nil {
 				t.Fatal(err)
 			}
 			after, err := os.ReadFile(path)
@@ -310,7 +310,7 @@ func TestNodeContinuationSavedConfirmationRejectsStaleFreshnessWithoutWriting(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(request)
+	_, d.run, err = submitControlWithHost(d.t, d.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestNodeContinuationSavedConfirmationRejectsStaleFreshnessWithoutWriting(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(other)
+	_, d.run, err = submitControlWithHost(d.t, d.f, other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestNodeContinuationSavedConfirmationRejectsStaleFreshnessWithoutWriting(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = d.f.SubmitControl(confirmation)
+	_, _, err = submitControlWithHost(d.t, d.f, confirmation)
 	if err == nil || !strings.Contains(err.Error(), protocol.CodeStaleFreshness) {
 		t.Fatal("stale node authorization was accepted", err)
 	}
@@ -412,7 +412,7 @@ func TestNodeContinuationPreservesReviewLimitAndSingleExtraGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(confirmation)
+	_, d.run, err = submitControlWithHost(d.t, d.f, confirmation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestNodeContinuationRetainsMainlinePrefixAndRejectsOrdinaryReturnToChild(t 
 	if !request.Continuation.EnteredMainline || len(request.Continuation.To.Missing) == 0 {
 		t.Fatal("child preview missed original entered-mainline fact")
 	}
-	_, child.run, err = child.f.SubmitControl(request)
+	_, child.run, err = submitControlWithHost(t, child.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +559,7 @@ func TestNodeContinuationChildGrantRecoversThroughOriginalParentObservation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, child.run, err = child.f.SubmitControl(request)
+	_, child.run, err = submitControlWithHost(t, child.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +583,7 @@ func TestNodeContinuationChildGrantRecoversThroughOriginalParentObservation(t *t
 		t.Fatal(err)
 	}
 	child.f.store, child.f.engine = store, engine
-	if _, _, err = child.f.SubmitControl(confirmation); err == nil {
+	if _, _, err = submitControlWithHost(t, child.f, confirmation); err == nil {
 		t.Fatal("normal child commit-response loss did not interrupt parent observation")
 	}
 	parent := driverState(t, master)
@@ -644,7 +644,7 @@ func TestNodeContinuationShowsOriginalSignedIntegrationClaimBeforeChildChoice(t 
 	if len(request.Continuation.ParentClaims) == 0 || request.Continuation.To.Unavailable == "" {
 		t.Fatal("preview missed exact pending mainline input")
 	}
-	_, child.run, err = child.f.SubmitControl(request)
+	_, child.run, err = submitControlWithHost(t, child.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}

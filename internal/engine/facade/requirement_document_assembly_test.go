@@ -28,7 +28,7 @@ func TestConfirmedRequirementDocumentAssembly(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		_, d.run, e = d.f.SubmitControl(c)
+		_, d.run, e = submitControlWithHost(t, d.f, c)
 		if e != nil {
 			t.Fatal(e)
 		}

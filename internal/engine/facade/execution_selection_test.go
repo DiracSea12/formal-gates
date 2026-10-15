@@ -51,9 +51,17 @@ func selectExecution(t *testing.T, f *Facade, input ExecutionSelectionInput) (Co
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, run, err := f.SubmitControl(candidate)
-	if err != nil || accepted.Status != "ACCEPTED" || accepted.Kind != string(protocol.KindDecide) {
-		t.Fatalf("execution instruction did not accept its complete typed decision: %+v %v", accepted, err)
+	accepted, run, err := submitControlWithHost(t, f, candidate)
+	if err != nil || accepted.Status != "ACCEPTED" || accepted.Kind != string(protocol.KindRequestControl) {
+		t.Fatalf("execution request did not create its typed Ask: %+v %v", accepted, err)
+	}
+	confirmation, err := f.PrepareControl(ControlInput{Ask: askPosition(t, run, protocol.ControlSelectExecution), Choice: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, run, err = submitControlWithHost(t, f, confirmation)
+	if err != nil || accepted.Kind != string(protocol.KindDecide) {
+		t.Fatal("execution confirmation did not accept its original tuple", accepted, err)
 	}
 	return candidate, run
 }
@@ -84,7 +92,7 @@ func TestExecutionSelectionPartialChoicesAndReplay(t *testing.T) {
 		t.Fatalf("platform change did not leave omitted effort to the native model default: %+v", candidate.Event.Request.Execution)
 	}
 	acceptedState := readWorkerFile(t, statePath)
-	if _, _, err := f.SubmitControl(candidate); err != nil || !bytes.Equal(acceptedState, readWorkerFile(t, statePath)) {
+	if _, _, err := submitControlWithHost(t, f, candidate); err != nil || !bytes.Equal(acceptedState, readWorkerFile(t, statePath)) {
 		t.Fatal("original selection replay changed state", err)
 	}
 	selectExecution(t, f, ExecutionSelectionInput{Node: "product-review", Effort: "high"})
@@ -140,9 +148,17 @@ func TestExecutionSelectionResumesItsOriginalTypedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, _, err := reopened.SubmitControl(candidate)
+	accepted, pending, err := submitControlWithHost(t, reopened, candidate)
+	if err != nil || accepted.Kind != string(protocol.KindRequestControl) || accepted.RequestID != requested.RequestID {
+		t.Fatal("reopen did not preserve the original pending request", accepted, err)
+	}
+	confirmation, err := reopened.PrepareControl(ControlInput{Ask: askPosition(t, pending, protocol.ControlSelectExecution), Choice: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, _, err = submitControlWithHost(t, reopened, confirmation)
 	if err != nil || accepted.Kind != string(protocol.KindDecide) || accepted.RequestID != requested.RequestID {
-		t.Fatal("reopen did not finish the original typed instruction", accepted, err)
+		t.Fatal("reopen confirmation did not finish the original request", accepted, err)
 	}
 	state, err := reopened.engine.Load()
 	if err != nil || state.State.EffectiveExecutionChoice("development") != candidate.Event.Request.Execution.Choice {
@@ -178,7 +194,7 @@ func TestExecutionSelectionRejectsUnavailableChoicesBeforeWrite(t *testing.T) {
 	platform.options = func(root, runtimeTarget string, native map[string]string, model string) (host.SelectionCatalogue, error) {
 		return host.SelectionCatalogue{Models: []host.ModelOption{{Value: "opaque-fast", Label: "Fast", Efforts: []string{"low"}}}}, nil
 	}
-	if _, _, err := f.SubmitControl(candidate); err == nil || !strings.Contains(err.Error(), "opaque-fast") {
+	if _, _, err := submitControlWithHost(t, f, candidate); err == nil || !strings.Contains(err.Error(), "opaque-fast") {
 		t.Fatal("update did not recheck original native options before writing", err)
 	}
 	if !bytes.Equal(original, readWorkerFile(t, statePath)) {
@@ -195,7 +211,7 @@ func TestExecutionSelectionRejectsUnavailableChoicesBeforeWrite(t *testing.T) {
 		platform.options = func(root, runtimeTarget string, native map[string]string, model string) (host.SelectionCatalogue, error) {
 			return host.SelectionCatalogue{Models: []host.ModelOption{{Value: "opaque-careful", Label: "Careful", Efforts: test.efforts}}}, nil
 		}
-		if _, _, err := f.SubmitControl(candidate); err == nil || !strings.Contains(err.Error(), test.problem) || !bytes.Equal(original, readWorkerFile(t, statePath)) {
+		if _, _, err := submitControlWithHost(t, f, candidate); err == nil || !strings.Contains(err.Error(), test.problem) || !bytes.Equal(original, readWorkerFile(t, statePath)) {
 			t.Fatal("effort report did not preserve its native meaning and existing state", test.problem, err)
 		}
 	}

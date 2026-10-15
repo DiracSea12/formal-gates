@@ -1,23 +1,12 @@
 package validate
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-
-	"formal-gates/internal/host"
 )
 
-// The hook captures the initiating conversation into a one-use bootstrap payload.
-// The current engine State owns its persisted transcript/session identity; this
-// module compares the write caller against that authority.
-
-// ownerSidecarPath 返回 hook 写、Start 读的桥接文件路径。
-func ownerSidecarPath(root, runID string) string {
-	return filepath.Join(root, ".gates", "tmp", runID+".start-owner.json")
-}
+// The engine State owns persisted transcript/session identity. This module
+// compares write callers against that authority.
 
 // hookOwnerIdentity 从 PreToolUse 载荷提取发起对话身份：transcript_path 为主键、
 // session_id 兜底（Cursor 的 conversation_id 并入 session 兜底）。
@@ -43,104 +32,6 @@ func hookPayloadField(value any, names ...string) string {
 		}
 	}
 	return ""
-}
-
-// isWorkflowStartCommand checks the actual executable and start operation.
-// The final precheck value follows the CLI boolean flag semantics.
-func isWorkflowStartCommand(tokens []string) bool {
-	if len(tokens) < 3 || !isFormalGatesExecutableToken(tokens[0]) ||
-		!strings.EqualFold(tokens[1], "workflow") || !strings.EqualFold(tokens[2], "start") {
-		return false
-	}
-	precheck := false
-	for _, token := range tokens[3:] {
-		for _, name := range []string{"-precheck", "--precheck"} {
-			if token == name {
-				precheck = true
-			} else if value, ok := switchInlineValue(token, token, name); ok {
-				parsed, err := strconv.ParseBool(value)
-				if err != nil {
-					return false
-				}
-				precheck = parsed
-			}
-		}
-	}
-	return !precheck
-}
-
-// captureStartOwner 在「主线程 + workflow start」时把发起对话身份写入 sidecar。任何一步
-// 不满足（非主线程、非 start、无身份字段、相对根目录无宿主 cwd）都静默跳过。
-func captureStartOwner(decoded any, providers ...string) {
-	if hookAgentType(decoded) != "" {
-		return
-	}
-	for _, segment := range commandSegments(hookCommand(decoded)) {
-		tokens := executableCommandTokens(segment)
-		if !isWorkflowStartCommand(tokens) {
-			continue
-		}
-		runID := strings.TrimSpace(workflowStartSwitchValue(tokens, "run-id", ""))
-		if runID == "" {
-			continue
-		}
-		transcript, session := hookOwnerIdentity(decoded)
-		if transcript == "" && session == "" {
-			continue
-		}
-		root := workflowStartSwitchValue(tokens, "root", ".")
-		if !filepath.IsAbs(root) {
-			cwd := hookPayloadCwd(decoded)
-			if cwd == "" {
-				continue
-			}
-			root = filepath.Join(cwd, root)
-		}
-		path := ownerSidecarPath(root, runID)
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			continue
-		}
-		// Use the host already selected by hook decide --provider. Transcript file
-		// names and session IDs do not establish which parser owns the format.
-		provider := ""
-		if len(providers) > 0 && strings.TrimSpace(providers[0]) != "" {
-			if descriptor, err := host.Lookup(providers[0]); err == nil {
-				provider = descriptor.ID
-			}
-		}
-		data, _ := json.Marshal(map[string]string{"transcript": transcript, "session": session, "provider": provider})
-		_ = os.WriteFile(path, data, 0o600)
-	}
-}
-
-// workflowStartSwitchValue uses the last supplied value, as the CLI flag parser does.
-func workflowStartSwitchValue(tokens []string, name, fallback string) string {
-	values := switchValues(tokens, name)
-	if len(values) > 0 {
-		return values[len(values)-1]
-	}
-	return fallback
-}
-
-// ConsumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
-// start），返回其中记录的 owner 身份。无 sidecar 或解析失败返回空串。
-func ConsumeStartOwner(root, runID string) (transcript, session, provider string) {
-	path := ownerSidecarPath(root, strings.TrimSpace(runID))
-	data, err := os.ReadFile(path)
-	_ = os.Remove(path)
-	if err != nil {
-		return "", "", ""
-	}
-	var probe struct {
-		Transcript string `json:"transcript"`
-		Session    string `json:"session"`
-		Provider   string `json:"provider"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", "", ""
-	}
-	return strings.TrimSpace(probe.Transcript), strings.TrimSpace(probe.Session), strings.TrimSpace(probe.Provider)
 }
 
 // readRunOwner obtains scope identity from the current engine authority.

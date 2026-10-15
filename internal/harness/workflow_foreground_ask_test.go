@@ -36,7 +36,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -69,7 +69,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(candidate); err != nil {
+	if _, _, err := confirmFacadeFixtureControl(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -96,12 +96,15 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	if got, err := NativeStartEvidence("codex", directory); err != nil || got != identity {
 		t.Fatal("foreground return changed original acknowledgement", got, err)
 	}
-	path := filepath.Join(t.TempDir(), "confirmation.json")
-	if err := writeAtomicJSON(path, candidate); err != nil {
-		t.Fatal(err)
+	body, err := confirmInstalledFixtureControl(t, binary, fRoot(ref), s.runID, candidate)
+	var confirmed struct {
+		Run struct {
+			Next struct {
+				Kind string `json:"kind"`
+			} `json:"next"`
+		} `json:"run"`
 	}
-	body, err := exec.Command(binary, "workflow", "submit", "--confirmation", path, "--machine").CombinedOutput()
-	if err != nil || json.Unmarshal(body, &response) != nil || response.Boundary != "ASK" || !NativeJobAlive(directory) || nativePeerTurns(t, s) != 1 {
+	if err != nil || json.Unmarshal(body, &confirmed) != nil || confirmed.Run.Next.Kind != "ASK" || !NativeJobAlive(directory) || nativePeerTurns(t, s) != 1 {
 		t.Fatalf("control consumer did not release its local lease at Ask: %v %s", err, body)
 	}
 	run, err := f.Show()
@@ -112,7 +115,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	if err != nil || len(run.PendingAsks) != 1 {
 		t.Fatal("original Ask unavailable", err)
 	}
-	if _, _, err := f.SubmitControl(decline); err != nil {
+	if _, _, err := confirmFacadeFixtureControl(t, f, decline); err != nil {
 		t.Fatal(err)
 	}
 	release()
@@ -132,7 +135,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 		t.Fatal("unconsumed original result changed identity or turn count")
 	}
 	for range 2 {
-		body, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine").CombinedOutput()
+		body, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil || json.Unmarshal(body, &response) != nil || response.Boundary != "ASK" || len(response.Blocked) != 0 {
 			t.Fatalf("original source collection: %v %s", err, body)
 		}
@@ -143,7 +146,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	var state struct {
 		Content protocol.State `json:"content"`
 	}
-	body, err = os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, "native-execution", "state.json"))
+	body, err = os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, s.runID, "state.json"))
 	if err != nil || json.Unmarshal(body, &state) != nil {
 		t.Fatal("original accepted state unavailable", err)
 	}

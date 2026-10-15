@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -1009,9 +1010,96 @@ func NativeTools(directory string, in io.Reader, out, errout io.Writer, services
 }
 
 func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(string, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
+	return ServeTools(in, out, errout, schemas, func(name string, arguments json.RawMessage, _ func(any) error, _ json.RawMessage) (any, error) {
+		return call(name, arguments)
+	}, record)
+}
+
+// ServeTools keeps confirmation on the requesting host's MCP connection. The
+// callback may execute only after that connection accepts the displayed object.
+func ServeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
 	var err error
 	decoder := json.NewDecoder(in)
 	encoder := json.NewEncoder(out)
+	formSupported := false
+	confirmationID := 0
+	var activeCallID json.RawMessage
+	confirm := func(value any) error {
+		if !formSupported {
+			return fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: the current host does not support MCP form elicitation")
+		}
+		body, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return err
+		}
+		confirmationID++
+		id := "formal-gates-confirmation-" + strconv.Itoa(confirmationID)
+		if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": map[string]any{
+			"mode": "form", "message": "Confirm this exact operation:\n" + string(body),
+			"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"confirmOperation": map[string]any{"type": "boolean", "title": "确认并执行所展示的具体操作"}}, "required": []string{"confirmOperation"}, "additionalProperties": false},
+		}}); err != nil {
+			return err
+		}
+		for {
+			var response struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+				Params struct {
+					RequestID json.RawMessage `json:"requestId"`
+				} `json:"params"`
+				Result struct {
+					Action  string `json:"action"`
+					Content struct {
+						ConfirmOperation bool `json:"confirmOperation"`
+					} `json:"content"`
+				} `json:"result"`
+				Error json.RawMessage `json:"error"`
+			}
+			if err := decoder.Decode(&response); err != nil {
+				return fmt.Errorf("native confirmation was not received: %w", err)
+			}
+			if response.Method == "notifications/cancelled" {
+				var cancelled string
+				if bytes.Equal(response.Params.RequestID, activeCallID) || json.Unmarshal(response.Params.RequestID, &cancelled) == nil && cancelled == id {
+					return fmt.Errorf("native confirmation cancelled; operation was not executed")
+				}
+				continue
+			}
+			if len(response.ID) == 0 {
+				continue
+			}
+			if response.Method == "ping" {
+				if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": response.ID, "result": map[string]any{}}); err != nil {
+					return err
+				}
+				continue
+			}
+			if response.Method != "" {
+				if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": response.ID, "error": map[string]any{"code": -32000, "message": "a native confirmation is pending; retry this request after it finishes"}}); err != nil {
+					return err
+				}
+				continue
+			}
+			var actual string
+			if json.Unmarshal(response.ID, &actual) != nil || actual != id {
+				return fmt.Errorf("native confirmation response belongs to another request")
+			}
+			if len(response.Error) != 0 {
+				return fmt.Errorf("native confirmation failed: %s", response.Error)
+			}
+			switch response.Result.Action {
+			case "accept":
+				if !response.Result.Content.ConfirmOperation {
+					return fmt.Errorf("native confirmation did not explicitly confirm the displayed operation")
+				}
+				return nil
+			case "decline", "cancel":
+				return fmt.Errorf("native confirmation %s; operation was not executed", response.Result.Action)
+			default:
+				return fmt.Errorf("native confirmation has no supported host action")
+			}
+		}
+	}
 	for {
 		var rawRequest json.RawMessage
 		var request struct {
@@ -1037,9 +1125,16 @@ func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call f
 		switch request.Method {
 		case "initialize":
 			var params struct {
-				ProtocolVersion string `json:"protocolVersion"`
+				ProtocolVersion string                     `json:"protocolVersion"`
+				Capabilities    map[string]json.RawMessage `json:"capabilities"`
 			}
 			err = json.Unmarshal(request.Params, &params)
+			var elicitation map[string]json.RawMessage
+			formSupported = false
+			if raw, ok := params.Capabilities["elicitation"]; ok && json.Unmarshal(raw, &elicitation) == nil && elicitation != nil {
+				_, formSupported = elicitation["form"]
+				formSupported = formSupported || len(elicitation) == 0
+			}
 			result = map[string]any{"protocolVersion": params.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "formal-gates", "version": "1"}}
 		case "tools/list":
 			result = map[string]any{"tools": schemas}
@@ -1047,11 +1142,14 @@ func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call f
 			var params struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
+				Metadata  json.RawMessage `json:"_meta"`
 			}
 			err = json.Unmarshal(request.Params, &params)
 			var value any
 			if err == nil {
-				value, err = call(params.Name, params.Arguments)
+				activeCallID = request.ID
+				value, err = call(params.Name, params.Arguments, confirm, params.Metadata)
+				activeCallID = nil
 			}
 			text := ""
 			if err != nil {
@@ -1063,10 +1161,14 @@ func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call f
 			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": err != nil}
 			err = nil
-			if err := record(rawRequest, result); err != nil {
-				fmt.Fprintln(errout, err)
-				return 1
+			if record != nil {
+				if err := record(rawRequest, result); err != nil {
+					fmt.Fprintln(errout, err)
+					return 1
+				}
 			}
+		case "ping":
+			result = map[string]any{}
 		default:
 			err = fmt.Errorf("unsupported MCP method %s", request.Method)
 		}

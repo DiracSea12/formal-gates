@@ -45,7 +45,15 @@ func TestPreviewDelegatesAndReadsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Result, production) || got.RequestAllowance != 2 || got.RetryAllowance != 4 || got.TotalAllowance != 6 || got.RuntimeIntegration != protocol.GuardRuntimeIntegration {
+	productionJSON, err := json.Marshal(production)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected guard.Result
+	if err := json.Unmarshal(productionJSON, &expected); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Result, expected) || got.RequestAllowance != 2 || got.RetryAllowance != 4 || got.TotalAllowance != 6 || got.RuntimeIntegration != protocol.GuardRuntimeIntegration {
 		t.Fatalf("output %+v", got)
 	}
 	after, err := os.ReadDir(dir)

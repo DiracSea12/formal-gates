@@ -20,7 +20,7 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 	saved := filepath.Join(t.TempDir(), "confirmation.json")
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
 	var out, stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--request", "ABORT", "--save-candidate", saved}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "next", "--root", root, "--request", "ABORT", "--save-candidate", saved}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	var request facade.ControlCandidate
@@ -37,7 +37,7 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 		t.Fatal("semantic display requires the caller to reconstruct event identity", out.String())
 	}
 	out.Reset()
-	if code := Run("formal-gates", []string{"workflow", "submit", "--confirmation", saved, "--single-step"}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "submit", "--confirmation", saved, "--single-step"}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	run, err := f.Show()
@@ -51,7 +51,7 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 	before = snapshotEngineRunTree(t, root, run.RunID)
 	reason := "保留当前任务 \"原文\"\n最后两格  "
 	out.Reset()
-	if code := Run("formal-gates", []string{"workflow", "next", "--root", root, "--ask", "1", "--choice", "decline", "--reason", reason, "--save-candidate", saved}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "next", "--root", root, "--ask", "1", "--choice", "decline", "--reason", reason, "--save-candidate", saved}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	var decision facade.ControlCandidate
@@ -68,7 +68,7 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 	}
 	args := []string{"workflow", "submit", "--confirmation", saved, "--single-step"}
 	out.Reset()
-	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	run, err = f.Show()
@@ -77,7 +77,7 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 	}
 	accepted := snapshotEngineRunTree(t, root, run.RunID)
 	out.Reset()
-	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || !reflect.DeepEqual(accepted, snapshotEngineRunTree(t, root, run.RunID)) {
+	if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || !reflect.DeepEqual(accepted, snapshotEngineRunTree(t, root, run.RunID)) {
 		t.Fatal("saved original confirmation replay changed authority", code, stderr.String())
 	}
 	t.Logf("next flags -> saved request %s -> original Ask %s -> saved decision %s -> confirmation -> unchanged replay", request.Event.ID, ask.RequestID, decision.Event.ID)
@@ -236,7 +236,7 @@ func TestNativeSemanticArgumentsUseOriginalParserBeforeSelection(t *testing.T) {
 		t.Helper()
 		out.Reset()
 		stderr.Reset()
-		code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr})
+		code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr})
 		t.Logf("argv=%q exit=%d stdout=%q stderr=%q", args, code, out.String(), stderr.String())
 		return code
 	}

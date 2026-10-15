@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { createInterface } from 'node:readline'
 
 export const name = 'formal-gates-dsh'
 
@@ -112,6 +113,119 @@ function stableLauncherPath() {
   return join(home, '.local', 'bin', 'formal-gates')
 }
 
+function controlClient(binary, dshHome, ask) {
+  const child = spawn(binary, ['workflow', 'serve'], {
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: dshHome ? { ...process.env, DSH_HOME: dshHome } : process.env,
+  })
+  const pending = new Map()
+  let counter = 0
+  let closed = false
+  let stderr = ''
+  const fail = (error) => {
+    for (const waiter of pending.values()) waiter.reject(error)
+    pending.clear()
+  }
+  const send = (message) => {
+    if (!closed) child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
+  }
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', fail)
+  child.on('close', () => fail(new Error(stderr || 'formal-gates control service closed')))
+  child.stdin.on('error', fail)
+  const lines = createInterface({ input: child.stdout })
+  lines.on('line', async (line) => {
+    try {
+      const message = JSON.parse(line)
+      if (message.method) {
+        if (message.method !== 'elicitation/create' || !ask) {
+          if (message.id !== undefined) send({ id: message.id, error: { code: -32601, message: 'No user interaction handler' } })
+          return
+        }
+        try {
+          const response = await ask(message.params)
+          send({ id: message.id, result: response })
+        } catch (error) {
+          send({ id: message.id, error: { code: -32603, message: String(error) } })
+        }
+        return
+      }
+      const waiter = pending.get(message.id)
+      if (!waiter) return
+      pending.delete(message.id)
+      if (message.error) waiter.reject(new Error(message.error.message))
+      else waiter.resolve(message.result)
+    } catch (error) {
+      fail(error)
+    }
+  })
+  return {
+    request(method, params) {
+      return new Promise((resolve, reject) => {
+        const id = ++counter
+        pending.set(id, { resolve, reject })
+        send({ id, method, params })
+      })
+    },
+    notify(method) { send({ method }) },
+    close() { closed = true; fail(new Error('formal-gates confirmation cancelled')); lines.close(); child.kill() },
+  }
+}
+
+async function initializeControl(client) {
+  await client.request('initialize', { protocolVersion: '2025-06-18', capabilities: { elicitation: { form: {} } }, clientInfo: { name: 'formal-gates-dsh', version: '1' } })
+  client.notify('notifications/initialized')
+}
+
+async function registerControlTools(ctx, binary, dshHome, provider) {
+  const discovery = controlClient(binary, dshHome)
+  let tools
+  try {
+    await initializeControl(discovery)
+    tools = (await discovery.request('tools/list', {})).tools
+  } finally {
+    discovery.close()
+  }
+  for (const tool of tools) {
+    const remove = ctx.tools.register({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema,
+      output: { schema: { type: 'object' }, render(_args, result) { return result.content } },
+      async execute(args, exec) {
+        if (!exec.agent) throw new Error('formal-gates confirmation requires the live root agent')
+        const client = controlClient(binary, dshHome, async (request) => {
+          if (request.mode !== 'form') throw new Error('formal-gates confirmation requires a native form')
+          const answer = await ctx.userQuestions.ask({
+            agent: exec.agent,
+            signal: exec.signal,
+            questions: [{ id: 'confirmation', header: 'formal-gates', question: request.message, options: [{ label: '确认并执行' }, { label: '取消' }] }],
+          })
+          const choice = answer.answers.find((item) => item.id === 'confirmation')
+          return choice?.selected.length === 1 && choice.selected[0] === '确认并执行'
+            ? { action: 'accept', content: { confirmOperation: true } }
+            : { action: 'decline' }
+        })
+        const cancel = () => client.close()
+        exec.signal?.addEventListener('abort', cancel, { once: true })
+        try {
+          exec.signal?.throwIfAborted()
+          await initializeControl(client)
+          const root = headerOf(exec.agent)?.cwd
+          const identity = payloadFor(ctx, exec)
+          const owner = { session: identity.session_id, transcript: identity.transcript_path, provider: identity.transcript_path ? provider : '' }
+          return await client.request('tools/call', { name: tool.name, arguments: { ...(root ? { root } : {}), ...args }, _meta: { 'formal-gates/owner': owner } })
+        } finally {
+          exec.signal?.removeEventListener('abort', cancel)
+          client.close()
+        }
+      },
+    })
+    ctx.effect(() => remove)
+  }
+}
+
 export function apply(ctx, config = {}) {
   const warn = typeof ctx.logger && typeof ctx.logger.warn === 'function'
     ? (message) => ctx.logger.warn(message)
@@ -135,5 +249,5 @@ export function apply(ctx, config = {}) {
     }
     return next()
   })
-
+  ctx.inject(['tools', 'userQuestions'], (control) => registerControlTools(control, binary, dshHome, config.provider))
 }

@@ -108,7 +108,7 @@ func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(candidate)
+			_, d.run, err = submitControlWithHost(t, d.f, candidate)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -230,7 +230,7 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 	if strings.TrimPrefix(pkg.CandidateRevision, "sha256:") != strings.TrimPrefix(before.Review.RequirementRevision, "sha256:") || pkg.RedoProductReview || pkg.RedoTopology || !pkg.RedoStartReadiness || !pkg.RedoRoute {
 		t.Fatalf("replan scope=%+v", pkg)
 	}
-	if _, _, err := d.f.SubmitControl(candidate); err != nil {
+	if _, _, err := submitControlWithHost(t, d.f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	d.drive()
@@ -238,7 +238,7 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(confirm)
+	_, d.run, err = submitControlWithHost(t, d.f, confirm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, d.run, err = d.f.SubmitControl(candidate)
+				_, d.run, err = submitControlWithHost(t, d.f, candidate)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -316,7 +316,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			if pkg.RedoProductReview || pkg.RedoStartReadiness || pkg.RedoTopology || !pkg.RedoRoute {
 				t.Fatal("replan enabled an unselected review or changed topology", pkg)
 			}
-			_, d.run, err = d.f.SubmitControl(request)
+			_, d.run, err = submitControlWithHost(t, d.f, request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -324,7 +324,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			acceptance, confirmed, err := d.f.SubmitControl(confirmation)
+			acceptance, confirmed, err := submitControlWithHost(t, d.f, confirmation)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,7 +333,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			if d.run.Review.RequirementRevision != before.Review.RequirementRevision || !reflect.DeepEqual(d.run.Review.Topology, before.Review.Topology) || !reflect.DeepEqual(d.run.Review.Actions, before.Review.Actions) || !reflect.DeepEqual(d.run.FlowSelection, before.FlowSelection) || d.run.Review.RouteConfirmed || d.run.Review.ReadinessProposal != nil {
 				t.Fatal("replan changed source/selection/reviews/topology or reused an expired proposal")
 			}
-			if replay, replayed, err := d.f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, acceptance) || !reflect.DeepEqual(replayed, d.run) {
+			if replay, replayed, err := submitControlWithHost(t, d.f, confirmation); err != nil || !reflect.DeepEqual(replay, acceptance) || !reflect.DeepEqual(replayed, d.run) {
 				t.Fatal("replayed confirmation changed its original facts", err)
 			}
 			d.drive()

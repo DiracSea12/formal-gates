@@ -94,7 +94,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 				group.Add(1)
 				go func() {
 					defer group.Done()
-					cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate")
+					cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID)
 					cmd.Env = append(cmd.Env, d.env...)
 					if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "REVISION_CONFLICT") && !strings.Contains(string(out), "LOCK_HELD") {
 						t.Errorf("concurrent resource drive: %v %s", err, out)
@@ -104,7 +104,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			group.Wait()
 			d.drive()
 			commandAction, commandInput := find(command.ID)
-			_, state := d.p.bindings(t, "candidate", "codex")
+			_, state := d.p.bindings(t, d.runID, "codex")
 			if !reflect.DeepEqual(commandInput.Development.Dependencies[spike.ID], state.Results[spikeAction]) || !reflect.DeepEqual(state.Results[spikeAction].Validation, &conclusion) {
 				t.Fatal("successor lost the original spike action, binding or full conclusion")
 			}
@@ -157,7 +157,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			d.develop(extensionAction, extensionInput, "extension.go")
 			d.drive()
 			d.untilValidation()
-			_, state = d.p.bindings(t, "candidate", "codex")
+			_, state = d.p.bindings(t, d.runID, "codex")
 			if string(readInstalledFile(t, filepath.Join(spikeInput.Workspace.Path, "probe.go"))) != probe {
 				t.Fatal("candidate preparation altered the retained probe source")
 			}
@@ -241,7 +241,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 				group.Add(1)
 				go func() {
 					defer group.Done()
-					cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", "candidate")
+					cmd := d.p.command(nil, "workflow", "drive", "--root", d.p.project, "--run-id", d.runID)
 					cmd.Env = append(cmd.Env, d.env...)
 					if out, err := cmd.CombinedOutput(); err != nil {
 						t.Errorf("parallel checkpoint drive: %v %s", err, out)
@@ -294,12 +294,12 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 
 func (d *candidateDriver) abort() {
 	d.t.Helper()
-	_, original := d.p.bindings(d.t, "candidate", "codex")
+	_, original := d.p.bindings(d.t, d.runID, "codex")
 	// Unsigned workers are never presumed stopped; the transport reports the
 	// observable fact that no agent was started before the user cancels.
 	for id := range d.run.PendingActions {
 		if _, spawned := original.SpawnReceipts[id]; spawned {
-			observed, err := lifecycle.VerifyDispatch(d.p.project, "candidate", id)
+			observed, err := lifecycle.VerifyDispatch(d.p.project, d.runID, id)
 			if err != nil || !observed.StartObserved || !observed.StopObserved {
 				d.t.Fatalf("spawned worker has no original start/stop evidence: %+v %v", observed, err)
 			}
@@ -324,7 +324,7 @@ func (d *candidateDriver) abort() {
 
 func (d *candidateDriver) showTerminal() {
 	d.t.Helper()
-	shown := d.p.run(d.t, "show", "candidate")
+	shown := d.p.run(d.t, "show", d.runID)
 	if shown.Status != d.run.Status || shown.Revision != d.run.Revision || !reflect.DeepEqual(shown.Termination, d.run.Termination) {
 		d.t.Fatal("terminal show changed the completed run identity or evidence")
 	}
@@ -402,7 +402,7 @@ func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
 				t.Fatalf("native prefix was not interrupted: %v", err)
 			}
 			trace := string(readInstalledFile(t, d.breakLog))
-			_, state := d.p.bindings(t, "candidate", "codex")
+			_, state := d.p.bindings(t, d.runID, "codex")
 			if len(state.PendingHostActions) == 0 {
 				t.Fatal("interruption lost its original native intent")
 			}
@@ -428,10 +428,10 @@ func TestInstalledUnknownIncompleteWorkspaceRemainsObserved(t *testing.T) {
 	d.breakNative("workspace")
 	d.reviews()
 	before := string(readInstalledFile(t, d.breakLog))
-	statePath := filepath.Join(d.p.project, facade.EngineNamespace, "candidate", "state.json")
+	statePath := filepath.Join(d.p.project, facade.EngineNamespace, d.runID, "state.json")
 	stateBytes := readInstalledFile(t, statePath)
 	revision := d.run.Revision
-	_, state := d.p.bindings(t, "candidate", "codex")
+	_, state := d.p.bindings(t, d.runID, "codex")
 	intent, ok := state.PendingHostActions[d.unknownAction]
 	if !ok {
 		t.Fatal("unknown original responsibility is missing")
@@ -439,7 +439,7 @@ func TestInstalledUnknownIncompleteWorkspaceRemainsObserved(t *testing.T) {
 	for n := 0; n < 2; n++ {
 		d.drive()
 	}
-	_, state = d.p.bindings(t, "candidate", "codex")
+	_, state = d.p.bindings(t, d.runID, "codex")
 	if d.run.Revision != revision || !reflect.DeepEqual(stateBytes, readInstalledFile(t, statePath)) {
 		t.Fatal("UNKNOWN observation changed its durable state")
 	}
@@ -463,7 +463,7 @@ func TestInstalledAbortWithdrawsIncompleteUnknownWorkspace(t *testing.T) {
 	d.unknownReceipt = true
 	d.breakNative("workspace")
 	d.reviews()
-	_, state := d.p.bindings(t, "candidate", "codex")
+	_, state := d.p.bindings(t, d.runID, "codex")
 	intent, pending := state.PendingHostActions[d.unknownAction]
 	unknown := state.HostActionReceipts[d.unknownAction]
 	if !pending || unknown.Status != protocol.HostActionStatusUnknown || len(state.HostActionFailures[d.unknownAction]) != 0 {
@@ -562,18 +562,18 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 				return strings.Join([]string{d.p.git(t, "rev-parse", "HEAD"), d.p.git(t, "rev-parse", "HEAD^{tree}"), d.p.git(t, "write-tree"), d.p.git(t, "status", "--porcelain=v1")}, "\n")
 			}
 			targetBefore := target()
-			_, originalState := d.p.bindings(t, "candidate", "codex")
+			_, originalState := d.p.bindings(t, d.runID, "codex")
 			promotion := originalState.CandidatePromotion
 			if promotion == nil || promotion.Final != d.p.git(t, "rev-parse", "HEAD") || promotion.FinalDigest != d.p.git(t, "rev-parse", "HEAD^{tree}") {
 				t.Fatal("cleanup has no exact completed promotion")
 			}
 			promotionReceipt := originalState.HostActionReceipts[promotion.OperationID]
 			before := d.p.git(t, "worktree", "list", "--porcelain") + d.p.git(t, "for-each-ref", "--format=%(refname) %(objectname)", "refs/formal-gates/")
-			statePath := filepath.Join(d.p.project, facade.EngineNamespace, "candidate", "state.json")
+			statePath := filepath.Join(d.p.project, facade.EngineNamespace, d.runID, "state.json")
 			stateBytes := readInstalledFile(t, statePath)
 			var next decision.NextResult
 			for _, command := range []string{"next", "show", "status"} {
-				out := d.call(nil, "workflow", command, "--machine", "--root", d.p.project, "--run-id", "candidate")
+				out := d.call(nil, "workflow", command, "--machine", "--root", d.p.project, "--run-id", d.runID)
 				if command == "next" {
 					if err := json.Unmarshal(out, &next); err != nil {
 						t.Fatal(err)
@@ -597,16 +597,16 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 				if after := d.p.git(t, "worktree", "list", "--porcelain") + d.p.git(t, "for-each-ref", "--format=%(refname) %(objectname)", "refs/formal-gates/"); after != before {
 					t.Fatal("requirement barrier wrote native cleanup")
 				}
-				_, held := d.p.bindings(t, "candidate", "codex")
+				_, held := d.p.bindings(t, d.runID, "codex")
 				if !reflect.DeepEqual(held.CandidatePromotion, promotion) || !reflect.DeepEqual(held.HostActionReceipts[promotion.OperationID], promotionReceipt) || !reflect.DeepEqual(held.NativeResources, originalState.NativeResources) || !reflect.DeepEqual(held.PendingHostActions, originalState.PendingHostActions) {
 					t.Fatal("requirement barrier changed original native facts")
 				}
 			}
 			decide := d.control(facade.ControlInput{Ask: d.ask(control), Choice: "abort", Reason: "Resolve the active cleanup control"})
 			original := d.accepted[len(d.accepted)-1].receipt
-			_, decided := d.p.bindings(t, "candidate", "codex")
-			repeated, _ := d.replay(decide)
-			_, replayed := d.p.bindings(t, "candidate", "codex")
+			_, decided := d.p.bindings(t, d.runID, "codex")
+			repeated, _ := d.replayAccepted(decide)
+			_, replayed := d.p.bindings(t, d.runID, "codex")
 			if !reflect.DeepEqual(repeated, original) || !reflect.DeepEqual(decided, replayed) {
 				t.Fatal("duplicate control decision changed its acceptance or durable state")
 			}

@@ -103,9 +103,6 @@ func Hook(payload []byte, providers ...string) (HookDecision, error) {
 		return HookDecision{}, err
 	}
 
-	// 捕获 workflow start 的发起对话身份（owner 作用域），先于一切判定。
-	captureStartOwner(decoded, providers...)
-
 	// 主代理/审查类代理写阻断：对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
 	// git commit、写文件 Bash）在活动正式 run 下按调用者身份阻断；formal-gates CLI 命令
 	// 与只读命令放行，交由既有命令级校验继续处理。

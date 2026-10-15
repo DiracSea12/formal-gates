@@ -51,8 +51,8 @@ func TestZcodeQuestionDecisionPreservesOriginalValues(t *testing.T) {
 			if _, err := os.Stat(nativeAnswerPath(directory)); !os.IsNotExist(err) {
 				t.Fatal("unconfirmed candidate delivered an answer")
 			}
-			if code := NativeRespond([]string{"--decision-file", decision}, &errout); code != 0 {
-				t.Fatalf("confirm exit=%d: %s", code, &errout)
+			if code, message := respondWithHost(t, "--decision-file", decision); code != 0 {
+				t.Fatalf("confirm exit=%d: %s", code, message)
 			}
 			answer, err := readJSONFile(nativeAnswerPath(directory))
 			if err != nil || getOf(answer, "request_id") != "question" {

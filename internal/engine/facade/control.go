@@ -526,7 +526,7 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 
 // SubmitControl binds the saved original event to its project and run, then
 // delegates replay, freshness and authorization to the original Submit owner.
-func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance, Run, error) {
+func (f *Facade) SubmitControl(candidate ControlCandidate, confirmation ...func(any) error) (protocol.Acceptance, Run, error) {
 	if candidate.Run.RunID != f.runID || !vcs.SamePath(candidate.Root, f.root) {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("confirmation belongs to a different project or run")
 	}
@@ -600,7 +600,15 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation differs from its complete original difference")
 		}
 	}
-	return f.submit(candidate.Event, candidate.Event.Request != nil && candidate.Event.Request.Control == protocol.ControlSelectExecution)
+	if !recorded && candidate.Event.Decide != nil {
+		if len(confirmation) != 1 || confirmation[0] == nil {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: a user decision requires confirmation from the current host")
+		}
+		if err := confirmation[0](candidate); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+	}
+	return f.submit(candidate.Event)
 }
 
 func correctionFromRun(run Run, input ControlInput) (review.CorrectionInput, error) {

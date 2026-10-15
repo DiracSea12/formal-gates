@@ -107,7 +107,7 @@ func runCLI(t *testing.T, args ...string) string {
 	t.Helper()
 	clearHostEnv(t)
 	var stdout, stderr bytes.Buffer
-	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("%s failed: %s", strings.Join(args, " "), stderr.String())
 	}
 	return stdout.String()

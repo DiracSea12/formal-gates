@@ -8,11 +8,10 @@ package validate
 // state exists. They use fresh fixtures independent of the shared helpers.
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/facade"
-	"formal-gates/internal/engine/protocol"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,18 +111,14 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 	record := admissionRecordByID(t, document, report.Targets[0].RegistryRecordID)
 	packageRoot := record.Target
 	launcherCopyExecutable(t, launcher, candidate)
-	raw, err := os.ReadFile(filepath.Join(root, "requirements.md"))
+	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision := fmt.Sprintf("%x", sha256.Sum256(raw))
-	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	receiptBytes, err := json.Marshal(receipt)
+	intake, err := facade.SaveOriginalCandidate(filepath.Join(root, ".gates", "tmp", "intake"), preview.IntakeCandidate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiptPath := filepath.Join(t.TempDir(), "confirmation.json")
-	launcherWriteFile(t, receiptPath, string(receiptBytes), 0600)
 	baseEnvironment := map[string]string{
 		"HOME": home, "USERPROFILE": home,
 		"LAUNCHER_DISCOVERY_ROOT":    root,
@@ -143,16 +138,35 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 			for key, value := range baseEnvironment {
 				environment[key] = value
 			}
-			runID := "launcher-" + invocation.mode
-			command := exec.Command(invocation.executable, "workflow", "start", "--root", root, "--run-id", runID, "--route", "lightweight", "--intake-receipt", receiptPath)
+			before, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(invocation.executable, "workflow", "serve")
 			command.Dir = root
 			command.Env = launcherChildEnvironment(environment)
-			output, childErr := command.CombinedOutput()
+			displayedID := ""
+			output, childErr := launcherConfirmStart(t, command, root, intake, func(original map[string]any) {
+				materials, ok := original["materials"].(map[string]any)
+				if invocation.mode != "stable" || !ok || original["root"] != root || original["route"] != "lightweight" || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
+					t.Fatalf("confirmation changed the original launcher operation: %v", original)
+				}
+				displayedID, _ = original["runId"].(string)
+				if displayedID == "" {
+					t.Fatal("confirmation omitted the generated run identity")
+				}
+			})
 			if invocation.mode == "stable" {
 				if childErr != nil {
 					t.Fatalf("stable launcher failed: %v\n%s", childErr, output)
 				}
-				persisted := admissionCurrentRequest(t, root, runID)
+				var started struct {
+					RunID string `json:"runId"`
+				}
+				if err := json.Unmarshal(output, &started); err != nil || started.RunID == "" || started.RunID != displayedID {
+					t.Fatalf("start response changed displayed run identity: %s %v", output, err)
+				}
+				persisted := admissionCurrentRequest(t, root, started.RunID)
 				if persisted.AdmissionRegistryPath != registry || persisted.InstalledTargetIdentity != record.ID || persisted.AdmissionRoot != root || persisted.AdmissionTarget != packageRoot || persisted.AdmissionGeneration != record.Generation || persisted.AdmissionLease != record.Lease || persisted.AdmissionToken != record.Token {
 					t.Fatalf("persisted exact launcher binding lost: %+v", persisted)
 				}
@@ -164,10 +178,121 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 				if childErr == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL:") || !strings.Contains(string(output), "no active registry record matches candidate package root") {
 					t.Fatalf("candidate not fenced by actual launcher owner: %v\n%s", childErr, output)
 				}
-				if _, err := os.Stat(admissionEngineDirectory(root, runID)); !os.IsNotExist(err) {
-					t.Fatalf("candidate rejection created authority: %v", err)
+				after, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
+				if err != nil || strings.Join(before, "\n") != strings.Join(after, "\n") || displayedID != "" {
+					t.Fatalf("candidate rejection created authority or requested approval: before=%v after=%v err=%v", before, after, err)
 				}
 			}
 		})
+	}
+}
+
+// launcherConfirmStart simulates the host's duplex form response, not a human UI.
+func launcherConfirmStart(t *testing.T, command *exec.Cmd, root string, intake int, check func(map[string]any)) ([]byte, error) {
+	t.Helper()
+	input, err := command.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	defer command.Process.Kill()
+	defer command.Wait()
+	defer input.Close()
+	encode, decode := json.NewEncoder(input), json.NewDecoder(output)
+	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}}); err != nil {
+		return nil, err
+	}
+	var initialized struct {
+		ID     int `json:"id"`
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := decode.Decode(&initialized); err != nil {
+		return nil, err
+	}
+	if initialized.ID != 1 || initialized.Result.ServerInfo.Name != "formal-gates" {
+		return nil, fmt.Errorf("unexpected initialize response: %+v", initialized)
+	}
+	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		return nil, err
+	}
+	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "confirm_start", "arguments": map[string]any{"root": root, "intake": intake, "route": "lightweight"}}}); err != nil {
+		return nil, err
+	}
+	confirmed := false
+	for {
+		var frame struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Mode    string `json:"mode"`
+				Message string `json:"message"`
+				Schema  struct {
+					Required             []string `json:"required"`
+					AdditionalProperties bool     `json:"additionalProperties"`
+					Properties           map[string]struct {
+						Type    string          `json:"type"`
+						Default json.RawMessage `json:"default"`
+					} `json:"properties"`
+				} `json:"requestedSchema"`
+			} `json:"params"`
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+			Error json.RawMessage `json:"error"`
+		}
+		if err := decode.Decode(&frame); err != nil {
+			return nil, fmt.Errorf("%w; stderr=%s", err, stderr.String())
+		}
+		if frame.Method == "elicitation/create" {
+			field := frame.Params.Schema.Properties["confirmOperation"]
+			if confirmed || frame.Params.Mode != "form" || strings.Join(frame.Params.Schema.Required, ",") != "confirmOperation" || frame.Params.Schema.AdditionalProperties || field.Type != "boolean" || len(field.Default) != 0 {
+				return nil, fmt.Errorf("service omitted the explicit unselected confirmation form")
+			}
+			var original map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(frame.Params.Message, "Confirm this exact operation:\n")), &original); err != nil {
+				return nil, err
+			}
+			check(original)
+			confirmed = true
+			if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if string(frame.ID) != "2" || frame.Method != "" {
+			return nil, fmt.Errorf("response belongs to another request: %s %s", frame.ID, frame.Method)
+		}
+		var body []byte
+		for _, content := range frame.Result.Content {
+			if content.Type == "text" {
+				body = append(body, []byte(content.Text)...)
+			}
+		}
+		if len(frame.Error) != 0 {
+			return body, fmt.Errorf("%s", frame.Error)
+		}
+		if frame.Result.IsError {
+			return body, fmt.Errorf("%s", body)
+		}
+		if !confirmed {
+			return body, fmt.Errorf("service started without its original form")
+		}
+		return body, nil
 	}
 }

@@ -32,7 +32,7 @@ func TestControlWaitsForCurrentResumedExecution(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(confirmation)
+			_, d.run, err = submitControlWithHost(t, d.f, confirmation)
 			if err != nil {
 				t.Fatal(err)
 			}

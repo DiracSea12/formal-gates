@@ -505,7 +505,7 @@ type codexScenario struct {
 	request                            map[string]any
 	peer                               codexPeerInput
 	directory, workspace, home, config string
-	runtime                            string
+	runtime, runID                     string
 }
 
 func newCodexScenario(t *testing.T) *codexScenario {
@@ -794,7 +794,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 		t.Logf("original CLI result: %s", out)
 		return out
 	}
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 	originalDirectory := s.directory
 	originalSource, err := NativeJobSource("codex", originalDirectory)
 	if err != nil || nativePeerTurns(t, s) != 1 {
@@ -848,7 +848,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, updated, err := f.SubmitControl(candidate)
+		_, updated, err := confirmFacadeFixtureControl(t, f, candidate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -901,7 +901,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	s.peer.Replies = []any{map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(read)}}, "success": true}}
 	s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The original resumed read finished; this peer now needs an operator decision"}).(map[string]any)
 	s.save(t)
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 	continued, err := NativeJobSource("codex", directory)
 	if err != nil || continued["identity"] != originalSource["identity"] || valuesEqual(continued["native_turn"], originalSource["native_turn"]) || nativePeerTurns(t, s) != 2 {
 		stderr, _ := os.ReadFile(filepath.Join(directory, "host.stderr"))
@@ -915,7 +915,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	}
 	run = confirm(facade.ControlInput{Request: protocol.ControlAbort})
 	run = confirm(facade.ControlInput{Ask: position(run, protocol.ControlAbort), Choice: "abort"})
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 	run, err = f.Show()
 	if err != nil {
 		t.Fatal(err)

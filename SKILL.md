@@ -16,9 +16,10 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 新对话检查：主代理执行 `workflow diagnose` 读取程序枚举工作区 `.gates/engine/*/state.json` 与 `.gates/tmp/*/state.json` 的原诊断报告，判断其是否对应当前用户会话。发现无法对应当前用户会话的残留状态时，告知报告中的原文件路径、run 状态及可能影响写入，并说明若需走 formal-gates 流程可直接提出。由用户决定推进完成、通过当前 typed Ask 授权的 reset/abort 及 engine 清理结束或删除对应状态文件；不得自行处置，也不得把残留状态解释为用户已启动正式流程。
 
-用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做确定性结构预检，通过后展示该文件全文与精确 revision，再单独请求并等待用户明确确认。确认后才以 typed intake receipt 启动开发 run。确认前不选择路线或派发后续子代理。修订时更新同一文件并重新预检、展示和确认。
+用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做确定性结构预检，通过后展示该文件全文与精确 revision。自然语言只提出申请；调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run。模型不能填写批准值、制作确认收据或用 CLI 自报确认。确认前不派发后续子代理。修订时更新同一文件并重新预检、展示和原生确认。
 
-确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确启动路线时先取得用户对 lightweight 或 regular 的选择；regular 在拆分决定之后确认所选门与精确开发计划，每个 child 独立决定；启动冻结所选命名流程配置。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
+确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。启动申请未明确路线时先取得用户对 lightweight 或 regular 的选择；regular 在拆分决定之后确认所选门与精确开发计划，每个 child 独立决定；启动冻结所选命名流程配置。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
+当前 typed Ask 的候选通过主宿主 confirm_control 原生确认，受管原生问题通过 confirm_native 原生确认；同一宿主连接把真人响应直接送入引擎。没有真人交互能力时明确不可执行，不以模型回包、自动批准 hook 或 NativeRespond 代替。
 <formal-gates:host-instructions:end>
 
 正式文件包含完整目标、边界、方案、需求块、验收条目与来源。通过 requirement 入口输入新语义，程序构造固定章节与编号并保留未修改的原文及已有 ID。
@@ -27,10 +28,10 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 formal-gates workflow start --precheck --document <原文档序号>
 ```
 
-在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认并明确启动路线后使用 `start --route <用户已选择的 regular|lightweight> --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
+在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，明确启动路线后调用主宿主 `confirm_start`，传入 `intake` 原序号与 `route`，由原生弹窗确认完整启动操作。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
 
 主流程节点选择由用户拥有：`start --nodes` 展示原序号，启动时只按用户明确决定提交
-`--disable-node <原序号>`，或以 `start --configuration <名称或原序号>` 选择本次配置。未执行的职责不得宣称已通过。
+`confirm_start.disabledNodes`，或以 `confirm_start.configuration` 选择本次配置。未执行的职责不得宣称已通过。
 运行中以 `submit --configuration <名称或原序号>` 或 `--flow-node <节点> --enabled true|false` 请求更改本次配置，
 QA 组选取使用 `--qa-mode`；同一请求可带执行组与 tuple。展示程序钉住的配置、候选门和影响预览，等待原 Ask 确认。
 保存默认的变化不自动传播；启用过去或跳过的职责后，可按原 `--node` 继续。
@@ -39,7 +40,7 @@ QA 组选取使用 `--qa-mode`；同一请求可带执行组与 tuple。展示�
 
 ## 活动任务
 
-`workflow drive` 消费原签发职责；主代理不另建任务、补排步骤或手工恢复。遇用户决定时，核实并展示程序当前候选与原因，只提交语义选择和必要理由；程序在语义准备时保存完整确认载荷并公布 `confirmationCandidate` 序号，确认后用 `submit --confirmation-candidate <原序号>` 提交；唯一载荷可用 `submit --confirm`。选择方式见[公共控制入口](references/formal-flow.md#启动与-run-控制)。
+`workflow drive` 消费原签发职责；主代理不另建任务、补排步骤或手工恢复。遇用户决定时，核实并展示程序当前候选与原因，只提交语义选择和必要理由；程序在语义准备时保存完整确认载荷并公布 `confirmationCandidate` 序号，调用主宿主 `confirm_control`，传入 `candidate` 原序号，真人在原生表单确认后由程序直接提交原对象。普通 CLI 的确认参数不能代替真人响应。选择方式见[公共控制入口](references/formal-flow.md#启动与-run-控制)。
 
 程序为每个开发 Batch 派发全新的零上下文代理，批内连续和恢复沿用原身份，开发会话不跨批复用。批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。
 

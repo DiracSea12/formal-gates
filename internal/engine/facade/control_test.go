@@ -1,8 +1,10 @@
 package facade
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,8 +14,90 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/harness"
 	"formal-gates/internal/prompts"
 )
+
+// Control fixtures exercise the production MCP confirmation callback with an
+// explicit simulated host response. They do not count as native UI validation.
+func submitControlWithHost(t *testing.T, f *Facade, candidate ControlCandidate) (protocol.Acceptance, Run, error) {
+	t.Helper()
+	input, inputWriter := io.Pipe()
+	output, outputWriter := io.Pipe()
+	t.Cleanup(func() { input.Close(); inputWriter.Close(); output.Close(); outputWriter.Close() })
+	var accepted protocol.Acceptance
+	var run Run
+	var submissionErr error
+	var errors bytes.Buffer
+	done := make(chan int, 1)
+	_, recorded, _ := f.recordedEvent(candidate.Event)
+	go func() {
+		code := harness.ServeTools(input, outputWriter, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
+			var identity protocol.EventID
+			if name != "control" || json.Unmarshal(arguments, &identity) != nil || identity != candidate.Event.ID {
+				return nil, fmt.Errorf("unexpected original control call %s %s", name, arguments)
+			}
+			accepted, run, submissionErr = f.SubmitControl(candidate, confirm)
+			return accepted, submissionErr
+		}, nil)
+		outputWriter.Close()
+		done <- code
+	}()
+	encoder := json.NewEncoder(inputWriter)
+	decoder := json.NewDecoder(output)
+	if err := encoder.Encode(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	var initialized any
+	if err := decoder.Decode(&initialized); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Encode(map[string]any{"id": 2, "method": "tools/call", "params": map[string]any{"name": "control", "arguments": candidate.Event.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	elicited := 0
+	for {
+		var frame struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Mode    string `json:"mode"`
+				Message string `json:"message"`
+				Schema  struct {
+					Properties map[string]map[string]any `json:"properties"`
+					Required   []string                  `json:"required"`
+				} `json:"requestedSchema"`
+			} `json:"params"`
+		}
+		if err := decoder.Decode(&frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Method == "" {
+			break
+		}
+		expected, err := json.MarshalIndent(candidate, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		property := frame.Params.Schema.Properties["confirmOperation"]
+		if frame.Method != "elicitation/create" || frame.Params.Mode != "form" || frame.Params.Message != "Confirm this exact operation:\n"+string(expected) || property["type"] != "boolean" || property["default"] != nil || !reflect.DeepEqual(frame.Params.Schema.Required, []string{"confirmOperation"}) {
+			t.Fatalf("confirmation differs from its original candidate: %+v", frame)
+		}
+		elicited++
+		if err := encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inputWriter.Close()
+	if code := <-done; code != 0 {
+		t.Fatal(code, errors.String())
+	}
+	if (recorded || candidate.Event.Decide == nil) && elicited != 0 || !recorded && candidate.Event.Decide != nil && submissionErr == nil && elicited != 1 {
+		t.Fatal("confirmation did not follow the original event ledger", recorded, elicited, submissionErr)
+	}
+
+	return accepted, run, submissionErr
+}
 
 func askPosition(t *testing.T, run Run, control protocol.ControlKind) int {
 	t.Helper()
@@ -65,12 +149,12 @@ func TestControlCandidateUsesOriginalAskAndPreservesTwoStages(t *testing.T) {
 	if err = json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
-	accepted, updated, err := d.f.SubmitControl(restored)
+	accepted, updated, err := submitControlWithHost(t, d.f, restored)
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.run = updated
-	replay, _, err := d.f.SubmitControl(restored)
+	replay, _, err := submitControlWithHost(t, d.f, restored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +236,7 @@ func TestRequirementControlBindsOriginalWorkAndCurrentDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, updated, err := d.f.SubmitControl(confirm)
+	accepted, updated, err := submitControlWithHost(t, d.f, confirm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +252,7 @@ func TestRequirementControlBindsOriginalWorkAndCurrentDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, _, err := reopened.SubmitControl(confirm)
+	replay, _, err := submitControlWithHost(t, reopened, confirm)
 	if err != nil || !reflect.DeepEqual(accepted, replay) {
 		t.Fatal("original confirmation replay changed acceptance", err)
 	}
@@ -195,7 +279,7 @@ func TestControlCandidateRejectsAnotherProjectOrRunWithoutWriting(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := d.f.SubmitControl(wrong); err == nil {
+		if _, _, err := submitControlWithHost(t, d.f, wrong); err == nil {
 			t.Fatalf("accepted another %s candidate", boundary)
 		}
 		after, err := d.f.engine.Load()
@@ -213,7 +297,7 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(freeze)
+			_, d.run, err = submitControlWithHost(t, d.f, freeze)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -237,7 +321,7 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(update)
+			_, d.run, err = submitControlWithHost(t, d.f, update)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -253,7 +337,7 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 				if err := os.WriteFile(path, append(original, '\n', '\n'), 0600); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := d.f.SubmitControl(confirmed); err == nil {
+				if _, _, err := submitControlWithHost(t, d.f, confirmed); err == nil {
 					t.Fatal("confirmation accepted source bytes changed after the preview")
 				}
 				after, err := d.f.engine.Load()
@@ -278,14 +362,14 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 				t.Fatal(err)
 			}
 			d.f.store, d.f.engine = store, engine
-			if _, _, err := d.f.SubmitControl(confirmed); err == nil {
+			if _, _, err := submitControlWithHost(t, d.f, confirmed); err == nil {
 				t.Fatal("original commit failure did not surface")
 			}
 			reopened, err := Open(d.f.root, d.f.runID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			accepted, _, err := reopened.SubmitControl(confirmed)
+			accepted, _, err := submitControlWithHost(t, reopened, confirmed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,7 +380,7 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 			if _, err := after.State.Events[string(confirmed.Event.ID)].Replay(confirmed.Event); err != nil {
 				t.Fatal(err)
 			}
-			replay, _, err := reopened.SubmitControl(confirmed)
+			replay, _, err := submitControlWithHost(t, reopened, confirmed)
 			if err != nil || !reflect.DeepEqual(accepted, replay) {
 				t.Fatal("same original confirmation was recorded twice", err)
 			}
@@ -329,7 +413,7 @@ func TestRouteControlUsesOfferedCatalogAndOriginalPlan(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(route.Selected, want) {
 				t.Fatal("selected gate position did not resolve its original offered identity")
 			}
-			if _, _, err := d.f.SubmitControl(candidate); err != nil {
+			if _, _, err := submitControlWithHost(t, d.f, candidate); err != nil {
 				t.Fatal("program route did not reach original typed acceptance", err)
 			}
 		})
@@ -370,7 +454,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, d.run, err = d.f.SubmitControl(initial); err != nil {
+	if _, d.run, err = submitControlWithHost(t, d.f, initial); err != nil {
 		t.Fatal(err)
 	}
 	if offered, err := d.f.RequestWorkflowChoice(); err != nil || offered {
@@ -387,7 +471,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	if !reflect.DeepEqual(before, driverState(t, d)) || request.Event.Decide != nil || !reflect.DeepEqual(request.Event.Request.RouteGates, catalog) || !reflect.DeepEqual(request.Event.Request.Options, automatic.Options) {
 		t.Fatal("active request wrote state or changed the shared catalog/options")
 	}
-	requested, run, err := d.f.SubmitControl(request)
+	requested, run, err := submitControlWithHost(t, d.f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +488,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	if err := json.Unmarshal(body, &saved); err != nil {
 		t.Fatal(err)
 	}
-	accepted, run, err := d.f.SubmitControl(saved)
+	accepted, run, err := submitControlWithHost(t, d.f, saved)
 	if err != nil || !reflect.DeepEqual(run.Review.SelectedGates, catalog[2:4]) || saved.DevelopmentPlan == nil || saved.Event.Decide.Request != protocol.RequestID(request.Event.ID) {
 		t.Fatal("reselection did not bind the original Ask and current plan", err)
 	}
@@ -423,7 +507,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 		candidate ControlCandidate
 		accepted  protocol.Acceptance
 	}{{request, requested}, {saved, accepted}} {
-		got, _, err := reopened.SubmitControl(replay.candidate)
+		got, _, err := submitControlWithHost(t, reopened, replay.candidate)
 		if err != nil || !reflect.DeepEqual(got, replay.accepted) {
 			t.Fatal("original route control replay changed acceptance", err)
 		}
@@ -450,14 +534,14 @@ func TestRouteRequestAppliesConfirmedGateChangesDuringDevelopment(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, d.run, err = d.f.SubmitControl(request); err != nil {
+		if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
 			t.Fatal(err)
 		}
 		choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, d.run, err = d.f.SubmitControl(choice); err != nil {
+		if _, d.run, err = submitControlWithHost(t, d.f, choice); err != nil {
 			t.Fatal("confirmed route change was not accepted", gates, err)
 		}
 		want, err := selectStrings(catalog, gates, "gate")
@@ -499,14 +583,14 @@ func TestRouteRequestUsesChildCatalogAndKeepsTopologyOwnedMergeDuties(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, child.run, err = child.f.SubmitControl(choice); err != nil {
+	if _, child.run, err = submitControlWithHost(t, child.f, choice); err != nil {
 		t.Fatal(err)
 	}
 	request, err := child.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
 	if err != nil || !reflect.DeepEqual(request.Event.Request.RouteGates, initial.RouteGates) || !reflect.DeepEqual(request.Event.Request.Options, initial.Options) {
 		t.Fatal("child active request differs from its automatic catalog/options", err)
 	}
-	if _, _, err := child.f.SubmitControl(request); err != nil {
+	if _, _, err := submitControlWithHost(t, child.f, request); err != nil {
 		t.Fatal("child active request was rejected", err)
 	}
 }

@@ -412,6 +412,7 @@ type startIntent struct {
 }
 
 type StartOptions struct {
+	Confirm       func(any) error
 	Configuration string
 	Settings      *settings.Effective
 	Root          string
@@ -705,6 +706,14 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	} else if req.Provider != DefaultProvider {
 		frozen, err = settings.Freeze(req.Provider, frozen)
 		if err != nil {
+			return nil, Run{}, err
+		}
+	}
+	if options.Confirm != nil {
+		if err := options.Confirm(map[string]any{"root": root, "runId": req.RunID, "route": req.Route, "vcs": req.VCS, "baseSnapshot": req.BaseSnapshot, "flowSelection": req.FlowSelection, "configuration": frozen.Configuration, "materials": initialMaterials}); err != nil {
+			return nil, Run{}, err
+		}
+		if err := validateArtifactBindings(options.ArtifactRoot, req.IntakeConfirmationReceipt); err != nil {
 			return nil, Run{}, err
 		}
 	}
@@ -1392,14 +1401,14 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 // Submit serializes new typed events with native execution. Exact accepted
 // replay stays read-only; waiting callers consult the current ledger again.
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
-	return f.submit(event, false)
+	return f.submit(event)
 }
 
-func (f *Facade) submit(event protocol.Event, selectExecution bool) (protocol.Acceptance, Run, error) {
+func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
-	accepted, recorded, err := f.recordedSubmission(event, selectExecution)
+	accepted, recorded, err := f.recordedEvent(event)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1412,7 +1421,7 @@ func (f *Facade) submit(event protocol.Event, selectExecution bool) (protocol.Ac
 		return protocol.Acceptance{}, Run{}, err
 	}
 	defer unlock()
-	accepted, recorded, err = f.recordedSubmission(event, selectExecution)
+	accepted, recorded, err = f.recordedEvent(event)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1523,12 +1532,6 @@ func (f *Facade) submit(event protocol.Event, selectExecution bool) (protocol.Ac
 	acceptance, err := f.engine.Submit(event, observation)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
-	}
-	if selectExecution && acceptance.Status == "ACCEPTED" {
-		acceptance, err = f.confirmExecutionSelection(event, acceptance)
-		if err != nil {
-			return acceptance, Run{}, err
-		}
 	}
 	if err := f.syncResetRequirement(); err != nil {
 		return acceptance, Run{}, err

@@ -14,8 +14,8 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
 ## 正式流程
 
 1. **澄清与确认。** 主代理读取仓库事实，解决重大未决选择，把完整需求与方案写入唯一
-   正式文件。先确定性结构预检，再展示全文和精确 revision，单独等待用户明确确认。
-2. **启动与登记。** 确认后选择 regular/lightweight，用 typed intake receipt 启动 run。
+   正式文件。先确定性结构预检，再展示全文和精确 revision。
+2. **启动与登记。** 明确 regular/lightweight，通过原生表单确认完整启动操作，程序直接接纳 typed intake 并启动 run。
    首次 drive 自动登记确认；后续产品审、技术审、开发与 QA 消费同一确认 revision。
 3. **独立双审。** 先产品审、再技术审。Operator 逐项核实 finding，用户处置有效问题。
    技术审形成 Batch→Subtask、依赖、DoD 与恢复计划。
@@ -49,11 +49,16 @@ lightweight 只留下明确“本 run 未经任何验证”的 unverified 记录
 并在规定节点确认。公开 workflow 入口穷举为：
 
 `start` / `drive` / `submit` / `show` / `status` / `next` / `progress` / `message` /
-`replan` / `handoff` / `diagnose` / `guard-preview`。
+`replan` / `handoff` / `diagnose` / `guard-preview` / `serve`。
 
-start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与用户确认；
+主宿主的 `confirm_start`、`confirm_control`、`confirm_native` 由 `workflow serve` 提供。
+自然语言只提出申请；服务显示绑定具体操作的原生确认，用户点击后直接提交原对象。
+模型不能填写批准值、制作确认收据或以普通 CLI 参数代替真人响应。
+Codex、ZCode 安装控制 MCP；DSH global 复用根代理原生问题服务，其他宿主的接入边界见[安装与 Hook](references/install-and-hooks.md)。
+
+start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与已确认决定；
 message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 准备并保存计划重审确认载荷。
-`settings` 可保存、修改和启用用户命名配置；`start --configuration <名称或序号>` 仅选择本次配置。
+`settings` 可保存、修改和启用用户命名配置；`confirm_start.configuration` 仅选择本次配置。
 运行中可用 `submit --configuration <名称或序号>`，或 `--flow-node <节点> --enabled true|false`、
 `--qa-mode <blackbox|whitebox> --enabled true|false` 请求调整本次流程，沿原 Ask 确认完整配置与影响。
 启用过去或跳过的节点后可从原节点继续；修改保存默认不会自动影响已有 run。
@@ -118,7 +123,7 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | ZCode | `~/.zcode/skills/formal-gates` | 所选项目 `.zcode/skills/formal-gates` |
 | WorkBuddy | `~/.codebuddy/skills/formal-gates` | 所选项目 `.codebuddy/skills/formal-gates` |
 
-安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装只装 skill 与 `AGENTS.md` 指令（当前 ZCode 忽略项目级 hook 配置）。WorkBuddy 只安装 skill 与 CODEBUDDY.md，原生工具/生命周期由 engine 接入，不写 global hook。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
+安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装写入 skill、`AGENTS.md` 指令与 `.zcode/config.json` 中的 MCP 配置（当前 ZCode 忽略项目级 hook 配置）。WorkBuddy 只安装 skill 与 CODEBUDDY.md，原生工具/生命周期由 engine 接入，不写 global hook。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
 
 安装还会维护受理规则：Claude Code 使用全局 `~/.claude/CLAUDE.md` 或项目
 `CLAUDE.md`，Codex 使用全局 `~/.codex/AGENTS.md` 或项目 `AGENTS.md`，Cursor 项目

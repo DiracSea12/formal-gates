@@ -125,6 +125,14 @@ func workflowRunView(run facade.Run) map[string]any {
 		if ask.Control == protocol.ControlConfirmTopology {
 			question["proposal"] = run.Review.ReadinessProposal
 		}
+		if ask.Control == protocol.ControlRecovery {
+			for _, record := range run.RecoveryRecords {
+				if record.Action == protocol.RecoveryAsk && record.RequestID == ask.RequestID {
+					question["recovery"] = map[string]any{"actionId": record.ActionID, "attemptId": record.AttemptID, "task": record.Task, "interruptionReason": record.InterruptionReason, "detail": record.Detail}
+					break
+				}
+			}
+		}
 		questions = append(questions, question)
 	}
 	view["questions"] = questions
@@ -266,7 +274,11 @@ func workflowReviewChoices(review facade.ReviewFace) []map[string]any {
 }
 
 func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any {
-	run := workflowRunView(candidate.Run)
+	current := workflowRunView(candidate.Run)
+	run := map[string]any{}
+	for _, key := range []string{"runId", "revision", "route", "status"} {
+		run[key] = current[key]
+	}
 	questions := []map[string]any{}
 	request := ""
 	if candidate.Event.Decide != nil {
@@ -277,7 +289,7 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	if request != "" {
 		for index, ask := range candidate.Run.PendingAsks {
 			if ask.RequestID == request {
-				question := run["questions"].([]map[string]any)[index]
+				question := current["questions"].([]map[string]any)[index]
 				question["ask"] = candidate.Input.Ask
 				questions = append(questions, question)
 				break
@@ -285,7 +297,7 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 		}
 	}
 	run["questions"] = questions
-	view := map[string]any{"input": candidate.Input, "run": run}
+	view := map[string]any{"root": candidate.Root, "input": candidate.Input, "run": run}
 	if candidate.Event.Request != nil && len(candidate.Event.Request.RouteGates) != 0 {
 		view["gates"] = numberedChoices(candidate.Event.Request.RouteGates)
 	}
@@ -314,6 +326,10 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	}
 	if candidate.Reset != nil {
 		view["reset"] = candidate.Reset
+	}
+	if candidate.Continuation != nil {
+		preview := candidate.Continuation
+		view["continuation"] = map[string]any{"from": preview.From, "to": preview.To, "work": preview.Work, "effects": preview.Effects, "reviewActions": preview.ReviewActions, "enteredMainline": preview.EnteredMainline, "parentClaims": preview.ParentClaims}
 	}
 	return view
 }

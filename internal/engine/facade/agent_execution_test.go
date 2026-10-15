@@ -71,7 +71,7 @@ func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(candidate)
+	_, d.run, err = submitControlWithHost(t, d.f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(candidate)
+	_, d.run, err = submitControlWithHost(t, d.f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}

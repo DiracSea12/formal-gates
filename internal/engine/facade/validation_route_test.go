@@ -796,7 +796,7 @@ func TestCarriedPrewaveResultSurvivesDeliveryOrder(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, d.run, err = d.f.SubmitControl(request)
+					_, d.run, err = submitControlWithHost(t, d.f, request)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -809,7 +809,7 @@ func TestCarriedPrewaveResultSurvivesDeliveryOrder(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, d.run, err = d.f.SubmitControl(confirmation)
+					_, d.run, err = submitControlWithHost(t, d.f, confirmation)
 					if err != nil {
 						t.Fatal(err)
 					}

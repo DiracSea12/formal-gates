@@ -26,13 +26,13 @@ func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		acceptance, run, err := d.f.SubmitControl(candidate)
+		acceptance, run, err := submitControlWithHost(t, d.f, candidate)
 		if err != nil || acceptance.Status != "ACCEPTED" {
 			t.Fatal(acceptance, err)
 		}
 		d.run = run
 		before := run.Revision
-		if _, again, err := d.f.SubmitControl(candidate); err != nil || again.Revision != before {
+		if _, again, err := submitControlWithHost(t, d.f, candidate); err != nil || again.Revision != before {
 			t.Fatal("replay changed authoritative state", err)
 		}
 		d.drive()
@@ -103,7 +103,7 @@ func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, run, err := d.f.SubmitControl(reset); err != nil {
+	if _, run, err := submitControlWithHost(t, d.f, reset); err != nil {
 		t.Fatal(err)
 	} else {
 		d.run = run

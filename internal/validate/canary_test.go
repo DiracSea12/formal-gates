@@ -124,8 +124,8 @@ func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 	if err != nil || !bytes.Equal(data, payload) {
 		t.Fatalf("original payload changed: %q, %v", data, err)
 	}
-	if _, err := os.Stat(ownerSidecarPath(root, "hook-probe")); !os.IsNotExist(err) {
-		t.Fatalf("passive probe must not capture a start owner: %v", err)
+	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
+		t.Fatalf("passive probe must not write project state: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 {

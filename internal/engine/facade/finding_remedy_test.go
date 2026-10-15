@@ -45,7 +45,7 @@ func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(candidate); err != nil {
+			if _, d.run, err = submitControlWithHost(t, d.f, candidate); err != nil {
 				t.Fatal(err)
 			}
 			if d.run.Review.Actions[0].Candidates[0].Findings[0].Revised {
@@ -71,14 +71,14 @@ func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, d.run, err = d.f.SubmitControl(change); err != nil {
+				if _, d.run, err = submitControlWithHost(t, d.f, change); err != nil {
 					t.Fatal(err)
 				}
 				confirmation, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "Confirm this complete title correction delta"})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, d.run, err = d.f.SubmitControl(confirmation); err != nil {
+				if _, d.run, err = submitControlWithHost(t, d.f, confirmation); err != nil {
 					t.Fatal(err)
 				}
 				if !d.run.Review.Actions[0].Candidates[0].Findings[0].Revised {
@@ -92,7 +92,7 @@ func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, d.run, err = d.f.SubmitControl(request); err != nil {
+			if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
 				t.Fatal(err)
 			}
 			correction.Request = ""
@@ -101,7 +101,7 @@ func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			accepted, updated, err := d.f.SubmitControl(decision)
+			accepted, updated, err := submitControlWithHost(t, d.f, decision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +111,7 @@ func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
 				t.Fatalf("severity correction changed the remedy obligation: completed=%d status=%s finding=%+v next=%+v", d.run.Review.Actions[0].Completed, d.run.Review.Actions[0].EffectiveStatus, finding, d.run.Next)
 			}
 			d.reopen()
-			replay, run, err := d.f.SubmitControl(decision)
+			replay, run, err := submitControlWithHost(t, d.f, decision)
 			if err != nil {
 				t.Fatal(err)
 			}

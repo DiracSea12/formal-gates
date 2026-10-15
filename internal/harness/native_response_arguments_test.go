@@ -36,7 +36,7 @@ func TestNativeResponseArgumentsAnswerOriginalQuestions(t *testing.T) {
 	if _, err := os.Stat(nativeAnswerPath(job)); !os.IsNotExist(err) {
 		t.Fatal("preparation delivered a vote", err)
 	}
-	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+	if code, errors := respondWithHost(t, "--decision-file", file); code != 0 {
 		t.Fatal(code, errors)
 	}
 	answer, err := readJSONFile(nativeAnswerPath(job))
@@ -58,7 +58,7 @@ func TestNativeResponseArgumentsConstructSchemaTypedFormValues(t *testing.T) {
 	if code, errors := respondCLI(t, "--run", run, "--choice", "1", "--form-field", "1", "--form-value", "false", "--form-field", "2", "--form-value", "9007199254740993", "--form-field", "3", "--form-value", "1.25", "--form-field", "4", "--form-value", text, "--form-field", "5", "--form-choice", "2", "--save-decision", file); code != 0 {
 		t.Fatal(code, errors)
 	}
-	if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+	if code, errors := respondWithHost(t, "--decision-file", file); code != 0 {
 		t.Fatal(code, errors)
 	}
 	answer, err := readJSONFile(nativeAnswerPath(job))
@@ -138,7 +138,7 @@ func TestNativeResponseArgumentsReadOriginalTextFiles(t *testing.T) {
 			if code, errors := respondCLI(t, args...); code != 0 {
 				t.Fatal(code, errors)
 			}
-			if code, errors := respondCLI(t, "--decision-file", file); code != 0 {
+			if code, errors := respondWithHost(t, "--decision-file", file); code != 0 {
 				t.Fatal(code, errors)
 			}
 			answer, err := readJSONFile(nativeAnswerPath(job))

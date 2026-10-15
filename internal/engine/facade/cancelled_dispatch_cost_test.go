@@ -102,7 +102,7 @@ func TestCancelledStoppedDispatchRetainsManagedNativeCost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, run, err = f.SubmitControl(candidate)
+			_, run, err = submitControlWithHost(t, f, candidate)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +136,7 @@ func TestCancelledStoppedDispatchRetainsManagedNativeCost(t *testing.T) {
 			if err := json.Unmarshal(originalCandidate, &replayCandidate); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := f.SubmitControl(replayCandidate); err != nil {
+			if _, _, err := submitControlWithHost(t, f, replayCandidate); err != nil {
 				t.Fatal(err)
 			}
 			after, err := f.engine.Load()

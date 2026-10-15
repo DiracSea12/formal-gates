@@ -165,7 +165,7 @@ func unlockRouteByRequirementRedo(d *validationDriver) {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	_, d.run, err = d.f.SubmitControl(request)
+	_, d.run, err = submitControlWithHost(d.t, d.f, request)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func unlockRouteByRequirementRedo(d *validationDriver) {
 		d.t.Fatal("route redo confirmation differs from its actual requirement source")
 	}
 	before := d.run.Revision
-	_, d.run, err = d.f.SubmitControl(confirmation)
+	_, d.run, err = submitControlWithHost(d.t, d.f, confirmation)
 	if err != nil {
 		d.t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(candidate)
+			_, d.run, err = submitControlWithHost(d.t, d.f, candidate)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -596,7 +596,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(confirm)
+			_, d.run, err = submitControlWithHost(d.t, d.f, confirm)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -772,7 +772,7 @@ func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, d.run, err = d.f.SubmitControl(candidate)
+				_, d.run, err = submitControlWithHost(d.t, d.f, candidate)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -780,7 +780,7 @@ func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, d.run, err = d.f.SubmitControl(confirm)
+				_, d.run, err = submitControlWithHost(d.t, d.f, confirm)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -871,7 +871,7 @@ func TestRequirementRedoTracksLatestReplacementAndPreservesIndependentWorker(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, d.run, err = d.f.SubmitControl(candidate)
+		_, d.run, err = submitControlWithHost(d.t, d.f, candidate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -879,7 +879,7 @@ func TestRequirementRedoTracksLatestReplacementAndPreservesIndependentWorker(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, d.run, err = d.f.SubmitControl(confirm)
+		_, d.run, err = submitControlWithHost(d.t, d.f, confirm)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -23,7 +23,7 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 				t.Helper()
 				var out, stderr bytes.Buffer
 				args = append(append([]string{"workflow"}, args...), "--root", root)
-				if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+				if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 					t.Fatalf("original CLI %v exit %d: %s", args, code, &stderr)
 				}
 				return out.Bytes()

@@ -16,8 +16,8 @@ import (
 	"formal-gates/internal/requirement"
 )
 
-// The authorized canary user stand-in confirms one complete requirements and
-// solution document. The production bootstrap derives activation from it.
+// The fixture builds the complete requirement and solution receipt used by
+// native protocol simulations and verifies its original content bindings.
 func (c *engineCanary) confirmedIntake() facade.IntakeConfirmationReceipt {
 	c.t.Helper()
 	if _, err := requirement.ParseRequirementProjection("requirements.md", c.doc); err != nil {

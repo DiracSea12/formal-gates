@@ -28,6 +28,8 @@ type IO struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Context        context.Context
+	confirmation   func(any) error
+	owner          *facade.OwnerBinding
 }
 
 func Run(program string, args []string, streams IO) int {
@@ -324,7 +326,7 @@ func runUninstall(args []string, streams IO) (int, error) {
 
 func runWorkflow(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") && !isHelpArg(args[0]) {
-		return 1, fmt.Errorf("workflow subcommand is required (start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan)")
+		return 1, fmt.Errorf("workflow subcommand is required (start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan|serve)")
 	}
 	if isHelpArg(args[0]) {
 		printWorkflowUsage(streams.Stdout, program)
@@ -338,7 +340,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 
 var workflowSubcommands = map[string]func([]string, IO) (int, error){
 	"execution-options": runWorkflowExecutionOptions,
-	"replan":            runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
+	"replan":            runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview, "serve": runWorkflowServe,
 }
 
 func runWorkflowStart(args []string, streams IO) (int, error) {
@@ -452,6 +454,13 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	if streams.confirmation == nil {
+		return 1, fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: request confirm_start through the current host's formal-gates MCP service")
+	}
+	confirmation, err := confirmSavedFile(*intakePath, streams.confirmation)
+	if err != nil {
+		return 1, err
+	}
 	baseIdentity := ""
 	if routeName == "regular" {
 		baseIdentity = *base
@@ -462,12 +471,11 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 			}
 		}
 	}
-	transcript, session, ownerProvider := validate.ConsumeStartOwner(*root, *runID)
-	owner := facade.OwnerBinding{Session: session}
-	if transcript != "" && ownerProvider != "" {
-		owner.Transcript, owner.Provider = transcript, ownerProvider
+	var owner facade.OwnerBinding
+	if streams.owner != nil {
+		owner = *streams.owner
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -778,7 +786,19 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	}
 	var acceptance protocol.Acceptance
 	var run facade.Run
-	acceptance, run, err = f.SubmitControl(*saved)
+	confirmation := streams.confirmation
+	if confirmation != nil {
+		confirmation = func(value any) error {
+			candidate := value.(facade.ControlCandidate)
+			view := workflowConfirmationView(candidate)
+			return streams.confirmation(view)
+		}
+	}
+	confirmation, err = confirmSavedFile(*confirmationPath, confirmation)
+	if err != nil {
+		return 1, err
+	}
+	acceptance, run, err = f.SubmitControl(*saved, confirmation)
 	if err != nil {
 		return 1, err
 	}
@@ -1393,7 +1413,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|execution-options\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview|serve\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|execution-options\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -1405,7 +1425,7 @@ func printRegistryUsage(w io.Writer, program string) {
 }
 
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|progress|message|handoff|replan|serve\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printGateUsage(w io.Writer, program string) {

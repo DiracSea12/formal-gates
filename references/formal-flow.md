@@ -23,6 +23,7 @@ workflow 的当前入口以 `workflow --help` 和各子命令帮助为准：
 | `message` | 向原 worker 提交新语义文字或原输入文件字节。 |
 | `handoff` | 为原开发职责准备受限转交 Ask。 |
 | `replan` | 为原需求内计划调整准备确认候选。 |
+| `serve` | 为当前主宿主提供 stdio MCP 真人确认；原生响应直接进入同一引擎接纳路径。 |
 
 安装、卸载、hook、lifecycle、canary 和脱离 run 的 gate 检查属于维护/诊断面，
 不能推进业务或改写 workflow 状态。正常 loader 要求版本、definition/package 摘要和
@@ -53,7 +54,7 @@ formal-gates requirement edit --root <repo> --item <原需求序号> \
 不代表用户确认。全部改变产品/流程行为及需要 QA 保证的义务须进入需求点；纯实现位置、
 代码边界与未来约束留在方案正文，不伪装为 QA 的 AC。
 
-**次序固定为：结构预检 → 展示完整文件与精确 revision → 用户明确确认 → start。**
+**次序固定为：结构预检 → 展示完整文件与精确 revision → 原生真人确认 → start。**
 启动前预检使用 start 的材料准备模式，保存载荷，不创建 run：
 
 ```bash
@@ -70,18 +71,18 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 固定 transport 均由程序组装，无需手抄。预检默认把完整 candidate 存入项目所属的
 `.gates/tmp/intake` 载荷目录，返回 `intake` 序号；保存候选不代表确认，不创建 run，
 不读取或写入 admission/registry。材料选择 flags 仅供 precheck；正常 start 只接收
-已获真实用户确认的原载荷。精确 `--requirement/--solution/--artifact` 与
+由原生真人确认通道接纳的原载荷。精确 `--requirement/--solution/--artifact` 与
 `--save-candidate` 文件接口仅供人工或程序集成。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
-展示和确认。确认前不启动开发 run、不选择后续路线、不派发后续代理。结构预检的通过
+展示和确认。确认前不启动开发 run、不确定拆分拓扑或派发后续代理。结构预检的通过
 不是产品审、技术审或 QA 的 PASS。
 
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
-精确 revisions。预检已由程序保存完整原对象；等待用户明确确认后，使用
-`start --route <用户已选择的 regular|lightweight> --intake <原序号>`，只有一个载荷时可省略序号，多个时程序只展示原位置供选择。
-精确 `--intake-receipt` 保留给人工或程序集成。代理不抽取 JSON、不抄写字段、路径、
-摘要或全文。保存候选不会启动 run；确认 receipt 是受理材料，不是模型调用记录。
+精确 revisions。预检已由程序保存完整原对象；调用当前主宿主 MCP 工具 `confirm_start`，
+传入原 `intake` 序号与已选择的 `route`。服务生成 run ID，原生弹窗展示原材料与完整启动操作；
+只有用户亲自确认才直接启动。`root` 缺省为当前目录，无需模型抄写 run ID、摘要或全文。
+普通 CLI `start --intake` / `--intake-receipt` 不接受自报批准。保存候选不会启动 run。
 
 程序固定 `source/authority=stable-driver` 与 `transport=stable-launcher`，登记
 `requirementSource/requirementRevision`、完整 `artifacts`、选定方案的
@@ -100,26 +101,27 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 ```bash
 formal-gates workflow start --nodes
 
-formal-gates workflow start --run-id <新名称> --route regular --vcs <git|svn|p4> \
-  --intake <原载荷序号>
-
-formal-gates workflow start --run-id <新名称> --route lightweight --intake <原载荷序号>
-
 formal-gates workflow drive
 formal-gates workflow show
 formal-gates workflow status
 formal-gates workflow next
 formal-gates workflow submit --request <当前控制类型>
 formal-gates workflow next --ask <原序号> --choice <真实选择>
-# 展示程序返回的当前确认内容，获得用户明确确认后：
-formal-gates workflow submit --confirmation-candidate <原载荷序号>
 formal-gates workflow diagnose --root <repo> --run-id <id>
 formal-gates workflow diagnose --path <state-or-summary.json>
 ```
 
-`start --nodes` 只读展示产品审、技术审、初始开发、整组 QA、质量门审查和业务返修六项主要职责。用户自由组合，保留原相对顺序与并行关系；关闭职责通过启动时重复 `--disable-node <原展示序号>` 提交，由程序从定义目录取原身份并随 run 持久化。QA 启用后按原设计→独立审查→执行链运行，黑盒、白盒在路线阶段各按整组选择，模式只归原 SelectedGates；关闭 QA 也关闭 merge QA。未选择关闭时保留默认流程，不暗跑关闭职责或伪造 PASS。恢复和节点继续不改变选择。关闭质量门审查同时不派普通门、合并门和返修成员门；child 继承同一决定，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
+启动使用主宿主 `confirm_start`；当前候选使用 `confirm_control`，参数 `candidate` 复用原载荷序号。
+三个确认工具由 `formal-gates workflow serve` 提供；`confirm_native` 的 `question/decision` 复用原生问题序号。
+工具只请求显示绑定原操作的原生表单，不能传入 `approved` 或替用户回答。
+表单含必填、无默认值的 `confirmOperation`，服务同时核对 `action=accept` 与该字段为 true；
+取消、拒绝、空回答、无交互能力或已取消的调用均不执行。模型、自动应答 hook 和另起的 headless client 不能作为真人来源。
+`confirm_control` 接纳当前操作并返回下一边界；完成后沿既有 `workflow drive` 消费已授权工作，
+不在确认工具调用内启动模型，也不为连续机械推进增加逐步确认。
 
-show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。精确 `submit --confirmation` 供人工或程序集成，仍从原候选自动绑定目标。
+`start --nodes` 只读展示产品审、技术审、初始开发、整组 QA、质量门审查和业务返修六项主要职责。用户自由组合，保留原相对顺序与并行关系；关闭职责通过 `confirm_start.disabledNodes` 的原展示序号提交，由程序从定义目录取原身份并随 run 持久化。QA 启用后按原设计→独立审查→执行链运行，黑盒、白盒在路线阶段各按整组选择，模式只归原 SelectedGates；关闭 QA 也关闭 merge QA。未选择关闭时保留默认流程，不暗跑关闭职责或伪造 PASS。恢复和节点继续不改变选择。关闭质量门审查同时不派普通门、合并门和返修成员门；child 继承同一决定，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
+
+show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。`confirm_control` 从原候选自动绑定目标，普通 `submit --confirmation` 不接纳自报批准。
 
 不可打开的顶层 run 保留在选择列表中并显示原错误；选择它仍按原准入规则拒绝，其他当前 run 可按显示序号选择。完整只读诊断使用原 `workflow diagnose` 入口。
 
@@ -138,12 +140,12 @@ lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/�
 决定使用 `next --ask --choice`：默认展示的 `ask` 先编号当前 run
 未决 Ask，再按子 run 的稳定顺序编号已建立的当前子流程 Ask；程序绑定原目标，`--machine` 保留本地投影。
 `choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
-Event、原 request/token、当前 revision 和展示材料。默认只展示当前确认所需的语义内容，确认后 `submit --confirmation-candidate`
-接纳原候选文件；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
+Event、原 request/token、当前 revision 和展示材料。`confirm_control` 读取原候选并显示具体操作，
+真人确认后直接接纳原对象；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
-`start --configuration <名称或原序号>` 只为本次启动选取保存的配置，不改启用默认。
+`confirm_start.configuration` 只为本次启动选取保存的配置，不改启用默认。
 运行中 `submit --configuration <名称或原序号>` 读取保存配置的实际副本；省略名称时，
 `--flow-node <节点或序号> --enabled true|false`、`--qa-mode <blackbox|whitebox或序号> --enabled true|false`
 只改本次当前选择。`--all-gates`/`--no-gates` 选择全部/空普通门；首次门确认可在原 Ask 用 `--gate <原序号>` 组合任意候选，`--gate none` 明确空集合；
@@ -319,7 +321,7 @@ PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ac
 --changed-item <实际改变> --transitive-impact <影响> --carry-reason <保留理由>` 只准备当前未终结
 regular 的计划重审：正式需求字节/revision 不变，product/topology 结论保留，逐项 work
 仍由用户选择 carry/redo 并给理由。按各子命令帮助选择原 work/child 的序号和新的影响解释，不写固定 JSON 外壳；
-程序保存完整 RequirementChangeInput，省略 classification/redo。原 `submit --confirmation-candidate` 确认后才重做
+程序保存完整 RequirementChangeInput，省略 classification/redo。原候选经 `confirm_control` 的真人确认后才重做
 start-readiness；优化或增加 Batch 必须由新技审生成完整计划并经 route/plan 再确认。
 不能通过自由任务正文绕过。普通相同需求的重复提交继续拒绝。
 

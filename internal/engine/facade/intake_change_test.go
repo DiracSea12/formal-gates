@@ -90,7 +90,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 				if err != nil || !bytes.Equal(before, readState()) {
 					t.Fatal("request preview wrote workflow facts", err)
 				}
-				if _, d.run, err = f.SubmitControl(request); err != nil {
+				if _, d.run, err = submitControlWithHost(t, f, request); err != nil {
 					t.Fatal(err)
 				}
 				d.drive()
@@ -127,7 +127,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 						t.Fatal("suggestion changed original work identity")
 					}
 				}
-				if _, d.run, err = f.SubmitControl(prepared); err != nil {
+				if _, d.run, err = submitControlWithHost(t, f, prepared); err != nil {
 					t.Fatal(err)
 				}
 				bound, err := f.engine.Load()
@@ -144,11 +144,11 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, d.run, err = f.SubmitControl(another); err != nil {
+					if _, d.run, err = submitControlWithHost(t, f, another); err != nil {
 						t.Fatal(err)
 					}
 					before = readState()
-					if _, _, err = f.SubmitControl(confirmation); err == nil || !strings.Contains(err.Error(), protocol.CodeStaleFreshness) || !bytes.Equal(before, readState()) {
+					if _, _, err = submitControlWithHost(t, f, confirmation); err == nil || !strings.Contains(err.Error(), protocol.CodeStaleFreshness) || !bytes.Equal(before, readState()) {
 						t.Fatal("stale confirmation changed workflow or source authority", err)
 					}
 					confirmation, err = f.PrepareCurrentControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlRequestRequirementChange), Choice: "proceed", Reason: "user confirms the complete changed document on the current Ask"})
@@ -160,7 +160,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 						t.Fatal(err)
 					}
 				}
-				accepted, _, err := f.SubmitControl(confirmation)
+				accepted, _, err := submitControlWithHost(t, f, confirmation)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -173,7 +173,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 				if err != nil {
 					t.Fatal(err)
 				}
-				replay, _, err := reopened.SubmitControl(confirmation)
+				replay, _, err := submitControlWithHost(t, reopened, confirmation)
 				if err != nil || !reflect.DeepEqual(accepted, replay) || !bytes.Equal(before, readState()) {
 					t.Fatal("reopened original confirmation replay changed durable facts", err)
 				}
@@ -244,7 +244,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, run, err = f.SubmitControl(begin)
+			_, run, err = submitControlWithHost(t, f, begin)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -283,7 +283,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 			if scenario == "updated-solution" && change.Intake.IntakeCandidate.SolutionRevision == initial.IntakeCandidate.SolutionRevision {
 				t.Fatal("updated selected solution kept its old binding")
 			}
-			_, run, err = f.SubmitControl(change)
+			_, run, err = submitControlWithHost(t, f, change)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -319,7 +319,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 				if _, err = f.PrepareControl(confirmInput); err == nil {
 					t.Fatal("pending package accepted changed selected material")
 				}
-				if _, _, err = f.SubmitControl(restored); err == nil {
+				if _, _, err = submitControlWithHost(t, f, restored); err == nil {
 					t.Fatal("saved confirmation accepted changed material bytes")
 				}
 				after, err := os.ReadFile(statePath)
@@ -328,7 +328,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 				}
 				return
 			}
-			accepted, updated, err := f.SubmitControl(restored)
+			accepted, updated, err := submitControlWithHost(t, f, restored)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -368,7 +368,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 			if _, err = reopened.PrepareControl(ControlInput{Request: protocol.ControlRequestRequirementChange}); err != nil {
 				t.Fatal("source edit blocked requirement change preparation", err)
 			}
-			replay, _, err := reopened.SubmitControl(restored)
+			replay, _, err := submitControlWithHost(t, reopened, restored)
 			if err != nil || !reflect.DeepEqual(accepted, replay) {
 				t.Fatal("original confirmation replay lost its accepted identity", err)
 			}
@@ -431,7 +431,7 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(request)
+	_, run, err = submitControlWithHost(t, f, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if decision.Reset == nil || !reflect.DeepEqual(decision.Reset.Intake, &beforeReset.IntakeCandidate) {
 		t.Fatal("reset preview did not bind actual current selected materials")
 	}
-	_, run, err = f.SubmitControl(decision)
+	_, run, err = submitControlWithHost(t, f, decision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +472,7 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if len(confirm.Intake.Materials) != 3 || !reflect.DeepEqual(confirm.Intake.Materials, beforeReset.Materials) {
 		t.Fatal("post-reset confirmation did not publish actual complete preserved bytes")
 	}
-	accepted, _, err := f.SubmitControl(confirm)
+	accepted, _, err := submitControlWithHost(t, f, confirm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, _, err := reopened.SubmitControl(confirm)
+	replay, _, err := submitControlWithHost(t, reopened, confirm)
 	if err != nil || !reflect.DeepEqual(accepted, replay) {
 		t.Fatal("reset reconfirmation replay changed accepted facts", err)
 	}

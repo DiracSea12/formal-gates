@@ -57,6 +57,9 @@ type InstallTargetReport struct {
 	LauncherPath      string            `json:"launcherPath,omitempty"`
 	HookConfig        string            `json:"hookConfig,omitempty"`
 	ManagedRulePath   string            `json:"managedRulePath,omitempty"`
+	ControlConfig     string            `json:"controlConfig,omitempty"`
+	ControlDigest     string            `json:"controlDigest,omitempty"`
+	ControlAction     string            `json:"controlAction,omitempty"`
 	SourceRoot        string            `json:"sourceRoot,omitempty"`
 	SourceDigest      string            `json:"sourceDigest,omitempty"`
 	InstalledDigest   string            `json:"installedDigest,omitempty"`
@@ -338,7 +341,11 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 			}
 		}
 		resourceRoot := installRegistryRecord(target, options).ResourceRoot
-		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, ResourcePath: resourceRoot, ResourceExisted: exists(resourceRoot), Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule})
+		control, backupErr := snapshotOuterFile(controlConfigPath(target), filepath.Join(backupRoot, "control.before"))
+		if backupErr != nil {
+			return InstallReport{}, backupErr
+		}
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, ResourcePath: resourceRoot, ResourceExisted: exists(resourceRoot), Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule, Control: control})
 	}
 	var releaseBackup installTreeBackup
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
@@ -451,6 +458,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	}
 	managedRuleChanges := map[string]bool{}
 	hookChanges := map[string]bool{}
+	controlChanges := map[string]bool{}
 	for _, target := range targets {
 		if !options.SkipHooks {
 			if err := installFault("hook"); err != nil {
@@ -461,6 +469,11 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 				return InstallReport{}, rollbackAll(err)
 			}
 			hookChanges[target.hookConfig] = changed
+			changed, err = configureControlServer(target, false)
+			if err != nil {
+				return InstallReport{}, rollbackAll(err)
+			}
+			controlChanges[controlConfigPath(target)] = changed
 		}
 		if target.managedRulePath != "" && !options.SkipHooks {
 			if err := installFault("managed-rule"); err != nil {
@@ -553,6 +566,19 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 			targetReport.HookAction = "NOT_APPLICABLE"
 		}
 		targetReport.ManagedRuleDigest, _ = fileDigest(target.managedRulePath)
+		if controlPath := controlConfigPath(target); controlPath != "" && !options.SkipHooks {
+			targetReport.ControlConfig = filepath.ToSlash(controlPath)
+			targetReport.ControlDigest, _ = fileDigest(controlPath)
+			targetReport.CanonicalPaths["controlConfig"] = canonicalRegistryPath(controlPath)
+			targetReport.ControlAction = "SKIPPED_UNCHANGED"
+			if controlChanges[controlPath] {
+				targetReport.ControlAction = "CONFIGURED"
+			}
+		} else if options.SkipHooks {
+			targetReport.ControlAction = "SKIPPED"
+		} else {
+			targetReport.ControlAction = "NOT_APPLICABLE"
+		}
 		if target.managedRulePath != "" {
 			targetReport.CanonicalPaths["managedRule"] = canonicalRegistryPath(target.managedRulePath)
 			if options.SkipHooks {
@@ -734,7 +760,11 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 				return UninstallReport{}, backupErr
 			}
 		}
-		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule})
+		control, backupErr := snapshotOuterFile(controlConfigPath(target), filepath.Join(backupRoot, "control.before"))
+		if backupErr != nil {
+			return UninstallReport{}, backupErr
+		}
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule, Control: control})
 	}
 	seen := map[string]bool{}
 	for index, record := range selected {
@@ -845,6 +875,9 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 			}
 		}
 		if err := installFault("hook"); err != nil {
+			return UninstallReport{}, rollback(err)
+		}
+		if _, err := configureControlServer(target, true); err != nil {
 			return UninstallReport{}, rollback(err)
 		}
 		if err := removeInstallHooks(target); err != nil {

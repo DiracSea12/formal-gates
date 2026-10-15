@@ -101,7 +101,7 @@ func TestDisabledDevelopmentRouteConfirmsWithoutPlan(t *testing.T) {
 		if err != nil || candidate.DevelopmentPlan != nil {
 			t.Fatal("disabled development required a proposal", choice, err)
 		}
-		if _, _, err := f.SubmitControl(candidate); err != nil {
+		if _, _, err := submitControlWithHost(t, f, candidate); err != nil {
 			t.Fatal("original confirmation did not accept the selection", choice, err)
 		}
 	}
@@ -157,14 +157,14 @@ func TestResetRetainsDisabledReviewSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(request); err != nil {
+	if _, _, err := submitControlWithHost(t, f, request); err != nil {
 		t.Fatal(err)
 	}
 	confirmation, err := f.PrepareCurrentControl(ControlInput{Ask: 1, Choice: "proceed", Reason: "user requests a reset with the displayed preservation"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.SubmitControl(confirmation); err != nil {
+	if _, _, err := submitControlWithHost(t, f, confirmation); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := f.engine.Load()

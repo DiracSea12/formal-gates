@@ -3,7 +3,7 @@
 package harness
 
 // These cases run the installed command against the original local app-server
-// peer. Its RPC log counts actual model turns; it never starts an installed host.
+// peer. Its RPC log counts original turn/start requests; it never starts an installed host.
 
 import (
 	"bytes"
@@ -36,6 +36,7 @@ import (
 func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facade.WorkerMaterial, *codexScenario, string) {
 	t.Helper()
 	s := newCodexScenario(t)
+	s.runID = "native-execution"
 	project := s.workspace
 	const document = "# 命令交付\n\n## 需求点\n\n### REQ-001：完成消息\n\n#### 要求\n公开执行 app.go 时退出 0，输出一行非空完成文本；不约束文本内容或顺序。\n\n#### 验收条件\n- AC-001：go run app.go 退出 0，并输出一行非空完成文本。\n\n#### 来源\n原生命令夹具的执行职责。\n\n## 方案\n在 app.go 的 main 中输出完成消息。\n"
 	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(document), 0600); err != nil {
@@ -157,17 +158,14 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	c := engineCanary{t: t, doc: []byte(document)}
 	var f *facade.Facade
 	if len(installed) > 0 && installed[0] {
-		intake := filepath.Join(t.TempDir(), "intake.json")
-		if err := writeAtomicJSON(intake, c.confirmedIntake()); err != nil {
-			t.Fatal(err)
+		started, startErr := confirmInstalledFixtureStart(t, exec.Command(binary, "workflow", "serve"), project, document)
+		if startErr != nil {
+			t.Fatalf("original installed start through the simulated MCP host: %v", startErr)
 		}
-		command := exec.Command(binary, "workflow", "start", "--root", project, "--run-id", "native-execution", "--route", "regular", "--vcs", "git", "--intake-receipt", intake, "--machine")
-		if body, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("original installed start: %v %s", err, body)
-		}
-		f, err = facade.Open(project, "native-execution")
+		s.runID = started.RunID
+		f, err = facade.Open(project, s.runID)
 	} else {
-		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: "native-execution", Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +229,7 @@ func nativePeerTurns(t *testing.T, s *codexScenario) int {
 
 func TestEngineNativeRejectsChangedInputsBeforeTurn(t *testing.T) {
 	_, _, s, binary := engineNativeFixture(t)
-	statePath := filepath.Join(s.workspace, facade.EngineNamespace, "native-execution", "state.json")
+	statePath := filepath.Join(s.workspace, facade.EngineNamespace, s.runID, "state.json")
 	before, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -296,11 +294,11 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 		}
 		return out
 	}
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--single-step")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--single-step")
 	if nativePeerTurns(t, s) != 0 {
 		t.Fatal("diagnostic step started a model turn")
 	}
-	body := call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	body := call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 	var consumed struct {
 		Boundary string     `json:"boundary"`
 		Run      facade.Run `json:"run"`
@@ -311,7 +309,7 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 	if nativePeerTurns(t, s) != 1 || consumed.Boundary != "ASK" || len(consumed.Run.PendingAsks) == 0 {
 		t.Fatalf("default did not consume then stop for the actual decision: %s", body)
 	}
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 	call("harness", "native", s.directory)
 	if nativePeerTurns(t, s) != 1 {
 		t.Fatal("accepted native result was executed again")
@@ -333,7 +331,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	s.peer.Mode = "bad_json"
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("failed native observation: %v %s", err, out)
 		}
@@ -348,7 +346,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 		if response.Boundary != "ASK" || len(response.Blocked) != 0 || nativePeerTurns(t, s) != 1 {
 			t.Fatalf("completed failure did not reach original recovery once: %s", out)
 		}
-		verification, err := lifecycle.VerifyDispatch(s.workspace, "native-execution", ref.ActionID)
+		verification, err := lifecycle.VerifyDispatch(s.workspace, s.runID, ref.ActionID)
 		if err != nil || !verification.StartObserved || !verification.StopObserved {
 			t.Fatalf("original terminal facts absent: %+v %v", verification, err)
 		}
@@ -387,7 +385,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(candidate)
+	_, run, err = confirmFacadeFixtureControl(t, f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +409,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	}
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("resumed original failed native observation: %v %s", err, out)
 		}
@@ -459,7 +457,7 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 	s.peer.Answer = nil
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine").CombinedOutput()
+		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("invalid semantic routing: %v %s", err, out)
 		}
@@ -602,7 +600,7 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), request); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("blocked native response: %v %s", err, out)
@@ -681,7 +679,7 @@ func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario
 		if _, _, err := f.Submit(spawn); err != nil {
 			t.Fatal(err)
 		}
-		if err := lifecycle.ObserveNativeCompletion(s.workspace, "native-execution", ref.ActionID, "codex", identity); err != nil {
+		if err := lifecycle.ObserveNativeCompletion(s.workspace, s.runID, ref.ActionID, "codex", identity); err != nil {
 			t.Fatal(err)
 		}
 		evidence := protocol.ReviewResultEvidence{Action: role, DispatchID: ref.ActionID, RequirementRevision: material.Input.Review.RequirementRevision, Status: "PASS", Findings: []review.Finding{}}
@@ -725,7 +723,7 @@ func stageNativeReviewsWithEdit(t *testing.T, f *facade.Facade, s *codexScenario
 		if err != nil {
 			t.Fatal(err)
 		}
-		if accepted, _, err := f.SubmitControl(candidate); err != nil || accepted.Status != "ACCEPTED" {
+		if accepted, _, err := confirmFacadeFixtureControl(t, f, candidate); err != nil || accepted.Status != "ACCEPTED" {
 			t.Fatal("independent synthetic review acceptance failed", accepted, err)
 		}
 	}
@@ -819,7 +817,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	submit(spawn)
-	if err := lifecycle.ObserveNativeCompletion(root, "native-execution", development.ActionID, "codex", "setup-development"); err != nil {
+	if err := lifecycle.ObserveNativeCompletion(root, s.runID, development.ActionID, "codex", "setup-development"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(original.Validation.Workspace.Path, "app.go"), []byte("package main\nfunc main() { println(\"delivered\") }\n"), 0600); err != nil {
@@ -861,7 +859,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	submit(spawn)
-	if err := lifecycle.ObserveNativeCompletion(root, "native-execution", gate, "codex", "setup-gate"); err != nil {
+	if err := lifecycle.ObserveNativeCompletion(root, s.runID, gate, "codex", "setup-gate"); err != nil {
 		t.Fatal(err)
 	}
 	submit(protocol.Event{ID: "gate-failure", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: gate, Provider: "codex", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:gate-failure", Validation: &protocol.ValidationResult{Binding: run.ValidationInputs[gate].Binding, Status: "FAIL", RequirementResults: []protocol.RequirementDecision{{PointID: original.RequirementPoints[0].ID, Status: "FAIL", Evidence: "The synthetic gate report asserts an additional ordering constraint for the observed completion line", FindingIndexes: []int{0}}}, Findings: []review.Finding{{Severity: "P2", Requirement: original.RequirementPoints[0].ID, Message: "Reported command ordering differs from the confirmed ordering"}}}}})
@@ -996,7 +994,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	previous := facade.NativeStartVerifier
 	facade.NativeStartVerifier = NativeStartEvidence
 	t.Cleanup(func() { facade.NativeStartVerifier = previous })
-	f, err = facade.Open(root, "native-execution")
+	f, err = facade.Open(root, s.runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,7 +1003,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "native-execution", "state.json"))
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, s.runID, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1117,7 +1115,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	out, err := cmd.CombinedOutput()
 	if err := os.WriteFile(filepath.Join(s.config, "consumer.json"), out, 0600); err != nil {
 		t.Fatal(err)
@@ -1178,7 +1176,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	var envelope struct {
 		Content protocol.State `json:"content"`
 	}
-	stateBody, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, "native-execution", "state.json"))
+	stateBody, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, s.runID, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1219,7 +1217,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -1230,7 +1228,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 		var envelope struct {
 			Content protocol.State `json:"content"`
 		}
-		body, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, "native-execution", "state.json"))
+		body, err := os.ReadFile(filepath.Join(fRoot(ref), facade.EngineNamespace, s.runID, "state.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1284,7 +1282,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(change)
+	_, run, err = confirmFacadeFixtureControl(t, f, change)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1302,7 +1300,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, run, err = f.SubmitControl(confirmation)
+		_, run, err = confirmFacadeFixtureControl(t, f, confirmation)
 		if err == nil {
 			break
 		}
@@ -1341,7 +1339,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	}
 	// The requirement Ask returns foreground control while the original job
 	// runs. Its confirmed carry is collected by the same public consumer.
-	collected, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine").CombinedOutput()
+	collected, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
 	if err != nil {
 		t.Fatalf("collect original carried job: %v %s", err, collected)
 	}
@@ -1379,7 +1377,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if nativePeerTurns(t, s) != 2 {
 		t.Fatalf("original developer plus independent gate turns=%d", nativePeerTurns(t, s))
 	}
-	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", "native-execution", "--machine").CombinedOutput(); err != nil {
+	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput(); err != nil {
 		t.Fatal(err)
 	}
 	if nativePeerTurns(t, s) != 2 {
@@ -1417,7 +1415,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				}
 				return out
 			}
-			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 			run, err := f.Show()
 			if err != nil {
 				t.Fatal(err)
@@ -1439,11 +1437,13 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			confirmation := filepath.Join(s.config, "recovery-confirmation.json")
-			if err := os.WriteFile(confirmation, body, 0600); err != nil {
+			var original facade.ControlCandidate
+			if err := json.Unmarshal(body, &original); err != nil {
 				t.Fatal(err)
 			}
-			call(nil, "workflow", "submit", "--root", s.workspace, "--run-id", "native-execution", "--confirmation", confirmation, "--single-step")
+			if _, err := confirmInstalledFixtureControl(t, binary, s.workspace, s.runID, original); err != nil {
+				t.Fatal(err)
+			}
 			run, err = f.Show()
 			if err != nil {
 				t.Fatal(err)
@@ -1476,7 +1476,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				s.peer.Answer = codexPlain(t, map[string]any{"interruptionReason": "The original resumed task needs another user decision"}).(map[string]any)
 				s.save(t)
 			}
-			out := call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			out := call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 			var response struct {
 				Run      facade.Run        `json:"run"`
 				Boundary string            `json:"boundary"`
@@ -1501,7 +1501,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			if choice == "resume" && response.Boundary != "ASK" {
 				t.Fatalf("resumed original task lost its next decision: %s", out)
 			}
-			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution")
+			call(nil, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID)
 			if nativePeerTurns(t, s) != want {
 				t.Fatal("completed native responsibility was executed twice")
 			}
@@ -1513,7 +1513,7 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 	f, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "wait"
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1532,7 +1532,7 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 		var envelope struct {
 			Content protocol.State `json:"content"`
 		}
-		body, err := os.ReadFile(filepath.Join(s.workspace, facade.EngineNamespace, "native-execution", "state.json"))
+		body, err := os.ReadFile(filepath.Join(s.workspace, facade.EngineNamespace, s.runID, "state.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1557,20 +1557,29 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 	if _, _, err := f.Submit(request); err != nil {
 		t.Fatal(err)
 	}
-	token, err := f.Freshness(string(request.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := protocol.NewDecideEvent("native-active-abort-decision", protocol.RequestID(request.ID), token, "abort")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.Submit(decision); err != nil {
-		t.Fatal(err)
-	}
 	if err := <-done; err != nil {
-		t.Fatalf("original native cancellation: %v %s", err, out.Bytes())
+		t.Fatalf("original foreground Ask: %v %s", err, out.Bytes())
 	}
+	var foreground struct {
+		Boundary string     `json:"boundary"`
+		Run      facade.Run `json:"run"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &foreground); err != nil || foreground.Boundary != "ASK" || foreground.Run.RunID != s.runID || !NativeJobAlive(s.directory) {
+		t.Fatalf("original Ask lost the live acknowledged turn: %v %s", err, out.Bytes())
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "abort"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := confirmInstalledFixtureControl(t, binary, s.workspace, s.runID, candidate); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original native cancellation: %v %s", err, completed)
+	}
+	out.Reset()
+	out.Write(completed)
 	var response struct {
 		Run     facade.Run        `json:"run"`
 		Blocked map[string]string `json:"blocked"`
@@ -1770,7 +1779,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	call := func() map[string]any {
 		t.Helper()
-		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("automatic released children: %v %s", err, out)
@@ -1977,14 +1986,14 @@ func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t
 	}
 	s.peer.Mode = "bad_json"
 	s.save(t)
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	run, err := f.Show()
 	if err != nil || len(run.WorkerMaterials) != 1 {
 		t.Fatalf("original worker: %+v %v", run.WorkerMaterials, err)
 	}
 	text := "Keep this exact supplementary text.\n原文和空格  "
 	var message protocol.TaskMessage
-	raw := call("workflow", "message", "--root", s.workspace, "--run-id", "native-execution", "--worker", "1", "--text", text)
+	raw := call("workflow", "message", "--root", s.workspace, "--run-id", s.runID, "--worker", "1", "--text", text)
 	if err := json.Unmarshal(raw, &message); err != nil {
 		t.Fatal(err)
 	}
@@ -2001,7 +2010,7 @@ func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = f.SubmitControl(candidate)
+	_, run, err = confirmFacadeFixtureControl(t, f, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2037,7 +2046,7 @@ func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t
 	if err := writeAtomicJSON(filepath.Join(s.config, "peer.json"), s.peer); err != nil {
 		t.Fatal(err)
 	}
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	source, err := readJSONFile(filepath.Join(directory, "native-source.json"))
 	if err != nil || getOf(getOf(source, "turn_ack"), "id") == nil {
 		t.Fatalf("original turn acknowledgement missing: %v %v", source, err)
@@ -2059,10 +2068,10 @@ func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t
 		}
 	}
 	check()
-	f, err = facade.Open(s.workspace, "native-execution")
+	f, err = facade.Open(s.workspace, s.runID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	call("workflow", "drive", "--root", s.workspace, "--run-id", "native-execution", "--machine")
+	call("workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	check()
 }

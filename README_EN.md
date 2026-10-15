@@ -16,9 +16,9 @@ intake begins only when the user explicitly requests it.
 
 1. **Clarify and confirm.** Read repository facts and resolve major choices. Write the complete
    requirement and solution into one formal document. Run the deterministic structural precheck,
-   show its full content and exact revision, then wait for explicit user confirmation.
-2. **Start and register.** After confirmation, choose regular/lightweight and start with a typed
-   intake receipt. The first drive registers that confirmation automatically. Product review,
+   show its full content and exact revision.
+2. **Start and register.** Choose regular/lightweight and confirm the complete startup operation in
+   the native form. The program accepts the typed intake and starts the run directly. The first drive registers that confirmation automatically. Product review,
    technical review, development, and QA consume the same confirmed revision.
 3. **Independent reviews.** Product review precedes technical review. The Operator verifies each
    raw finding and the user decides valid findings. Technical review produces Batch→Subtask,
@@ -60,7 +60,14 @@ After installation, tell your AI: “Use formal-gates for this change.” Respon
 choices and confirm at the required human nodes. The exhaustive public workflow surface is:
 
 `start` / `drive` / `submit` / `show` / `status` / `next` / `progress` / `message` /
-`replan` / `handoff` / `diagnose` / `guard-preview`.
+`replan` / `handoff` / `diagnose` / `guard-preview` / `serve`.
+
+The main host uses `confirm_start`, `confirm_control`, and `confirm_native` from `workflow serve`.
+Natural language requests an operation; a native form displays the exact bound operation and submits
+the original object directly after the person confirms. Models cannot supply approval values or
+replace that response with a receipt or ordinary CLI flag. Installation registers the control MCP
+for Codex and ZCode; DSH global uses its root agent's native question service. See
+[installation boundaries](references/install-and-hooks.md) for the other hosts.
 
 Start bootstraps, drive advances and recovers, and submit accepts business results and confirmed
 user decisions. Message adds temporary text to an existing action; handoff requests the original
@@ -68,7 +75,7 @@ recovery Ask; replan prepares and saves the plan-review confirmation payload. Sh
 waiver/skip, and HUMAN legal-node jumps use availableActions and typed Ask decisions. Reconcile
 UNKNOWN before another spawn or VCS side effect.
 
-Named workflow configurations save nodes and execution-group choices. `start --configuration <name-or-position>`
+Named workflow configurations save nodes and execution-group choices. `confirm_start.configuration`
 selects one for this run. During a run, `submit --configuration`, or `--flow-node <node> --enabled true|false`
 and `--qa-mode <blackbox|whitebox> --enabled true|false`, requests a change through the existing confirmation Ask.
 Enabled past or skipped nodes can be continued through the original node control. Saved defaults do not
@@ -137,7 +144,7 @@ On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only 
 | ZCode | `~/.zcode/skills/formal-gates` | `.zcode/skills/formal-gates` under the selected project |
 | WorkBuddy | `~/.codebuddy/skills/formal-gates` | `.codebuddy/skills/formal-gates` under the selected project |
 
-Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch); a ZCode global install writes `~/.zcode/cli/config.json`, while a project install writes only the skill and `AGENTS.md` instructions (current ZCode ignores project-level hook configuration). WorkBuddy installs its skill and CODEBUDDY.md instructions without global hooks; native actions use the engine tool and lifecycle boundary. Existing non-formal-gates hooks and plugin rows are preserved; when multiple hosts share a project `AGENTS.md`, the managed marker is cleaned only after the last active owner is uninstalled.
+Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch); a ZCode global install writes `~/.zcode/cli/config.json`, while a project install writes the skill, `AGENTS.md` instructions, and MCP configuration in `.zcode/config.json` (current ZCode ignores project-level hook configuration). WorkBuddy installs its skill and CODEBUDDY.md instructions without global hooks; native actions use the engine tool and lifecycle boundary. Existing non-formal-gates hooks and plugin rows are preserved; when multiple hosts share a project `AGENTS.md`, the managed marker is cleaned only after the last active owner is uninstalled.
 
 Installation also manages the intake rule: Claude Code uses global `~/.claude/CLAUDE.md` or project
 `CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, project Cursor

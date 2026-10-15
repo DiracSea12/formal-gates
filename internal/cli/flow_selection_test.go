@@ -60,7 +60,7 @@ func TestWorkflowStartSelectsFlowNodesFromPublishedPositions(t *testing.T) {
 	}
 	var out, stderr bytes.Buffer
 	args := []string{"workflow", "start", "--root", root, "--run-id", "selected-flow", "--route", "lightweight", "--intake", strconv.Itoa(intake), "--disable-node", "1", "--disable-node", strconv.Itoa(len(nodes)), "--machine"}
-	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	var run facade.Run
@@ -73,7 +73,7 @@ func TestWorkflowStartSelectsFlowNodesFromPublishedPositions(t *testing.T) {
 		t.Fatal("selection changed the original intake or lost the user choices", err)
 	}
 	out.Reset()
-	if code := Run("formal-gates", []string{"workflow", "show", "--root", root, "--run-id", run.RunID}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+	if code := runWithHostConfirmation(t, []string{"workflow", "show", "--root", root, "--run-id", run.RunID}, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	var view struct {

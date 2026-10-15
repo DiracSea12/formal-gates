@@ -66,7 +66,7 @@ func runNativeInteraction(args []string, streams IO) (int, error) {
 			if name == "form-field" {
 				mode = "fields"
 			}
-		})
+		}, streams.confirmation)
 		flags.Init("native respond", flag.ContinueOnError)
 		flags.Lookup("run").DefValue = "0"
 		if err := flags.Lookup("run").Value.Set("0"); err != nil {
@@ -156,7 +156,7 @@ func runNativeInteraction(args []string, streams IO) (int, error) {
 		if !done {
 			return 0, nil
 		}
-		return harness.NativeRespond([]string{"--decision-file", path}, streams.Stderr), nil
+		return harness.NativeRespondWithConfirmation([]string{"--decision-file", path}, streams.Stderr, streams.confirmation), nil
 	}
 	textDirectory := filepath.Join(payloadDirectory, mode, strconv.Itoa(position))
 	if prepareText {

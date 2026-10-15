@@ -766,7 +766,7 @@ func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.
 	if candidate.DevelopmentPlan == nil {
 		t.Fatal("public candidate omitted original plan confirmation")
 	}
-	if _, run, err := master.f.SubmitControl(candidate); err != nil {
+	if _, run, err := submitControlWithHost(t, master.f, candidate); err != nil {
 		t.Fatal(err)
 	} else {
 		master.run = run

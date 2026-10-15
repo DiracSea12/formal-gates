@@ -39,7 +39,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, d.run, err = d.f.SubmitControl(candidate)
+				_, d.run, err = submitControlWithHost(t, d.f, candidate)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -70,7 +70,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(request)
+			_, d.run, err = submitControlWithHost(t, d.f, request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,7 +89,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, d.run, err = d.f.SubmitControl(candidate)
+			_, d.run, err = submitControlWithHost(t, d.f, candidate)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +97,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			accepted, changed, err := d.f.SubmitControl(confirmation)
+			accepted, changed, err := submitControlWithHost(t, d.f, confirmation)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +128,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 			}
 			material := d.run.WorkerMaterials[freshAction]
 			d.reopen()
-			if replay, replayed, err := d.f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, accepted) || !reflect.DeepEqual(replayed.WorkerMaterials, d.run.WorkerMaterials) {
+			if replay, replayed, err := submitControlWithHost(t, d.f, confirmation); err != nil || !reflect.DeepEqual(replay, accepted) || !reflect.DeepEqual(replayed.WorkerMaterials, d.run.WorkerMaterials) {
 				t.Fatal("repeated confirmed change replayed preparation", err)
 			}
 			d.drive()
