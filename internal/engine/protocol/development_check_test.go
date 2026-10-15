@@ -121,7 +121,7 @@ func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
 		}
 		values[field] = "other"
 		altered.AdapterEvidence = &AdapterEvidence{Values: values}
-		if validateCheckReceipt(intent, altered) == nil {
+		if _, err := s.validateNativeCheckReceipt(intent, p, altered); err == nil {
 			t.Fatalf("receipt admitted changed %s", field)
 		}
 	}

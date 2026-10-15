@@ -950,7 +950,12 @@ func (e *Engine) applyNativeReceipt(s *State, intent HostActionIntent, receipt H
 		return nil
 	}
 	if intent.Adapter.Operation == "op.check" {
-		return s.validateNativeCheckReceipt(intent, receipt)
+		p, err := checkParameters(intent)
+		if err != nil {
+			return err
+		}
+		_, err = s.validateNativeCheckReceipt(intent, p, receipt)
+		return err
 	}
 	if intent.Adapter.Operation == "op.workspace" || intent.Adapter.Operation == "op.cleanup" {
 		return e.applyResourceReceipt(s, intent, receipt)

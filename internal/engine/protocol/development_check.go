@@ -234,15 +234,7 @@ func (s *State) checkResource(action string, source CandidateEvidence) NativeRes
 	return r
 }
 
-func validateCheckReceipt(intent HostActionIntent, receipt HostActionReceipt) error {
-	p, err := checkParameters(intent)
-	if err != nil {
-		return err
-	}
-	var e CheckEvidence
-	if err := decodeAdapterValues(receipt, &e); err != nil {
-		return err
-	}
+func validateCheckReceipt(intent HostActionIntent, p CheckParameters, e CheckEvidence) error {
 	if p.QA != nil {
 		operation, goName := p.QA.Operation, ""
 		if p.QA.GoTestRef != "" {
@@ -283,7 +275,11 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || p.SourceActionID != action || p.Check.ID != check || s.validateNativeCheckReceipt(intent, receipt) != nil {
+		if err != nil || p.SourceActionID != action || p.Check.ID != check {
+			continue
+		}
+		evidence, err := s.validateNativeCheckReceipt(intent, p, receipt)
+		if err != nil {
 			continue
 		}
 		result := s.Results[action]
@@ -293,8 +289,6 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 		if source, ok := s.editSourceProof(action); ok && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
 			continue
 		}
-		var evidence CheckEvidence
-		_ = decodeAdapterValues(receipt, &evidence)
 		return &evidence, true
 	}
 	return nil, false
@@ -502,49 +496,49 @@ func (s *State) editChecks(r WorkerResult) []DevelopmentCheck {
 
 // Reused preparation retains the original execution values. The new receipt
 // names that original action; it never rewrites its request or stream identity.
-func (s *State) validateNativeCheckReceipt(intent HostActionIntent, receipt HostActionReceipt) error {
+func (s *State) validateNativeCheckReceipt(intent HostActionIntent, p CheckParameters, receipt HostActionReceipt) (CheckEvidence, error) {
 	var evidence CheckEvidence
 	if err := decodeAdapterValues(receipt, &evidence); err != nil {
-		return err
+		return evidence, err
 	}
 	if evidence.PreparationSourceAction == "" {
-		return validateCheckReceipt(intent, receipt)
+		return evidence, validateCheckReceipt(intent, p, evidence)
 	}
 	original, ok := s.hostIntent(evidence.PreparationSourceAction)
 	if !ok || original.ActionID == intent.ActionID {
-		return validationError("shared preparation has no distinct original execution")
+		return evidence, validationError("shared preparation has no distinct original execution")
 	}
 	recorded, ok := s.HostActionReceipts[original.ActionID]
 	if !ok || recorded.Status != HostActionStatusExecuted {
-		return validationError("shared preparation original action has no execution receipt")
+		return evidence, validationError("shared preparation original action has no execution receipt")
 	}
 	var actual CheckEvidence
 	if err := decodeAdapterValues(recorded, &actual); err != nil {
-		return err
+		return evidence, err
 	}
 	if actual.PreparationSourceAction != "" || actual.PreparationInput == "" || actual.Error != "" {
-		return validationError("shared preparation source is not an original complete execution")
-	}
-	if err := validateCheckReceipt(original, recorded); err != nil {
-		return err
-	}
-	p, err := checkParameters(intent)
-	if err != nil {
-		return err
+		return evidence, validationError("shared preparation source is not an original complete execution")
 	}
 	prior, err := checkParameters(original)
-	if err != nil || p.QA == nil || prior.QA == nil || p.QA.Preparation == nil || prior.QA.Preparation == nil || p.QA.Preparation.Independent || prior.QA.Preparation.Independent {
-		return validationError("only approved common preparation can reuse an execution")
+	if err != nil {
+		return evidence, err
+	}
+	if err := validateCheckReceipt(original, prior, actual); err != nil {
+		return evidence, err
+	}
+	if p.QA == nil || prior.QA == nil || p.QA.Preparation == nil || prior.QA.Preparation == nil || p.QA.Preparation.Independent || prior.QA.Preparation.Independent {
+		return evidence, validationError("only approved common preparation can reuse an execution")
 	}
 	if !commonQAPreparation(p, prior) || p.QA.PreparationOrdinal != prior.QA.PreparationOrdinal || digestOfCanonical(p.QA.Operation) != digestOfCanonical(prior.QA.Operation) {
-		return validationError("shared preparation original inputs differ")
+		return evidence, validationError("shared preparation original inputs differ")
 	}
-	evidence.PreparationSourceAction = ""
-	if digestOfCanonical(evidence) != digestOfCanonical(actual) {
-		return validationError("shared preparation altered original execution or stream facts")
+	shared := evidence
+	shared.PreparationSourceAction = ""
+	if digestOfCanonical(shared) != digestOfCanonical(actual) {
+		return evidence, validationError("shared preparation altered original execution or stream facts")
 	}
 	if _, obsolete := s.ObsoleteActions[original.ActionID]; obsolete {
-		return validationError("shared preparation original action is obsolete")
+		return evidence, validationError("shared preparation original action is obsolete")
 	}
-	return nil
+	return evidence, nil
 }

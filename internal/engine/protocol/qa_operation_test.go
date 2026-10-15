@@ -326,6 +326,67 @@ func TestQAOperationsPreservePartitionOrderAndReceipts(t *testing.T) {
 	}
 }
 
+func TestSharedPreparationReceiptsRetainOriginalExecutionFacts(t *testing.T) {
+	s, cd, target := qaOperationState(t)
+	s.currentValidationWave().Scope = coverage.ScopeFull
+	s.currentValidationWave().Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
+	plans, err := s.qaCheckPlans(target, cd)
+	if err != nil || len(plans) != 4 {
+		t.Fatal("approved shared preparation plans", err)
+	}
+	original := addQAOperationReceipt(t, s, plans[0], "ready", 0)
+	originalParameters, err := checkParameters(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := s.HostActionReceipts[original.ActionID]
+	var actual CheckEvidence
+	if err := decodeAdapterValues(recorded, &actual); err != nil {
+		t.Fatal(err)
+	}
+	actual.PreparationInput = "original-input"
+	actual.PreparationArtifacts = map[string]string{"prepared": "original-artifact"}
+	recorded.AdapterEvidence.Values, _ = normalizeHostActionParams(actual)
+	s.HostActionReceipts[original.ActionID] = recorded
+	shared := addQAOperationReceipt(t, s, plans[2], "ready", 0)
+	reused := actual
+	reused.PreparationSourceAction = original.ActionID
+	receipt := s.HostActionReceipts[shared.ActionID]
+	receipt.AdapterEvidence.Values, _ = normalizeHostActionParams(reused)
+	s.HostActionReceipts[shared.ActionID] = receipt
+	body, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored State
+	if err := json.Unmarshal(body, &restored); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []*State{s, &restored} {
+		before, _ := json.Marshal(state.HostActionReceipts)
+		e := &Engine{cfg: Config{Definition: cd}}
+		if err := e.applyNativeReceipt(state, shared, receipt); err != nil {
+			t.Fatal("shared receipt lost its original execution", err)
+		}
+		fact, done := state.qaCheckReceipt(plans[2])
+		if !done || fact.ActionID != original.ActionID || !reflect.DeepEqual(fact.Parameters, originalParameters) || !reflect.DeepEqual(fact.Evidence, reused) {
+			t.Fatalf("shared receipt changed original parameters or evidence: %+v", fact)
+		}
+		changed := reused
+		changed.RequestDigest = "another-execution"
+		altered := receipt
+		values, _ := normalizeHostActionParams(changed)
+		altered.AdapterEvidence = &AdapterEvidence{Values: values}
+		if err := e.applyNativeReceipt(state, shared, altered); err == nil {
+			t.Fatal("shared receipt admitted changed original execution facts")
+		}
+		after, _ := json.Marshal(state.HostActionReceipts)
+		if string(after) != string(before) {
+			t.Fatal("receipt validation or lookup mutated recorded execution evidence")
+		}
+	}
+}
+
 func TestQACoreRejectsTextOnlyAndChangedNativeFacts(t *testing.T) {
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull

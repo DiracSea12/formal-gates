@@ -152,14 +152,14 @@ func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool)
 			continue
 		}
 		issued, err := checkParameters(intent)
-		if err != nil || issued.QA == nil || digestOfCanonical(issued) != digestOfCanonical(p) || s.validateNativeCheckReceipt(intent, receipt) != nil {
+		if err != nil || issued.QA == nil || digestOfCanonical(issued) != digestOfCanonical(p) {
+			continue
+		}
+		evidence, err := s.validateNativeCheckReceipt(intent, issued, receipt)
+		if err != nil {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {
-			continue
-		}
-		var evidence CheckEvidence
-		if decodeAdapterValues(receipt, &evidence) != nil {
 			continue
 		}
 		if evidence.PreparationSourceAction != "" {
@@ -666,11 +666,11 @@ func (s *State) qaApprovedRecipe(wave *ValidationWave, mode coverage.ReviewKind,
 			continue
 		}
 		receipt, found := s.HostActionReceipts[intent.ActionID]
-		if !found || receipt.Status != HostActionStatusExecuted || s.validateNativeCheckReceipt(intent, receipt) != nil {
+		if !found || receipt.Status != HostActionStatusExecuted {
 			continue
 		}
-		var evidence CheckEvidence
-		if decodeAdapterValues(receipt, &evidence) != nil || evidence.Error != "" {
+		evidence, err := s.validateNativeCheckReceipt(intent, p, receipt)
+		if err != nil || evidence.Error != "" {
 			continue
 		}
 		return slices.Clone(p.QA.Recipe)

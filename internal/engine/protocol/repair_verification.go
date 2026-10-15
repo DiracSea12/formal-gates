@@ -238,11 +238,11 @@ func (s *State) repairPlanReceipt(plan CheckParameters) (ExecutionOperationFact,
 			continue
 		}
 		p, err := checkParameters(intent)
-		if err != nil || digestOfCanonical(p) != expectedDigest || !s.nativeActionAllowed(intent) || s.validateNativeCheckReceipt(intent, receipt) != nil {
+		if err != nil || digestOfCanonical(p) != expectedDigest || !s.nativeActionAllowed(intent) {
 			continue
 		}
-		var evidence CheckEvidence
-		if decodeAdapterValues(receipt, &evidence) == nil {
+		evidence, err := s.validateNativeCheckReceipt(intent, p, receipt)
+		if err == nil {
 			return ExecutionOperationFact{ActionID: intent.ActionID, Parameters: p, Evidence: evidence}, true
 		}
 	}
