@@ -999,6 +999,18 @@ func (s *State) reviewDispositionPending(series review.Series) bool {
 	return false
 }
 
+// PendingAskCurrent projects unresolved controls whose required input is ready.
+// Development confirmations use the same preparation fact as their admission.
+func (s *State) PendingAskCurrent(ask PendingAsk) bool {
+	if ask.Resolved {
+		return false
+	}
+	if s.Route == "regular" && (ask.Control == ControlConfirmTopology || ask.Control == ControlSelectRoute) {
+		return s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
+	}
+	return true
+}
+
 // reconcileReviewAsks publishes each established finding through the existing
 // user-disposition contract. Each request retains its candidate/finding identity;
 // source results and original findings remain immutable.
@@ -1006,6 +1018,13 @@ func (e *Engine) reconcileReviewAsks(s *State) bool {
 	changed := e.reconcileReviewGrantAsks(s)
 	if s.requirementChangePending() || s.abortRequested() {
 		return changed
+	}
+	for id, ask := range s.PendingAsks {
+		if !ask.Resolved && !s.PendingAskCurrent(ask) {
+			ask.Resolved = true
+			s.PendingAsks[id] = ask
+			changed = true
+		}
 	}
 	offers := map[string][]AskOption{}
 	for _, series := range []review.Series{s.ReviewSeries.ProductReview, s.ReviewSeries.StartReadiness} {

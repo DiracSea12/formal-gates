@@ -470,7 +470,7 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 	slices.SortFunc(view.OperatorFacts, func(a, b decision.Fact) int { return strings.Compare(a.Key, b.Key) })
 	view.ControlRequests = nil
 	for id, ask := range s.PendingAsks {
-		if !ask.Resolved {
+		if s.PendingAskCurrent(ask) {
 			view.ControlRequests = append(view.ControlRequests, id)
 		}
 	}

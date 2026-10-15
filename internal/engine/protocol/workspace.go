@@ -408,7 +408,7 @@ func (s *State) pendingControl() bool {
 
 func (s *State) hasPendingAsks() bool {
 	for _, ask := range s.PendingAsks {
-		if !ask.Resolved {
+		if s.PendingAskCurrent(ask) {
 			return true
 		}
 	}

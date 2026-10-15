@@ -1772,7 +1772,7 @@ func (f *Facade) pendingRequirementAskFace(snap protocol.Snapshot) *PendingRequi
 func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 	ids := make([]string, 0, len(snap.State.PendingAsks))
 	for id, ask := range snap.State.PendingAsks {
-		if ask.Resolved {
+		if !snap.State.PendingAskCurrent(ask) {
 			continue
 		}
 		ids = append(ids, id)

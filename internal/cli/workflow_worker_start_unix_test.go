@@ -4,8 +4,10 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,8 +21,11 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/prompts"
+	"formal-gates/internal/requirement"
 )
 
 // The controlled supervisor records actual execution ownership and a native
@@ -89,7 +94,7 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 	<-stop
 }
 
-func workflowStartFixture(t *testing.T) (*facade.Facade, string, facade.WorkerMaterial, string) {
+func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
 	root, home, bin := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -123,6 +128,9 @@ func workflowStartFixture(t *testing.T) (*facade.Facade, string, facade.WorkerMa
 		t.Fatal(err)
 	}
 	launcher := "#!/bin/sh\nexec " + "'" + strings.ReplaceAll(executable, "'", "'\\''") + "'" + " -test.run '^TestWorkflowSupervisorProcess$' -- \"$@\"\n"
+	if len(selections) > 0 {
+		launcher = "#!/bin/sh\n[ \"$#\" = 3 ] && [ \"$1\" = harness ] && [ \"$2\" = supervise ] || exit 92\nprintf '%s\\n' \"$3\" >> \"$WORKFLOW_SUPERVISOR_CALLS\"\nexit 93\n"
+	}
 	if err := os.MkdirAll(filepath.Join(target, "bin"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +150,11 @@ func workflowStartFixture(t *testing.T) (*facade.Facade, string, facade.WorkerMa
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", Route: "regular", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt}})
+	var selection *protocol.FlowSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", Route: "regular", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt, FlowSelection: selection}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +320,126 @@ func TestWorkflowWorkerStartHonorsActualCancellationAndRequirementBarrier(t *tes
 				t.Fatal("cancellation changed original issuance", root, shown, err)
 			}
 		})
+	}
+}
+
+// The native consumer must reach the current preparation's original supervisor
+// after requirement replacement, rather than stop at its superseded topology Ask.
+func TestWorkflowConsumerStartsRequirementReplacementPreparation(t *testing.T) {
+	f, root, original, originalDirectory := workflowStartFixture(t, &protocol.FlowSelection{Disabled: []string{"product-review", "start-readiness", "qa", "gate", "repair"}})
+	var material worker.Material
+	if err := readJSONFileInto(original.Path, &material); err != nil {
+		t.Fatal(err)
+	}
+	input := material.Input
+	if input.Handler != "engine.development.plan.v1" || input.Validation == nil || input.Provider != "workbuddy" || input.Pending.ActionID != original.ActionID {
+		t.Fatal("preparation fixture has a different original protocol input", input)
+	}
+	plan := &protocol.GranularityReview{Reason: "Public engine entries share one run-binding contract", Batches: []protocol.DevelopmentBatch{{
+		ID: "entries", RequirementPoints: requirement.PointIDs(input.RequirementPoints), Subtasks: []protocol.DevelopmentSubtask{{ID: "run-binding", Description: "Implement the confirmed engine entry binding"}},
+		Deliverable: "Engine entries retain the authoritative run and reject legacy writes", PublicEntry: "workflow", Artifacts: []string{"app.go"}, Interfaces: "Workflow commands", StateBoundary: "Authoritative run state", Risk: "Incorrect run selection",
+		DoD: []protocol.DevelopmentCriterion{{ID: "binding", Description: "Public engine entries preserve the confirmed run binding"}}, Checks: []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Goal: "Build the project"}, {ID: "tests", Purpose: protocol.CheckFullTests, Goal: "Run the public-entry suite"}},
+		Rollback: "Revert the entry change", Recovery: "Continue from the confirmed run inputs", Handoff: "Document entry behavior and checks", ContextCost: "One entry contract fits one worker",
+	}}}
+	identity := "controlled-preparation"
+	spawn, err := protocol.NewSpawnReceiptEvent("preparation-spawn", original.ActionID, input.Provider, identity, protocol.SpawnStatusSpawned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted, _, err := f.Submit(spawn); err != nil || accepted.Status != "ACCEPTED" {
+		t.Fatal("original controlled preparation receipt was rejected", accepted, err)
+	}
+	usage := `{"type":"assistant","uuid":"controlled-preparation","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}` + "\n"
+	transcript := filepath.Join(t.TempDir(), "usage.jsonl")
+	mustWriteCLI(t, transcript, usage)
+	if err := os.MkdirAll(originalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]any{
+		"native-request.json": map[string]any{"provider": "workbuddy", "engine": map[string]any{"root": root, "runId": "consumer", "workerMaterial": original, "resumeActionId": ""}},
+		"source.json":         map[string]any{"provider": "workbuddy", "identity": identity, "transcript": transcript, "sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(usage)))},
+	} {
+		if err := writeInvocationFile(filepath.Join(originalDirectory, name), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lifecycle.ObserveNativeCompletion(root, "consumer", original.ActionID, input.Provider, identity); err != nil {
+		t.Fatal(err)
+	}
+	event := protocol.Event{ID: "prepared-plan", Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: original.ActionID, Provider: input.Provider, Outcome: protocol.OutcomePass, PayloadDigest: "controlled-plan-result", Validation: &protocol.ValidationResult{Binding: input.Validation.Binding, Status: protocol.OutcomePass, GranularityReview: plan}}}
+	if accepted, _, err := f.Submit(event); err != nil || accepted.Status != "ACCEPTED" {
+		t.Fatal("original controlled plan was rejected", accepted, err)
+	}
+	if requested, err := f.RequestWorkflowChoice(); err != nil || !requested {
+		t.Fatal("prepared plan did not publish topology", err)
+	}
+	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlRequestRequirementChange})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := f.SubmitControl(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(root, input.RequirementDocument.Path), strings.Replace(input.RequirementDocument.Content, "authoritative run binding", "current confirmed run binding", 1))
+	choices := make([]facade.WorkChoice, len(run.RequirementWork))
+	for i := range choices {
+		choices[i] = facade.WorkChoice{Disposition: protocol.RequirementWorkRedo, Reason: "The changed run-binding requirement requires a current plan"}
+	}
+	askPosition := 0
+	for i, ask := range run.PendingAsks {
+		if ask.Control == protocol.ControlRequestRequirementChange {
+			askPosition = i + 1
+		}
+	}
+	request, err = f.PrepareControl(facade.ControlInput{Request: protocol.ControlRequestRequirementChange, Ask: askPosition, Requirement: &facade.RequirementChangeInput{Classification: protocol.RequirementClassificationChanged, Redo: []string{"route"}, Work: choices, Impact: protocol.RequirementImpact{ChangedItems: []string{"current run binding"}, TransitiveImpacts: []string{"development plan"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.SubmitControl(request); err != nil {
+		t.Fatal(err)
+	}
+	confirmation, err := f.PrepareControl(facade.ControlInput{Ask: askPosition, Choice: "proceed", Reason: "Confirm the changed run binding and all original redo dispositions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.SubmitControl(confirmation); err != nil {
+		t.Fatal(err)
+	}
+	f, err = facade.Open(root, "consumer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = f.Show()
+	if err != nil || len(run.WorkerMaterials) != 1 {
+		t.Fatal("replacement preparation was not issued", err)
+	}
+	var current facade.WorkerMaterial
+	for _, ref := range run.WorkerMaterials {
+		current = ref
+	}
+	if current.ActionID == original.ActionID {
+		t.Fatal("replacement reused obsolete preparation")
+	}
+	// The real consumer publishes the signed invocation and starts its supervisor;
+	// this local fixture records the method and refuses before any model call.
+	consumed, err := consumeWorkflow(IO{}, f, root, "consumer")
+	if err != nil || consumed.Boundary != "BLOCKED" || !strings.Contains(consumed.Blocked[current.ActionID], "native supervisor ended without an exit receipt") {
+		t.Fatal("obsolete topology stopped the current native preparation", consumed.Boundary, consumed.Blocked, err)
+	}
+	directory := facade.WorkerExecutionDirectory(current, "")
+	calls, err := os.ReadFile(filepath.Join(root, "supervisor-calls"))
+	if err != nil || string(calls) != directory+"\n" {
+		t.Fatal("consumer did not start exactly the current original supervisor", string(calls), err)
+	}
+	var native struct {
+		Engine struct {
+			WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
+		} `json:"engine"`
+	}
+	body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+	if err != nil || json.Unmarshal(body, &native) != nil || native.Engine.WorkerMaterial != current {
+		t.Fatal("consumer changed the original replacement material", native, err)
 	}
 }
 
