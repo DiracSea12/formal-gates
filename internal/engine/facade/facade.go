@@ -95,6 +95,7 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	Configuration        protocol.ConfigurationSelection      `json:"configuration"`
 	FlowSelection        *protocol.FlowSelection              `json:"flowSelection,omitempty"`
 	FlowNodes            []FlowNodeFace                       `json:"flowNodes,omitempty"`
 	ExecutionNodes       []ExecutionNodeFace                  `json:"executionNodes,omitempty"`
@@ -185,13 +186,14 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
-	Execution    *protocol.ExecutionSelection      `json:"execution,omitempty"`
-	Continuation *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
-	Validation   *protocol.ValidationRequest       `json:"validation,omitempty"`
-	RoundGrant   *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
-	RequestID    string                            `json:"requestId"`
-	Control      protocol.ControlKind              `json:"control"`
-	Options      []protocol.AskOption              `json:"options"`
+	Configuration *protocol.ConfigurationSelection  `json:"configuration,omitempty"`
+	Execution     *protocol.ExecutionSelection      `json:"execution,omitempty"`
+	Continuation  *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
+	Validation    *protocol.ValidationRequest       `json:"validation,omitempty"`
+	RoundGrant    *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
+	RequestID     string                            `json:"requestId"`
+	Control       protocol.ControlKind              `json:"control"`
+	Options       []protocol.AskOption              `json:"options"`
 	// RouteGates 是 SELECT_ROUTE Ask 钉住的候选门全集的只读投影（其余
 	// 控制为空）：用户据此所见全集提交决定。
 	RouteGates []string `json:"routeGates,omitempty"`
@@ -271,7 +273,7 @@ type ReviewFace struct {
 	ReadinessProposal *protocol.GranularityReview `json:"readinessProposal,omitempty"`
 	Actions           []ReviewActionFace          `json:"actions"`
 	Topology          *protocol.TopologyBinding   `json:"topology,omitempty"`
-	RouteMode         string                      `json:"routeMode,omitempty"`
+	RouteConfirmed    bool                        `json:"routeConfirmed,omitempty"`
 	SelectedGates     []string                    `json:"selectedGates,omitempty"`
 	// RequirementRevision 是当前权威需求 revision（确认账本末条）。
 	RequirementRevision string `json:"requirementRevision"`
@@ -288,7 +290,7 @@ func reviewFace(state *protocol.State) ReviewFace {
 			reviewActionFace(state, state.ReviewSeries.StartReadiness),
 		},
 		Topology:              state.Topology,
-		RouteMode:             state.RouteMode,
+		RouteConfirmed:        state.RouteConfirmed,
 		SelectedGates:         state.SelectedGates,
 		RequirementRevision:   state.RequirementRevision(),
 		LastRequirementChange: requirementChangeFace(state),
@@ -410,9 +412,10 @@ type startIntent struct {
 }
 
 type StartOptions struct {
-	Settings *settings.Effective
-	Root     string
-	Request  StartRequest
+	Configuration string
+	Settings      *settings.Effective
+	Root          string
+	Request       StartRequest
 	// ArtifactRoot is the candidate test-project root containing injected
 	// requirement/solution artifacts. When set, receipt bindings are
 	// recomputed before the first state write.
@@ -628,9 +631,16 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		if homeErr != nil {
 			return nil, Run{}, homeErr
 		}
-		loaded, loadErr := settings.Load(root, home)
+		loaded, configurations, loadErr := settings.LoadConfigurations(root, home)
 		if loadErr != nil {
 			return nil, Run{}, loadErr
+		}
+		if options.Configuration != "" {
+			selected, err := settings.SelectConfiguration(configurations, options.Configuration)
+			if err != nil {
+				return nil, Run{}, err
+			}
+			loaded.ConfigurationName, loaded.Configuration, loaded.ConfigurationSource = selected.Name, selected.Configuration, selected.Source
 		}
 		effective = &loaded
 	}
@@ -640,6 +650,9 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		copy.Sources = maps.Clone(effective.Sources)
 		copy.Sources["capacity"] = "start option"
 		effective = &copy
+	}
+	if req.FlowSelection == nil {
+		req.FlowSelection = effective.Configuration.FlowSelection
 	}
 	options.Capacity = effective.Values.Capacity
 	tokenCap := effective.Values.TokenCap
@@ -1487,7 +1500,7 @@ func (f *Facade) submit(event protocol.Event, selectExecution bool) (protocol.Ac
 			}
 		}
 	}
-	if event.Request != nil && event.Request.Control == protocol.ControlContinueNode || event.Decide != nil && event.Decide.Continuation != nil {
+	if event.Request != nil && (event.Request.Control == protocol.ControlContinueNode || event.Request.Configuration != nil) || event.Decide != nil && (event.Decide.Continuation != nil || event.Decide.Review != nil && event.Decide.Review.Route != nil && event.Decide.Review.Route.Configuration != nil) {
 		parent, err := f.nodeParentSnapshot()
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -1667,6 +1680,7 @@ func (f *Facade) project() (Run, error) {
 		ReviewVerificationContexts: verificationContexts,
 		TaskMessages:               snap.State.TaskMessages,
 		Settings:                   stateSettings(snap.State),
+		Configuration:              snap.State.EffectiveConfiguration(),
 		WorkerMaterials:            materials,
 		ValidationInputs:           snap.State.ValidationInputs(f.definition),
 		Attempts:                   snap.State.Attempts,
@@ -1818,15 +1832,16 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
-			Execution:    ask.Execution,
-			Continuation: ask.Continuation,
-			Validation:   ask.Validation,
-			RequestID:    id,
-			RoundGrant:   ask.RoundGrant,
-			Control:      ask.Control,
-			Options:      append([]protocol.AskOption{}, ask.Options...),
-			RouteGates:   ask.RouteGates,
-			Token:        token,
+			Execution:     ask.Execution,
+			Continuation:  ask.Continuation,
+			Validation:    ask.Validation,
+			RequestID:     id,
+			RoundGrant:    ask.RoundGrant,
+			Control:       ask.Control,
+			Options:       append([]protocol.AskOption{}, ask.Options...),
+			RouteGates:    ask.RouteGates,
+			Configuration: ask.Configuration,
+			Token:         token,
 		})
 	}
 	return faces
@@ -2067,6 +2082,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 func runFromSummary(summary TerminalSummary) Run {
 	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
+		run.Configuration = s.EffectiveConfiguration()
 		run.FlowSelection = s.FlowSelection
 		run.FlowNodes = flowNodeFaces(s)
 		run.ExecutionNodes = executionNodeFaces(s)
@@ -2580,7 +2596,11 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...proto
 	if err != nil {
 		return nil, err
 	}
-	if !snapshot.State.FlowNodeEnabled("development") {
+	selection := snapshot.State.FlowSelection
+	if route.Configuration != nil {
+		selection = route.Configuration.Configuration.FlowSelection
+	}
+	if selection != nil && slices.Contains(selection.Disabled, "development") {
 		return nil, nil
 	}
 	if len(topology) == 0 && route.DevelopmentPlan == nil {

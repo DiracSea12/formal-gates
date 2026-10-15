@@ -101,7 +101,7 @@ func (s *State) BusinessNodes(cd *compiler.CompiledDefinition, parents ...Snapsh
 			}
 		}
 		modes := s.validationKinds()
-		if s.SliceChild == nil && s.RouteMode == "" {
+		if s.SliceChild == nil && !s.RouteConfirmed {
 			modes = []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox}
 		}
 		for _, mode := range modes {
@@ -196,15 +196,8 @@ func (e *Engine) nodeContinuationPreview(s *State, target string, revision uint6
 		return NodeContinuationPreview{}, validationError("继续目标不属于当前运行的业务节点")
 	}
 	p := NodeContinuationPreview{From: s.businessFrom(), FromPhase: s.Phase, To: to, RequirementRevision: s.RequirementRevision(), StateRevision: revision}
-	if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil {
-		parent := parents[0]
-		if parent.State.RunID != s.SliceChild.MasterRunID || parent.State.SliceChildren[s.SliceChild.SliceID] != s.RunID {
-			return p, validationError("片内节点需要原主运行成员事实")
-		}
-		p.ParentRunID, p.ParentRevision = parent.State.RunID, parent.Revision
-		p.EnteredMainline = parent.State.SliceEnteredMainline(s.RunID)
-		p.ParentClaims = parent.State.SliceIntegrationClaims(s.RunID)
-
+	if err := s.bindContinuationParent(&p, parents); err != nil {
+		return p, err
 	}
 	for _, w := range s.requirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkCarry
@@ -234,6 +227,35 @@ func (e *Engine) nodeContinuationPreview(s *State, target string, revision uint6
 	slices.Sort(p.Effects)
 	p.Digest = p.CanonicalDigest()
 	return p, nil
+}
+
+func (s *State) bindContinuationParent(p *NodeContinuationPreview, parents []Snapshot) error {
+	if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil {
+		parent := parents[0]
+		if parent.State.RunID != s.SliceChild.MasterRunID || parent.State.SliceChildren[s.SliceChild.SliceID] != s.RunID {
+			return validationError("片内节点需要原主运行成员事实")
+		}
+		p.ParentRunID, p.ParentRevision = parent.State.RunID, parent.Revision
+		p.EnteredMainline = parent.State.SliceEnteredMainline(s.RunID)
+		p.ParentClaims = parent.State.SliceIntegrationClaims(s.RunID)
+	}
+	return nil
+}
+
+func (s *State) validateContinuationParent(preview NodeContinuationPreview, changes bool, parent *Snapshot) error {
+	entered := preview.EnteredMainline
+	claims := preview.ParentClaims
+	if parent != nil && parent.State != nil && s.SliceChild != nil {
+		entered = parent.State.SliceEnteredMainline(s.RunID)
+		claims = parent.State.SliceIntegrationClaims(s.RunID)
+	}
+	if changes && len(claims) != 0 {
+		return validationError("主线正在对账此片输入，需要先由主线继续")
+	}
+	if changes && entered {
+		return validationError("该片已进入主线；普通修改由主线职责承接，重建需主运行授权")
+	}
+	return nil
 }
 
 func (e *Engine) NodeContinuationPreview(target string, parents ...Snapshot) (NodeContinuationPreview, error) {
@@ -357,15 +379,8 @@ func (e *Engine) acceptNodeContinuation(s *State, ask PendingAsk, d *DecidePaylo
 	if d.Choice != "approve" || n == nil || n.AppliedRevision != 0 || strings.TrimSpace(n.Reason) == "" || n.PreviewDigest != ask.Continuation.Digest || n.FreshnessToken != d.Token || ask.Continuation.RequirementRevision != s.RequirementRevision() {
 		return validationError("节点继续需要当前原预览、授权 token 和用户理由")
 	}
-	entered := ask.Continuation.EnteredMainline
-	if parent != nil && parent.State != nil && s.SliceChild != nil {
-		entered = parent.State.SliceEnteredMainline(s.RunID)
-		if len(parent.State.SliceIntegrationClaims(s.RunID)) != 0 && (n.changesExecutionEpoch(ask.Continuation.To) || ask.Continuation.To.Kind == "route") {
-			return validationError("主线正在对账此片输入，需要先由主线继续")
-		}
-	}
-	if entered && (n.changesExecutionEpoch(ask.Continuation.To) || ask.Continuation.To.Kind == "route") {
-		return validationError("该片已进入主线；普通修改由主线职责承接，重建需主运行授权")
+	if err := s.validateContinuationParent(*ask.Continuation, n.changesExecutionEpoch(ask.Continuation.To) || ask.Continuation.To.Kind == "route", parent); err != nil {
+		return err
 	}
 	if err := e.validateRequirementWork(s, n.Work, false); err != nil {
 		return err
@@ -377,26 +392,32 @@ func (e *Engine) acceptNodeContinuation(s *State, ask PendingAsk, d *DecidePaylo
 		if choice.Work != ask.Continuation.Work[i].Work {
 			return validationError("节点继续改变了原工作绑定")
 		}
+	}
+	s.retireContinuationWork(*ask.Continuation, n.Work, string(d.Request))
+	return nil
+}
+
+func (s *State) retireContinuationWork(preview NodeContinuationPreview, work []RequirementWorkDecision, request string) {
+	for _, choice := range work {
 		if choice.Disposition == RequirementWorkRedo {
 			s.archiveDispatchResults(choice.Work.ActionID)
 			if pending, attempt, live := s.workerActionTarget(choice.Work.ActionID); live {
-				s.recordObsoleteAction(pending, attempt, "", "节点继续授权 "+string(d.Request))
+				s.recordObsoleteAction(pending, attempt, "", "Workflow continuation authorized by "+request)
 			}
 		}
 	}
-	for _, action := range ask.Continuation.ReviewActions {
+	for _, action := range preview.ReviewActions {
 		s.archiveDispatchResults(action)
 		if pending, attempt, live := s.workerActionTarget(action); live {
-			s.recordObsoleteAction(pending, attempt, "", "节点继续授权 "+string(d.Request))
+			s.recordObsoleteAction(pending, attempt, "", "Workflow continuation authorized by "+request)
 		}
 	}
-	return nil
 }
 
 func (s *State) nodeContinuationDecisions() []RecordedDecision {
 	var decisions []RecordedDecision
 	for _, d := range s.Decisions {
-		if d.Control != ControlContinueNode || d.Choice != "approve" || d.Continuation == nil {
+		if (d.Control != ControlContinueNode && d.Control != ControlSelectRoute) || d.Choice != "approve" || d.Continuation == nil {
 			continue
 		}
 		if len(s.RequirementRevisions) > 1 && s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision > d.Revision {
@@ -499,7 +520,10 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 		if err := e.applyWorkAuthorization(s, entry); err != nil {
 			return changed, err
 		}
-		if d.Continuation.changesExecutionEpoch(p.To) || current && p.To.Kind == "route" {
+		if p.To.Kind == "configuration" {
+			e.rebindValidationRoute(s)
+		}
+		if d.Continuation.changesExecutionEpoch(p.To) || current && p.To.Kind == "route" || p.To.Kind == "configuration" && s.SliceReceipt != nil && s.SliceReceipt.Receipt.Validation.RouteDigest != s.validationRouteDigest() {
 			if err := s.reopenSliceCheckpoint(); err != nil {
 				return changed, err
 			}
@@ -516,6 +540,7 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 		if current {
 			switch p.To.Kind {
 			case "route":
+				s.RouteConfirmed = false
 				var original RecordedDecision
 				for _, decision := range s.Decisions {
 					if decision.Control == ControlSelectRoute && decision.Review != nil && decision.Review.Route != nil && decision.Revision > original.Revision {
@@ -524,7 +549,12 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 				}
 				if original.Review != nil {
 					request := "continuation-route:" + d.RequestID
-					s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlSelectRoute, RouteGates: slices.Clone(original.Review.Route.Gates), Options: []AskOption{{ID: "full", Label: "全部既有门"}, {ID: "custom", Label: "选择合法路线"}}}
+					selected := s.EffectiveConfiguration()
+					preview, err := e.configurationPreview(s, selected, original.Review.Route.Gates, nextRevision)
+					if err != nil {
+						return changed, err
+					}
+					s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlSelectRoute, RouteGates: slices.Clone(original.Review.Route.Gates), Configuration: &selected, Continuation: &preview, Options: []AskOption{{ID: "approve", Label: "确认门选择"}}}
 				}
 			case "intake":
 				request := "continuation-intake:" + d.RequestID
@@ -560,6 +590,8 @@ func (s *State) nodeInputsReady(n BusinessNode, cd *compiler.CompiledDefinition)
 		return false
 	}
 	switch n.Kind {
+	case "configuration":
+		return true
 	case "intake":
 		return s.IntakeReceipt != nil
 	case "product-review":
@@ -572,7 +604,7 @@ func (s *State) nodeInputsReady(n BusinessNode, cd *compiler.CompiledDefinition)
 		return s.Topology != nil && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	case "development":
 		_, plan, _ := s.confirmedDevelopmentPlan()
-		return plan != nil && s.developmentPlanCurrent(plan) && s.RouteMode != "" && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
+		return plan != nil && s.developmentPlanCurrent(plan) && s.RouteConfirmed && s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	case "qa-design":
 		return s.validationRequirementCurrent() && slices.Contains(s.validationKinds(), n.Mode) && (n.Mode != coverage.ReviewWhitebox || s.Validation.AuthoringWorkspace != "")
 	case "qa-review":

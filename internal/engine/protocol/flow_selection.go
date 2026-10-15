@@ -1,20 +1,19 @@
 package protocol
 
 import (
-	"fmt"
 	"slices"
+	"strings"
 
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/settings"
 )
 
-// FlowSelection owns fixed main-flow choices. SelectedGates owns dynamic gates
-// and QA modes; continuation decisions do not alter these persistent choices.
-type FlowSelection struct {
-	Disabled []string `json:"disabled"`
-}
+type FlowSelection = settings.FlowSelection
 
 func FlowNodeIDs() []string {
 	nodes := definition.MainFlowNodes()
@@ -26,19 +25,7 @@ func FlowNodeIDs() []string {
 }
 
 func ValidateFlowSelection(selection *FlowSelection) error {
-	if selection == nil {
-		return nil
-	}
-	ids := FlowNodeIDs()
-	for i, id := range selection.Disabled {
-		if !slices.Contains(ids, id) {
-			return fmt.Errorf("flow selection: unknown main-flow node %q (available: %v)", id, ids)
-		}
-		if slices.Contains(selection.Disabled[:i], id) {
-			return fmt.Errorf("flow selection: node %q is disabled more than once", id)
-		}
-	}
-	return nil
+	return settings.ValidateFlowSelection(selection)
 }
 
 func (s *State) FlowNodeEnabled(id string) bool {
@@ -87,4 +74,45 @@ func (s *State) projectFlowSelection(view *decision.State, cd *compiler.Compiled
 			}
 		}
 	}
+}
+
+func (s *State) taskFlowEnabled(task runtime.TaskKey, cd *compiler.CompiledDefinition) bool {
+	node := s.ExecutionNode(task, cd)
+	switch node {
+	case "qa-blackbox":
+		return s.FlowNodeEnabled("qa") && slices.Contains(s.SelectedGates, "blackbox")
+	case "qa-whitebox":
+		return s.FlowNodeEnabled("qa") && slices.Contains(s.SelectedGates, "whitebox")
+	case "qa":
+		return s.FlowNodeEnabled("qa") && slices.Contains(s.validationKinds(), coverage.ReviewMerge)
+	case "gate":
+		if !s.FlowNodeEnabled("gate") {
+			return false
+		}
+		for _, gate := range s.SelectedGates {
+			if gate != "blackbox" && gate != "whitebox" && strings.HasSuffix(s.sourceValidationTask(task).Scope, ":"+gate) {
+				return true
+			}
+		}
+		return false
+	}
+	return s.FlowNodeEnabled(node)
+}
+
+func (s *State) flowNodeWasDisabled(id string) bool {
+	if !s.FlowNodeEnabled(id) {
+		return true
+	}
+	if s.Settings != nil && s.Settings.Configuration.FlowSelection != nil && slices.Contains(s.Settings.Configuration.FlowSelection.Disabled, id) {
+		return true
+	}
+	for _, decision := range s.Decisions {
+		if decision.Control == ControlSelectRoute && decision.Choice == "approve" && decision.Review != nil && decision.Review.Route != nil && decision.Review.Route.Configuration != nil {
+			selection := decision.Review.Route.Configuration.Configuration.FlowSelection
+			if selection != nil && slices.Contains(selection.Disabled, id) {
+				return true
+			}
+		}
+	}
+	return false
 }

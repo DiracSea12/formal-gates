@@ -162,7 +162,7 @@ func TestRetainedInstallationKeepsNamespaceAndReadOnlyReplay(t *testing.T) {
 	if _, err := reopened.Freshness(string(event.ID)); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = reopened.DevelopmentPlan(protocol.RouteDecision{Mode: "default"})
+	_, _ = reopened.DevelopmentPlan(protocol.RouteDecision{})
 	if _, err := Diagnose(filepath.Join(d.f.stateDir, "state.json"), "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +904,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 	for _, window := range []string{"publish", "handoff", "discovery", "replay"} {
 		t.Run(window, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "child", "lane-core", "custom")
+			child := receiptChild(t, master, "child", "lane-core", "selected")
 			for _, f := range []*Facade{master.f, child.f} {
 				req, err := f.request()
 				if err != nil {
@@ -973,7 +973,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 }
 
 func TestCheckpointFencingLeavesTheChildActive(t *testing.T) {
-	child := promotedSlice(t, "custom", OwnerBinding{})
+	child := promotedSlice(t, "selected", OwnerBinding{})
 	before, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
 	if err != nil {
 		t.Fatal(err)

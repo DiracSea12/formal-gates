@@ -73,7 +73,7 @@
 
 1. 普通修改请求由插件提醒一次；复杂请求在完整需求/方案确认后、动手前再提醒一次。两次都不要求用户回应，不阻塞普通直接处理。
 2. 用户明确提出 formal-gates 时直接进入完整受理，不在完整需求/方案确认后重复询问“是否进入正式流程”。用户可随时主动取消，但引擎不得制造重复 yes/no Ask。
-3. 受理阶段逐项澄清重大需求与技术选择，并单独确认完整整合后的需求和方案。确认后如未明确模式，再选择 lightweight 或 regular；full/custom 仍在拆分决定之后选择。
+3. 受理阶段逐项澄清重大需求与技术选择，并单独确认完整整合后的需求和方案。确认后如未明确模式，再选择 lightweight 或 regular；具体流程配置、开发计划和门集合仍在相应原 typed 确认节点确认。
 4. `start` 后首个 drive 自动登记已确认 intake receipt/digest，不重复询问同一份需求确认。
 5. regular 不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一正式 UTF-8 Markdown 需求案，不新增草稿或人工覆盖清单；自然语言正文保留，唯一 `## 需求点` 章节以固定 `REQ → 要求/验收条件/来源` 和唯一 `AC` 结构声明全部必须实现、改变产品/流程行为或需要 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界；通过后仍由用户确认当前完整文件及 revision，后续产品审、技术审、开发和 QA 只消费该确认 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，保留在方案正文并交由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 不写该正式需求案。
 
@@ -81,12 +81,12 @@
 
 1. lightweight/regular 模式（用户尚未明确时）；lightweight 是 `start` bootstrap 例外，不能由 regular run 后期切入。
 2. 高置信拆分的精确拓扑：边界、数量、依赖、并行度；低置信不拆或不确定由 engine 自动记录 no-split 理由。
-3. regular 非分片 run 与每个 child 的 full/custom 路线；custom 可选择当前候选门的任意子集（含空集）或全集。UI 可批量接受统一默认，但每个 child 持久化独立决定。
+3. regular 非分片 run 与每个 child 直接确认当前具体配置、开发计划和候选门集合，可选择普通门的任意子集（含空集）或全集，黑盒/白盒 QA 各按整组选取。UI 可接受命名配置，但每个 child 持久化独立决定，不提供路线档位。
 4. 产品审、技术审经 Operator 验证成立的每条 P0/P1/P2/P3 finding，以稳定 ID+digest 逐项 confirm/dismiss；可同屏展示但不得只存一条全局决定。Ask 已附带唯一、完整修法时，confirm 同时批准该修法，不再重复询问；只确认问题而修法仍含用户拥有的产品/重大技术选择时，必须继续澄清并按 §7.2.1 确认完整候选的 review-delta 后才能修订。用户还可对已接纳 finding 的有效性、严重度或 adjudication 发起绑定原 result/finding digest 与当前 revision 的 typed correction Ask；原始结果保留，纠正只 supersede 裁决并重算有效状态。
 
 ### 6.3 条件 Ask 与用户主动事件
 
-1. route-add/reselect：开发前可重选或追加；开发后只可追加普通门，不能新增 QA，不能静默移除既有义务。lightweight 与 retained merge master 拒绝普通 route-add。
+1. 任意非终态时刻，用户可明确为本次 run 切换整套命名配置、修改节点启停、QA/普通门选择或节点平台/模型/推理强度。经原 typed 确认保存当前 run 的具体配置；局部编辑保留其他当前有效 tuple、QA 与门选择，命名选择整体采用保存副本，整套配置与原单执行组选择以确认 revision 决定先后。已 claim 且仍启用的调用保留原绑定、权限和费用归属；关闭职责沿原生命周期停止并失效，晚到结果不生效。用户可从已完成或跳过的合法节点继续，原节点继续入口展示依赖失效、复用与重做处置后确认；不新增需求变化或第二路由状态机。默认文件修改不自动传播到 run，既存 child 不自动跟随父后续选择。
 2. `REQUEST_REQUIREMENT_CHANGE`：在任意 ACTIVE、非终态阶段均可提交，具体规则见第 7 节。
 3. adopt-external、带精确保留/清除预览的 reset、abort。
 4. 原因未知且 bindings 未变的代理中断：resume 原 attempt、fresh attempt 或 abort。
@@ -146,10 +146,10 @@
 
 1. `start` 不声明、不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认：高置信要拆时 Ask 精确拓扑（边界、数量、依赖、并行度），低置信不拆或不确定由 engine 自动记录 no-split 理由。拓扑确认即绑定点——确认前用户可改变意向（无需需求变化、reset 或 abort），确认后不得重切，变更走用户需求变化（ImpactSet 级联）、reset/rebuild 或 abort。
 2. master 确认拓扑后，Controller 固定执行：ENGINE_LOCAL 持久化 child-creation intent、分配 ID、创建 PREPARING child state 并注入 bindings → 每个 child 的 VCS adapter 独立 StepSpec 创建/对账 workspace/client → ENGINE 校验全部 typed receipts/identity → 原子提交 `sliceID → childRunID` map 并解锁 child。不得让本地 handler 越过 adapter 创建 VCS workspace，也不得把顺序交给宿主猜。
-3. child 继承整体产品/技术审与精确拓扑，各自持久化 full/custom 路线；child 只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。child 达标后进入可恢复的 `SLICE_READY` checkpoint，不作为独立最终 SEALED，也不提前删除恢复信息。
+3. child 继承整体产品/技术审与精确拓扑，各自持久化已确认的具体配置与门集合；child 只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。child 达标后进入可恢复的 `SLICE_READY` checkpoint，不作为独立最终 SEALED，也不提前删除恢复信息。
 4. durable `SliceTerminalReceipt` 至少含状态、child/slice/master ID、版本、VCS snapshot/tree/digest、需求/拓扑/路线 bindings、普通门结果、成本和最后 request/event digest；`SelectedQA` 与 `ApprovedCases` 为空，明确未选择普通 QA。master 只按期望 map 接纳 receipt。
 5. 分片 QA 集中在 master 合并后执行；merge QA 的批准用例覆盖完整已确认需求与方案中适用的 QA 义务，其设计和审查与各 slice 开发并行。master 收齐 receipts 后由 engine VCS adapter 按固定 topology 顺序完成 Git/SVN/P4 集成，并在主线 snapshot 前物化已批准的 merge cases/其他 VCS 内最终 artifact；只有实际内容冲突需要语义判断时才派主线开发 worker，且它只编辑冲突内容，后续 resolved 校验、resolve/add、提交和 snapshot 仍由 adapter 执行。
-6. 合并后并行执行所选合并 QA 与质量门审查职责。冲突处置或主线返修后，Controller 以 topology ownership、VCS diff 和每个 child receipt 的 validation view 机械计算 `AffectedChildSet`：若只改 integration-owned glue/跨片接缝且所有 child view 精确相等，只重跑合并 QA/合并门；若改变某个 child-owned 内容或无法证明其 view 未变，则在同一最终主线候选上额外补跑该 child 受影响的普通门义务。仍不回 child、不重新 Seal child、不重复路线或澄清；所有当前 eligible 验证最大并行。Operator 核实完成后处置仍不唯一时才生成 `VALIDATION_DETAIL_DISPOSITION` Ask；处置完成后，`wave >= 3` 才生成三轮统一 Ask。
+6. 合并后并行执行所选合并 QA 与质量门审查职责。冲突处置或主线返修后，Controller 以 topology ownership、VCS diff 和每个 child receipt 的 validation view 机械计算 `AffectedChildSet`：若只改 integration-owned glue/跨片接缝且所有 child view 精确相等，只重跑启用的合并 QA/合并门；若改变某个 child-owned 内容或无法证明其 view 未变，则在同一最终主线候选上额外补跑该 child 受影响的普通门义务。仍不回 child、不重新 Seal child、不重复路线或澄清；所有当前 eligible 验证最大并行。Operator 核实完成后处置仍不唯一时才生成 `VALIDATION_DETAIL_DISPOSITION` Ask；处置完成后，`wave >= 3` 才生成三轮统一 Ask。
 7. child abort 产生 ABORTED receipt 并阻塞 master；master abort/reset/重大需求变化按已授权策略级联，不得遗留 orphan child。master 最终 Seal 绑定集中 QA 的批准用例和执行结果，汇总 child receipts/cost 并清理 checkpoint；整体需求保证以完整 receipt map 和当前主线验证证据为准。
 
 ### 8.2 强制并行不变量
@@ -256,9 +256,9 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 ## 13. 用户已确认的决策记录
 
 - 用户主动提出 formal-gates 后不重复询问是否进入；插件只非阻塞提醒一次或复杂需求时两次。
-- 完整需求/方案仍须单独确认；lightweight 是 start bootstrap 例外，full/custom 在拆分决定后确认。
+- 完整需求/方案仍须单独确认；lightweight 是 start bootstrap 例外，具体开发计划和门集合在拆分决定后确认。
 - 所有用户选择能力保留为 typed Ask/available action，经唯一 `submit` 入口落账。
-- 用户可自由组合产品审、开发前技术审、初始开发、QA、质量门审查和业务返修六项主要职责，保持所选职责原有相对顺序与并行关系。QA 按设计、独立审查、执行整条链运行；黑盒、白盒在线路阶段各按整组选取，具体模式仅由原 SelectedGates 持有，关闭 QA 职责也关闭 merge QA。启动入口从同源定义目录展示并绑定明确用户选择，state 只保存这一份主流程选择，恢复和节点继续均不改变它；关闭职责不暗跑、不伪造 PASS。初始开发与业务返修分别选择，关闭返修仍保留真实失败与义务。质量门审查独立控制普通门、固定合并门与返修成员门，关闭时不建立门目标、不补写门 PASS；child 继承同一选择，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
+- 用户可自由组合产品审、开发前技术审、初始开发、QA、质量门审查和业务返修六项主要职责，保持所选职责原有相对顺序与并行关系。QA 按设计、独立审查、执行整条链运行；黑盒、白盒各按整组选取，运行模式由原 SelectedGates 持有，关闭 QA 职责也关闭 merge QA。启动及运行中配置入口从同源定义目录展示并绑定明确用户选择，state 只保存当前这一份主流程选择，恢复不重读默认文件；关闭职责不暗跑、不伪造 PASS。初始开发与业务返修分别选择，关闭返修仍保留真实失败与义务。质量门审查独立控制普通门、固定合并门与返修成员门，关闭时不建立门目标、不补写门 PASS；child 继承创建时选择，receipt 保留真实门集合和原结果，主线仅在门职责启用时准备 child 补门目标。
 - 运行中的临时执行选择从主流程目录派生，黑盒 QA 与白盒 QA 各自可选平台、模型和推理强度，同组设计、独立审查与执行共用该组配置；其余主要职责分别选择，辅助任务及合并 QA 不新增公开选择。流程开关与顺序不变。选择沿原 Decisions 持久化，只更新该组未 claim 的调用；已 claim 调用及其恢复保留原 Attempt 绑定。child 继承创建时快照，既存 child 不随父后续选择改变；已保存的共享 QA 选择及其请求重放保持原语义。
 - 产品/技术审 P0/P1 修订做完整新鲜复审；P2/P3 逐项询问并修复，但不因级别本身复审。
 - 产品审和技术审各自最多自动完成三轮语义审查；只有有效 PASS/FAIL 计轮，revision 变化不清零。仍需第 4 轮时由 typed Ask 逐动作、逐轮授权；授权增加一个 fresh-review TaskKey，不增加该任务的 retry 次数，split child 不另开额度。
@@ -269,8 +269,8 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - 并行由引擎最大化强制执行，不允许主代理选择性忽略可派任务。
 - 白盒独立编写、审查并提交测试；最终 case-set FROZEN 且绑定最终含测试快照后，全部 QA execution 与门一次准备并行。普通返修不解冻 QA；实现质量门不审测试，测试质量归白盒 Review。
 - Seal/Abort 必须由 adapter 清理全部登记的 Git/SVN/P4 临时 workspace/client/ref/changelist，核验无残留后才 Complete。
-- 分片保留合并后集中 QA：child 只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA；master 强制 merge QA 与 merge gate，集中 QA 覆盖完整需求。
-- 合并 QA/合并门失败只派主线开发 worker 修复；只改 integration-owned 内容时仍只重跑合并双验证，若改到 child-owned 内容则在最终主线候选补跑该 child 受影响的普通门义务，不回 child。
+- 分片保留合并后集中 QA：child 只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA；master 在 QA 与质量门审查职责各自启用时保留相应 merge QA 与 merge gate，启用的集中 QA 覆盖完整需求。
+- 合并 QA/合并门失败只派主线开发 worker 修复；只改 integration-owned 内容时仍只重跑启用的合并验证，若改到 child-owned 内容则在最终主线候选补跑该 child 受影响的普通门义务，不回 child。
 - Git/SVN/P4 的分片和非分片都支持并验收；OS 不作本次承诺，只保持实现通用性。
 - 节点内部已知顺序也必须由 Controller 机械钉死；采用业界常见的 durable workflow/activity 边界，只在需要独立恢复、副作用、并行或审计时拆持久 StepSpec，不机械拆碎纯原子计算。
 - 所有可程序化动作都由 ENGINE 决定；代理仅负责语义判断、创造性实现和独立审查，VCS 写操作与集成顺序全部由 Git/SVN/P4 adapter 执行，且引擎失败不得动态降级给代理。
@@ -291,6 +291,16 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - 用户与项目设置统一手改入口、字段覆盖与有效来源；模型、effort、总/QA 并发、
   token cap 和原生路径在启动一次冻结到 state，child 继承，恢复不重读也不清预算。
   动态费用/授权仍归既有 cost/guard；适配器只消费本平台路径与参数，不能改全局环境。
+- 命名配置由主流程节点选择、黑盒/白盒整组选择、普通门子集和七个执行组各自的
+  平台/模型/推理强度构成，不打包并发、额度、认证或原生路径。初始只提供“默认”：
+  主流程全部可用、不选普通 QA、全选普通门、tuple 同平台继承 run 全局默认，换平台
+  未指定项留原生默认。其他名称由用户自取。保存、查看、修改、启用、删除和原生
+  选项查询沿原 settings 入口；用户/项目 scope、同一 loader、同一路径锁和原子写
+  继续持有配置，LLM 仅填写原序号与语义值，不生成 JSON 或机械身份。新 run 只冻结
+  当时选中配置及来源，命名集合不进入 run；`start --configuration` 可按原名称或序号只选本次配置，
+  不修改保存的启用项，省略则采用已启用配置，显式启动节点开关优先。运行中明确配置修改沿原 typed 控制与
+  节点继续接纳，既有 Attempt、费用、恢复和 child 快照归属不变。主流程与执行组
+  目录同源，普通门仍可选择任意子集；具体选择代替路线档位。
 - 不变需求的优化/新增 Batch 使用显式用户主动计划重审：精确原 revision 保持，
   product/topology 保留，原完整确认与 carry/redo 仍生效；新 start-readiness 生成新
   计划，route/plan 确认后开发。普通重复提交不开放，不接受自拟自由任务定义。

@@ -514,7 +514,7 @@ func TestRepairPlanSchemaPublishesOnlyOriginalChoicesOrNewSemanticContent(t *tes
 	}
 }
 
-func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
+func TestPlanRouteSchemaUsesIssuedGateSelections(t *testing.T) {
 	for _, handler := range []string{"engine.readiness.plan.v6", "engine.repair.v7"} {
 		t.Run(handler, func(t *testing.T) {
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: OutputCodec, Handler: handler, Provider: "host", Pending: protocol.PendingAction{ActionID: "plan", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Confirmed public behavior"}, AvailableRouteCandidates: []string{"quality", "complexity"}}
@@ -534,23 +534,10 @@ func TestPlanRouteSchemaSeparatesFullAndCustomChoices(t *testing.T) {
 				}
 				batch := plan["properties"].(map[string]any)["batches"].(map[string]any)["items"].(map[string]any)
 				route := batch["properties"].(map[string]any)["route"].(map[string]any)
-				if route["properties"] != nil {
-					t.Fatal("route publishes an unqualified mode/subset combination")
-				}
-				branches := route["anyOf"].([]any)
-				if len(branches) != 2 {
-					t.Fatal("route must separate complete and subset selection")
-				}
-				full := branches[0].(map[string]any)
-				fullFields := full["properties"].(map[string]any)
-				if full["additionalProperties"] != false || len(fullFields) != 1 || !reflect.DeepEqual(fullFields["mode"].(map[string]any)["enum"], []string{"full"}) || !reflect.DeepEqual(full["required"], []string{"mode"}) {
-					t.Fatal("full route asks the model for a gate subset")
-				}
-				custom := branches[1].(map[string]any)
-				customFields := custom["properties"].(map[string]any)
-				selected := customFields["selected"].(map[string]any)
-				if custom["additionalProperties"] != false || len(customFields) != 2 || !reflect.DeepEqual(customFields["mode"].(map[string]any)["enum"], []string{"custom"}) || !reflect.DeepEqual(custom["required"], []string{"mode", "selected"}) || selected["minItems"] != 1 || selected["uniqueItems"] != true || !reflect.DeepEqual(selected["items"].(map[string]any)["enum"], []int{1, 2}) {
-					t.Fatal("custom route permits missing, repeated or unissued gate choices")
+				fields := route["properties"].(map[string]any)
+				selected := fields["selected"].(map[string]any)
+				if route["additionalProperties"] != false || len(fields) != 1 || !reflect.DeepEqual(route["required"], []string{"selected"}) || selected["minItems"] != 1 || selected["uniqueItems"] != true || !reflect.DeepEqual(selected["items"].(map[string]any)["enum"], []int{1, 2}) {
+					t.Fatal("route permits missing, repeated or unissued gate choices")
 				}
 			}
 			input.AvailableRouteCandidates = nil

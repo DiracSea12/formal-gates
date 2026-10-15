@@ -118,8 +118,8 @@ func TestNodeContinuationEntersExistingReviewAndRouteOwners(t *testing.T) {
 				}
 			case "route":
 				askPosition(t, d.run, protocol.ControlSelectRoute)
-				if state.RouteMode != original.RouteMode || !reflect.DeepEqual(state.SelectedGates, original.SelectedGates) {
-					t.Fatal("route node removed its original obligations")
+				if state.RouteConfirmed || !reflect.DeepEqual(state.SelectedGates, original.SelectedGates) {
+					t.Fatal("route continuation lost its obligations or bypassed confirmation")
 				}
 			case "topology":
 				if !reflect.DeepEqual(state.Topology, original.Topology) {

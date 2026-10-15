@@ -143,7 +143,6 @@ func stableBodySchema(input protocol.WorkerInput, role any) (map[string]any, err
 		changed["required"] = []string{"reuse"}
 		for _, batch := range []map[string]any{created, changed} {
 			properties := batch["properties"].(map[string]any)
-			properties["route"].(map[string]any)["properties"].(map[string]any)["mode"] = map[string]any{"type": "string", "enum": []string{"full", "custom"}}
 			location := LocationSchema(false)
 			delete(location["properties"].(map[string]any), "line")
 			properties["artifacts"] = map[string]any{"type": "array", "items": location}
@@ -286,13 +285,9 @@ func completedSchema(input protocol.WorkerInput, target any) (map[string]any, er
 		properties["checks"] = map[string]any{"type": "array", "items": check}
 		delete(properties, "route")
 		if len(input.AvailableRouteCandidates) > 0 {
-			properties["route"] = map[string]any{"anyOf": []any{
-				fixedObject(map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"full"}}}, []string{"mode"}),
-				fixedObject(map[string]any{
-					"mode":     map[string]any{"type": "string", "enum": []string{"custom"}},
-					"selected": map[string]any{"type": "array", "items": indexSchema(input.AvailableRouteCandidates), "minItems": 1, "uniqueItems": true},
-				}, []string{"mode", "selected"}),
-			}}
+			properties["route"] = fixedObject(map[string]any{
+				"selected": map[string]any{"type": "array", "items": indexSchema(input.AvailableRouteCandidates), "minItems": 1, "uniqueItems": true},
+			}, []string{"selected"})
 		}
 		for _, name := range []string{"subtasks", "dod"} {
 			delete(properties[name].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any), "reuse")

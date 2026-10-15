@@ -93,13 +93,14 @@ func sameRequiredDuty(role string, source, current runtime.TaskKey) bool {
 	return true
 }
 
-func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDecision) {
+func (e *Engine) invalidateValidationWork(s *State, entry ConfirmedRevision) {
 	if s.Validation == nil {
 		return
 	}
 	v := s.Validation
 	invalidated := false
-	for _, choice := range choices {
+	candidateChanged := s.Decisions[entry.RequestID].Control != ControlSelectRoute
+	for _, choice := range entry.WorkDecisions {
 		if choice.Disposition != RequirementWorkRedo {
 			continue
 		}
@@ -109,9 +110,11 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 		}
 		switch s.validationRole(key, e.cfg.Definition) {
 		case "engine.development.batch.v6", "engine.repair.v7":
+			candidateChanged = true
 			v.DevelopmentSnapshot = ""
 			v.AuthoringWorkspace = ""
 		case "engine.qa.design.v6", "engine.qa.review.rationale.v2":
+			candidateChanged = true
 			if set := v.Sets[s.validationMode(key)]; set != nil {
 				var affected []string
 				for _, c := range set.Manifest.Cases {
@@ -124,7 +127,9 @@ func (e *Engine) invalidateValidationWork(s *State, choices []RequirementWorkDec
 	if !invalidated {
 		return
 	}
-	v.Candidate = nil
+	if candidateChanged {
+		v.Candidate = nil
+	}
 	if wave := s.currentValidationWave(); wave != nil && wave.Status != "COMPLETE" {
 		wave.Status = "INVALIDATED"
 	}

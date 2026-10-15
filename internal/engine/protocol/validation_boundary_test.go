@@ -19,15 +19,15 @@ func TestAbortRetiresOrdinaryValidationBoundary(t *testing.T) {
 	for _, scenario := range []struct {
 		name, waiting string
 		topology      *TopologyBinding
-		route         string
+		route         bool
 		validation    *Validation
 	}{
-		{"topology", "confirm topology", nil, "", nil},
-		{"plan", "development plan", &TopologyBinding{Decision: "no-split"}, "full", nil},
-		{"slice-receipts", "slice receipts: 0/2", &TopologyBinding{Decision: "split", SplitCount: 2, Slices: []string{"core", "tooling"}}, routeModeMerge, &Validation{}},
+		{"topology", "confirm topology", nil, false, nil},
+		{"plan", "development plan", &TopologyBinding{Decision: "no-split"}, true, nil},
+		{"slice-receipts", "slice receipts: 0/2", &TopologyBinding{Decision: "split", SplitCount: 2, Slices: []string{"core", "tooling"}}, true, &Validation{}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			s := &State{RequirementRevisions: []ConfirmedRevision{{Revision: "confirmed", StateRevision: 1}}, Topology: scenario.topology, RouteMode: scenario.route, Validation: scenario.validation}
+			s := &State{RequirementRevisions: []ConfirmedRevision{{Revision: "confirmed", StateRevision: 1}}, Topology: scenario.topology, RouteConfirmed: scenario.route, Validation: scenario.validation}
 			s.ReviewSeries.ProductReview.Effective.Status = "PASS"
 			s.ReviewSeries.ProductReview.Effective.RequirementRevision = "confirmed"
 			s.ReviewSeries.StartReadiness.Effective.Status = "PASS"

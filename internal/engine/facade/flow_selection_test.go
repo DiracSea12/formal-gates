@@ -89,11 +89,15 @@ func TestDisabledDevelopmentRouteConfirmsWithoutPlan(t *testing.T) {
 	if _, err := f.Drive(); err != nil {
 		t.Fatal(err)
 	}
-	for _, choice := range []string{"no-split", "custom"} {
+	for _, choice := range []string{"no-split", "approve"} {
 		if requested, err := f.RequestWorkflowChoice(); err != nil || !requested {
 			t.Fatal("original topology/route Ask was not requested", choice, err)
 		}
-		candidate, err := f.PrepareCurrentControl(ControlInput{Ask: 1, Choice: choice, Reason: "user selected the displayed scope"})
+		input := ControlInput{Ask: 1, Choice: choice, Reason: "user selected the displayed scope"}
+		if choice == "approve" {
+			input.Gates = []int{}
+		}
+		candidate, err := f.PrepareCurrentControl(input)
 		if err != nil || candidate.DevelopmentPlan != nil {
 			t.Fatal("disabled development required a proposal", choice, err)
 		}
@@ -102,7 +106,7 @@ func TestDisabledDevelopmentRouteConfirmsWithoutPlan(t *testing.T) {
 		}
 	}
 	snapshot, err := f.engine.Load()
-	if err != nil || snapshot.State.RouteMode != "custom" || len(snapshot.State.SelectedGates) != 0 {
+	if err != nil || !snapshot.State.RouteConfirmed || len(snapshot.State.SelectedGates) != 0 {
 		t.Fatal("empty route did not persist through original confirmation", err)
 	}
 	if requested, err := f.RequestWorkflowChoice(); err != nil || requested {

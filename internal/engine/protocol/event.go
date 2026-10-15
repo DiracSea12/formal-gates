@@ -11,6 +11,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/settings"
 )
 
 // 独立命名 ID（ids.go 哲学：不同用途的 ID 之间不可直接赋值）。
@@ -129,10 +130,11 @@ func (k EventKind) Valid() bool {
 // without a package to freeze work during clarification. A later update binds
 // the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
-	Execution    *ExecutionSelection
-	Continuation *NodeContinuationRequest
-	Handoff      *DevelopmentHandoffRequest
-	Validation   *ValidationRequest
+	Configuration *ConfigurationSelection
+	Execution     *ExecutionSelection
+	Continuation  *NodeContinuationRequest
+	Handoff       *DevelopmentHandoffRequest
+	Validation    *ValidationRequest
 	// Request and Token bind a package update to an existing requirement Ask.
 	// Empty Request starts a new control request, including a package-free barrier.
 	Request RequestID
@@ -273,18 +275,13 @@ type ACOwner struct {
 	Owner string `json:"owner"`
 }
 
-// RouteDecision 是 SELECT_ROUTE 的显式门列表决定：候选列表不得含合并验证
-// （合并验证只在拆分运行中自动附加）；default/full 携带完整候选全集
-// （Selected 必须为空），default 选全部普通门，full 全选；custom 携带非空、
-// 逐项属于候选列表的选择（可选全集）。门目录
-// 发现不在协议层——全集与选择都由 payload 显式给出，引擎只做集合约束校
-// 验；full 必含双内建 QA（普通 run）与 child 候选不含 QA 依赖 run 形态，
-// 在接纳层判定。
+// RouteDecision binds the candidate gates and the user's explicit subset,
+// including an empty selection. Split merge duties come from the topology.
 type RouteDecision struct {
+	Configuration   *ConfigurationSelection      `json:"configuration,omitempty"`
 	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`
-	Mode            string                       `json:"mode"`
 	Gates           []string                     `json:"gates"`
-	Selected        []string                     `json:"selected,omitempty"`
+	Selected        []string                     `json:"selected"`
 }
 
 // RequirementDecisionPackage binds the revision, impact preview and each
@@ -678,6 +675,14 @@ func (e Event) Validate() error {
 		} else if e.Request.Continuation != nil {
 			return validationError("该请求不接受节点继续载荷")
 		}
+		if e.Request.Configuration != nil {
+			if e.Request.Control != ControlSelectRoute {
+				return validationError("configuration selection requires SELECT_ROUTE")
+			}
+			if err := settings.ValidateConfiguration(e.Request.Configuration.Configuration); err != nil {
+				return validationError(err.Error())
+			}
+		}
 		if e.Request.Control == ControlSelectExecution {
 			if e.Request.Execution == nil {
 				return validationError("execution selection requires its node and choice")
@@ -904,16 +909,17 @@ type eventWire struct {
 }
 
 type requestWire struct {
-	Execution    *ExecutionSelection         `json:"execution,omitempty"`
-	Continuation *NodeContinuationRequest    `json:"continuation,omitempty"`
-	Handoff      *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
-	Validation   *ValidationRequest          `json:"validation,omitempty"`
-	Request      string                      `json:"request,omitempty"`
-	Token        string                      `json:"token,omitempty"`
-	Control      string                      `json:"control"`
-	Options      []AskOption                 `json:"options"`
-	Package      *RequirementDecisionPackage `json:"package,omitempty"`
-	RouteGates   []string                    `json:"routeGates,omitempty"`
+	Configuration *ConfigurationSelection     `json:"configuration,omitempty"`
+	Execution     *ExecutionSelection         `json:"execution,omitempty"`
+	Continuation  *NodeContinuationRequest    `json:"continuation,omitempty"`
+	Handoff       *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
+	Validation    *ValidationRequest          `json:"validation,omitempty"`
+	Request       string                      `json:"request,omitempty"`
+	Token         string                      `json:"token,omitempty"`
+	Control       string                      `json:"control"`
+	Options       []AskOption                 `json:"options"`
+	Package       *RequirementDecisionPackage `json:"package,omitempty"`
+	RouteGates    []string                    `json:"routeGates,omitempty"`
 }
 
 type decideEventWire struct {
@@ -1002,6 +1008,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		w.Request = &requestWire{Handoff: e.Request.Handoff, Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
 		w.Request.Continuation = e.Request.Continuation
 		w.Request.Execution = e.Request.Execution
+		w.Request.Configuration = e.Request.Configuration
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Reset: e.Decide.Reset, Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}

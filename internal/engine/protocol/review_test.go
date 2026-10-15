@@ -26,6 +26,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	definition "formal-gates/internal/engine/testkit/workflow"
+	"formal-gates/internal/settings"
 )
 
 // reviewStepsFixture constructs serial review carriers after a local prep step.
@@ -245,6 +246,7 @@ func controlRequestEvent(t *testing.T, control ControlKind, requestID string, pa
 		if err != nil {
 			t.Fatalf("route request event: %v", err)
 		}
+		ev.Request.Configuration = payload.Route.Configuration
 		return ev
 	}
 	ev, err := NewRequestEvent(EventID(requestID), control, options...)
@@ -252,6 +254,25 @@ func controlRequestEvent(t *testing.T, control ControlKind, requestID string, pa
 		t.Fatalf("request event: %v", err)
 	}
 	return ev
+}
+
+func configureRouteChange(t *testing.T, e *Engine, route *RouteDecision) {
+	t.Helper()
+	state := e.LoadMustSucceed(t).State
+	if !state.RouteConfigurationRequired() || route.Configuration != nil {
+		return
+	}
+	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
+	selected.Configuration.FlowSelection = state.FlowSelection
+	selected.SetSelectedGates(route.Selected)
+	route.Configuration = &selected
+	if route.DevelopmentPlan != nil {
+		preview, err := e.DevelopmentPlan(*route)
+		if err != nil {
+			t.Fatal(err)
+		}
+		route.DevelopmentPlan = &preview.Confirmation
+	}
 }
 
 // askAndDecide 走完整两段：创建受限 Ask，取当前 freshness token 后提交
@@ -270,6 +291,9 @@ func askAndDecide(t *testing.T, engine *Engine, control ControlKind, requestID s
 			}
 			payload.Topology.DevelopmentPlan = &preview.Confirmation
 		}
+	}
+	if control == ControlSelectRoute && payload != nil && payload.Route != nil {
+		configureRouteChange(t, engine, payload.Route)
 	}
 	observedInput := Observation{}
 	request := controlRequestEvent(t, control, requestID, payload, options)
@@ -308,10 +332,10 @@ func topologyOptions() []AskOption {
 
 // routeOptions 是 SELECT_ROUTE 的标准选项集。
 func routeOptions() []AskOption {
-	return []AskOption{{ID: "default", Label: "默认（推荐：全部普通门，不选 QA）"}, {ID: "full", Label: "full（QA 阶段较重，适合大型任务）"}, {ID: "custom", Label: "custom（自选至少一项，可选全集）"}}
+	return []AskOption{{ID: "approve", Label: "确认门选择"}}
 }
 
-func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *testing.T) {
+func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -320,7 +344,7 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 	submitVerifiedReviewResult(t, engine, "result-readiness", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one cohesive deliverable"}})
 	pinned := []string{"blackbox", "gate.quality", "whitebox", "gate.delivery", "gate.security"}
-	request, err := NewRouteRequestEvent("req-default", pinned, routeOptions()...)
+	request, err := NewRouteRequestEvent("req-selection", pinned, routeOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,36 +352,29 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatal(err)
 	}
-	token, err := engine.Freshness("req-default")
+	token, err := engine.Freshness("req-selection")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, route := range map[string]RouteDecision{
-		"hand-selected subset": {Mode: "default", Gates: pinned, Selected: []string{"gate.quality"}},
-		"hand-selected all":    {Mode: "default", Gates: pinned, Selected: pinned},
-	} {
-		if _, err := NewReviewDecideEvent(EventID(name), "req-default", token, "default", ReviewDecisionPayload{Route: &route}); err == nil {
-			t.Fatalf("default accepted %s", name)
-		}
-	}
-	for name, choice := range map[string]AskOptionID{"choice mismatch": "custom", "missing candidate": "default"} {
+
+	for name, choice := range map[string]AskOptionID{"choice mismatch": "defer", "missing candidate": "approve"} {
 		gates := pinned
 		if name == "missing candidate" {
 			gates = pinned[:len(pinned)-1]
 		}
-		event, err := NewReviewDecideEvent(EventID(name), "req-default", token, choice, ReviewDecisionPayload{Route: &RouteDecision{Mode: "default", Gates: gates}})
+		event, err := NewReviewDecideEvent(EventID(name), "req-selection", token, choice, ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: []string{"gate.quality"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		before := stateBytesOf(t, dir)
 		if _, err := engine.Submit(event, observedInput); err == nil {
-			t.Fatalf("default accepted %s", name)
+			t.Fatalf("selection accepted %s", name)
 		}
 		if !bytes.Equal(before, stateBytesOf(t, dir)) {
 			t.Fatalf("%s changed persisted state", name)
 		}
 	}
-	event, err := NewReviewDecideEvent("evt-default", "req-default", token, "default", ReviewDecisionPayload{Route: &RouteDecision{Mode: "default", Gates: pinned}})
+	event, err := NewReviewDecideEvent("evt-selection", "req-selection", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: pinned, Selected: []string{"gate.security", "gate.quality", "gate.delivery"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,14 +436,14 @@ func TestDefaultRouteBindsOrdinaryGatesAcrossReplayAndConcurrentDecisions(t *tes
 	}
 	state := reopened.LoadMustSucceed(t).State
 	want := []string{"gate.quality", "gate.delivery", "gate.security"}
-	if state.RouteMode != "default" || !slices.Equal(state.SelectedGates, want) || !state.routeHasNoQAModes() {
-		t.Fatalf("persisted default route = %q %v", state.RouteMode, state.SelectedGates)
+	if !state.RouteConfirmed || !slices.Equal(state.SelectedGates, want) || !state.routeHasNoQAModes() {
+		t.Fatalf("persisted gate selection = %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
-	decision := state.Decisions["req-default"]
-	if decision.Choice != "default" || decision.Review.Route.Mode != "default" || !slices.Equal(decision.Review.Route.Gates, pinned) {
-		t.Fatalf("persisted default decision = %+v", decision)
+	decision := state.Decisions["req-selection"]
+	if decision.Choice != "approve" || !slices.Equal(decision.Review.Route.Selected, []string{"gate.security", "gate.quality", "gate.delivery"}) || !slices.Equal(decision.Review.Route.Gates, pinned) {
+		t.Fatalf("persisted selection decision = %+v", decision)
 	}
-	if len(state.Decisions) != 2 || !state.PendingAsks["req-default"].Resolved {
+	if len(state.Decisions) != 2 || !state.PendingAsks["req-selection"].Resolved {
 		t.Fatalf("concurrent decision bookkeeping = %+v", state.Decisions)
 	}
 }
@@ -447,7 +464,7 @@ func findingOption(t *testing.T, engine *Engine, action review.Action, index int
 
 // TestReviewSequenceThroughTopologyAndRoute：受理→产品审 FAIL→逐 finding
 // DECIDE（dismiss 解阻塞）→effective PASS 推进 phase→start-readiness
-// PASS→拓扑（no-split+note）→路线（full）→DEVELOPMENT_PARALLEL。
+// PASS→拓扑（no-split+note）→路线（明确门列表）→DEVELOPMENT_PARALLEL。
 func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
@@ -522,15 +539,13 @@ func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 		t.Fatalf("phase after topology = %s, want TOPOLOGY_AND_ROUTE (route missing)", snap.State.Phase)
 	}
 
-	// 路线：full 显式全集；绑定后推进 DEVELOPMENT_PARALLEL。
-	askAndDecide(t, engine, ControlSelectRoute, "req-route", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
-	}})
+	// 路线：显式选择全集；绑定后推进 DEVELOPMENT_PARALLEL。
+	askAndDecide(t, engine, ControlSelectRoute, "req-route", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}}})
 	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != "full" || len(snap.State.SelectedGates) != 4 ||
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 4 ||
 		snap.State.SelectedGates[0] != "blackbox" || snap.State.SelectedGates[1] != "whitebox" ||
 		snap.State.SelectedGates[2] != "gate.quality" || snap.State.SelectedGates[3] != "gate.security" {
-		t.Fatalf("route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+		t.Fatalf("route binding = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
@@ -581,15 +596,12 @@ func TestSplitTopologyRequiresTheConfirmedACUniverse(t *testing.T) {
 	}
 }
 
-// TestCustomRouteBindsWholeCandidateList：custom 的集合约束是至少选一项
-// 且逐项属于候选列表（sliced-runs-confirmation-and-qa-refactor 需求9），
-// 无真子集要求——候选表仅一项门且无 QA 模式（full 因必含双内建 QA 不
-// 可用）时 custom 选该项仍可绑定；全选多元素候选表时接纳且 SelectedGates
-// 与候选全集一致，绑定后推进 DEVELOPMENT_PARALLEL。
-func TestCustomRouteBindsWholeCandidateList(t *testing.T) {
-	for name, gates := range map[string][]string{
-		"single candidate gate": {"quality"},
-		"whole candidate list":  {"blackbox", "whitebox", "gate.quality", "gate.security"},
+func TestGateSelectionBindsAnySubset(t *testing.T) {
+	for name, selection := range map[string]struct{ gates, selected []string }{
+		"single candidate": {[]string{"quality"}, []string{"quality"}},
+		"all candidates":   {[]string{"blackbox", "whitebox", "gate.quality"}, []string{"blackbox", "whitebox", "gate.quality"}},
+		"blackbox only":    {[]string{"blackbox", "whitebox", "gate.quality"}, []string{"blackbox"}},
+		"empty selection":  {[]string{"blackbox", "whitebox", "gate.quality"}, []string{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
@@ -601,15 +613,13 @@ func TestCustomRouteBindsWholeCandidateList(t *testing.T) {
 			askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 				Decision: "no-split", Note: "建议不拆",
 			}})
-			askAndDecide(t, engine, ControlSelectRoute, "req-route-custom-all", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-				Mode: "custom", Gates: gates, Selected: gates,
-			}})
+			askAndDecide(t, engine, ControlSelectRoute, "req-route-selection", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: selection.gates, Selected: selection.selected}})
 			snap := engine.LoadMustSucceed(t)
-			if snap.State.RouteMode != "custom" || !slices.Equal(snap.State.SelectedGates, gates) {
-				t.Fatalf("custom route binding = %q %v, want gates %v", snap.State.RouteMode, snap.State.SelectedGates, gates)
+			if !snap.State.RouteConfirmed || !slices.Equal(snap.State.SelectedGates, selection.selected) {
+				t.Fatalf("gate selection binding = %t %v, want gates %v", snap.State.RouteConfirmed, snap.State.SelectedGates, selection.selected)
 			}
 			if snap.State.Phase != runtime.PhaseDevelopmentParallel {
-				t.Fatalf("phase after custom whole-list route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
+				t.Fatalf("phase after gate selection = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 			}
 		})
 	}
@@ -632,8 +642,14 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	gates := []string{"blackbox", "whitebox", "gate.quality"}
 	// 绑定前两个 Ask 并存（PendingAsks 按 requestID 各自落账）。
 	observedInput := Observation{}
+	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
+	selected.SetSelectedGates(gates)
 	for _, requestID := range []string{"req-route-binding", "req-route-coexisting"} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), observedInput); err != nil {
+		route := &RouteDecision{Gates: gates, Selected: gates}
+		if requestID == "req-route-coexisting" {
+			route.Configuration = &selected
+		}
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: route}, routeOptions()), observedInput); err != nil {
 			t.Fatalf("submit ask %s: %v", requestID, err)
 		}
 	}
@@ -641,7 +657,7 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewReviewDecideEvent("evt-route-binding", "req-route-binding", token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+	binding, err := NewReviewDecideEvent("evt-route-binding", "req-route-binding", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +670,7 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := NewReviewDecideEvent("evt-route-coexisting", "req-route-coexisting", coexist, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+	decision, err := NewReviewDecideEvent("evt-route-coexisting", "req-route-coexisting", coexist, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates, Configuration: &selected}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,20 +678,18 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 		t.Fatalf("coexisting route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeFull || len(snap.State.SelectedGates) != len(gates) {
-		t.Fatalf("same-set reselection changed the binding: %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != len(gates) {
+		t.Fatalf("same-set reselection changed the binding: %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 	if ask, pending := snap.State.PendingAsks["req-route-coexisting"]; !pending || !ask.Resolved {
 		t.Fatalf("coexisting ask did not settle: %+v", ask)
 	}
 	// 绑定后的第二次 Ask 照常抬起，缩集重选落账新绑定。
 	subset := []string{"gate.quality"}
-	askAndDecide(t, engine, ControlSelectRoute, "req-route-second", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "custom", Gates: subset, Selected: subset,
-	}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-second", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: subset, Selected: subset}})
 	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
-		t.Fatalf("re-selected route = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
+		t.Fatalf("re-selected route = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 }
 
@@ -754,7 +768,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 			if err != nil {
 				t.Fatalf("freshness for %s: %v", name, err)
 			}
-			ev, err := NewReviewDecideEvent(EventID("evt-"+name), "req-route-diverging", token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
+			ev, err := NewReviewDecideEvent(EventID("evt-"+name), "req-route-diverging", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates}})
 			if err != nil {
 				t.Fatalf("decide %s: %v", name, err)
 			}
@@ -777,9 +791,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("freshness for corrected decide: %v", err)
 		}
-		corrected, err := NewReviewDecideEvent(EventID("evt-route-corrected"), "req-route-diverging", token, "full", ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "full", Gates: []string{"gate.security", "blackbox", "whitebox"},
-		}})
+		corrected, err := NewReviewDecideEvent(EventID("evt-route-corrected"), "req-route-diverging", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"gate.security", "blackbox", "whitebox"}, Gates: []string{"gate.security", "blackbox", "whitebox"}}})
 		if err != nil {
 			t.Fatalf("corrected decide: %v", err)
 		}
@@ -787,8 +799,8 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 			t.Fatalf("corrected decide rejected: %v", err)
 		}
 		snap := engine.LoadMustSucceed(t)
-		if snap.State.RouteMode != "full" || !sameGateSet(snap.State.SelectedGates, pinned) {
-			t.Fatalf("route binding = %q %v, want the pinned set %v", snap.State.RouteMode, snap.State.SelectedGates, pinned)
+		if !snap.State.RouteConfirmed || !sameGateSet(snap.State.SelectedGates, pinned) {
+			t.Fatalf("route binding = %t %v, want the pinned set %v", snap.State.RouteConfirmed, snap.State.SelectedGates, pinned)
 		}
 		if !snap.State.PendingAsks["req-route-diverging"].Resolved {
 			t.Fatal("corrected decide left the ask unresolved")
@@ -938,9 +950,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("route before topology", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-early", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"},
-		}}); err == nil {
+		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-early", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
 			t.Fatal("route accepted before topology binding")
 		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 			t.Fatalf("early route code = %q", code)
@@ -991,7 +1001,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 	})
 
-	t.Run("route choice must anchor the payload mode", func(t *testing.T) {
+	t.Run("route choice must approve the gate selection", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
 		product := issueReady(t, engine)[0]
@@ -1001,17 +1011,15 @@ func TestReviewGatingNegatives(t *testing.T) {
 		askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 			Decision: "no-split", Note: "建议不拆",
 		}})
-		custom := &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "custom", Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
-		}}
-		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-cross", routeOptions(), "full", custom); err == nil {
-			t.Fatal("full choice with a custom payload accepted")
+		selection := &ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"}}}
+		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-cross", []AskOption{{ID: "defer", Label: "Defer"}}, "defer", selection); err == nil {
+			t.Fatal("unapproved gate selection accepted")
 		} else if code := rejectionCode(t, err); code != CodeEventSchemaInvalid {
 			t.Fatalf("crossed route code = %q", code)
 		}
 	})
 
-	t.Run("route candidates missing a built-in QA mode for full or carrying merge are rejected without state writes", func(t *testing.T) {
+	t.Run("reserved merge candidates are rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
 		product := issueReady(t, engine)[0]
@@ -1023,15 +1031,15 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}})
 		observedInput := Observation{}
 		for name, route := range map[string]*RouteDecision{
-			"full-with-merge":      {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
-			"custom-with-merge":    {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
-			"full-with-merge-gate": {Mode: "full", Gates: []string{"blackbox", "whitebox", "merge-gate", "gate.quality"}},
-			"custom-with-merge-qa": {Mode: "custom", Gates: []string{"blackbox", "whitebox", "merge-qa", "gate.quality"}, Selected: []string{"gate.quality"}},
+			"merge-candidate":             {Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}},
+			"merge-candidate-with-subset": {Gates: []string{"blackbox", "whitebox", "merge", "gate.quality"}, Selected: []string{"gate.quality"}},
+			"merge-gate-candidate":        {Gates: []string{"blackbox", "whitebox", "merge-gate", "gate.quality"}},
+			"merge-qa-candidate":          {Gates: []string{"blackbox", "whitebox", "merge-qa", "gate.quality"}, Selected: []string{"gate.quality"}},
 		} {
 			// 字面构造事件绕开构造器前置校验，让引擎在 Submit 边界拒绝；
 			// 拒绝必须零状态写入。
 			ev := Event{ID: EventID("evt-" + name), Kind: KindDecide, Decide: &DecidePayload{
-				Request: RequestID("req-route-" + name), Token: "sha256:token", Choice: AskOptionID(route.Mode),
+				Request: RequestID("req-route-" + name), Token: "sha256:token", Choice: "approve",
 				Review: &ReviewDecisionPayload{Route: route},
 			}}
 			before := stateBytesOf(t, dir)
@@ -1044,39 +1052,9 @@ func TestReviewGatingNegatives(t *testing.T) {
 				t.Fatalf("rejected %s changed state bytes", name)
 			}
 		}
-		// full 缺内建 QA 是 run 形态相关约束（child 的 full 不含 QA），在接
-		// 纳层判定：真实 Ask 上提交缺 QA 的 full 决定被可区分拒绝、零写且
-		// Ask 存活。
-		for name, gates := range map[string][]string{
-			"full-without-whitebox": {"blackbox", "gate.quality"},
-			"full-without-blackbox": {"whitebox", "gate.quality"},
-		} {
-			request := controlRequestEvent(t, ControlSelectRoute, "req-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions())
-			if _, err := engine.Submit(request, observedInput); err != nil {
-				t.Fatalf("route ask %s: %v", name, err)
-			}
-			token, err := engine.Freshness(RequestID("req-route-" + name))
-			if err != nil {
-				t.Fatalf("freshness %s: %v", name, err)
-			}
-			event, err := NewReviewDecideEvent(EventID("evt-"+name), RequestID("req-route-"+name), token, "full", ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}})
-			if err != nil {
-				t.Fatalf("decide event %s: %v", name, err)
-			}
-			before := stateBytesOf(t, dir)
-			if _, err := engine.Submit(event, observedInput); err == nil {
-				t.Fatalf("%s accepted", name)
-			} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-				t.Fatalf("%s code = %q (%v)", name, code, err)
-			}
-			if after := stateBytesOf(t, dir); string(before) != string(after) {
-				t.Fatalf("rejected %s changed state bytes", name)
-			}
-		}
-		// 正向对照：合法 custom 选择照常接纳。
-		askAndDecide(t, engine, ControlSelectRoute, "req-route-custom-subset", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "custom", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
-		}})
+
+		// 正向对照：合法 门选择照常接纳。
+		askAndDecide(t, engine, ControlSelectRoute, "req-route-subset", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Selected: []string{"gate.quality"}}})
 	})
 
 	t.Run("no-split without note is schema invalid", func(t *testing.T) {
@@ -1089,11 +1067,9 @@ func TestReviewGatingNegatives(t *testing.T) {
 		}
 	})
 
-	t.Run("custom route can select no validation gates", func(t *testing.T) {
-		if _, err := NewReviewDecideEvent("evt-empty", "req-route", "sha256:token", "custom", ReviewDecisionPayload{Route: &RouteDecision{
-			Mode: "custom", Gates: []string{"gate.a", "gate.b"}, Selected: []string{},
-		}}); err != nil {
-			t.Fatalf("empty custom subset rejected: %v", err)
+	t.Run("gate selection can select no validation gates", func(t *testing.T) {
+		if _, err := NewReviewDecideEvent("evt-empty", "req-route", "sha256:token", "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"gate.a", "gate.b"}, Selected: []string{}}}); err != nil {
+			t.Fatalf("empty gate selection rejected: %v", err)
 		}
 	})
 
@@ -1451,9 +1427,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	}
 
 	// 重新阻塞期间选路线：可区分拒绝、零状态变化。
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-blocked", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"},
-	}}); err == nil {
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-blocked", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
 		t.Fatal("route accepted while product-review is re-blocked")
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 		t.Fatalf("route-under-block code = %q", code)
@@ -1502,9 +1476,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	if released.Effective.Revision <= voided.Effective.Revision {
 		t.Fatalf("the released projection must keep the revision monotonic: %d <= %d", released.Effective.Revision, voided.Effective.Revision)
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-held", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"},
-	}}); err == nil {
+	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-held", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
 		t.Fatal("route accepted while the re-projected readiness conclusion blocks")
 	}
 
@@ -1522,12 +1494,10 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	if series := snap.State.ReviewSeries.StartReadiness; series.Effective.Status != "PASS" || series.Completed != 1 {
 		t.Fatalf("dismissing the window raise must restore readiness PASS: %+v", series.Effective)
 	}
-	askAndDecide(t, engine, ControlSelectRoute, "req-route-open", routeOptions(), "full", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
-	}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-route-open", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}}})
 	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != "full" || snap.State.Phase != runtime.PhaseDevelopmentParallel {
-		t.Fatalf("route = %q phase = %s, want full/DEVELOPMENT_PARALLEL after the release round trip", snap.State.RouteMode, snap.State.Phase)
+	if !snap.State.RouteConfirmed || snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("route = %t phase = %s, want confirmed/DEVELOPMENT_PARALLEL after the release round trip", snap.State.RouteConfirmed, snap.State.Phase)
 	}
 	if _, err := engine.Load(); err != nil {
 		t.Fatalf("load after the release round trip: %v", err)

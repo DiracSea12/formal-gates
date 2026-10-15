@@ -525,3 +525,39 @@ func TestSharedQACreationSnapshotPreservesMergeExecution(t *testing.T) {
 		t.Fatal("child creation lost shared QA's original modes or merge execution")
 	}
 }
+
+func TestConfigurationExecutionInheritsOnlyTheSelectedPlatformDefaults(t *testing.T) {
+	for _, sample := range []struct {
+		name       string
+		configured ExecutionChoice
+		want       ExecutionChoice
+	}{
+		{"run-defaults", ExecutionChoice{}, ExecutionChoice{Provider: host.Codex, Model: "run-model", ReasoningEffort: "high"}},
+		{"same-platform", ExecutionChoice{Provider: host.Codex}, ExecutionChoice{Provider: host.Codex, Model: "run-model", ReasoningEffort: "high"}},
+		{"inherited-platform", ExecutionChoice{Model: "node-model"}, ExecutionChoice{Provider: host.Codex, Model: "node-model", ReasoningEffort: "high"}},
+		{"different-platform", ExecutionChoice{Provider: host.Claude}, ExecutionChoice{Provider: host.Claude}},
+		{"different-model", ExecutionChoice{Provider: host.Claude, Model: "node-model"}, ExecutionChoice{Provider: host.Claude, Model: "node-model"}},
+		{"different-effort", ExecutionChoice{Provider: host.Claude, ReasoningEffort: "low"}, ExecutionChoice{Provider: host.Claude, ReasoningEffort: "low"}},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			state := State{RunProvider: host.Codex, Settings: &settings.Effective{Values: settings.Values{Model: "run-model", ReasoningEffort: "high"}, Configuration: settings.Configuration{Execution: map[string]ExecutionChoice{"qa-blackbox": sample.configured}}}}
+			if got := state.EffectiveExecutionChoice("qa-blackbox"); got != sample.want {
+				t.Fatalf("configuration choice = %+v, want %+v", got, sample.want)
+			}
+			inherited := state.ExecutionSelections()
+			state.Settings.Configuration.Execution["qa-blackbox"] = ExecutionChoice{Provider: host.ZCode, Model: "future-model"}
+			child := State{RunProvider: host.Codex, Settings: state.Settings, SliceChild: &SliceChildBinding{InheritedExecution: inherited}}
+			body, err := json.Marshal(child)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var recovered State
+			if err := json.Unmarshal(body, &recovered); err != nil {
+				t.Fatal(err)
+			}
+			if got := recovered.EffectiveExecutionChoice("qa-blackbox"); got != sample.want {
+				t.Fatalf("recovered child choice = %+v, want creation snapshot %+v", got, sample.want)
+			}
+		})
+	}
+}

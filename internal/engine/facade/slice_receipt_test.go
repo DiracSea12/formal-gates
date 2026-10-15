@@ -90,8 +90,8 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	}
 	d := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 	meterReceiptDispatches(d, 1, 4, 2)
-	route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality", "security"}}
-	if mode == "custom" {
+	route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
+	if mode == "selected" {
 		route.Selected = []string{"security"}
 	}
 	d.confirmSliceRoute(route, sliceLanePlan())
@@ -203,7 +203,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 	writeTranscript(t, path, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
 	own := driverState(t, master)
-	core := receiptChild(t, master, "core", "lane-core", "custom")
+	core := receiptChild(t, master, "core", "lane-core", "selected")
 	promoteReceiptChild(t, core)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	first := publishReceiptChild(t, core)
@@ -215,7 +215,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 			t.Fatalf("child dispatch differs from its known transcript: %+v", entry)
 		}
 	}
-	tooling := receiptChild(t, master, "tooling", "lane-tooling", "custom")
+	tooling := receiptChild(t, master, "tooling", "lane-tooling", "selected")
 	tooling.reopen()
 	promoteReceiptChild(t, tooling)
 	second := publishReceiptChild(t, tooling)
@@ -364,7 +364,7 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 	if len(driverState(t, master).SliceReceipts) != 0 || master.run.Status != "ACTIVE" {
 		t.Fatal("unclaimed slices did not wait")
 	}
-	child := receiptChild(t, master, "core", "lane-core", "custom")
+	child := receiptChild(t, master, "core", "lane-core", "selected")
 	master.drive()
 	if len(driverState(t, master).SliceReceipts) != 0 {
 		t.Fatal("unfinished child was accepted")
@@ -393,7 +393,7 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 			case "envelope":
 				bad.Receipt.Envelope.PackageDigest = "sha256:other-package"
 			case "route":
-				bad.Receipt.RouteMode = "default"
+				bad.Receipt.RouteConfirmed = false
 			case "status":
 				bad.Receipt.Status = runtime.PhaseTerminal
 			}
@@ -434,7 +434,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 			writeTranscript(t, path, []string{intervalBaseLine})
 			master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
 			own := driverState(t, master)
-			child := receiptChild(t, master, "core", "lane-core", "custom")
+			child := receiptChild(t, master, "core", "lane-core", "selected")
 			promoteReceiptChild(t, child)
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			receipt := publishReceiptChild(t, child)
@@ -486,7 +486,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	master := receiptMaster(t)
 	own := driverState(t, master)
-	child := receiptChild(t, master, "core", "lane-core", "default")
+	child := receiptChild(t, master, "core", "lane-core", "all")
 	quality, input := child.gateAction("quality")
 	child.business(quality, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "documented output order differs"}}})
 	security, input := child.gateAction("security")
@@ -532,7 +532,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 	for _, scope := range []string{"requirement", "topology", "route"} {
 		t.Run(scope, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "core", "lane-core", "custom")
+			child := receiptChild(t, master, "core", "lane-core", "selected")
 			promoteReceiptChild(t, child)
 			child.drive()
 			receipt := readSliceReceipt(t, child)
@@ -567,7 +567,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 			master.reopen()
 			master.drive()
 			state := driverState(t, master)
-			if !reflect.DeepEqual(state.SliceReceipts[child.f.runID], receipt) || !reflect.DeepEqual(state.Cost, before.Cost) || state.SliceReceiptCurrent(receipt) || scope == "topology" && state.Topology != nil || scope == "route" && state.RouteMode != "" {
+			if !reflect.DeepEqual(state.SliceReceipts[child.f.runID], receipt) || !reflect.DeepEqual(state.Cost, before.Cost) || state.SliceReceiptCurrent(receipt) || scope == "topology" && state.Topology != nil || scope == "route" && state.RouteConfirmed {
 				t.Fatal("Phase B history was coupled to the superseded current context")
 			}
 			next, _ := json.Marshal(master.run.Next)
@@ -586,7 +586,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 }
 
 func TestMasterDriveAcceptsThePublishedChildReceipt(t *testing.T) {
-	child := promotedSlice(t, "custom", OwnerBinding{})
+	child := promotedSlice(t, "selected", OwnerBinding{})
 	child.drive()
 	receipt := readSliceReceipt(t, child)
 	master, err := Open(child.f.root, receipt.Receipt.MasterRunID)
@@ -631,10 +631,11 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 	slices.Sort(gates)
 	topologyDigest := canonicalDigest(state.Topology)
 	routeDigest := canonicalDigest(struct {
-		Route    string
-		Gates    []string
-		Topology *protocol.TopologyBinding
-	}{state.RouteMode, gates, state.Topology})
+		Confirmed bool
+		Gates     []string
+		Topology  *protocol.TopologyBinding
+		Flow      *protocol.FlowSelection
+	}{state.RouteConfirmed, gates, state.Topology, state.FlowSelection})
 	confirmed := func(id, revision string) guard.ConfirmedIdentity {
 		return guard.ConfirmedIdentity{Identity: guard.Identity{ID: id, Revision: revision}, ConfirmedRevision: revision}
 	}

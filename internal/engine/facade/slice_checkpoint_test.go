@@ -40,8 +40,8 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
-	route := protocol.RouteDecision{Mode: mode, Gates: []string{"quality", "security"}}
-	if mode == "custom" {
+	route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
+	if mode == "selected" {
 		route.Selected = []string{"security"}
 	}
 	child.confirmSliceRoute(route, sliceLanePlan())
@@ -80,7 +80,7 @@ func TestSliceDisabledQualityRoleKeepsRealRouteAndEmptyGateEvidence(t *testing.T
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "full", Gates: []string{"quality", "security"}}, sliceLanePlan())
+	child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}, sliceLanePlan())
 	child.drive()
 	id, input := planBatchAction(child, "command")
 	if err := os.WriteFile(filepath.Join(input.Workspace.Path, "app_test.go"), []byte("package main\n"), 0600); err != nil {
@@ -169,7 +169,7 @@ func assertSliceRequestEvidence(t *testing.T, child *validationDriver, receipt p
 }
 
 func TestSliceReceiptBindsTheAuthorizedGeneratedRequest(t *testing.T) {
-	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{})
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{})
 	child.drive()
 	assertSliceRequestEvidence(t, child, readSliceReceipt(t, child), offer, event)
 }
@@ -186,7 +186,7 @@ func assertNoSuccessfulSliceReceipt(t *testing.T, child *validationDriver) {
 
 func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 	t.Run("selected gate missing", func(t *testing.T) {
-		child := reviewReadySlice(t, "full", OwnerBinding{})
+		child := reviewReadySlice(t, "all", OwnerBinding{})
 		id, input := child.gateAction("quality")
 		child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
 		if _, err := child.f.PrepareCandidate(""); err == nil {
@@ -200,7 +200,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 		assertNoSuccessfulSliceReceipt(t, child)
 	})
 	t.Run("promotion missing", func(t *testing.T) {
-		child := reviewReadySlice(t, "custom", OwnerBinding{})
+		child := reviewReadySlice(t, "selected", OwnerBinding{})
 		completeSliceGates(t, child)
 		state := driverState(t, child)
 		if err := child.f.engine.CheckpointSlice(state.Validation.Candidate.Identity, state.Validation.Candidate.Digest, nil, "", protocol.Observation{}); err == nil {
@@ -210,7 +210,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 	})
 	for _, kind := range []string{"dirty", "drift", "tree", "barrier", "abort", "independent-seal"} {
 		t.Run(kind, func(t *testing.T) {
-			child := promotedSlice(t, "default", OwnerBinding{})
+			child := promotedSlice(t, "all", OwnerBinding{})
 			state := driverState(t, child)
 			var err error
 			switch kind {
@@ -255,7 +255,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 
 func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.jsonl")
-	child := promotedSlice(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	child := promotedSlice(t, "selected", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	child.drive()
 	r := readSliceReceipt(t, child).Receipt
 	if r.Cost.Owner == nil || *r.Cost.Owner != (cost.OwnerCost{Source: cost.SourceUnavailable, Reason: "owner baseline is unavailable"}) || r.OwnerTranscript != path || r.OwnerStartedAt == "" || r.OwnerEndedAt == "" {
@@ -266,7 +266,7 @@ func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
 func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
-	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	if _, _, err := child.f.engine.Drive(protocol.Observation{}); err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 }
 
 func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
-	for _, mode := range []string{"default", "full", "custom"} {
+	for _, mode := range []string{"all", "selected"} {
 		t.Run(mode, func(t *testing.T) {
 			child := promotedSlice(t, mode, OwnerBinding{})
 			before := driverState(t, child)
@@ -342,7 +342,7 @@ func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			assigned := membership.State.SliceChildren[before.SliceChild.SliceID]
-			if assigned == "" || assigned != child.f.runID || r.Status != runtime.PhaseSliceReady || r.ChildRunID != assigned || r.MasterRunID != before.SliceChild.MasterRunID || r.SliceID != before.SliceChild.SliceID || r.Envelope != child.f.envelope || r.Snapshot != before.PromotedSnapshot || r.Tree != tree || r.Digest != tree || r.RequirementRevision != child.revision || !reflect.DeepEqual(r.Topology, *before.Topology) || r.RouteMode != mode || !reflect.DeepEqual(r.SelectedGates, before.SelectedGates) {
+			if assigned == "" || assigned != child.f.runID || r.Status != runtime.PhaseSliceReady || r.ChildRunID != assigned || r.MasterRunID != before.SliceChild.MasterRunID || r.SliceID != before.SliceChild.SliceID || r.Envelope != child.f.envelope || r.Snapshot != before.PromotedSnapshot || r.Tree != tree || r.Digest != tree || r.RequirementRevision != child.revision || !reflect.DeepEqual(r.Topology, *before.Topology) || !r.RouteConfirmed || !reflect.DeepEqual(r.SelectedGates, before.SelectedGates) {
 				t.Fatalf("receipt bindings = %+v", r)
 			}
 			if content, err := (vcs.ExecRunner{}).Run(child.f.vcs.Root(), "git", "show", r.Snapshot+":app_test.go"); err != nil || content != "package main" {
@@ -398,7 +398,7 @@ func readSliceReceipt(t *testing.T, child *validationDriver) protocol.SliceRecei
 func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
-	child, offer, event := promotedSliceWithAuthorizedRetry(t, "default", OwnerBinding{Transcript: path, Provider: meteredProvider})
+	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	child.drive()
 	receipt := readSliceReceipt(t, child)
@@ -462,7 +462,7 @@ func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
 		t.Run(string(point), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "owner.jsonl")
 			writeTranscript(t, path, []string{intervalBaseLine})
-			child, offer, event := promotedSliceWithAuthorizedRetry(t, "custom", OwnerBinding{Transcript: path, Provider: meteredProvider})
+			child, offer, event := promotedSliceWithAuthorizedRetry(t, "selected", OwnerBinding{Transcript: path, Provider: meteredProvider})
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			// Settle the engine's internal frontier before injecting the checkpoint transaction.
 			if _, _, err := child.f.engine.Drive(protocol.Observation{}); err != nil {

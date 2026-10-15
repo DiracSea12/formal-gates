@@ -17,9 +17,12 @@ reset/rebuild 或 abort 的 typed Ask。引擎机械验证已确认图，不从�
 
 engine 从 master 的确认拓扑创建独立 child 工作区和 run，持久化 sliceID→childRunID。
 child 继承整体产品/技术审和需求 revision，不重做受理与整体双审；每个 child 独立确认
-default/full/custom route；default 与 full 均选择全部普通门，custom 可选任意子集（含空集）或全集。
-child 的候选不含普通黑盒/白盒 QA，不选择也不执行；master 强制
+所选普通门与精确开发计划；从创建时继承的命名配置预选普通门，可改选任意子集（含空集）或全集。
+child 的候选不含普通黑盒/白盒 QA，不选择也不执行；master 按启用职责执行
 merge QA 与 merge gate。容量允许时并行派发独立 child，依赖边等待由 engine 管理。
+
+运行中明确选择配置或修改节点时，master 与每个 child 分别通过自己的原 SELECT_ROUTE Ask 确认；
+修改保存默认或父流程的后续选择不自动改变已有 child，过去或跳过节点仍按原 continuation 继续。
 
 child 完整候选、适用门结果、成本和 durable receipt 固定后形成 SLICE_READY。
 VCS adapter 集成 child，只有精确冲突需要语义选择时才派窄主线开发动作；adapter 核验

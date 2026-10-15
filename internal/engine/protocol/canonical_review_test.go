@@ -75,13 +75,11 @@ func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
 		t.Fatalf("canonical topology binding = %+v", snap.State.Topology)
 	}
 
-	// 路线选择读取双审门：full 绑定后进入 DEVELOPMENT_PARALLEL。
-	confirmPlannedRoute(t, engine, "canonical-route", RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
-	})
+	// 路线选择读取双审门：确认后进入 DEVELOPMENT_PARALLEL。
+	confirmPlannedRoute(t, engine, "canonical-route", RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}})
 	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != "full" {
-		t.Fatalf("canonical route binding = %q", snap.State.RouteMode)
+	if !snap.State.RouteConfirmed {
+		t.Fatalf("canonical route binding = %t", snap.State.RouteConfirmed)
 	}
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after canonical route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
@@ -258,9 +256,7 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-1", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "single lane",
 	}})
-	confirmPlannedRoute(t, engine, "canonical-redo-route-1", RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
-	})
+	confirmPlannedRoute(t, engine, "canonical-redo-route-1", RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}})
 
 	work, err := engine.RequirementWork()
 	if err != nil {
@@ -314,9 +310,7 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 	askAndDecide(t, engine, ControlConfirmTopology, "canonical-redo-topo-2", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "no-split", Note: "reconfirmed after the redo",
 	}})
-	confirmPlannedRoute(t, engine, "canonical-redo-route-2", RouteDecision{
-		Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"},
-	})
+	confirmPlannedRoute(t, engine, "canonical-redo-route-2", RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}})
 	if snap := engine.LoadMustSucceed(t); snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after the redone walk = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
@@ -391,12 +385,13 @@ func plannedReviewEvidence(action review.Action, dispatch, authorization, status
 }
 func confirmPlannedRoute(t *testing.T, e *Engine, id string, route RouteDecision) {
 	t.Helper()
+	configureRouteChange(t, e, &route)
 	p, err := e.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)
 	}
 	route.DevelopmentPlan = &p.Confirmation
-	askAndDecide(t, e, ControlSelectRoute, id, routeOptions(), "full", &ReviewDecisionPayload{Route: &route})
+	askAndDecide(t, e, ControlSelectRoute, id, routeOptions(), "approve", &ReviewDecisionPayload{Route: &route})
 }
 
 func plannedReviewEvidenceAt(action review.Action, dispatch, revision, status, message string, findings []review.Finding) ReviewResultEvidence {

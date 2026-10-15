@@ -758,13 +758,13 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 	if _, _, err := f.Submit(decision); err != nil {
 		t.Fatal(err)
 	}
-	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
+	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
 	preview, err := f.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	request, err = protocol.NewRouteRequestEvent("setup-route", route.Gates, protocol.AskOption{ID: "custom", Label: "command gate"})
+	request, err = protocol.NewRouteRequestEvent("setup-route", route.Gates, protocol.AskOption{ID: "approve", Label: "command gate"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +775,7 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err = protocol.NewReviewDecideEvent("setup-route-decision", protocol.RequestID(request.ID), token, "custom", protocol.ReviewDecisionPayload{Route: &route})
+	decision, err = protocol.NewReviewDecideEvent("setup-route-decision", protocol.RequestID(request.ID), token, "approve", protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1703,7 +1703,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	topology.DevelopmentPlan = &preview.Confirmation
 	decide(f, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
-	route := protocol.RouteDecision{Mode: "custom", Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
+	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
 	s.peer.Mode = "workflow-held"
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
@@ -1833,14 +1833,14 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	if err != nil || len(childRun.PendingAsks) != 1 || childRun.PendingAsks[0].Control != protocol.ControlSelectRoute {
 		t.Fatal("child did not retain its typed route Ask", err)
 	}
-	childRoute := protocol.RouteDecision{Mode: "custom", Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected}
+	childRoute := protocol.RouteDecision{Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected}
 	preview, err = child.DevelopmentPlan(childRoute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	childRoute.DevelopmentPlan = &preview.Confirmation
 	ask := childRun.PendingAsks[0]
-	event, err := protocol.NewReviewDecideEvent("approve-child-route", protocol.RequestID(ask.RequestID), ask.Token, "custom", protocol.ReviewDecisionPayload{Route: &childRoute})
+	event, err := protocol.NewReviewDecideEvent("approve-child-route", protocol.RequestID(ask.RequestID), ask.Token, "approve", protocol.ReviewDecisionPayload{Route: &childRoute})
 	if err != nil {
 		t.Fatal(err)
 	}

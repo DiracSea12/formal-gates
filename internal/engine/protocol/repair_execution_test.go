@@ -37,7 +37,7 @@ func TestValidationTargetControlsPreserveFrozenExpectedSet(t *testing.T) {
 func TestRepairMembersUseTheSelectedQualityRole(t *testing.T) {
 	cd := compiledCanonicalWorkflow(t)
 	for _, enabled := range []bool{true, false} {
-		s := &State{RunID: "run", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
+		s := &State{RunID: "run", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
 		if !enabled {
 			s.FlowSelection = &FlowSelection{Disabled: []string{"gate"}}
 		}
@@ -110,7 +110,7 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &State{RunID: "run", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
+			s := &State{RunID: "run", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
 			task := pipelineTask(cd, "engine.repair.v7", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{"original": {ID: "original"}, "source": {ID: "source"}, "later": {ID: "later"}}, Waves: []ValidationWave{{ID: "source-wave", Generation: 1, Status: "REPAIR", Candidate: coverage.ValidationCandidate{Identity: "base"}, Targets: map[string]*ValidationTarget{}, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
@@ -294,7 +294,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &State{RunID: "run", Route: "regular", RouteMode: "full", SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
+			s := &State{RunID: "run", Route: "regular", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
 			task := pipelineTask(cd, "engine.repair.v7", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}, Waves: []ValidationWave{{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Counted: true, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}

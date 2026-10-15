@@ -30,7 +30,7 @@ func (f *Facade) driveNative() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if progress, err := f.observeWorkerResumes(snap.State); progress || err != nil {
+	if progress, err := f.observeWorkerExecutions(snap.State); progress || err != nil {
 		return progress, err
 	}
 	if f.vcs == nil || snap.State.NativeRoot == "" {
@@ -70,7 +70,17 @@ func (f *Facade) driveNative() (bool, error) {
 	return false, nil
 }
 
-func (f *Facade) observeWorkerResumes(state *protocol.State) (bool, error) {
+func (f *Facade) observeWorkerExecutions(state *protocol.State) (bool, error) {
+	observed := map[string]nativeWorkerInvocation{}
+	for _, pending := range state.PendingActions {
+		invocations, err := claimedWorkerInvocations(f.root, f.runID, pending.ActionID, pending.AttemptID)
+		if err != nil {
+			return false, err
+		}
+		for _, invocation := range invocations {
+			observed[invocation.directory] = invocation
+		}
+	}
 	intents := map[string]protocol.HostActionIntent{}
 	for id, intent := range state.PendingHostActions {
 		if intent.Resume != nil {
@@ -132,28 +142,37 @@ func (f *Facade) observeWorkerResumes(state *protocol.State) (bool, error) {
 			return err == nil, err
 		}
 		for _, invocation := range jobs {
-			if NativeStartVerifier == nil {
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				return false, err
-			}
-			before, err := f.engine.Load()
-			if err != nil {
-				return false, err
-			}
-			if err := f.observeWorkerExecution(*invocation.binding.WorkerMaterial, invocation.directory, NativeStartVerifier); err != nil {
-				return false, err
-			}
-			after, err := f.engine.Load()
-			if err != nil {
-				return false, err
-			}
-			if after.Revision > before.Revision {
-				return true, nil
-			}
+			observed[invocation.directory] = invocation
+		}
+	}
+	directories := make([]string, 0, len(observed))
+	for directory := range observed {
+		directories = append(directories, directory)
+	}
+	slices.Sort(directories)
+	for _, directory := range directories {
+		invocation := observed[directory]
+		if NativeStartVerifier == nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return false, err
+		}
+		before, err := f.engine.Load()
+		if err != nil {
+			return false, err
+		}
+		if err := f.observeWorkerExecution(*invocation.binding.WorkerMaterial, invocation.directory, NativeStartVerifier); err != nil {
+			return false, err
+		}
+		after, err := f.engine.Load()
+		if err != nil {
+			return false, err
+		}
+		if after.Revision > before.Revision {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -1065,7 +1084,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		if p.Base != s.RequirementAssemblySource() {
 			evidence.Changes = changes
 		}
-		if p.Stage == "REVIEW_READY" && s.RouteMode == "merge" {
+		if p.Stage == "REVIEW_READY" && s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == "split" {
 			evidence.ChildViews, err = f.childValidationViews(s, head, owned)
 			if err != nil {
 				return nativeResult{}, false, err

@@ -201,7 +201,7 @@ func (s *State) AcceptedNativeSnapshot() string {
 // confirmed plan, complete source set and approved execution evidence. A
 // checkpoint only releases later development.
 func (s *State) FinalValidationComplete(cd *compiler.CompiledDefinition) bool {
-	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+	if !s.parentReviewReady() || !pipelineEnabled(s, cd) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || !s.RouteConfirmed {
 		return false
 	}
 	_, plan, _ := s.confirmedDevelopmentPlan()

@@ -24,12 +24,12 @@ intake begins only when the user explicitly requests it.
    raw finding and the user decides valid findings. Technical review produces Batch→Subtask,
    dependencies, DoD, verification, and recovery contracts.
 4. **Plan and route.** Bind exact split topology or the no-split reason after technical review,
-   then confirm default/full/custom. In an unsliced run, default selects every ordinary gate without
-   blackbox/whitebox QA; full selects every ordinary gate and both QA modes (the QA stage is heavier
-   and suits large tasks); custom selects a nonempty subset or the entire current candidate set.
-   Recommendations still require confirmation, and each child decides independently. Children exclude
-   ordinary QA, so default/full both select every ordinary gate; the master requires merge verification.
-   Start does not predict split; the engine creates child runs.
+   then confirm the selected gates and exact development plan. Named configurations save workflow
+   nodes and execution-group platform, model and reasoning effort choices; blackbox and whitebox
+   are separate groups. Initially only “默认” exists: main nodes enabled, no ordinary QA, all ordinary
+   gates and inherited host execution choices. Any subset, including none, or all candidates may be
+   selected. Each child confirms independently and selects no ordinary QA; the master runs the
+   merge QA and gates enabled by its selected responsibilities.
 5. **Concurrent development.** When blackbox is selected, development runs alongside its design/review in a baseline
    workspace. Developers and reviewers remain isolated. Each Batch starts a new development
    session; retries and recovery within the Batch retain the original identity.
@@ -68,8 +68,12 @@ recovery Ask; replan prepares and saves the plan-review confirmation payload. Sh
 waiver/skip, and HUMAN legal-node jumps use availableActions and typed Ask decisions. Reconcile
 UNKNOWN before another spawn or VCS side effect.
 
-User/project model, effort, concurrency, token cap, and native path settings are frozen at start;
-recovery preserves their sources and budgets. See [configuration](references/user-configuration.md).
+Named workflow configurations save nodes and execution-group choices. `start --configuration <name-or-position>`
+selects one for this run. During a run, `submit --configuration`, or `--flow-node <node> --enabled true|false`
+and `--qa-mode <blackbox|whitebox> --enabled true|false`, requests a change through the existing confirmation Ask.
+Enabled past or skipped nodes can be continued through the original node control. Saved defaults do not
+automatically change existing runs; recovery preserves sources, claimed calls and budgets. See
+[configuration](references/user-configuration.md).
 
 Version, definition/package digest, or installation identity mismatch rejects ordinary reads and
 writes. Diagnose can inspect raw state; unsupported runs are neither migrated nor continued. Create

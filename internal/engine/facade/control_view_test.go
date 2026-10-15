@@ -44,7 +44,7 @@ func TestChildControlReadWindowUsesActualMasterAndChild(t *testing.T) {
 	if err != nil || len(current) != 1 || current[0].MasterRunID != master.run.RunID {
 		t.Fatal("direct child projection lost its actual master", err)
 	}
-	input := ControlInput{Ask: askPosition(t, current[0], protocol.ControlSelectRoute), Choice: "full"}
+	input := ControlInput{Ask: askPosition(t, current[0], protocol.ControlSelectRoute), Choice: "approve"}
 	before := installationFiles(t, child.stateDir)
 	local, err := child.PrepareControl(input)
 	if err != nil {

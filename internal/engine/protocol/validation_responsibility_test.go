@@ -66,7 +66,7 @@ func TestCompletedRepairMemberRetainsTheWholeGateResponsibility(t *testing.T) {
 	cd := compiledCanonicalWorkflow(t)
 	s := pointResponsibilityState()
 	s.Validation.Generation, s.Validation.RequirementRevision = 1, "confirmed"
-	s.RouteMode, s.SelectedGates = "full", []string{"quality"}
+	s.RouteConfirmed, s.SelectedGates = true, []string{"quality"}
 	root := pipelineTask(cd, "engine.repair.v7", "original")
 	gateTask := pipelineTask(cd, "engine.gate.v3", "original:quality")
 	original := &ValidationTarget{Task: gateTask, Kind: "GATE", Gate: "quality", Status: "FAIL", ResultAction: "gate-result"}

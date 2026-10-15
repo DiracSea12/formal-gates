@@ -54,7 +54,7 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 				}
 				d.submit(unknown)
 			}
-			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: []int{4}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -62,7 +62,7 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Replacing an ordinary gate is legal before any development dispatch.
-			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{4}})
+			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -364,14 +364,14 @@ func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
 				}
 				d.submit(unknown)
 			}
-			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: []int{1, 3, 4}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, d.run, err = d.f.SubmitControl(request); err != nil {
 				t.Fatal(err)
 			}
-			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{1, 3, 4}})
+			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
 			if err != nil {
 				t.Fatal(err)
 			}

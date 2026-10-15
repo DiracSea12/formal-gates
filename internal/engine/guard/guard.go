@@ -70,6 +70,7 @@ type Basis struct {
 	SelectedGates          []Identity        `json:"selectedGates"`
 	EstablishedObligations []Identity        `json:"establishedObligations"`
 	EstablishedRepairs     []Identity        `json:"establishedRepairs"`
+	HistoricalSources      []Provenance      `json:"historicalSources,omitempty"`
 	ExternalTasks          []ExternalTask    `json:"externalTasks"`
 }
 
@@ -151,6 +152,33 @@ func Calculate(input Basis) (Result, error) {
 			sources[Provenance{field.kind, item}] = true
 		}
 	}
+
+	b.HistoricalSources = make([]Provenance, 0, len(input.HistoricalSources))
+	for i, source := range input.HistoricalSources {
+		switch source.Kind {
+		case DefinitionSource, BatchSource, RouteSource, TopologySource, QASource, GateSource, ObligationSource, RepairSource:
+		default:
+			return Result{}, fmt.Errorf("historicalSources[%d]: unknown source kind", i)
+		}
+		if err := validateIdentity(fmt.Sprintf("historicalSources[%d]", i), source.Identity); err != nil {
+			return Result{}, err
+		}
+		if sources[source] {
+			continue
+		}
+		sources[source] = true
+		b.HistoricalSources = append(b.HistoricalSources, source)
+	}
+	sort.Slice(b.HistoricalSources, func(i, j int) bool {
+		a, b := b.HistoricalSources[i], b.HistoricalSources[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.ID != b.ID {
+			return a.ID < b.ID
+		}
+		return a.Revision < b.Revision
+	})
 
 	tasks := make(map[runtime.TaskKey]ExternalTask)
 	b.ExternalTasks = make([]ExternalTask, 0, len(input.ExternalTasks))

@@ -11,6 +11,7 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
 	definition "formal-gates/internal/engine/testkit/workflow"
+	"formal-gates/internal/settings"
 )
 
 func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
@@ -21,34 +22,30 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 		"with-blackbox": {"blackbox", "gate.quality"},
 		"with-whitebox": {"whitebox", "gate.quality"},
 	} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full", Gates: gates}}, routeOptions()), observedInput); err == nil {
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, "req-child-route-"+name, &ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates}}, routeOptions()), observedInput); err == nil {
 			t.Fatalf("QA-carrying child route ask %s accepted", name)
 		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 			t.Fatalf("QA-carrying ask %s code = %q (%v)", name, code, err)
 		}
 	}
 
-	// QA-free custom 子集按候选全集顺序归一落账并推进开发段。
+	// QA-free explicit 子集按候选全集顺序归一落账并推进开发段。
 	engine, _ = sliceChildEngine(t)
-	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"},
-	}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.release", "gate.quality"}}})
 	snap := engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 2 ||
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 2 ||
 		snap.State.SelectedGates[0] != "gate.quality" || snap.State.SelectedGates[1] != "gate.release" {
-		t.Fatalf("child custom route binding = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+		t.Fatalf("child gate selection binding = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after child route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
 	// §6.3.1 开发前可重选：绑定后的第二次路线选择 Ask 照常抬起，缩集重
 	// 选落账新绑定。
-	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-again", routeOptions(), "custom", &ReviewDecisionPayload{Route: &RouteDecision{
-		Mode: "custom", Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.security"},
-	}})
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-again", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.security"}}})
 	snap = engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
-		t.Fatalf("child re-selected route = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
+		t.Fatalf("child re-selected route = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 }
 
@@ -59,8 +56,15 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security"}
 	observedInput := Observation{}
+	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
+	selected.SetSelectedGates([]string{"gate.security"})
 	for _, requestID := range []string{"req-child-bind", "req-child-coexist"} {
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}}, routeOptions()), observedInput); err != nil {
+		route := &RouteDecision{Gates: gates, Selected: []string{"gate.quality"}}
+		if requestID == "req-child-coexist" {
+			route.Configuration = &selected
+			route.Selected = []string{"gate.security"}
+		}
+		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: route}, routeOptions()), observedInput); err != nil {
 			t.Fatalf("submit ask %s: %v", requestID, err)
 		}
 	}
@@ -68,7 +72,7 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewReviewDecideEvent("evt-child-bind", "req-child-bind", token, "custom", ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.quality"}}})
+	binding, err := NewReviewDecideEvent("evt-child-bind", "req-child-bind", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: []string{"gate.quality"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +83,7 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := NewReviewDecideEvent("evt-child-coexist", "req-child-coexist", coexist, "custom", ReviewDecisionPayload{Route: &RouteDecision{Mode: "custom", Gates: gates, Selected: []string{"gate.security"}}})
+	decision, err := NewReviewDecideEvent("evt-child-coexist", "req-child-coexist", coexist, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: []string{"gate.security"}, Configuration: &selected}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,31 +91,24 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 		t.Fatalf("coexisting child route decide after binding: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if snap.State.RouteMode != routeModeCustom || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
-		t.Fatalf("child binding after the coexisting decide = %q %v", snap.State.RouteMode, snap.State.SelectedGates)
+	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
+		t.Fatalf("child binding after the coexisting decide = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 	if ask, pending := snap.State.PendingAsks["req-child-coexist"]; !pending || !ask.Resolved {
 		t.Fatalf("coexisting child ask did not settle: %+v", ask)
 	}
 }
 
-// TestSliceChildCompleteOrdinaryRoutesBindEveryDiscoveredGate：QA-free 候选的 default/full 路线
-// 全选绑定（候选即全部已发现门，不含 QA）；账本 residue 使加载边界在
-// DEVELOPMENT_PARALLEL 上重算通过（隐含于 LoadMustSucceed）。
-func TestSliceChildCompleteOrdinaryRoutesBindEveryDiscoveredGate(t *testing.T) {
-	for _, mode := range []string{"default", "full"} {
-		t.Run(mode, func(t *testing.T) {
-			engine, _ := sliceChildEngine(t)
-			gates := []string{"gate.quality", "gate.security", "gate.delivery"}
-			askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), AskOptionID(mode), &ReviewDecisionPayload{Route: &RouteDecision{Mode: mode, Gates: gates}})
-			snap := engine.LoadMustSucceed(t)
-			if snap.State.RouteMode != mode || !slices.Equal(snap.State.SelectedGates, gates) || !snap.State.routeHasNoQAModes() {
-				t.Fatalf("child %s route binding = %q %v", mode, snap.State.RouteMode, snap.State.SelectedGates)
-			}
-			if snap.State.Phase != runtime.PhaseDevelopmentParallel {
-				t.Fatalf("phase after child %s route = %s, want DEVELOPMENT_PARALLEL", mode, snap.State.Phase)
-			}
-		})
+func TestSliceChildCanSelectEveryDiscoveredGate(t *testing.T) {
+	engine, _ := sliceChildEngine(t)
+	gates := []string{"gate.quality", "gate.security", "gate.delivery"}
+	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: gates}})
+	snap := engine.LoadMustSucceed(t)
+	if !snap.State.RouteConfirmed || !slices.Equal(snap.State.SelectedGates, gates) || !snap.State.routeHasNoQAModes() {
+		t.Fatalf("child gate selection = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
+	}
+	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
+		t.Fatalf("phase after child selection = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
 }
 

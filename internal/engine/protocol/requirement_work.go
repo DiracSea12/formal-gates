@@ -297,7 +297,7 @@ func (s *State) requiredWorkTasks() []runtime.TaskKey {
 
 func (e *Engine) applyWorkAuthorization(state *State, entry ConfirmedRevision) error {
 	choices, requestID := entry.WorkDecisions, entry.RequestID
-	e.invalidateValidationWork(state, choices)
+	e.invalidateValidationWork(state, entry)
 	for i, choice := range choices {
 		if choice.Disposition == RequirementWorkCarry {
 			continue

@@ -100,7 +100,7 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 					if aborted.RequirementRevision != ready.RequirementRevision || aborted.OriginRequirementRevision != ready.OriginRequirementRevision || aborted.ChildRunID != ready.ChildRunID || aborted.SliceID != ready.SliceID || aborted.MasterRunID != ready.MasterRunID || aborted.Envelope != ready.Envelope || !reflect.DeepEqual(aborted.Topology, ready.Topology) {
 						t.Fatal("abort changed the checkpoint's requirement, ownership or version bindings")
 					}
-					if aborted.RouteMode != ready.RouteMode || !reflect.DeepEqual(aborted.SelectedGates, ready.SelectedGates) || !reflect.DeepEqual(aborted.Cost, ready.Cost) {
+					if aborted.RouteConfirmed != ready.RouteConfirmed || !reflect.DeepEqual(aborted.SelectedGates, ready.SelectedGates) || !reflect.DeepEqual(aborted.Cost, ready.Cost) {
 						t.Fatal("abort changed the checkpoint's route or cost")
 					}
 				}

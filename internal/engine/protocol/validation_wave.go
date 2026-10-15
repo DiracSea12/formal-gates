@@ -55,7 +55,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		_, p, _ := s.confirmedDevelopmentPlan()
 		return p == nil || !s.developmentPlanCurrent(p)
 	}
-	if s.Topology != nil && s.RouteMode == routeModeMerge && s.Validation != nil && s.Validation.DevelopmentSnapshot == "" {
+	if s.mergeMaster() && s.Validation != nil && s.Validation.DevelopmentSnapshot == "" {
 		// split 绑定锁定合并路线：保留总任务实例不涉常规路线与开发计划，
 		// 停等 children（合并门＋合并 QA 属收尾）。
 		ready, expected := s.sliceReceiptProgress()
@@ -63,9 +63,9 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		if ready == expected {
 			message = ""
 		}
-	} else if s.SliceChild != nil && s.RouteMode == "" {
+	} else if s.SliceChild != nil && !s.RouteConfirmed {
 		message = "select the slice route (the topology is inherited from the master)"
-	} else if s.SliceChild == nil && (s.Topology == nil || s.RouteMode == "") {
+	} else if s.SliceChild == nil && (s.Topology == nil || !s.RouteConfirmed) {
 		message = "confirm topology and select route"
 	} else if s.SliceChild == nil && !s.mergeMaster() && developmentPlanPending() {
 		message = "confirm the current development plan with the route"
@@ -126,6 +126,9 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 	if s.resetPending() {
 		return e.advanceReset(s, nextRevision)
 	}
+	if d, known := s.nodeContinuationDecision(); known && d.Continuation.AppliedRevision == 0 && s.PendingAsks[d.RequestID].Continuation.To.Kind == "configuration" {
+		return false, nil
+	}
 	if !s.parentReviewReady() || s.SliceChild != nil && s.Phase == runtime.PhaseSliceReady {
 		return false, nil
 	}
@@ -142,7 +145,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 	} else if made {
 		return true, nil
 	}
-	if !pipelineEnabled(s, e.cfg.Definition) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || s.RouteMode == "" {
+	if !pipelineEnabled(s, e.cfg.Definition) || !s.validationRequirementCurrent() || s.requirementChangePending() || s.Topology == nil || !s.RouteConfirmed {
 		return changed, nil
 	}
 	if s.DeliveryComplete(e.cfg.Definition) {

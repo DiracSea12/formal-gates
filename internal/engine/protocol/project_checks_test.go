@@ -27,7 +27,7 @@ func ownedDevelopmentPlan() *GranularityReview {
 
 func TestSplitPlansPreserveExplicitOwnersAndCompleteChecks(t *testing.T) {
 	plan := ownedDevelopmentPlan()
-	state := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"accepted": {Review: &ReviewResultEvidence{GranularityReview: plan}}, "unconfirmed": {Review: &ReviewResultEvidence{GranularityReview: ownedDevelopmentPlan()}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "accepted"}}}}}}
+	state := State{RouteConfirmed: true, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"accepted": {Review: &ReviewResultEvidence{GranularityReview: plan}}, "unconfirmed": {Review: &ReviewResultEvidence{GranularityReview: ownedDevelopmentPlan()}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "accepted"}}}}}}
 	state.Results["unconfirmed"].Review.GranularityReview.Batches[0].Checks[1].Command = "unconfirmed command"
 	if err := state.validateSplitPlan(plan); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestSplitPlansPreserveExplicitOwnersAndCompleteChecks(t *testing.T) {
 	if len(checks) != 2 || checks[0].Command != plan.Batches[2].Checks[0].Command {
 		t.Fatal("master complete verification included child-purpose commands")
 	}
-	state.RouteMode, state.Topology = "full", &TopologyBinding{Decision: "no-split"}
+	state.RouteConfirmed, state.Topology = true, &TopologyBinding{Decision: "no-split"}
 	if len(state.fullProjectChecks()) != 6 {
 		t.Fatal("unsplit project lost approved commands because a proposal carried owners")
 	}
@@ -157,7 +157,7 @@ func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
 	if err := ValidateGranularity(p); err != nil {
 		t.Fatal(err)
 	}
-	s := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"first", "second"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: p}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}, Validation: &Validation{Waves: []ValidationWave{{ID: "merge", Status: "COMPLETE", Scope: coverage.ScopeFull, Candidate: coverage.ValidationCandidate{Identity: "integrated", Digest: "tree"}}}}}
+	s := State{RouteConfirmed: true, Topology: &TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"first", "second"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: p}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}, Validation: &Validation{Waves: []ValidationWave{{ID: "merge", Status: "COMPLETE", Scope: coverage.ScopeFull, Candidate: coverage.ValidationCandidate{Identity: "integrated", Digest: "tree"}}}}}
 	if len(s.fullProjectChecks()) != 2 || len(s.planTasks(compiledCanonicalWorkflow(t))) != 0 {
 		t.Fatal("master lost full project commands or took child development tasks")
 	}
@@ -239,7 +239,7 @@ func TestSplitMasterMissingCallsUseConfirmedTaskIdentity(t *testing.T) {
 	missing.DependsOn = []string{existing.ID}
 	missing.Checks = []DevelopmentCheck{{ID: "build", Purpose: CheckFullBuild, Goal: "Build the integrated project"}, {ID: "tests", Purpose: CheckFullTests, Goal: "Test all integrated behavior"}}
 	plan.Batches = append(plan.Batches, missing)
-	s := State{RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: plan}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}}
+	s := State{RouteConfirmed: true, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"ready": {Review: &ReviewResultEvidence{GranularityReview: plan}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "ready"}}}}}}
 	tasks := s.planTasks(cd)
 	if len(tasks) != 1 || tasks[0] != planTask(cd, plan, missing.ID) {
 		t.Fatalf("master invented a plan identity or dispatched an existing call: %+v", tasks)

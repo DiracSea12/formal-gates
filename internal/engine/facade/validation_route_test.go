@@ -1,11 +1,11 @@
 package facade
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
@@ -470,79 +470,52 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 }
 
 // TestRouteRedoUnlocksTheBoundSelection：需求变化勾选重走路线的变更通道
-// ——绑定解除（RouteMode 清空、已生效义务在册），重新 Ask/决定照常接纳并
+// ——绑定解除（RouteConfirmed 清空、已生效义务在册），重新 Ask/决定照常接纳并
 // 落账新绑定，开发继续。
 func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 	d := newValidationDriver(t, "quality")
-	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 1 {
-		t.Fatalf("fixture route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	if !d.run.Review.RouteConfirmed || len(d.run.Review.SelectedGates) != 1 {
+		t.Fatalf("fixture route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 	}
 	unlockRouteByRequirementRedo(d)
-	if d.run.Review.RouteMode != "" {
-		t.Fatalf("requirement redo left the route bound: %q", d.run.Review.RouteMode)
+	if d.run.Review.RouteConfirmed {
+		t.Fatalf("requirement redo left the route bound: %t", d.run.Review.RouteConfirmed)
 	}
 	d.confirmRoute(routeDecisionForGates([]string{"quality", "security"}))
-	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 2 ||
+	if !d.run.Review.RouteConfirmed || len(d.run.Review.SelectedGates) != 2 ||
 		d.run.Review.SelectedGates[0] != "quality" || d.run.Review.SelectedGates[1] != "security" {
-		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+		t.Fatalf("re-selected route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 	}
 	d.drive()
 	d.action("engine.development.batch.v6")
 }
 
-// TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges：§6.3.1 开发已
-// 启动后的路线变更语义——Ask 照常抬起，非 add-only 变更（移除既有义务、
-// 缩减集合、新增 QA）在决定处可区分拒绝、零写；追加普通门经直接通道照常
-// 落账并进入新门的验证。
-func TestDevelopedRoutePermitsOnlyAdditiveOrdinaryGateChanges(t *testing.T) {
-	nonAdditive := []protocol.RouteDecision{
-		{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}},
-		{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality"}},
-		{Mode: "custom", Gates: []string{"blackbox", "whitebox", "security"}, Selected: []string{"blackbox", "security"}},
-		{Mode: "custom", Gates: []string{"blackbox", "quality"}, Selected: []string{"blackbox"}},
+// Gate and QA changes retain the confirmed requirement and rebuild the selected obligations.
+func TestDevelopedRouteAcceptsConfirmedGateAndQAChanges(t *testing.T) {
+	for _, selected := range [][]string{{"quality"}, {"blackbox", "whitebox", "quality"}, {"blackbox", "security"}, {"blackbox"}, {}} {
+		t.Run(fmt.Sprint(selected), func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox", "quality")
+			d.reviewReady()
+			before := driverState(t, d)
+			route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality", "security"}, Selected: selected}
+			d.confirmRoute(route)
+			d.reopen()
+			after := driverState(t, d)
+			if !after.RouteConfirmed || !slices.Equal(after.SelectedGates, selected) || !reflect.DeepEqual(after.RequirementRevisions, before.RequirementRevisions) {
+				t.Fatal("confirmed selection did not preserve the requirement or exact selected obligations", after.SelectedGates)
+			}
+			if after.Validation.Waves[0].Status != "INVALIDATED" {
+				t.Fatal("changed obligations retained the collecting wave", after.Validation.Waves[0])
+			}
+		})
 	}
-	for _, route := range nonAdditive {
-		d := newValidationDriver(t, "blackbox", "quality")
-		d.reviewReady()
-		before := driverState(t, d)
-		// 重选决定必须携再取的计划确认（不变计划的确认与路线载荷绑定），
-		// 变更约束由 validateRouteChange 在其后把关。
-		preview, err := d.f.DevelopmentPlan(route)
-		if err != nil {
-			t.Fatal(err)
-		}
-		route.DevelopmentPlan = &preview.Confirmation
-		err = controlError(t, d, protocol.ControlSelectRoute, route.Mode, protocol.ReviewDecisionPayload{Route: &route})
-		if err == nil {
-			t.Fatalf("developed route accepted a non-additive change: %s %v", route.Mode, route.Gates)
-		}
-		if !strings.Contains(err.Error(), "development has started") {
-			t.Fatalf("non-additive change rejection = %v", err)
-		}
-		d.reopen()
-		after := driverState(t, d)
-		if len(after.Validation.Waves) != len(before.Validation.Waves) ||
-			after.Validation.Waves[0].ExpectedDigest != before.Validation.Waves[0].ExpectedDigest ||
-			len(after.SelectedGates) != len(before.SelectedGates) {
-			t.Fatalf("rejected developed-route change rewrote validation: %q %v", after.RouteMode, after.SelectedGates)
-		}
-	}
-	// 开发后追加普通门（直接通道，不经需求重走）：落账新义务并进入其验证。
-	d := newValidationDriver(t, "blackbox", "quality")
-	d.reviewReady()
-	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality", "security"}))
-	if got := d.run.Review.SelectedGates; len(got) != 3 || !slices.Contains(got, "security") {
-		t.Fatalf("additive gate change = %v", got)
-	}
-	d.drive()
-	d.gateAction("security")
 }
 
-func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing.T) {
+func TestGateReselectionCanAddQAAfterDevelopment(t *testing.T) {
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
-	route := protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}}
+	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality"}, Selected: []string{"quality"}}
 	d.confirmRoute(route)
 	d.confirmRoute(route)
 	d.drive()
@@ -551,25 +524,26 @@ func TestDefaultRouteReselectionAddsOnlyOrdinaryGatesAfterDevelopment(t *testing
 	d.materialize()
 	d.materialize()
 	d.drive()
-	d.confirmRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "quality", "whitebox", "security"}})
+	d.confirmRoute(protocol.RouteDecision{Gates: []string{"blackbox", "quality", "whitebox", "security"}, Selected: []string{"quality", "security"}})
 	d.reopen()
-	if d.run.Review.RouteMode != "default" || !slices.Equal(d.run.Review.SelectedGates, []string{"quality", "security"}) {
-		t.Fatalf("developed default addition = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	if !d.run.Review.RouteConfirmed || !slices.Equal(d.run.Review.SelectedGates, []string{"quality", "security"}) {
+		t.Fatalf("developed gate addition = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 	}
 	d.drive()
 	d.gateAction("security")
-	full := protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality", "security"}}
-	preview, err := d.f.DevelopmentPlan(full)
+	withQA := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality", "security"}, Selected: []string{"blackbox", "whitebox", "quality", "security"}}
+	d.configureRoute(&withQA)
+	preview, err := d.f.DevelopmentPlan(withQA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	full.DevelopmentPlan = &preview.Confirmation
-	if err := controlError(t, d, protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &full}); err == nil || !strings.Contains(err.Error(), "development has started") {
-		t.Fatalf("default acquired QA after development: %v", err)
+	withQA.DevelopmentPlan = &preview.Confirmation
+	if err := controlError(t, d, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &withQA}); err != nil {
+		t.Fatalf("confirmed QA addition after development: %v", err)
 	}
 	d.reopen()
-	if d.run.Review.RouteMode != "default" || !slices.Equal(d.run.Review.SelectedGates, []string{"quality", "security"}) {
-		t.Fatal("rejected QA addition changed default obligations")
+	if !d.run.Review.RouteConfirmed || !slices.Equal(d.run.Review.SelectedGates, withQA.Selected) {
+		t.Fatal("QA addition did not persist its exact obligations")
 	}
 }
 
@@ -688,8 +662,8 @@ func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))
-	if d.run.Review.RouteMode != "custom" || len(d.run.Review.SelectedGates) != 1 || d.run.Review.SelectedGates[0] != "quality" {
-		t.Fatalf("re-selected route = %q %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+	if !d.run.Review.RouteConfirmed || len(d.run.Review.SelectedGates) != 1 || d.run.Review.SelectedGates[0] != "quality" {
+		t.Fatalf("re-selected route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 	}
 	state := driverState(t, d)
 	selections := 0

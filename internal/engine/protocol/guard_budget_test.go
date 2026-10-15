@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	definition "formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/guard"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -55,7 +56,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		Classification: RequirementClassificationIntake, StateRevision: 1,
 	}}
 	state.Topology = &TopologyBinding{Decision: "no-split", Note: "single lane"}
-	state.RouteMode = "full"
+	state.RouteConfirmed = true
 	state.SelectedGates = []string{"blackbox", "gate.quality"}
 	plan := &GranularityReview{Reason: "one batch", VerificationTier: "FINAL", Batches: []DevelopmentBatch{{
 		ID: "batch-1", Deliverable: "command", PublicEntry: "app run",
@@ -63,8 +64,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	state.Decisions = map[string]RecordedDecision{
 		"route-1": {
 			RequestID: "route-1", Control: ControlSelectRoute, Choice: "confirm", Revision: 5,
-			Review: &ReviewDecisionPayload{Route: &RouteDecision{
-				Mode: "full", Gates: []string{"blackbox", "gate.quality"},
+			Review: &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "gate.quality"}, Gates: []string{"blackbox", "gate.quality"},
 				DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "act:readiness-plan", Digest: "sha256:plan"},
 			}},
 		},
@@ -786,7 +786,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 		Classification: RequirementClassificationIntake, StateRevision: 1,
 	}}
 	state.Topology = &TopologyBinding{Decision: "no-split", Note: "single lane"}
-	state.RouteMode = "full"
+	state.RouteConfirmed = true
 	state.SelectedGates = []string{"blackbox"}
 	plan := &GranularityReview{Reason: "one batch", VerificationTier: "FINAL", Batches: []DevelopmentBatch{{
 		ID: "batch-1", Deliverable: "command", PublicEntry: "app run",
@@ -794,8 +794,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	state.Decisions = map[string]RecordedDecision{
 		"route-1": {
 			RequestID: "route-1", Control: ControlSelectRoute, Choice: "confirm", Revision: 5,
-			Review: &ReviewDecisionPayload{Route: &RouteDecision{
-				Mode: "full", Gates: []string{"blackbox"},
+			Review: &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox"}, Gates: []string{"blackbox"},
 				DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "act:readiness-plan", Digest: "sha256:plan"},
 			}},
 		},
@@ -863,4 +862,88 @@ func mustStoreAt(t *testing.T, dir string) *persistence.Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestGuardBudgetKeepsFrozenSourcesWhenGateAndQASelectionsChange(t *testing.T) {
+	e, state, qa := guardPipelineFixture(t)
+	original := state.validationRouteDigest()
+	state.SelectedGates = []string{"security"}
+	observation := pipelineTask(e.cfg.Definition, "engine.validation.observation.v2", "original-observation")
+	state.DispatchBindings["original-observation"] = WorkBinding{Task: observation, RouteScope: original}
+	basis, err := e.guardBasis(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := guard.Calculate(basis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[guard.Provenance]bool{}
+	for _, source := range result.Basis.HistoricalSources {
+		sources[source] = true
+	}
+	for _, source := range []guard.Provenance{{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: original}}, {Kind: guard.GateSource, Identity: guard.Identity{ID: "gate.quality", Revision: original}}, {Kind: guard.QASource, Identity: guard.Identity{ID: string(coverage.ReviewBlackbox), Revision: "case-v1"}}} {
+		if !sources[source] {
+			t.Fatalf("original source disappeared: %+v", source)
+		}
+	}
+	found := false
+	for _, task := range result.Basis.ExternalTasks {
+		if task.TaskKey == qa {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("an original issued QA disappeared from accounting")
+	}
+}
+
+func TestGuardBudgetKeepsIssuedDevelopmentAuthorizationAcrossConfigurationChanges(t *testing.T) {
+	e, state, _ := guardPipelineFixture(t)
+	state.SelectedGates = []string{}
+	state.Validation.Waves = nil
+	state.Validation.Sets = map[coverage.ReviewKind]*CaseSet{}
+	_, original, _ := state.confirmedDevelopmentPlan()
+	task := state.planTasks(e.cfg.Definition)[0]
+	state.DispatchBindings = map[string]WorkBinding{"issued-development": {Task: task, PlanRequest: "route-1", BatchID: original.Batches[0].ID}}
+	originalSource := guard.Provenance{Kind: guard.BatchSource, Identity: guard.Identity{ID: "development-plan", Revision: planContractDigest(original)}}
+	for _, change := range []string{"close", "reopen", "replace plan", "close after plan replacement"} {
+		t.Run(change, func(t *testing.T) {
+			switch change {
+			case "close", "close after plan replacement":
+				state.FlowSelection = &FlowSelection{Disabled: []string{"development"}}
+			case "reopen":
+				state.FlowSelection = nil
+			case "replace plan":
+				next := *original
+				next.Batches = append([]DevelopmentBatch(nil), original.Batches...)
+				next.Batches[0].Deliverable = "another confirmed deliverable"
+				state.Results["replacement-plan"] = WorkerResult{ActionID: "replacement-plan", Outcome: OutcomePass, Review: &ReviewResultEvidence{GranularityReview: &next}}
+				state.Decisions["replacement-route"] = RecordedDecision{RequestID: "replacement-route", Control: ControlSelectRoute, Choice: "approve", Revision: 6,
+					Review: &ReviewDecisionPayload{Route: &RouteDecision{DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "replacement-plan", Digest: planContractDigest(&next)}}}}
+			}
+			basis, err := e.guardBasis(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := guard.Calculate(basis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, external := range result.Basis.ExternalTasks {
+				if external.TaskKey == task {
+					found = true
+					if external.Provenance != originalSource {
+						t.Fatalf("issued development switched authorization: %+v, want %+v", external.Provenance, originalSource)
+					}
+				} else if change == "replace plan" && external.Provenance.Identity.Revision != result.Basis.Batch.Revision {
+					t.Fatalf("new development retained an unrelated plan: %+v", external.Provenance)
+				}
+			}
+			if !found {
+				t.Fatal("issued development disappeared from accounting")
+			}
+		})
+	}
 }

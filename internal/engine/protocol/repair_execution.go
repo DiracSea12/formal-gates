@@ -94,18 +94,14 @@ func (s *State) repairRoute(work repairWork) RouteDecision {
 	gates := slices.DeleteFunc(slices.Clone(s.SelectedGates), func(g string) bool {
 		return g == "blackbox" || g == "whitebox" || slices.Contains(reservedRouteGates, g)
 	})
-	return RouteDecision{Mode: routeModeFull, Gates: gates}
+	return RouteDecision{Gates: gates, Selected: gates}
 }
 
 func (s *State) repairGates(work repairWork) []string {
 	if !s.FlowNodeEnabled("gate") || work.verification || work.wave.Repair.PureP2 || work.pureP2 || work.plan == nil || len(work.plan.Batches) == 1 {
 		return nil
 	}
-	route := s.repairRoute(work)
-	if route.Mode == routeModeCustom {
-		return route.Selected
-	}
-	return route.Gates
+	return s.repairRoute(work).Selected
 }
 
 // ValidateRepairPlan checks the shared plan contract and the repair-specific
@@ -120,8 +116,8 @@ func ValidateRepairPlan(p *GranularityReview, completion bool) error {
 			return validationError("repair batches must deliver the original obligation")
 		}
 		if batch.Route != nil {
-			if batch.Route.DevelopmentPlan != nil || batch.Route.Mode != routeModeFull && batch.Route.Mode != routeModeCustom {
-				return validationError("repair slice route must be full or custom without another development plan")
+			if batch.Route.DevelopmentPlan != nil {
+				return validationError("repair slice route cannot carry another development plan")
 			}
 			if err := validateRouteDecision(batch.Route); err != nil {
 				return err

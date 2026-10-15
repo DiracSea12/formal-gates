@@ -1,5 +1,5 @@
 // slice.go 是拆分 run 身份层在提交协议层的归属点：split 拓扑的验收条件
-// 责任映射校验与合并路线词汇、master 的已解锁成员（sliceID → childRunID
+// 责任映射校验与合并职责词汇、master 的已解锁成员（sliceID → childRunID
 // 的唯一事实源）、child run 启动携带的继承事实，以及整体审查结论经继承
 // 等价满足的判据。相位机与账本校验（review.go）直接引用本文件的判据，
 // 不另建第二套判定路径。
@@ -20,11 +20,8 @@ import (
 
 // 拆分 run 的合并路线、验证门及 AC 责任映射持久词汇。
 const (
-	// routeModeMerge 是 split 拓扑绑定同事务锁定的合并路线：保留总任务实例
-	// 只跑强制的合并门＋合并 QA，不涉常规路线选择。
-	routeModeMerge = "merge"
-	mergeQAGateID  = "merge-qa"
-	mergeGateID    = "merge-gate"
+	mergeQAGateID = "merge-qa"
+	mergeGateID   = "merge-gate"
 	// masterMergeOwner 是 AC 责任映射中保留总任务实例（合并侧）的 owner 值。
 	masterMergeOwner = "master-merge"
 )
@@ -107,7 +104,7 @@ type SliceTerminalReceipt struct {
 	Digest                    string                                              `json:"digest"`
 	RequirementRevision       string                                              `json:"requirementRevision"`
 	Topology                  TopologyBinding                                     `json:"topology"`
-	RouteMode                 string                                              `json:"routeMode"`
+	RouteConfirmed            bool                                                `json:"routeConfirmed"`
 	SelectedGates             []string                                            `json:"selectedGates"`
 	Validation                SliceValidationReceipt                              `json:"validation"`
 	SelectedQA                []coverage.ReviewKind                               `json:"selectedQA"`
@@ -223,7 +220,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 		RequirementRevision: state.RequirementRevision(),
 		ResetRequestID:      state.resetRequestID(),
 		Topology:            copyTopology(*state.Topology),
-		RouteMode:           state.RouteMode,
+		RouteConfirmed:      state.RouteConfirmed,
 		SelectedGates:       slices.Clone(state.SelectedGates),
 		Validation: SliceValidationReceipt{
 			WaveID:              wave.ID,
@@ -320,7 +317,7 @@ func (s *State) verifySliceReceipt() error {
 // the child loader and checkpoint own whether the final obligations concluded.
 func (r SliceReceipt) verify() error {
 	v := r.Receipt
-	route := State{RouteMode: v.RouteMode, SelectedGates: v.SelectedGates, Topology: &v.Topology}
+	route := State{RouteConfirmed: v.RouteConfirmed, SelectedGates: v.SelectedGates, Topology: &v.Topology}
 	if r.Digest != v.CanonicalDigest() || (v.Status != runtime.PhaseSliceReady && v.Status != "ABORTED") || v.ChildRunID == "" || v.MasterRunID == "" || v.SliceID == "" ||
 		v.Status == runtime.PhaseSliceReady && (v.Snapshot == "" || v.Tree == "" || v.Digest != v.Tree || v.Validation.Status != "COMPLETE" || v.Validation.Candidate.Digest != v.Tree) ||
 		v.RequirementRevision == "" || v.Status == runtime.PhaseSliceReady && (v.Validation.RequirementRevision != v.RequirementRevision || v.Validation.RouteDigest != route.validationRouteDigest()) || v.Status == "ABORTED" && (v.Abort == nil || v.Abort.Event.Digest == "" || v.Abort.Decision.RequestID == "") {
@@ -422,7 +419,7 @@ func (s *State) SliceReceiptQualified(receipt SliceReceipt) bool {
 	if authority := receipt.Continuation; authority != nil && authority.Preview.To.Kind == "abort" && r.Status != "ABORTED" {
 		return false
 	}
-	return s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit && s.RouteMode == routeModeMerge &&
+	return s.mergeMaster() &&
 		r.MasterRunID == s.RunID && slices.Contains(s.Topology.Slices, r.SliceID) && s.SliceChildren[r.SliceID] == r.ChildRunID &&
 		(r.RequirementRevision == s.RequirementRevision() || s.childReceiptCarried(receipt) || r.Status == "ABORTED") && (digestOfCanonical(r.Topology) == digestOfCanonical(*s.Topology) || s.childReceiptCarried(receipt)) && (r.Status == "ABORTED" || s.SliceResetAuthorities[r.ChildRunID].Decision.RequestID == r.ResetRequestID)
 }
@@ -434,7 +431,7 @@ func (s *State) SliceReceiptCurrent(receipt SliceReceipt) bool {
 }
 
 func (s *State) sliceReceiptProgress() (ready, expected int) {
-	if s.Topology == nil || s.Topology.Decision != topologySplit || s.RouteMode != routeModeMerge {
+	if !s.mergeMaster() {
 		return 0, 0
 	}
 	for _, sliceID := range s.Topology.Slices {
@@ -553,7 +550,7 @@ func (e *Engine) FreezeAbortedSlice(endedAt string, input Observation) error {
 	if s.SliceReceipt != nil && s.SliceReceipt.Receipt.Status == "ABORTED" {
 		return nil
 	}
-	r := SliceTerminalReceipt{OriginRequirementRevision: s.SliceChild.RequirementRevision, ParentRequirement: s.SliceChild.ParentChange, ParentReset: s.SliceChild.ParentReset, Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteMode: s.RouteMode, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
+	r := SliceTerminalReceipt{OriginRequirementRevision: s.SliceChild.RequirementRevision, ParentRequirement: s.SliceChild.ParentChange, ParentReset: s.SliceChild.ParentReset, Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteConfirmed: s.RouteConfirmed, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
 	if s.SliceChild.ParentAbort != nil {
 		r.Abort = s.SliceChild.ParentAbort
 		r.LastRequest.RequestDigest = r.Abort.RequestDigest

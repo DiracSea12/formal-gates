@@ -234,3 +234,23 @@ func TestGuardCoreHasNoIO(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoricalSourcesKeepOriginalTaskAllowances(t *testing.T) {
+	basis := testBasis()
+	old := Provenance{RouteSource, Identity{"route", "original"}}
+	task := testTask("original-task", attempts(2))
+	task.Provenance = old
+	basis.ExternalTasks = []ExternalTask{task}
+	if _, err := Calculate(basis); err == nil {
+		t.Fatal("a historical task was accepted without its original declared source")
+	}
+	basis.HistoricalSources = []Provenance{old, old, {RouteSource, basis.Route.Identity}}
+	result := mustCalculate(t, basis)
+	if result.RequestAllowance != 1 || result.RetryAllowance != 1 || result.TotalAllowance != 2 || !reflect.DeepEqual(result.Basis.HistoricalSources, []Provenance{old}) {
+		t.Fatal("source history changed task accounting or retained duplicate declarations", result)
+	}
+	basis.HistoricalSources = []Provenance{{SourceKind("UNKNOWN"), old.Identity}}
+	if _, err := Calculate(basis); err == nil {
+		t.Fatal("an unknown historical source kind was accepted")
+	}
+}

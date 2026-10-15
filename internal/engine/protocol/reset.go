@@ -19,7 +19,7 @@ type ResetPreview struct {
 	Current             string                     `json:"current"`
 	Development         string                     `json:"development,omitempty"`
 	Topology            *TopologyBinding           `json:"topology,omitempty"`
-	RouteMode           string                     `json:"routeMode"`
+	RouteConfirmed      bool                       `json:"routeConfirmed"`
 	Gates               []string                   `json:"gates"`
 	Children            []string                   `json:"children"`
 	ChildPreviews       []ResetPreview             `json:"childPreviews,omitempty"`
@@ -45,7 +45,7 @@ type ResetAuthority struct {
 }
 
 func (s *State) ResetPreview() ResetPreview {
-	p := ResetPreview{RunID: s.RunID, RequirementRevision: s.RequirementRevision(), Base: s.BaseSnapshot, Current: s.AcceptedNativeSnapshot(), Topology: s.Topology, RouteMode: s.RouteMode, Gates: slices.Clone(s.SelectedGates), Preserve: []string{"native target bytes and committed content", "base/current/development and pre-repair identities", "topology, child origin and route obligations", "accepted development and same-revision completed batches", "intake, event and result audit, cumulative costs"}, Clear: []string{"current review conclusions and automatic grants", "effective QA/gate results, carry and candidates", "waves, problems, waivers and repair obligations", "unaccepted dispatch eligibility and pending controls", "slice checkpoint eligibility", "requirement confirmation"}}
+	p := ResetPreview{RunID: s.RunID, RequirementRevision: s.RequirementRevision(), Base: s.BaseSnapshot, Current: s.AcceptedNativeSnapshot(), Topology: s.Topology, RouteConfirmed: s.RouteConfirmed, Gates: slices.Clone(s.SelectedGates), Preserve: []string{"native target bytes and committed content", "base/current/development and pre-repair identities", "topology, child origin and route obligations", "accepted development and same-revision completed batches", "intake, event and result audit, cumulative costs"}, Clear: []string{"current review conclusions and automatic grants", "effective QA/gate results, carry and candidates", "waves, problems, waivers and repair obligations", "unaccepted dispatch eligibility and pending controls", "slice checkpoint eligibility", "requirement confirmation"}}
 	if s.Validation != nil {
 		p.Development = s.Validation.DevelopmentSnapshot
 	}

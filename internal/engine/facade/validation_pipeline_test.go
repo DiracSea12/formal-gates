@@ -23,8 +23,23 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 )
+
+// Semantic fixtures bind an explicit generic platform; execution and lifecycle
+// evidence retain the same provider identity as their issued calls.
+func init() {
+	descriptor, err := host.Lookup(host.Default)
+	if err != nil {
+		panic(err)
+	}
+	platform := descriptor
+	platform.ID, platform.Aliases = DefaultProvider, nil
+	if err := host.Register(&platform); err != nil {
+		panic(err)
+	}
+}
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
 
@@ -397,6 +412,9 @@ func (d *validationDriver) control(kind protocol.ControlKind, choice string, p p
 	var err error
 	if kind == protocol.ControlSelectRoute && p.Route != nil {
 		e, err = protocol.NewRouteRequestEvent(id, p.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
+		if err == nil {
+			e.Request.Configuration = p.Route.Configuration
+		}
 	} else {
 		e, err = protocol.NewRequestEvent(id, kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
 	}
@@ -471,10 +489,7 @@ func configuredValidationDriver(t *testing.T, inventory *protocol.CoverageInvent
 	return plannedValidationDriver(t, inventory, commandPlan(), gates...)
 }
 
-// routeDecisionForGates builds the route fixture from the obligation gates a
-// test asks for: the candidate list always carries both built-in QA modes, and
-// a list that selects both keeps the spec-complete full route while any other
-// combination pins those exact obligations as a custom selection.
+// routeDecisionForGates pins the candidate catalogue and the requested obligations.
 func routeDecisionForGates(gates []string) protocol.RouteDecision {
 	candidates := []string{"blackbox", "whitebox"}
 	for _, gate := range gates {
@@ -482,11 +497,7 @@ func routeDecisionForGates(gates []string) protocol.RouteDecision {
 			candidates = append(candidates, gate)
 		}
 	}
-	route := protocol.RouteDecision{Mode: "custom", Gates: candidates, Selected: gates}
-	if slices.Contains(gates, "blackbox") && slices.Contains(gates, "whitebox") && slices.Equal(gates, candidates) {
-		route = protocol.RouteDecision{Mode: "full", Gates: candidates}
-	}
-	return route
+	return protocol.RouteDecision{Gates: candidates, Selected: gates}
 }
 func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
 	return plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory, plan, gates...)
@@ -1283,7 +1294,7 @@ func (d *validationDriver) candidateReceipt(id string, intent protocol.HostActio
 	data, _ := json.Marshal(evidence)
 	fields := map[string]any{}
 	_ = json.Unmarshal(data, &fields)
-	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
+	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
 	if err != nil {
 		d.t.Fatal(err)
 	}

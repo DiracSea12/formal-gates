@@ -162,7 +162,7 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(raw, after) || state.BaseSnapshot != before.BaseSnapshot || state.InitialSnapshot != before.InitialSnapshot || state.Validation.DevelopmentSnapshot != before.Validation.DevelopmentSnapshot || state.AcceptedNativeSnapshot() != before.AcceptedNativeSnapshot() || state.RouteMode != before.RouteMode || !reflect.DeepEqual(state.SelectedGates, before.SelectedGates) || !reflect.DeepEqual(state.Topology, before.Topology) || state.SliceChild.RequirementRevision != before.SliceChild.RequirementRevision {
+	if !bytes.Equal(raw, after) || state.BaseSnapshot != before.BaseSnapshot || state.InitialSnapshot != before.InitialSnapshot || state.Validation.DevelopmentSnapshot != before.Validation.DevelopmentSnapshot || state.AcceptedNativeSnapshot() != before.AcceptedNativeSnapshot() || state.RouteConfirmed != before.RouteConfirmed || !reflect.DeepEqual(state.SelectedGates, before.SelectedGates) || !reflect.DeepEqual(state.Topology, before.Topology) || state.SliceChild.RequirementRevision != before.SliceChild.RequirementRevision {
 		t.Fatal("reset changed native content or child origin")
 	}
 	if !reflect.DeepEqual(driverState(t, master).ReviewSeries, parentBefore.ReviewSeries) || len(state.ReviewSeries.ProductReview.RawCandidates) != 0 {
@@ -486,13 +486,14 @@ func TestMasterRequirementBarrierProtectsChildWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	master.submit(request)
-	route := protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}
+	route := protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}
+	child.configureRoute(&route)
 	preview, err := child.f.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	if err = controlError(t, child, protocol.ControlSelectRoute, "default", protocol.ReviewDecisionPayload{Route: &route}); err == nil {
+	if err = controlError(t, child, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err == nil {
 		t.Fatal("master barrier admitted child route")
 	}
 	if _, err = child.f.PrepareCandidate(""); err == nil {
@@ -530,7 +531,7 @@ func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
 	owner := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, owner, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: owner, Provider: meteredProvider})
-	child := receiptChild(t, master, "core", "lane-core", "custom")
+	child := receiptChild(t, master, "core", "lane-core", "selected")
 	promoteReceiptChild(t, child)
 	writeTranscript(t, owner, []string{intervalBaseLine, intervalDuringLine})
 	ready := publishReceiptChild(t, child)
@@ -606,7 +607,7 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 	dependent.Artifacts = []string{"output.go"}
 	dependent.DependsOn = []string{"command"}
 	plan.Batches = append(plan.Batches, dependent)
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, plan)
+	child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, plan)
 
 	child.drive()
 	id, input := planBatchAction(child, "command")
@@ -980,7 +981,7 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 		child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 		development := sliceLanePlan()
 		development.Batches[0].Artifacts = []string{plan.SliceID + ".go"}
-		child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, development)
+		child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, development)
 		child.drive()
 		id, input := planBatchAction(child, "command")
 		if err := os.WriteFile(filepath.Join(input.Workspace.Path, development.Batches[0].Artifacts[0]), []byte("package main\n"), 0600); err != nil {

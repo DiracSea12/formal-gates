@@ -82,6 +82,7 @@ func TestControlArgumentsDistinguishAbsentAndExplicitEmptyFields(t *testing.T) {
 	}{
 		{args: []string{"--root", "somewhere"}},
 		{args: []string{"--reason", ""}, provided: true},
+		{args: []string{"--gate", "none"}, provided: true, input: facade.ControlInput{Gates: []int{}}},
 		{args: []string{"--node", "3"}, provided: true, input: facade.ControlInput{Request: protocol.ControlContinueNode, Node: 3}},
 		{args: []string{"--classification", ""}, provided: true, input: facade.ControlInput{Requirement: &facade.RequirementChangeInput{}}},
 		{args: []string{"--validation-kind", ""}, provided: true, input: facade.ControlInput{Validation: &facade.ValidationControlInput{}}},
@@ -118,5 +119,21 @@ func TestControlArgumentsRejectUnselectedFieldsAndMissingPositions(t *testing.T)
 		if err == nil {
 			t.Fatal("unselected field or missing current position accepted", args)
 		}
+	}
+}
+
+func TestControlArgumentsConfigurationChangesKeepOneTypedRouteRequest(t *testing.T) {
+	fs := flag.NewFlagSet("configuration", flag.ContinueOnError)
+	a := registerControlArguments(fs)
+	if err := fs.Parse([]string{"--configuration", "2", "--flow-node", "repair", "--enabled", "false", "--execution-node", "qa-whitebox", "--platform", "codex", "--model", "2", "--effort", "high", "--no-gates"}); err != nil {
+		t.Fatal(err)
+	}
+	input, provided, err := a.input()
+	if err != nil || !provided || input.Request != protocol.ControlSelectRoute || input.Execution != nil || input.Configuration == nil {
+		t.Fatal("configuration edit left the shared typed route control", input, err)
+	}
+	configuration := input.Configuration
+	if configuration.Name != "2" || configuration.FlowNode != "repair" || configuration.Enabled == nil || *configuration.Enabled || configuration.AllGates == nil || *configuration.AllGates || configuration.Execution == nil || configuration.Execution.Node != "qa-whitebox" || configuration.Execution.Platform != "codex" || configuration.Execution.Model != "2" || configuration.Execution.Effort != "high" {
+		t.Fatal("configuration input changed the user's semantic fields", configuration)
 	}
 }

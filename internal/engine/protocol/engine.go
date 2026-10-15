@@ -1193,7 +1193,7 @@ func (e *Engine) Submit(ev Event, input Observation) (Acceptance, error) {
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
 	}
 	if state.Phase == runtime.PhasePreparing {
-		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil) {
+		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode && !(ev.Request.Control == ControlSelectRoute && ev.Request.Configuration != nil) || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil) {
 			return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "preparing child has no business control authority"}
 		}
 	}
@@ -1344,19 +1344,16 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			ask.Execution = &selection
 			ask.Options = []AskOption{{ID: "approve", Label: "Apply this choice to unstarted calls"}, {ID: "decline", Label: "Keep the current execution choices"}}
 		}
-		// SELECT_ROUTE 的候选门全集必填且形状合法（与决定侧候选表同一定义
-		// 点），通过后钉进 Ask：用户确认边界以此为唯一权威，DECIDE 的候选
-		// 表必须与之集合相等（admitReviewDecision 核对）。schema 层不校验
-		// 该字段——事件 schema 判定先于幂等台账，已接纳事件的重放不得因
-		// 此字段被拒。按 run 形态分流的约束在此接纳处判定：已绑定路线的
-		// run 照常抬路线 Ask（§6.3.1 开发前重选/开发后追加，变更约束在决定
-		// 侧由 validateRouteChange 把关）；split 绑定锁定的合并路线拒绝普通
-		// route-add/reselect；child 的候选不含内建 QA 模式。
+		// SELECT_ROUTE pins the available gates and complete configuration, when
+		// present. A configuration update does not confirm missing topology or plans.
 		if ev.Request.Control == ControlSelectRoute {
+			if state.RouteConfigurationRequired() && ev.Request.Configuration == nil {
+				return Acceptance{}, nil, false, validationError("route changes require the complete configuration and its impact preview")
+			}
 			if err := validateRouteGateCandidates(ev.Request.RouteGates); err != nil {
 				return Acceptance{}, nil, false, err
 			}
-			if state.RouteMode == routeModeMerge {
+			if state.mergeMaster() && ev.Request.Configuration == nil {
 				return Acceptance{}, nil, false, &RejectedError{Code: CodeReviewDecisionRejected, Detail: "route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"}
 			}
 			if state.SliceChild != nil {
@@ -1370,6 +1367,19 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				}
 			}
 			ask.RouteGates = slices.Clone(ev.Request.RouteGates)
+			if ev.Request.Configuration != nil {
+				selected := *ev.Request.Configuration
+				ask.Configuration = &selected
+				parents := []Snapshot{}
+				if ev.nodeParent != nil {
+					parents = append(parents, *ev.nodeParent)
+				}
+				preview, err := e.configurationPreview(state, selected, ask.RouteGates, revision, parents...)
+				if err != nil {
+					return Acceptance{}, nil, false, err
+				}
+				ask.Continuation = &preview
+			}
 		}
 		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
@@ -1420,7 +1430,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 		}
 		if reviewControl(ask.Control) || ev.Decide.Review != nil {
-			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide); err != nil {
+			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide, ev.nodeParent); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -1453,6 +1463,17 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
 			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset, Continuation: ev.Decide.Continuation,
+		}
+		if ask.Control == ControlSelectRoute && ask.Configuration != nil && ev.Decide.Choice == "approve" {
+			recorded := state.Decisions[requestID]
+			preview := ask.Continuation
+			recorded.Continuation = &NodeContinuationDecision{PreviewDigest: preview.Digest, Reason: "Apply the confirmed workflow configuration", FreshnessToken: ev.Decide.Token, Work: slices.Clone(preview.Work)}
+			state.Decisions[requestID] = recorded
+			for _, node := range ExecutionNodeIDs() {
+				if err := e.rebindUnclaimedExecution(state, node, state.EffectiveExecutionChoice(node)); err != nil {
+					return Acceptance{}, nil, false, err
+				}
+			}
 		}
 		if ask.Control == ControlSelectExecution && ev.Decide.Choice == "approve" {
 			recorded := state.Decisions[requestID]

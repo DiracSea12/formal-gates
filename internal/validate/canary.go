@@ -394,13 +394,13 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			continue
 		}
 		if topology && !routeConfirmed {
-			route := protocol.RouteDecision{Mode: "full", Gates: gates}
+			route := protocol.RouteDecision{Gates: gates, Selected: gates}
 			preview, err := f.DevelopmentPlan(route)
 			if err != nil {
 				return err
 			}
 			route.DevelopmentPlan = &preview.Confirmation
-			if err = control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &route}); err != nil {
+			if err = control(protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err != nil {
 				return err
 			}
 			routeConfirmed = true

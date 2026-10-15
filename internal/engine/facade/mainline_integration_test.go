@@ -85,9 +85,8 @@ func mainlineReady(t *testing.T, conflict string, identical bool, supplied ...*p
 			t.Fatal(err)
 		}
 		child := &validationDriver{t: t, f: childFacade, run: run, revision: master.revision, git: childFacade.vcs}
-		route := protocol.RouteDecision{Mode: "full", Gates: []string{"quality", "security"}}
+		route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
 		if index == 1 {
-			route.Mode = "custom"
 			route.Selected = []string{"security"}
 		}
 		plan := sliceLanePlan()

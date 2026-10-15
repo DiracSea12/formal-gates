@@ -143,6 +143,17 @@ Event、原 request/token、当前 revision 和展示材料。默认只展示当
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
+`start --configuration <名称或原序号>` 只为本次启动选取保存的配置，不改启用默认。
+运行中 `submit --configuration <名称或原序号>` 读取保存配置的实际副本；省略名称时，
+`--flow-node <节点或序号> --enabled true|false`、`--qa-mode <blackbox|whitebox或序号> --enabled true|false`
+只改本次当前选择。`--all-gates`/`--no-gates` 选择全部/空普通门；首次门确认可在原 Ask 用 `--gate <原序号>` 组合任意候选，`--gate none` 明确空集合；
+后续更改在 `submit --request SELECT_ROUTE --gate <原序号>` 请求阶段指定，完整配置钉住后按原值确认。组合 `--execution-node --platform --model --effort`
+时把组选择加入同一完整配置；单独执行组 tuple 仍走原临时执行选择。
+这些请求复用 SELECT_ROUTE Ask，程序钉住配置原值、候选全集和原 continuation 影响预览，
+用户确认后才改变本次配置，不改默认文件。产品/技术审在途、初次拓扑或路线未确认时也可改配置，
+但不代替所需拓扑与精确开发计划确认。已 claim 且仍启用的调用保留原 tuple 与恢复绑定；
+关闭职责按原生命周期停止和失效，晚到结果不成为有效完成。启用过去或跳过的职责后，可从原节点继续。
+
 运行中的 `businessNodes` 按当前 run 与已建立 child 的同一顺序编号真实职责。
 `next --node <序号>` 只准备从该职责继续的原请求；提交保存的候选，或以
 `submit --node <序号>` 创建原 Ask 后，
@@ -216,10 +227,11 @@ P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成�
 
 技术审形成 `granularityReview`：Batch→Subtask、依赖、接口、状态边界、DoD、验证、
 恢复与交接。审查者只选择既有检查调用或提出验证目标，不填写 command/parts；缺少调用由开发者准备，程序绑定并执行。
-用户确认计划与精确 split 拓扑或 no-split 理由之后，确认 default/full/custom。
-非分片 run 的 default 选择全部普通门、不含黑盒/白盒 QA；full 选择全部普通门与双 QA
-（QA 阶段较重，适合大型任务）；custom 选择当前候选的任意子集（含空集）或全集，保留 custom 身份。
-推荐不代替用户确认；每个 child 独立确认，child 候选不含普通 QA，default/full 均选全部普通门。
+用户确认精确 split 拓扑或 no-split 理由之后，确认所选门与精确开发计划。
+启动时冻结启用的命名流程配置：流程节点选择及各执行组的平台、模型、推理强度；黑盒与白盒各为一组。
+初始仅有“默认”配置，启用主流程节点、不选普通 QA、选全部普通门，执行选择继承宿主。
+路线 Ask 保留当前候选全集，按冻结配置预选普通门与 QA；可显式改选任意子集（含空集）或全集。
+每个 child 独立确认，候选不含普通 QA；合并验证由 master 按启用职责执行。
 Batch 是现有任务的分组，不新增生命周期；程序为每个开发 Batch 派发全新的零上下文代理，开发会话不跨批复用，Subtask 不能独立派发。
 批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
 

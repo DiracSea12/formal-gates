@@ -647,10 +647,10 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 		state.Topology = nil
 	}
 	if payload.RedoRoute {
-		// 解除的是绑定（RouteMode 清空，重新确认走既有 SELECT_ROUTE 路径），
-		// 不清 SelectedGates：已生效义务在重选窗口内仍然在册，重选对它保持
-		// add-only（validateRouteChange 的基线），已派发工作与波次不动。
-		state.RouteMode = ""
+		// 解除的是确认（重新确认走既有 SELECT_ROUTE 路径），
+		// 不清 SelectedGates：已生效义务在重选窗口内仍然在册；新的配置
+		// 决定沿工作处置路径接纳变化，已派发工作与波次在此保持。
+		state.RouteConfirmed = false
 	}
 	// Issuance owns series identity. Select affected live dispatches from that
 	// fact before archiving their results, including unvalidated quarantine data.
@@ -782,7 +782,7 @@ func NewGuaranteeActivation(revision, solution string, document requirement.Froz
 	return &GuaranteeActivation{ActivationSource: "EXPLICIT_REQUIREMENT_CONFIRMATION", RequirementRevision: revision, SolutionRevision: solution, ManifestDigest: digestOfCanonical(document.Requirements)}
 }
 func (s *State) GuaranteeActive() bool {
-	return s.RequirementGuarantee != nil && s.RequirementGuarantee.RequirementRevision == s.RequirementRevision() && s.RequirementGuarantee.ManifestDigest != "" && s.RouteMode != "" && !s.routeHasNoQAModes() && !s.ValidationNotGuaranteed()
+	return s.RequirementGuarantee != nil && s.RequirementGuarantee.RequirementRevision == s.RequirementRevision() && s.RequirementGuarantee.ManifestDigest != "" && s.RouteConfirmed && !s.routeHasNoQAModes() && !s.ValidationNotGuaranteed()
 }
 
 func requirementRedoScope(payload *RequirementDecisionPayload) []string {

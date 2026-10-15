@@ -98,7 +98,7 @@ func TestDevelopmentPreparationBindsOriginalResultAndConfirmationAfterReload(t *
 		t.Fatal("preparation bypassed confirmation or did not unlock its original confirmation owner")
 	}
 	askAndDecide(t, reopened, ControlConfirmTopology, "prepared-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one cohesive responsibility"}})
-	route := RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "gate.quality"}}
+	route := RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}
 	preview, err := reopened.DevelopmentPlan(route)
 	if err != nil || preview.Confirmation.ReviewActionID != action || !reflect.DeepEqual(preview.Proposal, *proposal) {
 		t.Fatal("confirmation did not bind the original prepared proposal", preview, err)
@@ -142,7 +142,7 @@ func TestDisabledDevelopmentUsesCurrentNativeInputAndExistingGuard(t *testing.T)
 		t.Fatal("disabled development projected batches or lost the verified native input")
 	}
 	delete(s.Results, "act:readiness-plan")
-	s.Decisions["route-1"] = RecordedDecision{Control: ControlSelectRoute, Review: &ReviewDecisionPayload{Route: &RouteDecision{Mode: "full"}}}
+	s.Decisions["route-1"] = RecordedDecision{Control: ControlSelectRoute, Review: &ReviewDecisionPayload{Route: &RouteDecision{}}}
 	budget, err := e.deriveGuardBudget(s)
 	if err != nil || budget == nil || budget.RequestAllowance != 2 {
 		t.Fatal("selected QA and gate lost their existing dispatch guard", budget, err)

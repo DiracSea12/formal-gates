@@ -199,7 +199,7 @@ func TestSelectedModesShareConfirmedRelations(t *testing.T) {
 	d.materialize()
 	d.materialize()
 	unlockRouteByRequirementRedo(d)
-	d.confirmRoute(protocol.RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox", "quality", "security"}})
+	d.confirmRoute(protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality", "security"}, Selected: []string{"blackbox", "whitebox", "quality", "security"}})
 	d.drive()
 	id, in = d.gateAction("security")
 	for _, input := range d.run.ValidationInputs {

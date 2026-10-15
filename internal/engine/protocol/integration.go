@@ -72,7 +72,7 @@ type ChildGateView struct {
 }
 
 func (s *State) mergeMaster() bool {
-	return s.SliceChild == nil && s.RouteMode == routeModeMerge && s.Topology != nil && s.Topology.Decision == topologySplit
+	return s.SliceChild == nil && s.Topology != nil && s.Topology.Decision == topologySplit
 }
 func (s *State) integrationResource() NativeResource {
 	if !s.mergeMaster() || s.ChildCreation == nil || s.Validation == nil {

@@ -349,6 +349,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	vcsName := fs.String("vcs", "", "external VCS name")
 	base := fs.String("base-snapshot", "", "native base identity for a regular run")
 	route := fs.String("route", "", "regular or lightweight")
+	configuration := fs.String("configuration", "", "saved configuration name or position for this run; omitted uses the active default")
 	intakePath := fs.String("intake-receipt", "", "program integration: exact original intake candidate file")
 	intakeChoice := fs.Int("intake", 0, "original displayed intake candidate position")
 	document := fs.Int("document", 0, "original displayed requirement document or lightweight material position")
@@ -466,7 +467,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if transcript != "" && ownerProvider != "" {
 		owner.Transcript, owner.Provider = transcript, ownerProvider
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -1392,7 +1393,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|set|remove\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|execution-options\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {

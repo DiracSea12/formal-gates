@@ -102,8 +102,8 @@ func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
 	ask := d.run.PendingRequirementAsk
 	d.submit(protocol.Event{Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: ask.Token, Choice: "proceed", Requirement: &protocol.RequirementDecisionPayload{Intake: pkg.Intake, BaseRevision: ask.BaseRevision, CandidateRevision: revision, DeltaDigest: pkg.DeltaDigest, ImpactDigest: pkg.ImpactDigest, Source: pkg.Source, Classification: protocol.RequirementClassificationPreserved, RedoStartReadiness: true, WorkDecisions: choices, Reason: "readiness only; the route stays bound"}}}.WithRequirementDocument(document))
 	d.drive()
-	if d.run.Review.RouteMode != "custom" {
-		t.Fatalf("readiness-only redo changed the route binding: %q", d.run.Review.RouteMode)
+	if !d.run.Review.RouteConfirmed {
+		t.Fatalf("readiness-only redo changed the route binding: %t", d.run.Review.RouteConfirmed)
 	}
 	// 新计划的重走 readiness 轮（DoD 扩一项）。
 	nextPlan := *commandPlan()

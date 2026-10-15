@@ -98,7 +98,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality", "security"}}, sliceLanePlan())
+	child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}, sliceLanePlan())
 
 	child.drive()
 	assertInput := func(input protocol.ValidationInput) {
@@ -170,7 +170,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other.vcs.Root(), "requirements.md"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}
-	sibling.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	sibling.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, sliceLanePlan())
 
 	sibling.drive()
 	siblingID, _ := planBatchAction(sibling, "command")
@@ -272,7 +272,7 @@ func TestChildWaitingBoundariesPreserveUserDecisions(t *testing.T) {
 			var f *Facade
 			control := protocol.ControlAbort
 			if target == "slice-checkpoint" {
-				child := promotedSlice(t, "custom", OwnerBinding{})
+				child := promotedSlice(t, "selected", OwnerBinding{})
 				child.drive()
 				f = child.f
 			} else {
@@ -542,7 +542,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: d.revision, git: f.vcs}
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, sliceLanePlan())
 
 	child.drive()
 	id, input := planBatchAction(child, "command")
@@ -957,7 +957,7 @@ func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T
 				if !inFlight {
 					continue
 				}
-				child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+				child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, sliceLanePlan())
 
 				child.drive()
 				for id, input := range child.run.ValidationInputs {
@@ -1206,7 +1206,7 @@ func TestChildCreationPreservesPreparedMaterialConfirmation(t *testing.T) {
 				if !reflect.DeepEqual(state.IntakeConfirmationReceipt, &preview.IntakeCandidate) || !reflect.DeepEqual(metadata.IntakeConfirmationReceipt, preview.IntakeCandidate) || len(state.RequirementRevisions) != 1 || state.RequirementRevisions[0].Revision != preview.Revision || state.RequirementRevisions[0].StateRevision != state.IntakeReceipt.Revision || !reflect.DeepEqual(state.SliceChild.InheritedIntake, confirmation) || !reflect.DeepEqual(state.CurrentIntakeConfirmation(), confirmation) || !reflect.DeepEqual(state.RequirementGuarantee, wantActivation) {
 					t.Fatal("child changed the initial receipt, ledger, inherited confirmation or activation")
 				}
-				child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+				child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, sliceLanePlan())
 				child.drive()
 				id, input := planBatchAction(child, "command")
 				if input.Binding.Generation != 0 || input.Manifest.Binding.SolutionRevision != confirmation.SolutionRevision {

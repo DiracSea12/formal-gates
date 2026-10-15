@@ -71,7 +71,7 @@ func executionPlatforms() []string {
 	return names
 }
 
-func (f *Facade) selectionCatalogue(state *protocol.State, provider, model string) (host.SelectionCatalogue, error) {
+func selectionCatalogue(root, runtimeTarget string, native map[string]string, provider, model string) (host.SelectionCatalogue, error) {
 	adapter, err := host.LookupAdapter(provider)
 	if err != nil {
 		return host.SelectionCatalogue{}, err
@@ -80,11 +80,7 @@ func (f *Facade) selectionCatalogue(state *protocol.State, provider, model strin
 	if !ok {
 		return host.SelectionCatalogue{}, fmt.Errorf("platform %q has no execution selection adapter (available: %v)", provider, executionPlatforms())
 	}
-	var native map[string]string
-	if state.Settings != nil {
-		native = state.Settings.Values.Native
-	}
-	return options.SelectionOptions(f.root, f.admission.Target, native, model)
+	return options.SelectionOptions(root, runtimeTarget, native, model)
 }
 
 func selectionModel(catalogue host.SelectionCatalogue, value string) (host.ModelOption, error) {
@@ -112,16 +108,14 @@ func selectionModel(catalogue host.SelectionCatalogue, value string) (host.Model
 	return host.ModelOption{}, fmt.Errorf("model %q is not an unambiguous native option (available: %v)", value, catalogue.Models)
 }
 
-func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptions, error) {
+// QueryExecutionOptions reads the same native catalogue for saved configurations
+// and temporary run selections. Current carries the caller's effective tuple.
+func QueryExecutionOptions(root, runtimeTarget string, native map[string]string, current protocol.ExecutionChoice, input ExecutionSelectionInput) (ExecutionOptions, error) {
 	node, err := executionNode(strings.TrimSpace(input.Node))
 	if err != nil {
 		return ExecutionOptions{}, err
 	}
-	snap, err := f.engine.Load()
-	if err != nil {
-		return ExecutionOptions{}, err
-	}
-	effective := snap.State.EffectiveExecutionChoice(node.ID)
+	effective := current
 	platform := effective.Provider
 	if input.Platform != "" {
 		descriptor, err := selectionPlatform(input.Platform)
@@ -134,7 +128,7 @@ func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptio
 	if platform != effective.Provider {
 		model = ""
 	}
-	catalogue, err := f.selectionCatalogue(snap.State, platform, model)
+	catalogue, err := selectionCatalogue(root, runtimeTarget, native, platform, model)
 	if err != nil {
 		return ExecutionOptions{}, err
 	}
@@ -144,13 +138,37 @@ func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptio
 			return ExecutionOptions{}, err
 		}
 		if option.Value != model {
-			catalogue, err = f.selectionCatalogue(snap.State, platform, option.Value)
+			catalogue, err = selectionCatalogue(root, runtimeTarget, native, platform, option.Value)
 			if err != nil {
 				return ExecutionOptions{}, err
 			}
 		}
 	}
 	return ExecutionOptions{Node: node, Effective: effective, Platforms: executionPlatforms(), Platform: platform, Catalogue: catalogue}, nil
+}
+
+func (f *Facade) executionContext(input ExecutionSelectionInput) (protocol.ExecutionChoice, map[string]string, error) {
+	node, err := executionNode(strings.TrimSpace(input.Node))
+	if err != nil {
+		return protocol.ExecutionChoice{}, nil, err
+	}
+	snap, err := f.engine.Load()
+	if err != nil {
+		return protocol.ExecutionChoice{}, nil, err
+	}
+	var native map[string]string
+	if snap.State.Settings != nil {
+		native = snap.State.Settings.Values.Native
+	}
+	return snap.State.EffectiveExecutionChoice(node.ID), native, nil
+}
+
+func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptions, error) {
+	current, native, err := f.executionContext(input)
+	if err != nil {
+		return ExecutionOptions{}, err
+	}
+	return QueryExecutionOptions(f.root, f.admission.Target, native, current, input)
 }
 
 // QueryExecutionOptions reads native choices without recording a decision.
@@ -163,11 +181,12 @@ func (f *Facade) QueryExecutionOptions(input ExecutionSelectionInput) (Execution
 	return f.executionOptions(input)
 }
 
-func (f *Facade) prepareExecutionSelection(input ExecutionSelectionInput) (*protocol.ExecutionSelection, error) {
+// PrepareExecutionSelection resolves and validates a tuple against native choices.
+func PrepareExecutionSelection(root, runtimeTarget string, native map[string]string, current protocol.ExecutionChoice, input ExecutionSelectionInput) (*protocol.ExecutionSelection, error) {
 	if input.Platform == "" && input.Model == "" && input.Effort == "" {
 		return nil, fmt.Errorf("execution selection requires a platform, model or effort")
 	}
-	options, err := f.executionOptions(input)
+	options, err := QueryExecutionOptions(root, runtimeTarget, native, current, input)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +230,14 @@ func (f *Facade) prepareExecutionSelection(input ExecutionSelectionInput) (*prot
 	return &protocol.ExecutionSelection{Node: options.Node.ID, Choice: choice}, nil
 }
 
+func (f *Facade) prepareExecutionSelection(input ExecutionSelectionInput) (*protocol.ExecutionSelection, error) {
+	current, native, err := f.executionContext(input)
+	if err != nil {
+		return nil, err
+	}
+	return PrepareExecutionSelection(f.root, f.admission.Target, native, current, input)
+}
+
 func validateExecutionChoice(choice protocol.ExecutionChoice, catalogue host.SelectionCatalogue) error {
 	if choice.Model == "" && choice.ReasoningEffort == "" {
 		return nil
@@ -248,7 +275,11 @@ func (f *Facade) validateExecutionSelection(selection *protocol.ExecutionSelecti
 	if err != nil {
 		return err
 	}
-	catalogue, err := f.selectionCatalogue(snap.State, selection.Choice.Provider, selection.Choice.Model)
+	var native map[string]string
+	if snap.State.Settings != nil {
+		native = snap.State.Settings.Values.Native
+	}
+	catalogue, err := selectionCatalogue(f.root, f.admission.Target, native, selection.Choice.Provider, selection.Choice.Model)
 	if err != nil {
 		return err
 	}

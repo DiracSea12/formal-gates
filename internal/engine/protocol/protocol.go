@@ -214,6 +214,7 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
+	Configuration  *ConfigurationSelection  `json:"configuration,omitempty"`
 	Execution      *ExecutionSelection      `json:"execution,omitempty"`
 	Continuation   *NodeContinuationPreview `json:"continuation,omitempty"`
 	Reset          *ResetPreview            `json:"reset,omitempty"`
@@ -586,11 +587,10 @@ type State struct {
 	// §8.1.1 绑定点：确认后不得重切）。child run 落账的是从 master 继承的
 	// 拓扑副本（同样不可重切）。nil 表示尚未确认。
 	Topology *TopologyBinding `json:"topology,omitempty"`
-	// RouteMode/SelectedGates 是拓扑绑定后的验证路线（default/full/custom）。
-	// lightweight 是 run 级路线、start 时已定，不经这两个字段；split 绑定
-	// 同事务锁定 merge 路线（保留总任务实例不涉常规路线选择）。
-	RouteMode     string   `json:"routeMode,omitempty"`
-	SelectedGates []string `json:"selectedGates,omitempty"`
+	// RouteConfirmed records the accepted gate selection independently from its
+	// retained obligations during requirement reconfirmation.
+	RouteConfirmed bool     `json:"routeConfirmed,omitempty"`
+	SelectedGates  []string `json:"selectedGates,omitempty"`
 	// SliceChild 是 child run 的继承事实（master run、分片名与继承结论绑定
 	// 的需求 revision）；nil＝普通 run。产品审/技术审经它等价满足，child 不
 	// 自行增加审查轮次。

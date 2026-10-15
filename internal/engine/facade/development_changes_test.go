@@ -296,7 +296,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 				return candidate
 			}
 			confirmChoice("no-split")
-			original := confirmChoice("custom")
+			original := confirmChoice("approve")
 			if development && (original.DevelopmentPlan == nil || original.DevelopmentPlan.Confirmation.ReviewActionID != oldAction) {
 				t.Fatal("original confirmation did not bind the prepared proposal")
 			}
@@ -330,7 +330,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			}
 			d.run = confirmed
 			d.reopen()
-			if d.run.Review.RequirementRevision != before.Review.RequirementRevision || !reflect.DeepEqual(d.run.Review.Topology, before.Review.Topology) || !reflect.DeepEqual(d.run.Review.Actions, before.Review.Actions) || !reflect.DeepEqual(d.run.FlowSelection, before.FlowSelection) || d.run.Review.RouteMode != "" || d.run.Review.ReadinessProposal != nil {
+			if d.run.Review.RequirementRevision != before.Review.RequirementRevision || !reflect.DeepEqual(d.run.Review.Topology, before.Review.Topology) || !reflect.DeepEqual(d.run.Review.Actions, before.Review.Actions) || !reflect.DeepEqual(d.run.FlowSelection, before.FlowSelection) || d.run.Review.RouteConfirmed || d.run.Review.ReadinessProposal != nil {
 				t.Fatal("replan changed source/selection/reviews/topology or reused an expired proposal")
 			}
 			if replay, replayed, err := d.f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, acceptance) || !reflect.DeepEqual(replayed, d.run) {
@@ -351,7 +351,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 				plan.Batches[0].DoD = append(plan.Batches[0].DoD, protocol.DevelopmentCriterion{ID: "diagnostic", Description: "Invalid input reports its specific diagnostic"})
 				d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", GranularityReview: plan})
 			}
-			reselected := confirmChoice("custom")
+			reselected := confirmChoice("approve")
 			if development {
 				if reselected.DevelopmentPlan == nil || reselected.DevelopmentPlan.Confirmation.ReviewActionID != freshAction || len(reselected.DevelopmentPlan.Proposal.Batches[0].DoD) != 2 {
 					t.Fatal("route reconfirmation did not bind the new prepared plan")

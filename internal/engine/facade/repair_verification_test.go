@@ -194,7 +194,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 func childWithP2GateRepair(t *testing.T) (*validationDriver, string, protocol.ValidationInput) {
 	t.Helper()
 	master := receiptMaster(t)
-	child := receiptChild(t, master, "core", "lane-core", "default")
+	child := receiptChild(t, master, "core", "lane-core", "all")
 	quality, input := child.gateAction("quality")
 	child.business(quality, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "documented output order differs"}}})
 	security, input := child.gateAction("security")

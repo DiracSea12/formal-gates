@@ -50,7 +50,7 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 	state.RunID = "run-face"
 	state.ReviewSeries = set
 	state.Topology = &protocol.TopologyBinding{Decision: "no-split", Note: "建议不拆：模块小"}
-	state.RouteMode = "custom"
+	state.RouteConfirmed = true
 	state.SelectedGates = []string{"gate.quality"}
 
 	face := reviewFace(state)
@@ -89,9 +89,9 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 		readiness.RawResults != 0 || readiness.Adjudications != 0 || readiness.Corrections != 0 {
 		t.Fatalf("readiness face = %+v", readiness)
 	}
-	if face.Topology == nil || face.Topology.Decision != "no-split" || face.RouteMode != "custom" ||
+	if face.Topology == nil || face.Topology.Decision != "no-split" || !face.RouteConfirmed ||
 		len(face.SelectedGates) != 1 || face.SelectedGates[0] != "gate.quality" {
-		t.Fatalf("bindings = %+v %q %v", face.Topology, face.RouteMode, face.SelectedGates)
+		t.Fatalf("bindings = %+v %t %v", face.Topology, face.RouteConfirmed, face.SelectedGates)
 	}
 }
 
@@ -427,7 +427,7 @@ func TestLightweightRunCarriesReviewFace(t *testing.T) {
 			t.Fatalf("initial series face = %+v", face)
 		}
 	}
-	if run.Review.Topology != nil || run.Review.RouteMode != "" || run.Review.SelectedGates != nil {
+	if run.Review.Topology != nil || run.Review.RouteConfirmed || run.Review.SelectedGates != nil {
 		t.Fatalf("lightweight run must not carry topology or route: %+v", run.Review)
 	}
 	completed, err := f.Drive()
@@ -437,7 +437,7 @@ func TestLightweightRunCarriesReviewFace(t *testing.T) {
 	if completed.Status != "COMPLETE" {
 		t.Fatalf("terminal status = %s", completed.Status)
 	}
-	if len(completed.Review.Actions) != 2 || completed.Review.RouteMode != "" {
+	if len(completed.Review.Actions) != 2 || completed.Review.RouteConfirmed {
 		t.Fatalf("terminal review face = %+v", completed.Review)
 	}
 }

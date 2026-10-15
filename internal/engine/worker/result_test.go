@@ -203,7 +203,7 @@ func TestSemanticResultRejectsIssuedAndGeneratedFields(t *testing.T) {
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[],"pointDecisions":[],"caseDecisions":[],"suggestions":[{"decision":"ACCEPT","severity":"P3","message":"actual suggestion"}]}`},
 		{"engine.qa.review.rationale.v2", `{"scope":"FULL","sourceDecisions":[],"pointDecisions":[],"caseDecisions":[]}`},
 		{"engine.qa.review.rationale.v2", `{"sourceDecisions":[{"id":"wrong","status":"PASS","reason":"actual"}],"pointDecisions":[],"caseDecisions":[]}`},
-		{"engine.repair.v7", `{"granularityReview":{"batches":[{"id":"batch","route":{"mode":"full","gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
+		{"engine.repair.v7", `{"granularityReview":{"batches":[{"id":"batch","route":{"selected":[],"gates":[],"developmentPlan":{"digest":"forged"}}}]}}`},
 		{"engine.qa.execution.v4", `{"binding":{"candidate":{"identity":"wrong"}},"records":{}}`},
 		{"engine.qa.execution.v4", `{"records":[{"sourceId":"wrong","result":"EXECUTED_PASS"}]}`},
 	} {

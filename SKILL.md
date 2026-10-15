@@ -18,7 +18,7 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做确定性结构预检，通过后展示该文件全文与精确 revision，再单独请求并等待用户明确确认。确认后才以 typed intake receipt 启动开发 run。确认前不选择路线或派发后续子代理。修订时更新同一文件并重新预检、展示和确认。
 
-确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确启动路线时先取得用户对 lightweight 或 regular 的选择；regular 内的 default/full/custom 在拆分决定之后确认，每个 child 独立决定。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
+确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。未明确启动路线时先取得用户对 lightweight 或 regular 的选择；regular 在拆分决定之后确认所选门与精确开发计划，每个 child 独立决定；启动冻结所选命名流程配置。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
 <formal-gates:host-instructions:end>
 
 正式文件包含完整目标、边界、方案、需求块、验收条目与来源。通过 requirement 入口输入新语义，程序构造固定章节与编号并保留未修改的原文及已有 ID。
@@ -30,9 +30,12 @@ formal-gates workflow start --precheck --document <原文档序号>
 在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，取得真实确认并明确启动路线后使用 `start --route <用户已选择的 regular|lightweight> --intake <原序号>`。唯一载荷可自动选取，多个时按原位置选择。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
 
 主流程节点选择由用户拥有：`start --nodes` 展示原序号，启动时只按用户明确决定提交
-`--disable-node <原序号>`。未执行的职责不得宣称已通过；节点继续授权不会打开关闭节点。
+`--disable-node <原序号>`，或以 `start --configuration <名称或原序号>` 选择本次配置。未执行的职责不得宣称已通过。
+运行中以 `submit --configuration <名称或原序号>` 或 `--flow-node <节点> --enabled true|false` 请求更改本次配置，
+QA 组选取使用 `--qa-mode`；同一请求可带执行组与 tuple。展示程序钉住的配置、候选门和影响预览，等待原 Ask 确认。
+保存默认的变化不自动传播；启用过去或跳过的职责后，可按原 `--node` 继续。
 
-需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 的原字段序号入口，不编写固定 JSON 外壳。
+需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 保存和启用用户命名套件，标量沿原字段序号入口；不编写固定 JSON 外壳。
 
 ## 活动任务
 

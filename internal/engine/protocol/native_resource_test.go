@@ -373,7 +373,7 @@ func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
 		t.Run(fmt.Sprintf("task-bound=%t", withTask), func(t *testing.T) {
 			key := pipelineTask(cd, "engine.development.batch.v6", "plan:command")
 			resource := NativeResource{ID: "implementation", Owner: "run", Role: "development", Path: "/work/implementation", Ref: "refs/implementation", Source: "source", Status: "PLANNED"}
-			s := &State{RunID: "run", NativeRoot: "/work", RouteMode: "custom", SelectedGates: []string{"quality"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"developer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}
+			s := &State{RunID: "run", NativeRoot: "/work", RouteConfirmed: true, SelectedGates: []string{"quality"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{resource.ID: resource}, DispatchBindings: map[string]WorkBinding{"developer": {Task: key, WorkspaceID: resource.ID, RequirementRevision: "confirmed", Generation: 1}}}
 			required := map[authoring.StepID][]decision.RequiredTask{key.Step: {{Task: key}}}
 			p := WorkspaceParameters{Resource: resource, RequirementRevision: "confirmed", Generation: 1, RouteScope: s.validationRouteDigest()}
 			if withTask {
@@ -476,7 +476,7 @@ func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
 	})
 
 	t.Run("merge workspace", func(t *testing.T) {
-		s := &State{RunID: "master", NativeRoot: "/work", RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: "split"}, ChildCreation: &ChildCreation{Source: "source"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{}}
+		s := &State{RunID: "master", NativeRoot: "/work", RouteConfirmed: true, Topology: &TopologyBinding{Decision: "split"}, ChildCreation: &ChildCreation{Source: "source"}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1}, NativeResources: map[string]NativeResource{}}
 		r := s.integrationResource()
 		s.NativeResources[r.ID] = r
 		p := WorkspaceParameters{Resource: r, RequirementRevision: "confirmed", Generation: 1, RouteScope: "signed-context"}

@@ -19,11 +19,11 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
    首次 drive 自动登记确认；后续产品审、技术审、开发与 QA 消费同一确认 revision。
 3. **独立双审。** 先产品审、再技术审。Operator 逐项核实 finding，用户处置有效问题。
    技术审形成 Batch→Subtask、依赖、DoD 与恢复计划。
-4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再确认 default/full/custom。
-   非分片 run 的 default 选全部普通门、不含黑盒/白盒 QA；full 选全部普通门与双 QA
-   （QA 阶段较重，适合大型任务）；custom 可选当前候选的任意子集（含空集）或全集。推荐仍须确认。
-   每个 child 独立决定；child 不选普通 QA，default/full 均选全部普通门，master 强制合并验证。
-   start 不预判 split，child 由 engine 创建。
+4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再确认所选门与开发计划。
+   命名流程配置同时保存流程节点开关和各执行组的平台、模型、推理强度，黑盒与白盒各为一组；
+   初始仅有“默认”配置：主流程节点启用、无普通 QA、全部普通门，执行选择继承宿主。
+   当前候选门可选任意子集（含空集）或全集，每个 child 独立确认；child 不选普通 QA。
+   master 按所选职责执行合并 QA 与合并门。
 5. **并发开发。** 选择黑盒时，开发与其设计/审查并发。黑盒只读基线，开发者与审查者隔离。
    每个 Batch 新建开发会话，批内重试与恢复沿用原身份。
 6. **冻结候选。** adapter 校验 manifest 后跟踪、提交和快照；选择白盒时独立核对覆盖与测试。
@@ -53,6 +53,11 @@ lightweight 只留下明确“本 run 未经任何验证”的 unverified 记录
 
 start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与用户确认；
 message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 准备并保存计划重审确认载荷。
+`settings` 可保存、修改和启用用户命名配置；`start --configuration <名称或序号>` 仅选择本次配置。
+运行中可用 `submit --configuration <名称或序号>`，或 `--flow-node <节点> --enabled true|false`、
+`--qa-mode <blackbox|whitebox> --enabled true|false` 请求调整本次流程，沿原 Ask 确认完整配置与影响。
+启用过去或跳过的节点后可从原节点继续；修改保存默认不会自动影响已有 run。
+
 show/status/diagnose/guard-preview 只读；next 的语义选择准备确认载荷，progress 可显式保存进度载荷。准备或保存不代表用户确认。设置见[用户与项目设置](references/user-configuration.md)。需求变化、路线调整、reset、abort、waiver/skip 和 HUMAN 合法节点跳转通过当前
 availableActions 的 typed Ask 提交。UNKNOWN 先对账，不能盲目重派或重做 VCS 副作用。
 

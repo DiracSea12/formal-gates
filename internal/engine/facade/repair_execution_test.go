@@ -118,7 +118,7 @@ func repairBatchPlan(tier string) *protocol.GranularityReview {
 		b.ID = id
 		b.Artifacts = []string{id + ".go"}
 		b.Subtasks = []protocol.DevelopmentSubtask{{ID: id + "-contract", Description: "implement " + id}}
-		b.Route = &protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "security"}, Selected: []string{"quality"}}
+		b.Route = &protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality"}}
 		if id == "command" {
 			b.DependsOn = []string{"parser"}
 		}

@@ -1,5 +1,65 @@
 # 用户与项目设置
 
+一套命名配置同时保存六项主流程开关、黑盒/白盒 QA 的整组选择、普通门子集，以及
+七个执行组各自的平台、模型和推理强度。程序初始只提供“默认”：主流程全部可用，
+不选普通黑盒/白盒 QA，普通门全部选取；各执行组沿 run 宿主与全局模型/推理强度。
+其他名称由用户提供。并发、token cap、认证和原生路径不打包进命名配置。
+
+通过同一个 `settings` 入口查看、命名保存、修改、启用和删除；只传原选项序号或语义值，
+程序编码配置文件。未写 `--configuration` 时操作当前启用的配置。保存复制选中配置，
+不会自动启用；已有名称用 `set` 修改。`show` 同时展示名称、来源、当前启用项、流程、
+QA 和执行组选项；`show --gates` 读取当前已注册 runtime 的普通门目录。
+
+```bash
+formal-gates settings show --root <repo>
+formal-gates settings save --root <repo> --scope user --name '<用户命名>' --configuration 1
+formal-gates settings set --root <repo> --configuration '<用户命名>' --flow-node 1 --enabled false
+formal-gates settings set --root <repo> --configuration '<用户命名>' --qa-mode blackbox --enabled true
+formal-gates settings show --root <repo> --gates
+formal-gates settings set --root <repo> --configuration '<用户命名>' --gate <原序号>
+formal-gates settings set --root <repo> --configuration '<用户命名>' --all-gates
+formal-gates settings set --root <repo> --configuration '<用户命名>' --no-gates
+formal-gates settings execution-options --root <repo> --configuration '<用户命名>' --execution-node qa-whitebox --platform workbuddy
+formal-gates settings set --root <repo> --configuration '<用户命名>' --execution-node qa-whitebox --platform workbuddy --model 1 --effort high
+formal-gates settings remove --root <repo> --configuration '<用户命名>' --execution-node qa-whitebox
+formal-gates settings use --root <repo> --configuration '<用户命名>'
+formal-gates settings delete --root <repo> --scope project --configuration '<用户命名>'
+```
+
+`--gate` 可重复，保存普通门任意子集；`--all-gates` 随实际目录选全部普通门，
+`--no-gates` 选择空集。QA 模式单独按整组选取。`remove --execution-node` 删除该组
+覆盖值，恢复继承。节点开关与 QA 选择不查询原生模型；模型/effort 查询与修改复用
+运行中选择的同一原生选项验证。改变平台时不携带旧平台未同时指定的模型或 effort。
+
+命名配置和启用名称保存在既有用户/项目 `config.json` 的 `configurations` 与
+`configuration` 字段。用户可手改；同一 loader 校验名称、结构、节点和选择值。
+项目同名配置覆盖用户同名配置，项目启用名称覆盖用户启用名称。跨 scope 启用时，
+程序先将选中配置的完整内容保存到目标 scope，再启用名称，
+使用户配置可在其他项目独立使用；同 scope 和内置默认直接引用原值。删除只移除所选 scope
+的保存值；同名较低层值重新显现，“默认”的覆盖值也可删除并恢复继承。删除当前
+启用的自定义配置时，该 scope 的启用项回到“默认”。配置内容与来源在新 run 启动时
+冻结；后续默认文件变更不自动传播到已运行 run。
+
+`workflow start --configuration <名称或原序号>` 只选择本次启动的配置，不改保存的启用项。
+省略该参数时使用 `settings use` 已启用的配置；显式启动节点开关优先于配置中的流程节点选择。
+运行中使用同一组语义选项请求更改当前 run，程序从保存配置取真实副本，或基于本次当前有效选择只改指定项：
+
+```bash
+formal-gates workflow start --root <repo> --run-id <本次ID> --route regular --intake <原序号> --configuration '<用户命名>'
+formal-gates workflow submit --root <repo> --configuration '<用户命名>'
+formal-gates workflow submit --root <repo> --flow-node repair --enabled false
+formal-gates workflow submit --root <repo> --qa-mode whitebox --enabled true
+formal-gates workflow submit --root <repo> --no-gates
+formal-gates workflow submit --root <repo> --request SELECT_ROUTE --gate <候选原序号>
+formal-gates workflow next --root <repo> --ask <原序号> --choice approve
+formal-gates workflow submit --root <repo> --confirmation-candidate <原序号>
+```
+
+配置请求使用原 SELECT_ROUTE Ask：展示完整配置、候选门全集和程序生成的原 continuation 影响预览，
+明确确认后才生效。更改不写默认文件；同一 run 的整套配置与单执行组选择按确认 revision 生效。
+仅改指定节点时保留其他当前 tuple、QA 与门选择；明确选择命名配置时整体采用其保存值。
+产品/技术审在途或初次拓扑、路线尚未确认时可改本次配置，不代替原必需的拓扑与开发计划确认。
+
 模型通过 `settings show` 的原字段序号和 `settings set/remove --field <序号>` 修改配置，
 只填写新的语义值；程序保留其他字段并编码原配置文件。用户仍可人工编辑。启动时按字段覆盖，优先级从低到高：默认值、用户
 `~/.config/formal-gates/config.json`、项目 `.gates/token-cap.json` 的既有有限 cap、
@@ -38,7 +98,7 @@ formal-gates settings remove --root <repo> --scope project --field <原序号>
 WorkBuddy CLI 的 effort 合同为 minimal/low/medium/high/xhigh/max，模型实际支持另由
 宿主决定；`deepseek-v4.1-flash` 的官方默认 effort 为 high。
 
-有效值与来源在 `show` 可查。启动时冻结到原 `state.json`，child 继承该冻结值；恢复
+全局设置的有效值与来源在 `show` 可查。启动时冻结到原 `state.json`，child 继承该冻结值；恢复
 不重读修改后的配置，不重置用量、次数、授权或并发。动态 token cap/授权仍由原
 cost/guard owner 持有，设置展示只投影其当前有效值。修改配置作用于后续新 run。
 
@@ -73,3 +133,11 @@ child 不跟随父后续改变，要调整它时用 `--run` 先选中该 child�
 `qa-whitebox`（白盒 QA）；两组各自选择平台、模型和 effort，每组内部的设计、独立
 审查与执行共用该组选择。其余执行组沿用流程节点 ID。合并 QA 和辅助任务沿本次
 run 冻结默认值；已保存的共享 QA 选择仍按原值读取。
+
+本次 run 可在任意非终态时刻明确选择另一套已保存配置，或修改流程节点、QA/普通门
+选择和执行组 tuple；每次经原 typed 确认记录到该 run。流程配置与门集合确认直接展示
+具体选项，不提供路线档位。拆分拓扑确认后，原开发计划和具体门集合仍须确认；普通
+run 与每个 child 分别落账，child 不选择或执行普通 QA，主线保留合并验证职责。
+已 claim 的调用及其恢复保留原执行绑定和费用归属；默认文件与既存 child 不自动跟随。
+从已完成或跳过的合法节点继续时，沿现有节点继续入口先展示复用、失效与重新执行的
+具体处置，再由用户确认；不会把启用节点或读取命名配置当作需求变更。

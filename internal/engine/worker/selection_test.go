@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -14,7 +13,7 @@ import (
 
 func TestPlanAllocatesIdentitiesAndMapsSemanticChoices(t *testing.T) {
 	owner := 1
-	value := &Granularity{Reason: "Independent responsibilities", VerificationTier: "CHECKPOINT", CheckpointGroups: [][]int{{1}, {2}}, Batches: []Batch{{Owner: &owner, Subtasks: []Subtask{{Description: "Create public behavior"}}, DoD: []Criterion{{Description: "Public oracle holds"}}, Checks: []Check{{Purpose: protocol.CheckFullTests, Command: "project-tests"}}, Route: &RouteProposal{Mode: "custom", Selected: []int{2}}}, {DependsOn: []int{1}, Subtasks: []Subtask{{Description: "Integrate output"}}}}}
+	value := &Granularity{Reason: "Independent responsibilities", VerificationTier: "CHECKPOINT", CheckpointGroups: [][]int{{1}, {2}}, Batches: []Batch{{Owner: &owner, Subtasks: []Subtask{{Description: "Create public behavior"}}, DoD: []Criterion{{Description: "Public oracle holds"}}, Checks: []Check{{Purpose: protocol.CheckFullTests, Command: "project-tests"}}, Route: &RouteProposal{Selected: []int{2}}}, {DependsOn: []int{1}, Subtasks: []Subtask{{Description: "Integrate output"}}}}}
 	input := protocol.WorkerInput{AvailableRouteCandidates: []string{"quality", "diff"}}
 	before, _ := json.Marshal(value)
 	plan, err := DecodeGranularity(input, value, nil, nil, false)
@@ -46,12 +45,10 @@ func TestRepairRoutesPreserveCompleteAndSubsetMeaning(t *testing.T) {
 		name     string
 		route    RouteProposal
 		selected []string
-		invalid  bool
 	}{
-		{name: "full", route: RouteProposal{Mode: "full"}},
-		{name: "custom", route: RouteProposal{Mode: "custom", Selected: []int{2}}, selected: []string{"complexity"}},
-		{name: "full-subset", route: RouteProposal{Mode: "full", Selected: []int{1, 2}}, invalid: true},
-		{name: "custom-empty", route: RouteProposal{Mode: "custom"}},
+		{name: "all", route: RouteProposal{Selected: []int{1, 2}}, selected: []string{"quality", "complexity"}},
+		{name: "subset", route: RouteProposal{Selected: []int{2}}, selected: []string{"complexity"}},
+		{name: "empty", route: RouteProposal{}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			batch.Route = &sample.route
@@ -62,13 +59,10 @@ func TestRepairRoutesPreserveCompleteAndSubsetMeaning(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = protocol.ValidateRepairPlan(plan, false)
-			if (err != nil) != sample.invalid {
+			if err != nil {
 				t.Fatalf("route meaning changed: %v", err)
 			}
-			if sample.name == "full-subset" && !strings.Contains(err.Error(), "full route selects the complete gate list without a subset") {
-				t.Fatalf("full subset lost its original rejection: %v", err)
-			}
-			if !sample.invalid && (!slices.Equal(plan.Batches[0].Route.Gates, input.AvailableRouteCandidates) || !slices.Equal(plan.Batches[0].Route.Selected, sample.selected)) {
+			if !slices.Equal(plan.Batches[0].Route.Gates, input.AvailableRouteCandidates) || !slices.Equal(plan.Batches[0].Route.Selected, sample.selected) {
 				t.Fatal("program changed the issued complete gate list or semantic subset")
 			}
 			after, _ := json.Marshal(value)

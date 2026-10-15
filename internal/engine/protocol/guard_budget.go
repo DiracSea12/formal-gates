@@ -99,7 +99,7 @@ func (e *Engine) tokenCapExceeded(state *State) bool {
 // （plan:361「QA/开发/门的外部派发统一经过 guard」；系列轮次的权威是
 // series 账本）。
 func (e *Engine) guardEngaged(state *State) bool {
-	if state.Validation == nil || state.Topology == nil || state.RouteMode == "" {
+	if state.Validation == nil || state.Topology == nil || !state.RouteConfirmed {
 		return false
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
@@ -130,7 +130,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	if state.IntakeConfirmationReceipt != nil && strings.TrimSpace(state.IntakeConfirmationReceipt.RequirementSource) != "" {
 		requirementID = state.IntakeConfirmationReceipt.RequirementSource
 	}
-	if state.Topology == nil || state.RouteMode == "" {
+	if state.Topology == nil || !state.RouteConfirmed {
 		return guard.Basis{}, fmt.Errorf("guard budget: topology and route bindings are required before the dispatch budget applies")
 	}
 	_, plan, _ := state.confirmedDevelopmentPlan()
@@ -149,7 +149,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		SchemaVersion: 1,
 		Requirement:   guard.ConfirmedIdentity{Identity: guard.Identity{ID: requirementID, Revision: requirement}, ConfirmedRevision: requirement},
 		Batch:         guard.ConfirmedIdentity{Identity: batchIdentity, ConfirmedRevision: batchIdentity.Revision},
-		Route:         guard.ConfirmedIdentity{Identity: guard.Identity{ID: state.RouteMode, Revision: routeDigest}, ConfirmedRevision: routeDigest},
+		Route:         guard.ConfirmedIdentity{Identity: guard.Identity{ID: "validation-route", Revision: routeDigest}, ConfirmedRevision: routeDigest},
 		Topology:      guard.ConfirmedIdentity{Identity: guard.Identity{ID: state.Topology.Decision, Revision: digestOfCanonical(state.Topology)}, ConfirmedRevision: digestOfCanonical(state.Topology)},
 		Definition: guard.Definition{
 			Identity:      guard.Identity{ID: definitionDigest, Revision: string(e.cfg.Definition.Version)},
@@ -223,6 +223,9 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 			return fmt.Errorf("guard budget: authorized dispatch %s has no authorizing source", task.String())
 		}
 		authorized[task] = true
+		if original, known := state.originalGuardSource(task, e.cfg.Definition); known {
+			basis.HistoricalSources = append(basis.HistoricalSources, original)
+		}
 		attempts := maxAttempts
 		basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: task, Provenance: provenance, MaxAttempts: &attempts})
 		return nil
@@ -440,6 +443,71 @@ func issuedGuardTasks(state *State, cd *compiler.CompiledDefinition) map[runtime
 	return tasks
 }
 
+// originalGuardSource reads the signed issuance or frozen wave authorization.
+// Historical calls retain that source when the active selection changes.
+func (s *State) originalGuardSource(task runtime.TaskKey, cd *compiler.CompiledDefinition) (guard.Provenance, bool) {
+	source := s.sourceValidationTask(task)
+	binding, known := WorkBinding{}, false
+	for _, candidate := range s.DispatchBindings {
+		if candidate.Task == task {
+			binding, known = candidate, true
+			break
+		}
+	}
+	if !known && source != task {
+		for _, candidate := range s.DispatchBindings {
+			if candidate.Task == source {
+				binding, known = candidate, true
+				break
+			}
+		}
+	}
+	role := s.validationRole(source, cd)
+	if known && binding.Task == task && role == "engine.development.batch.v6" {
+		if plan := s.decisionPlanProposal(s.Decisions[binding.PlanRequest]); plan != nil {
+			return guard.Provenance{Kind: guard.BatchSource, Identity: guard.Identity{ID: "development-plan", Revision: planContractDigest(plan)}}, true
+		}
+	}
+	if known && (role == "engine.validation.observation.v2" || role == "engine.merge.resolve.v3") && binding.RouteScope != "" {
+		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: binding.RouteScope}}, true
+	}
+	if role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2" || role == "engine.qa.execution.v4" {
+		mode := taskScopeMode(source)
+		if known && binding.CaseVersion != "" {
+			return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(mode), Revision: binding.CaseVersion}}, true
+		}
+		if known && binding.RouteScope != "" {
+			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: binding.RouteScope}}, true
+		}
+		if s.Validation != nil {
+			for _, wave := range s.Validation.Waves {
+				for _, target := range wave.Targets {
+					if (target.Task == task || target.Task == source) && wave.Versions[target.Mode] != "" {
+						return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(target.Mode), Revision: wave.Versions[target.Mode]}}, true
+					}
+				}
+			}
+		}
+	}
+	if role == "engine.gate.v3" && s.Validation != nil {
+		if wave, target := s.repairGateTarget(source); target != nil && wave.RouteDigest != "" {
+			return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: wave.RouteDigest}}, true
+		}
+		for _, wave := range s.Validation.Waves {
+			for _, target := range wave.Targets {
+				if (target.Task == task || target.Task == source) && target.Gate != "" && wave.RouteDigest != "" {
+					identity := guard.Identity{ID: target.Gate, Revision: wave.RouteDigest}
+					if target.SliceID != "" {
+						identity = guard.Identity{ID: target.SliceID + ":" + target.Gate, Revision: s.SliceReceipts[s.SliceChildren[target.SliceID]].Digest}
+					}
+					return guard.Provenance{Kind: guard.GateSource, Identity: identity}, true
+				}
+			}
+		}
+	}
+	return guard.Provenance{}, false
+}
+
 // guardTaskProvenance 按任务角色归类 provenance（合同：「provenance 按上述
 // source 归类」）并给出该 TaskKey 的现行有限 retry 策略。策略读 attempt 账本
 // （一次性用户追加只改该账本的 MaxAttempts，AC-059），无账本条目时用编译步策略。
@@ -455,6 +523,9 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 	if attempt, ok := state.EndedAttempts[task]; ok && attempt.MaxAttempts > 0 {
 		maxAttempts = attempt.MaxAttempts
 	}
+	if original, known := state.originalGuardSource(task, e.cfg.Definition); known {
+		return original, maxAttempts, true
+	}
 	switch role {
 	case "engine.development.plan.v1":
 		data, err := encoder.Encode(e.cfg.Definition)
@@ -464,17 +535,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		return guard.Provenance{Kind: guard.DefinitionSource, Identity: guard.Identity{ID: encoder.Digest(data), Revision: string(e.cfg.Definition.Version)}}, maxAttempts, true
 	case "engine.validation.observation.v2":
 		if input := state.validationObservationInput(); input != nil && source == observationTask(e.cfg.Definition, input) {
-			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-		}
-		for _, binding := range state.DispatchBindings {
-			if state.sourceValidationTask(binding.Task) == source {
-				if binding.WaveID == "" && binding.RouteScope != "" {
-					return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: binding.RouteScope}}, maxAttempts, true
-				}
-				if wave := state.validationWave(binding.WaveID); wave != nil && wave.Candidate.Identity == binding.Candidate {
-					return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-				}
-			}
+			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: state.validationRouteDigest()}}, maxAttempts, true
 		}
 		return guard.Provenance{}, 0, false
 	case "engine.merge.resolve.v3":
@@ -482,7 +543,7 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		if input == nil || len(input.Evidence.Conflicts) == 0 {
 			return guard.Provenance{}, 0, false
 		}
-		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
+		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: state.validationRouteDigest()}}, maxAttempts, true
 	case "engine.development.batch.v6":
 		_, plan, _ := state.confirmedDevelopmentPlan()
 		if plan == nil {
@@ -502,39 +563,16 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey) (guard.
 		if state.Validation == nil {
 			return guard.Provenance{}, 0, false
 		}
-		// 派发 scope 内携带 mode 身份（generation:mode:...），按 mode 直查
-		// case-set 账本；set 缺失的历史事实按其 wave target 的冻结版本定位。
+		// 未签发的当前设计/审查槽读取当前用例集；已签发与冻结波次由
+		// originalGuardSource 保留其授权来源。
 		mode := taskScopeMode(source)
 		if set := state.Validation.Sets[mode]; set != nil {
 			return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(mode), Revision: set.Version}}, maxAttempts, true
 		}
-		for i := range state.Validation.Waves {
-			for _, target := range state.Validation.Waves[i].Targets {
-				if target.Task == source && target.Mode == mode {
-					return guard.Provenance{Kind: guard.QASource, Identity: guard.Identity{ID: string(mode), Revision: state.Validation.Waves[i].Versions[mode]}}, maxAttempts, true
-				}
-			}
-		}
 		// 首个 QA design 派发先于 case-set 存在：路线选择（所选门决定的 QA
 		// mode 集）是其授权来源。
-		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: state.RouteMode, Revision: state.validationRouteDigest()}}, maxAttempts, true
-	case "engine.gate.v3":
-		if _, target := state.repairGateTarget(source); target != nil {
-			return guard.Provenance{Kind: guard.GateSource, Identity: guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}}, maxAttempts, true
-		}
-		if state.Validation == nil {
-			return guard.Provenance{}, 0, false
-		}
-		for i := range state.Validation.Waves {
-			if target := state.Validation.Waves[i].Targets[source.String()]; target != nil && target.Gate != "" {
-				identity := guard.Identity{ID: target.Gate, Revision: state.validationRouteDigest()}
-				if target.SliceID != "" {
-					identity = guard.Identity{ID: target.SliceID + ":" + target.Gate, Revision: state.SliceReceipts[state.SliceChildren[target.SliceID]].Digest}
-				}
-				return guard.Provenance{Kind: guard.GateSource, Identity: identity}, maxAttempts, true
-			}
-		}
-		return guard.Provenance{}, 0, false
+		return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: state.validationRouteDigest()}}, maxAttempts, true
+
 	case "engine.repair.verify.v2":
 		context, ok := state.repairComparisonContext(task, e.cfg.Definition)
 		if !ok {

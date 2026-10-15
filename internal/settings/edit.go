@@ -48,6 +48,41 @@ func EditableFields(e Effective) ([]EditableField, error) {
 // EditField changes only the selected field in its original overlay file. The
 // same Load rules validate the complete candidate before it replaces that file.
 func EditField(root, home, scope string, position int, value string, remove bool) (Effective, error) {
+	return editOverlay(root, home, scope, func(raw map[string]json.RawMessage, effective Effective, _ []ConfigurationOption) error {
+		fields, err := EditableFields(effective)
+		if err != nil {
+			return err
+		}
+		if position < 1 || position > len(fields) {
+			return fmt.Errorf("field position must be 1..%d", len(fields))
+		}
+		name := fields[position-1].Name
+		if remove {
+			delete(raw, name)
+			return nil
+		}
+		var encoded []byte
+		switch name {
+		case "capacity", "qaCapacity", "tokenCap":
+			number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			if err != nil {
+				return fmt.Errorf("%s: expected an integer: %w", name, err)
+			}
+			encoded, err = json.Marshal(number)
+		default:
+			encoded, err = json.Marshal(value)
+		}
+		if err != nil {
+			return err
+		}
+		raw[name] = encoded
+		return nil
+	})
+}
+
+// editOverlay is the one locked candidate-validation and atomic-write path for
+// scalar fields and named workflow configurations.
+func editOverlay(root, home, scope string, change func(map[string]json.RawMessage, Effective, []ConfigurationOption) error) (Effective, error) {
 	files := overlayPaths(root, home)
 	var path string
 	switch scope {
@@ -63,16 +98,9 @@ func EditField(root, home, scope string, position int, value string, remove bool
 		return Effective{}, err
 	}
 	defer release()
-	effective, err := Load(root, home)
+	effective, options, err := LoadConfigurations(root, home)
 	if err != nil {
 		return Effective{}, err
-	}
-	fields, err := EditableFields(effective)
-	if err != nil {
-		return Effective{}, err
-	}
-	if position < 1 || position > len(fields) {
-		return Effective{}, fmt.Errorf("field position must be 1..%d", len(fields))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -84,35 +112,16 @@ func EditField(root, home, scope string, position int, value string, remove bool
 			return Effective{}, err
 		}
 	}
-	name := fields[position-1].Name
-	if remove {
-		delete(raw, name)
-	} else {
-		var encoded []byte
-		switch name {
-		case "capacity", "qaCapacity", "tokenCap":
-			number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			if err != nil {
-				return Effective{}, fmt.Errorf("%s: expected an integer: %w", name, err)
-			}
-			encoded, err = json.Marshal(number)
-			if err != nil {
-				return Effective{}, err
-			}
-		default:
-			encoded, err = json.Marshal(value)
-			if err != nil {
-				return Effective{}, err
-			}
-		}
-		raw[name] = encoded
+	if err := change(raw, effective, options); err != nil {
+		return Effective{}, err
 	}
 	candidate, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return Effective{}, err
 	}
 	candidate = append(candidate, '\n')
-	if err := applyOverlay(&effective, path, candidate, path == effective.Files[0] && effective.Sources["tokenCap"] == filepath.Join(root, ".gates", "token-cap.json")); err != nil {
+	validated, _, err := load(root, home, path, candidate)
+	if err != nil {
 		return Effective{}, err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
@@ -131,5 +140,5 @@ func EditField(root, home, scope string, position int, value string, remove bool
 	if err := os.Rename(temp.Name(), path); err != nil {
 		return Effective{}, err
 	}
-	return Load(root, home)
+	return validated, nil
 }

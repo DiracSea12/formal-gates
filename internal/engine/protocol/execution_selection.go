@@ -9,15 +9,10 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
+	"formal-gates/internal/settings"
 )
 
-// ExecutionChoice preserves native model and effort values. Empty values leave
-// the corresponding native default in force.
-type ExecutionChoice struct {
-	Provider        string `json:"provider"`
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-}
+type ExecutionChoice = settings.ExecutionChoice
 
 // ExecutionSelection is a user choice for one selectable execution group.
 // Decisions owns future choices; Attempt bindings own each issued execution.
@@ -70,6 +65,9 @@ func (s *State) EffectiveExecutionChoice(node string) ExecutionChoice {
 	if node == "" {
 		return choice
 	}
+	if s.Settings != nil {
+		choice = s.Settings.Configuration.EffectiveExecutionChoice(node, choice)
+	}
 	if s.SliceChild != nil {
 		for _, inherited := range s.SliceChild.InheritedExecution {
 			if inherited.Node == node {
@@ -83,8 +81,17 @@ func (s *State) EffectiveExecutionChoice(node string) ExecutionChoice {
 	}
 	var revision uint64
 	for _, decision := range s.Decisions {
-		if decision.Control == ControlSelectExecution && decision.Choice == "approve" && decision.Execution != nil && executionSelectionApplies(decision.Execution.Node, node) && decision.Revision > revision {
+		if decision.Choice != "approve" || decision.Revision <= revision {
+			continue
+		}
+		if decision.Control == ControlSelectExecution && decision.Execution != nil && executionSelectionApplies(decision.Execution.Node, node) {
 			choice, revision = decision.Execution.Choice, decision.Revision
+		} else if decision.Control == ControlSelectRoute && decision.Review != nil && decision.Review.Route != nil && decision.Review.Route.Configuration != nil {
+			choice = s.EffectiveExecutionChoice("")
+			if selected, known := decision.Review.Route.Configuration.Configuration.Execution[node]; known {
+				choice = selected
+			}
+			revision = decision.Revision
 		}
 	}
 	return choice
@@ -220,9 +227,13 @@ func (e *Engine) acceptExecutionSelection(s *State, ask PendingAsk, decision *De
 	if decision.Execution == nil || ask.Execution == nil || decision.Execution.Digest != ask.Execution.CanonicalDigest() {
 		return validationError("execution decision differs from its original selection")
 	}
+	return e.rebindUnclaimedExecution(s, ask.Execution.Node, ask.Execution.Choice)
+}
+
+func (e *Engine) rebindUnclaimedExecution(s *State, node string, choice ExecutionChoice) error {
 	var unclaimed []PendingAction
 	for id, pending := range s.PendingActions {
-		if !executionSelectionApplies(ask.Execution.Node, s.ExecutionNode(pending.Task, e.cfg.Definition)) {
+		if !executionSelectionApplies(node, s.ExecutionNode(pending.Task, e.cfg.Definition)) {
 			continue
 		}
 		if _, known := s.SpawnReceipts[id]; known {
@@ -242,7 +253,6 @@ func (e *Engine) acceptExecutionSelection(s *State, ask PendingAsk, decision *De
 	}
 	for _, pending := range unclaimed {
 		attempt := s.Attempts[pending.Task]
-		choice := ask.Execution.Choice
 		attempt.Bindings.Responsibility, attempt.Bindings.Model, attempt.Bindings.ReasoningEffort = choice.Provider, &choice.Model, &choice.ReasoningEffort
 		s.Attempts[pending.Task] = attempt
 	}

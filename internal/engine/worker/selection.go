@@ -357,7 +357,7 @@ func DecodeGranularity(input protocol.WorkerInput, value *Granularity, paths []s
 			if err != nil {
 				return nil, err
 			}
-			batch.Route = &protocol.RouteDecision{Mode: item.Route.Mode, Gates: gates, Selected: selected}
+			batch.Route = &protocol.RouteDecision{Gates: gates, Selected: selected}
 		}
 		result.Batches = append(result.Batches, batch)
 	}

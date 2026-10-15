@@ -330,9 +330,7 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	wrongBase[len(wrongBase)-1] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
 	assertRejected("missing-route", p.startArgs("missing-route", ""), "workflow start requires --route regular or lightweight")
-	for _, route := range []string{"default", "full", "custom"} {
-		assertRejected(route, p.startArgs(route, route), "workflow start supports --route regular or lightweight")
-	}
+	assertRejected("unknown-route", p.startArgs("unknown-route", "unsupported"), "workflow start supports --route regular or lightweight")
 	for _, flag := range []string{"--split=no", "--master=parent", "--retained-overall=false", "--from-sealed-run=sealed"} {
 		name := strings.Split(strings.TrimPrefix(flag, "--"), "=")[0]
 		assertRejected(name, append(p.startArgs(name, "regular"), flag), "flag provided but not defined")

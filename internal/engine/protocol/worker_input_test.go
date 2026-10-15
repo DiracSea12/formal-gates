@@ -93,7 +93,7 @@ func parallelValidationInputState(t *testing.T) (*Engine, *State, decision.Issue
 	readiness := pendingActionID(t, e)
 	submitVerifiedReviewResult(t, e, "parallel-readiness", readiness, plannedReviewEvidence(review.StartReadiness, readiness, "", "PASS", "complete", nil))
 	askAndDecide(t, e, ControlConfirmTopology, "input-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one workspace"}})
-	confirmPlannedRoute(t, e, "input-route", RouteDecision{Mode: "full", Gates: []string{"blackbox", "whitebox"}})
+	confirmPlannedRoute(t, e, "input-route", RouteDecision{Selected: []string{"blackbox", "whitebox"}, Gates: []string{"blackbox", "whitebox"}})
 	snap := e.LoadMustSucceed(t)
 	s := snap.State
 	s.Validation = &Validation{RequirementRevision: s.RequirementRevision(), Generation: s.requirementGeneration(), Document: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Sets: map[coverage.ReviewKind]*CaseSet{}, AuthoringWorkspace: "authoring"}

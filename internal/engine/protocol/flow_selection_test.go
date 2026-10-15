@@ -42,7 +42,7 @@ func TestQualityRoleOwnsOrdinaryAndMergeGateTargets(t *testing.T) {
 		}
 	}
 	for _, enabled := range []bool{true, false} {
-		s := &State{RunID: "master", RouteMode: routeModeMerge, Topology: &TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"core", "tools"}}, SliceChildren: map[string]string{"core": "core-run", "tools": "tools-run"}, SliceReceipts: map[string]SliceReceipt{"core-run": {Receipt: SliceTerminalReceipt{ChildRunID: "core-run", SelectedGates: []string{"quality"}}}, "tools-run": {Receipt: SliceTerminalReceipt{ChildRunID: "tools-run", SelectedGates: []string{"security"}}}}}
+		s := &State{RunID: "master", RouteConfirmed: true, Topology: &TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"core", "tools"}}, SliceChildren: map[string]string{"core": "core-run", "tools": "tools-run"}, SliceReceipts: map[string]SliceReceipt{"core-run": {Receipt: SliceTerminalReceipt{ChildRunID: "core-run", SelectedGates: []string{"quality"}}}, "tools-run": {Receipt: SliceTerminalReceipt{ChildRunID: "tools-run", SelectedGates: []string{"security"}}}}}
 		if !enabled {
 			s.FlowSelection = &FlowSelection{Disabled: []string{"gate"}}
 		}
@@ -170,7 +170,7 @@ func TestFlowSelectionRejectsUnknownAndRepeatedNodes(t *testing.T) {
 	}
 }
 
-func TestQAGroupKeepsRouteModesAndOwnsTheCompleteChain(t *testing.T) {
+func TestQAGroupKeepsSelectedModesAndOwnsTheCompleteChain(t *testing.T) {
 	if err := ValidateFlowSelection(&FlowSelection{Disabled: []string{"qa"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestQAGroupKeepsRouteModesAndOwnsTheCompleteChain(t *testing.T) {
 	selected := append([]string{}, s.SelectedGates...)
 	s.FlowSelection = &FlowSelection{Disabled: []string{"qa"}}
 	if len(s.validationKinds()) != 0 || !s.ValidationNotGuaranteed() || !reflect.DeepEqual(selected, s.SelectedGates) {
-		t.Fatal("disabling QA changed route modes or retained QA work")
+		t.Fatal("disabling QA changed selected modes or retained QA work")
 	}
 	e, _ := selectedReviewEngine(t, &FlowSelection{Disabled: []string{"qa"}})
 	for _, node := range e.LoadMustSucceed(t).State.BusinessNodes(cd) {

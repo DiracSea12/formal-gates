@@ -308,10 +308,6 @@ func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Faca
 	started := false
 	services := harness.ExecutionServices{ReceiptMessage: facade.RecordNativeMessage}
 	for {
-		source, sourceErr := harness.NativeJobSource(provider, directory, services)
-		if sourceErr == nil {
-			return acceptWorkflowWorker(f, ref, resume, directory, source)
-		}
 		if !started {
 			if _, err := os.Stat(filepath.Join(directory, "identity.json")); err == nil {
 				if err := f.ObserveWorkerStart(ref, directory, harness.NativeStartEvidence); err != nil {
@@ -323,9 +319,9 @@ func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Faca
 			}
 		}
 		var receipt map[string]any
-		if err := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt); err == nil {
-			// The source may have landed between the first observation and exit.
-			source, sourceErr = harness.NativeJobSource(provider, directory, services)
+		receiptErr := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt)
+		if receiptErr == nil {
+			source, sourceErr := harness.NativeJobSource(provider, directory, services)
 			if sourceErr == nil {
 				return acceptWorkflowWorker(f, ref, resume, directory, source)
 			}
@@ -336,7 +332,7 @@ func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Faca
 			if err := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt); err == nil {
 				continue
 			}
-			return fmt.Errorf("native invocation is UNKNOWN; original job %s needs observation: %w", directory, sourceErr)
+			return fmt.Errorf("native invocation is UNKNOWN; original job %s needs observation: %w", directory, receiptErr)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

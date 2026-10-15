@@ -154,7 +154,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 					t.Fatal("fresh topology did not offer the current route", err)
 				}
 			}
-			current := confirm("custom")
+			current := confirm("approve")
 			if current.DevelopmentPlan == nil || current.DevelopmentPlan.Confirmation.ReviewActionID != freshAction || !reflect.DeepEqual(current.DevelopmentPlan.Proposal, *plan) {
 				t.Fatal("route confirmation did not bind the exact current preparation")
 			}

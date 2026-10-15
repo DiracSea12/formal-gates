@@ -11,7 +11,6 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
-	"formal-gates/internal/settings"
 	"formal-gates/internal/validate"
 )
 
@@ -154,61 +153,6 @@ func runRequirement(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	return printJSON(streams.Stdout, preview)
-}
-
-func runSettings(args []string, streams IO) (int, error) {
-	command := "show"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		command, args = args[0], args[1:]
-	}
-	fs := flag.NewFlagSet("settings "+command, flag.ContinueOnError)
-	fs.SetOutput(streams.Stderr)
-	root := fs.String("root", ".", "project root")
-	home, err := os.UserHomeDir()
-	userHome := fs.String("home", home, "user configuration home")
-	scope := fs.String("scope", "project", "project or user overlay")
-	field := fs.Int("field", 0, "published field position")
-	value := fs.String("value", "", "new semantic value; stdin when omitted")
-	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-		return code, err
-	}
-	if err != nil && *userHome == "" {
-		return 1, err
-	}
-	var effective settings.Effective
-	if command == "show" {
-		effective, err = settings.Load(*root, *userHome)
-	} else if command == "set" || command == "remove" {
-		if command == "set" {
-			supplied := false
-			fs.Visit(func(f *flag.Flag) {
-				if f.Name == "value" {
-					supplied = true
-				}
-			})
-			if !supplied {
-				data, readErr := io.ReadAll(streams.Stdin)
-				if readErr != nil {
-					return 1, readErr
-				}
-				*value = string(data)
-			}
-		}
-		effective, err = settings.EditField(*root, *userHome, *scope, *field, *value, command == "remove")
-	} else {
-		return 1, fmt.Errorf("settings command must be show, set or remove")
-	}
-	if err != nil {
-		return 1, err
-	}
-	fields, err := settings.EditableFields(effective)
-	if err != nil {
-		return 1, err
-	}
-	return printJSON(streams.Stdout, struct {
-		Effective settings.Effective       `json:"effective"`
-		Fields    []settings.EditableField `json:"fields"`
-	}{Effective: effective, Fields: fields})
 }
 
 type requirementDocumentChoice struct {

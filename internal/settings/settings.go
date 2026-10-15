@@ -24,9 +24,12 @@ type Values struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 type Effective struct {
-	Values  Values            `json:"values"`
-	Sources map[string]string `json:"sources"`
-	Files   []string          `json:"files"`
+	Values              Values            `json:"values"`
+	Sources             map[string]string `json:"sources"`
+	Files               []string          `json:"files"`
+	ConfigurationName   string            `json:"configurationName,omitempty"`
+	Configuration       Configuration     `json:"configuration"`
+	ConfigurationSource string            `json:"configurationSource,omitempty"`
 }
 type input struct {
 	QACapacity *int   `json:"qaCapacity,omitempty"`
@@ -70,14 +73,20 @@ func Freeze(provider string, effective Effective) (Effective, error) {
 // Load overlays project values over installation/user values field by field.
 // Unknown fields and null are errors: a typo must never silently remove a cap.
 func Load(root, home string) (Effective, error) {
+	effective, _, err := load(root, home, "", nil)
+	return effective, err
+}
+
+func load(root, home, candidatePath string, candidate []byte) (Effective, []ConfigurationOption, error) {
 	nativeFields := host.Configuration()
 	e := Effective{Values: Values{QACapacity: 4, Capacity: 16, Native: map[string]string{}}, Sources: map[string]string{}, Files: overlayPaths(root, home)}
+	configurations := newConfigurationSet()
 	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
 		e.Sources[name] = "default"
 	}
 	for name, field := range nativeFields {
 		if _, exists := e.Sources[name]; exists {
-			return e, fmt.Errorf("platform configuration shadows common field %q", name)
+			return e, nil, fmt.Errorf("platform configuration shadows common field %q", name)
 		}
 		e.Values.Native[name] = field.Default
 		e.Sources[name] = "default"
@@ -91,31 +100,39 @@ func Load(root, home string) (Effective, error) {
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&value); err != nil {
-			return e, fmt.Errorf("token cap config %s is invalid: %w", legacy, err)
+			return e, nil, fmt.Errorf("token cap config %s is invalid: %w", legacy, err)
 		}
 		if value.Cap == nil || *value.Cap < 0 {
-			return e, fmt.Errorf("token cap config %s is invalid: engineDispatchMaxTotalTokens must be non-negative", legacy)
+			return e, nil, fmt.Errorf("token cap config %s is invalid: engineDispatchMaxTotalTokens must be non-negative", legacy)
 		}
 		if err := decoder.Decode(new(any)); err != io.EOF {
-			return e, fmt.Errorf("token cap config %s has trailing JSON data", legacy)
+			return e, nil, fmt.Errorf("token cap config %s has trailing JSON data", legacy)
 		}
 		e.Values.TokenCap, e.Sources["tokenCap"] = value.Cap, legacy
 	} else if !os.IsNotExist(err) {
-		return e, err
+		return e, nil, err
 	}
 	for _, path := range e.Files {
 		data, err := os.ReadFile(path)
+		if path == candidatePath {
+			data, err = candidate, nil
+		}
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return e, err
+			return e, nil, err
 		}
-		if err := applyOverlay(&e, path, data, path == e.Files[0] && e.Sources["tokenCap"] == legacy); err != nil {
-			return e, err
+		if err := applyOverlay(&e, configurations, path, data, path == e.Files[0] && e.Sources["tokenCap"] == legacy); err != nil {
+			return e, nil, err
 		}
 	}
-	return e, nil
+	selected, ok := configurations.values[configurations.active]
+	if !ok {
+		return e, nil, fmt.Errorf("configuration %q does not exist", configurations.active)
+	}
+	e.ConfigurationName, e.Configuration, e.ConfigurationSource = configurations.active, selected, configurations.sources[configurations.active]
+	return e, configurations.options(), nil
 }
 
 func overlayPaths(root, home string) []string {
@@ -124,19 +141,22 @@ func overlayPaths(root, home string) []string {
 
 // applyOverlay is the single-file parser and validator for persisted and edited
 // configuration. A project cap can retain precedence over the user cap field.
-func applyOverlay(e *Effective, path string, data []byte, preserveTokenCap bool) error {
+func applyOverlay(e *Effective, configurations *configurationSet, path string, data []byte, preserveTokenCap bool) error {
 	nativeFields := host.Configuration()
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil || raw == nil {
 		return fmt.Errorf("%s: expected a JSON object: %v", path, err)
 	}
 	for field, value := range raw {
-		if _, ok := e.Sources[field]; !ok {
+		if _, ok := e.Sources[field]; !ok && field != "configurations" && field != "configuration" {
 			return fmt.Errorf("%s: unknown configuration field %q; see references/user-configuration.md", path, field)
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return fmt.Errorf("%s: %s: null is invalid; remove the field to inherit its default", path, field)
 		}
+	}
+	if err := configurations.apply(path, raw); err != nil {
+		return err
 	}
 	var in input
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -199,6 +219,9 @@ func applyOverlay(e *Effective, path string, data []byte, preserveTokenCap bool)
 		e.Values.ReasoningEffort = *in.ReasoningEffort
 	}
 	for field := range raw {
+		if field == "configurations" || field == "configuration" {
+			continue
+		}
 		if field != "tokenCap" || !preserveTokenCap {
 			e.Sources[field] = path
 		}

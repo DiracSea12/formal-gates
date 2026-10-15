@@ -32,6 +32,7 @@ func workflowRunView(run facade.Run) map[string]any {
 		for index, node := range run.FlowNodes {
 			nodes = append(nodes, map[string]any{"node": index + 1, "description": node.Description, "enabled": node.Enabled})
 		}
+		view["configuration"] = run.Configuration
 		view["flowNodes"] = nodes
 	}
 	if len(run.ExecutionNodes) != 0 {
@@ -98,6 +99,9 @@ func workflowRunView(run facade.Run) map[string]any {
 			options = append(options, map[string]any{"choice": choice, "label": option.Label})
 		}
 		question := map[string]any{"ask": index + 1, "control": ask.Control, "options": options}
+		if ask.Configuration != nil {
+			question["configuration"] = ask.Configuration
+		}
 		if ask.Execution != nil {
 			question["execution"] = ask.Execution
 		}
@@ -282,8 +286,21 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	}
 	run["questions"] = questions
 	view := map[string]any{"input": candidate.Input, "run": run}
+	if candidate.Event.Request != nil && len(candidate.Event.Request.RouteGates) != 0 {
+		view["gates"] = numberedChoices(candidate.Event.Request.RouteGates)
+	}
+	if candidate.Event.Request != nil && candidate.Event.Request.Configuration != nil {
+		view["configuration"] = candidate.Event.Request.Configuration
+	}
 	if candidate.Event.Request != nil && candidate.Event.Request.Execution != nil {
 		view["execution"] = candidate.Event.Request.Execution
+	}
+	if candidate.Event.Decide != nil && candidate.Event.Decide.Review != nil && candidate.Event.Decide.Review.Route != nil {
+		route := candidate.Event.Decide.Review.Route
+		view["selectedGates"] = route.Selected
+		if route.Configuration != nil {
+			view["configuration"] = route.Configuration
+		}
 	}
 	if candidate.ReviewDelta != nil {
 		view["reviewDelta"] = candidate.ReviewDelta

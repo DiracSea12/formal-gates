@@ -252,7 +252,7 @@ func (s *State) NextWorkflowChoice(cd *compiler.CompiledDefinition) ControlKind 
 	if s.SliceChild == nil && s.Topology == nil {
 		return ControlConfirmTopology
 	}
-	if s.RouteMode == "" {
+	if !s.RouteConfirmed {
 		return ControlSelectRoute
 	}
 	if s.SliceChild == nil && !s.mergeMaster() && s.FlowNodeEnabled("development") {

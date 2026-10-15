@@ -85,15 +85,12 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "formal-gates.manifest.json"), admissionManifest, 0o600)
 	admissionWrite(t, filepath.Join(root, "bin", nativeBinaryName()), string(stubBinaryPayload(t)), 0o755)
 	admissionWrite(t, filepath.Join(root, "prompts", "reviewer-base.md"), "sample reviewer base\n", 0o600)
-	for _, action := range []string{
-		"development-worker", "product-review", "qa-design",
-		"qa-execution", "qa-review", "start-readiness", "validation-observation",
-	} {
-		admissionWrite(t, filepath.Join(root, "prompts", "actions", action+".md"), action+" prompt\n", 0o600)
-	}
 	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, action := range catalog.Actions {
+		admissionWrite(t, filepath.Join(root, "prompts", "actions", action.ID+".md"), action.Content, 0o600)
 	}
 	for _, rules := range catalog.RoleRules {
 		admissionWrite(t, filepath.Join(root, "prompts", "roles", rules.ID+".md"), rules.Content, 0o600)

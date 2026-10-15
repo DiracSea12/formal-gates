@@ -38,14 +38,28 @@ func splitCommandPlan(owners ...string) *protocol.GranularityReview {
 	}
 	return plan
 }
+func (d *validationDriver) configureRoute(route *protocol.RouteDecision) {
+	d.t.Helper()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if route.Configuration == nil && snapshot.State.RouteConfigurationRequired() {
+		configuration := snapshot.State.EffectiveConfiguration()
+		configuration.SetSelectedGates(route.Selected)
+		route.Configuration = &configuration
+	}
+}
+
 func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 	d.t.Helper()
+	d.configureRoute(&route)
 	preview, err := d.f.DevelopmentPlan(route)
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	d.control(protocol.ControlSelectRoute, route.Mode, protocol.ReviewDecisionPayload{Route: &route})
+	d.control(protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route})
 }
 
 func batchEvidence(input protocol.ValidationInput) *protocol.DevelopmentEvidence {
@@ -285,7 +299,7 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			}
 			// 重走解除了路线绑定：重新选择即新计划的确认通道（绑定→重走
 			// 解除→重新选择）。
-			d.confirmRoute(protocol.RouteDecision{Mode: "custom", Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
+			d.confirmRoute(protocol.RouteDecision{Gates: []string{"quality", "blackbox"}, Selected: []string{"quality"}})
 			d.drive()
 			id, in := planBatchAction(d, "command")
 			if id == old || in.Binding.Task == ci.Binding.Task || len(in.Development.Batch.DoD) != 2 {
@@ -529,7 +543,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 			if kind == "missing-full-tests" && !strings.Contains(rejected.Reason, protocol.CheckFullTests) {
 				t.Fatal("missing project-test purpose was rejected for another reason", rejected.Reason)
 			}
-			if snap.State.ReviewSeries.StartReadiness.Completed != 0 || snap.State.ReviewSeries.StartReadiness.FirstPass || snap.State.RouteMode != "" || len(snap.State.SliceChildren) != 0 {
+			if snap.State.ReviewSeries.StartReadiness.Completed != 0 || snap.State.ReviewSeries.StartReadiness.FirstPass || snap.State.RouteConfirmed || len(snap.State.SliceChildren) != 0 {
 				t.Fatal("invalid worker content unlocked route or counted a semantic round")
 			}
 			var retry string
@@ -572,7 +586,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	verifyReviewFixture(t, d, ready)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	route := routeDecisionForGates([]string{"blackbox", "quality"})
-	req, err := protocol.NewRouteRequestEvent(d.eventID(), route.Gates, protocol.AskOption{ID: "custom", Label: "Custom"})
+	req, err := protocol.NewRouteRequestEvent(d.eventID(), route.Gates, protocol.AskOption{ID: "approve", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +595,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(req.ID), token, "custom", protocol.ReviewDecisionPayload{Route: &route})
+	event, err := protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(req.ID), token, "approve", protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +614,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 		t.Fatal(err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	event, err = protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(req.ID), token, "custom", protocol.ReviewDecisionPayload{Route: &route})
+	event, err = protocol.NewReviewDecideEvent(d.eventID(), protocol.RequestID(req.ID), token, "approve", protocol.ReviewDecisionPayload{Route: &route})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +688,7 @@ func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision := snapshot.State.Decisions[string(request.ID)]
-	if decision.Review == nil || !reflect.DeepEqual(decision.Review.Topology.DevelopmentPlan, &preview.Confirmation) || snapshot.State.RouteMode != "merge" {
+	if decision.Review == nil || !reflect.DeepEqual(decision.Review.Topology.DevelopmentPlan, &preview.Confirmation) || !snapshot.State.RouteConfirmed {
 		t.Fatal("split lost its original plan confirmation")
 	}
 	saved, err := os.ReadFile(path)
@@ -705,7 +719,7 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 	}
 	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
 	driver.drive()
-	route := protocol.RouteDecision{Mode: "full", Gates: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
 	expected, err := parent.SliceDevelopmentPlan("lane-core")
 	if err != nil {
 		t.Fatal(err)
@@ -723,7 +737,7 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 		t.Fatal("read-only automatic slice preview changed authority", err)
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	driver.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &route})
+	driver.control(protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route})
 	driver.drive()
 	driver.reopen()
 	id, input := planBatchAction(driver, "command")
@@ -769,7 +783,7 @@ func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.
 	}
 	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
 	driver.drive()
-	route := protocol.RouteDecision{Mode: "full", Gates: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
 	preview, err := child.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)
@@ -778,7 +792,7 @@ func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.
 		t.Fatal("child preview lost derived tier or original obligations")
 	}
 	route.DevelopmentPlan = &preview.Confirmation
-	driver.control(protocol.ControlSelectRoute, "full", protocol.ReviewDecisionPayload{Route: &route})
+	driver.control(protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route})
 	driver.drive()
 	driver.reopen()
 	_, input := planBatchAction(driver, plan.Batches[0].ID)

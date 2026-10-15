@@ -269,21 +269,20 @@ func ValidateGranularity(p *GranularityReview) error {
 	return nil
 }
 func (s *State) readinessProposal() (string, *GranularityReview) {
+	series := s.ReviewSeries.StartReadiness
+	if s.effectivePass(series) {
+		for _, candidate := range series.RawCandidates {
+			if candidate.ResultDigest != series.Effective.ResultDigest {
+				continue
+			}
+			result := s.Results[candidate.DispatchID]
+			if result.Review != nil && result.Review.Action == review.StartReadiness {
+				return candidate.DispatchID, result.Review.GranularityReview
+			}
+		}
+	}
 	if !s.FlowNodeEnabled("start-readiness") {
 		return s.preparedDevelopmentPlan()
-	}
-	series := s.ReviewSeries.StartReadiness
-	if !s.effectivePass(series) {
-		return "", nil
-	}
-	for _, candidate := range series.RawCandidates {
-		if candidate.ResultDigest != series.Effective.ResultDigest {
-			continue
-		}
-		result := s.Results[candidate.DispatchID]
-		if result.Review != nil && result.Review.Action == review.StartReadiness {
-			return candidate.DispatchID, result.Review.GranularityReview
-		}
 	}
 	return "", nil
 }
@@ -323,7 +322,7 @@ func (s *State) readinessPreparationReady() bool {
 	if !s.FlowNodeEnabled("development") || s.SliceChild != nil {
 		return true
 	}
-	_, plan := s.preparedDevelopmentPlan()
+	_, plan := s.readinessProposal()
 	return plan != nil
 }
 
@@ -331,7 +330,7 @@ func (s *State) developmentPlanTasks(cd *compiler.CompiledDefinition) []decision
 	if s.FlowNodeEnabled("start-readiness") || !s.FlowNodeEnabled("development") || s.SliceChild != nil || !pipelineEnabled(s, cd) || !s.PreDevelopmentReviewsSatisfied() || !s.validationRequirementCurrent() || s.requirementChangePending() || s.abortRequested() {
 		return nil
 	}
-	if _, plan := s.preparedDevelopmentPlan(); plan != nil {
+	if _, plan := s.readinessProposal(); plan != nil {
 		return nil
 	}
 	if _, registered := pipelineStep(cd, "engine.development.plan.v1"); !registered {
@@ -362,7 +361,17 @@ func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) 
 func planTaskScope(plan *GranularityReview, id string) string {
 	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
 }
+func (s *State) routeConfigurationState(route RouteDecision) *State {
+	if route.Configuration == nil {
+		return s
+	}
+	projected := *s
+	projected.FlowSelection = route.Configuration.Configuration.FlowSelection
+	return &projected
+}
+
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
+	s = s.routeConfigurationState(route)
 	if !s.FlowNodeEnabled("development") {
 		return nil, validationError("development is disabled for this run")
 	}
@@ -426,12 +435,12 @@ func (s *State) splitPlanPreview(cd *compiler.CompiledDefinition, topology Topol
 	}
 	projected := *s
 	projected.Topology = binding
-	projected.RouteMode = routeModeMerge
+	projected.RouteConfirmed = true
 	_, proposal := projected.readinessProposal()
 	if err := projected.validateSplitPlan(proposal); err != nil {
 		return nil, err
 	}
-	return projected.developmentPlanPreview(cd, RouteDecision{Mode: routeModeMerge, Gates: mergeRouteGates()})
+	return projected.developmentPlanPreview(cd, RouteDecision{Gates: mergeRouteGates(), Selected: mergeRouteGates()})
 }
 
 // SliceDevelopmentPlan projects only the original confirmed master's ownership.
@@ -534,6 +543,12 @@ func (e *Engine) DevelopmentPlan(route RouteDecision, topology ...TopologyDecisi
 	}
 	if len(topology) == 1 {
 		return s.splitPlanPreview(e.cfg.Definition, topology[0])
+	}
+	if route.Configuration != nil {
+		proposed := s.routeConfigurationState(route)
+		if !proposed.FlowNodeEnabled("development") || proposed.Topology == nil || !proposed.PreDevelopmentReviewsSatisfied() || !proposed.readinessPreparationReady() {
+			return nil, nil
+		}
 	}
 	return s.developmentPlanPreview(e.cfg.Definition, route)
 }
@@ -805,6 +820,7 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 	return input
 }
 func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error {
+	s = s.routeConfigurationState(*route)
 	if !s.FlowNodeEnabled("development") {
 		if route.DevelopmentPlan != nil {
 			return validationError("a disabled development node has no plan confirmation")

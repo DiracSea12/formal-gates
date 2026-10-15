@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -648,7 +649,7 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 		if requested, err := child.RequestWorkflowChoice(); err != nil || !requested {
 			t.Fatal("normal child has no original route choice", requested, err)
 		}
-		candidate, err := child.PrepareControl(facade.ControlInput{Ask: 1, Choice: "full", Reason: "Validate the complete original child responsibility"})
+		candidate, err := child.PrepareControl(facade.ControlInput{Ask: 1, Choice: "approve", Reason: "Validate the complete original child responsibility"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -974,4 +975,177 @@ func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWorkflowWorkerWaitsForOriginalExitAfterResult(t *testing.T) {
+	previous := facade.NativeSourceVerifier
+	facade.NativeSourceVerifier = harness.NativeResultEvidence
+	t.Cleanup(func() { facade.NativeSourceVerifier = previous })
+	f, root, ref, directory := workflowStartFixture(t)
+	_, _, _, finished, err := startWorkflowWorker(context.Background(), f, ref, protocol.HostActionIntent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowCompletedSource(t, directory)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- executeWorkflowWorker(ctx, ctx, f, ref, protocol.HostActionIntent{}) }()
+	select {
+	case err := <-done:
+		t.Fatalf("worker returned before its original exit receipt: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	stopWorkflowSupervisor(t, directory, finished)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	assertWorkflowResultAndCost(t, f, root, ref, directory)
+}
+
+func TestWorkflowWorkerRecoversOriginalCostPendingResult(t *testing.T) {
+	for _, reopen := range []bool{false, true} {
+		t.Run(fmt.Sprint("reopen=", reopen), func(t *testing.T) {
+			previousStart, previousSource := facade.NativeStartVerifier, facade.NativeSourceVerifier
+			facade.NativeStartVerifier, facade.NativeSourceVerifier = harness.NativeStartEvidence, harness.NativeResultEvidence
+			t.Cleanup(func() { facade.NativeStartVerifier, facade.NativeSourceVerifier = previousStart, previousSource })
+			f, root, ref, directory := workflowStartFixture(t)
+			_, _, _, finished, err := startWorkflowWorker(context.Background(), f, ref, protocol.HostActionIntent{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := workflowCompletedSource(t, directory)
+			if err := acceptWorkflowWorker(f, ref, protocol.HostActionIntent{}, directory, source); err != nil {
+				t.Fatal(err)
+			}
+			stored := workflowStoredState(t, root)
+			if stored.Events[string(facade.WorkerResultEventID(ref, ""))].Acceptance.Status != protocol.StatusCostPending || stored.StagedResults[ref.ActionID].Outcome != protocol.OutcomePass || stored.Results[ref.ActionID].Outcome != "" || stored.Cost == nil || len(stored.Cost.Dispatches) != 0 {
+				t.Fatal("early original result was not held without charging or completing", stored.StagedResults, stored.Cost)
+			}
+			if _, _, _, _, err := f.WorkerExecutionRequest(ref, ""); err == nil {
+				t.Fatal("delivered pending result permitted another execution request")
+			}
+			stopWorkflowSupervisor(t, directory, finished)
+			if reopen {
+				f, err = facade.Open(root, "consumer")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				if _, err := f.Drive(); err != nil {
+					t.Fatal(err)
+				}
+				assertWorkflowResultAndCost(t, f, root, ref, directory)
+			}
+		})
+	}
+}
+
+// The fixture supplies a native terminal stream and submits the actual semantic
+// tool call while the original supervisor remains alive without its exit receipt.
+func workflowCompletedSource(t *testing.T, directory string) map[string]any {
+	t.Helper()
+	var request map[string]any
+	if err := readJSONFileInto(filepath.Join(directory, "native-request.json"), &request); err != nil {
+		t.Fatal(err)
+	}
+	var identity map[string]any
+	if err := readJSONFileInto(filepath.Join(directory, "identity.json"), &identity); err != nil {
+		t.Fatal(err)
+	}
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"submit_semantics","arguments":{"findings":[]}}}`
+	var out, errout bytes.Buffer
+	if code := harness.NativeTools(directory, strings.NewReader(call), &out, &errout, harness.ExecutionServices{Admit: facade.AdmitExecution}); code != 0 {
+		t.Fatal("native semantic tool failed", code, errout.String())
+	}
+	var reply struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &reply); err != nil || reply.Result.IsError {
+		t.Fatal("original semantic call was rejected", out.String(), err)
+	}
+	selection := map[string]any{"model": nil, "reasoning_effort": nil}
+	terminal := map[string]any{"type": "result", "subtype": "success", "uuid": "controlled-result", "session_id": identity["identity"], "is_error": false}
+	events := []any{map[string]any{"type": "system", "subtype": "init", "session_id": identity["identity"], "cwd": request["workspace"]}, terminal}
+	var stream bytes.Buffer
+	for _, event := range events {
+		if err := json.NewEncoder(&stream).Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWriteCLI(t, filepath.Join(directory, "native-events.jsonl"), stream.String())
+	mustWriteCLI(t, filepath.Join(directory, "answer.json"), `{"findings":[]}`)
+	mustWriteCLI(t, filepath.Join(directory, "native-usage.json"), `[{"id":"controlled-response","session_id":"controlled-session","providerData":{"usage":{"inputTokens":120,"outputTokens":30,"inputTokensDetails":[{"cached_tokens":20}]}}}]`)
+	if err := writeInvocationFile(filepath.Join(directory, "native-source.json"), map[string]any{"sessionId": identity["identity"], "workspace": request["workspace"], "selection": selection, "process": map[string]any{"exit_code": 0, "error": ""}}); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]any{}
+	for _, name := range []string{"native-source.json", "native-events.jsonl", "answer.json", "native-usage.json", "native-tool-calls.jsonl", "native-tool-context.json"} {
+		body, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = map[string]any{"sha256": fmt.Sprintf("%x", sha256.Sum256(body)), "size": len(body)}
+	}
+	source := map[string]any{"provider": request["provider"], "identity": identity["identity"], "selection": selection, "native_result": terminal, "usage_evidence": nil, "transcript": filepath.Join(directory, "native-usage.json"), "files": files}
+	if err := writeInvocationFile(filepath.Join(directory, "source.json"), source); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := harness.NativeJobSource(request["provider"].(string), directory)
+	if err != nil {
+		t.Fatal("original source did not pass its real provider verifier", err)
+	}
+	return verified
+}
+
+func stopWorkflowSupervisor(t *testing.T, directory string, finished <-chan error) {
+	t.Helper()
+	var process map[string]any
+	if err := readJSONFileInto(filepath.Join(directory, "process.json"), &process); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := os.FindProcess(int(process["pid"].(float64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertWorkflowResultAndCost(t *testing.T, f *facade.Facade, root string, ref facade.WorkerMaterial, directory string) {
+	t.Helper()
+	s := workflowStoredState(t, root)
+	entry := s.Cost.Dispatches[ref.ActionID]
+	if s.Results[ref.ActionID].Outcome != protocol.OutcomePass || s.StagedResults[ref.ActionID].Outcome != "" || s.Events["native-stopped:"+ref.Digest+":"].Acceptance.Status != "ACCEPTED" || len(s.Cost.Dispatches) != 1 || entry.TotalInputTokens != 120 || entry.InputCacheHitTokens != 20 || entry.InputCacheMissTokens != 100 || entry.OutputTokens != 30 || s.Cost.TotalInputTokens != 120 || s.Cost.OutputTokens != 30 {
+		t.Fatal("original result/stop/exact cost did not close once", s.Results[ref.ActionID], s.StagedResults[ref.ActionID], entry, s.Cost)
+	}
+	calls, err := os.ReadFile(filepath.Join(root, "supervisor-calls"))
+	if err != nil || string(calls) != "harness|supervise|"+directory+"\n" {
+		t.Fatal("original invocation was repeated", string(calls), err)
+	}
+	if _, _, _, _, err := f.WorkerExecutionRequest(ref, ""); err == nil {
+		t.Fatal("completed result permitted another execution request")
+	}
+}
+
+func workflowStoredState(t *testing.T, root string) protocol.State {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "consumer", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Content protocol.State `json:"content"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	return stored.Content
 }

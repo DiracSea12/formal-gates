@@ -606,7 +606,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 		}
 	}
 	s.projectDevelopmentPlanTasks(view, cd)
-	if !s.validationRequirementCurrent() || s.Topology == nil || s.RouteMode == "" {
+	if !s.validationRequirementCurrent() || s.Topology == nil || !s.RouteConfirmed {
 		return
 	}
 	v := s.Validation
@@ -704,11 +704,17 @@ func (s *State) coverageContract(candidate *coverage.ValidationCandidate) covera
 func (s *State) validationRouteDigest() string {
 	gates := slices.Clone(s.SelectedGates)
 	slices.Sort(gates)
+	disabled := []string{}
+	if s.FlowSelection != nil {
+		disabled = append(disabled, s.FlowSelection.Disabled...)
+	}
+	slices.Sort(disabled)
 	return digestOfCanonical(struct {
-		Route    string
-		Gates    []string
-		Topology *TopologyBinding
-	}{s.RouteMode, gates, s.Topology})
+		Confirmed bool
+		Gates     []string
+		Topology  *TopologyBinding
+		Disabled  []string
+	}{s.RouteConfirmed, gates, s.Topology, disabled})
 }
 
 // automaticValidationWaveLimit 是不经逐次授权的返修轮数上限：计满后每轮

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
+	"slices"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -305,21 +305,18 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 }
 
 func TestRouteControlUsesOfferedCatalogAndOriginalPlan(t *testing.T) {
-	for _, mode := range []string{"full", "custom"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, gates := range [][]int{{1, 2, 3}, {3}, {}} {
+		t.Run(fmt.Sprint(gates), func(t *testing.T) {
 			d := startValidationDriver(t, nil)
 			passPreDevelopmentReviews(t, d, commandPlan())
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 			offered := []string{"blackbox", "whitebox", "quality"}
-			request, err := protocol.NewRouteRequestEvent(d.eventID(), offered, protocol.AskOption{ID: protocol.AskOptionID(mode), Label: mode})
+			request, err := protocol.NewRouteRequestEvent(d.eventID(), offered, protocol.AskOption{ID: "approve", Label: "Confirm"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			d.submit(request)
-			input := ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: mode}
-			if mode == "custom" {
-				input.Gates = []int{3}
-			}
+			input := ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve", Gates: gates}
 			candidate, err := d.f.PrepareControl(input)
 			if err != nil {
 				t.Fatal(err)
@@ -328,7 +325,8 @@ func TestRouteControlUsesOfferedCatalogAndOriginalPlan(t *testing.T) {
 			if !reflect.DeepEqual(route.Gates, offered) || candidate.DevelopmentPlan == nil || route.DevelopmentPlan == nil || *route.DevelopmentPlan != candidate.DevelopmentPlan.Confirmation {
 				t.Fatal("route lost the original complete catalog or exact plan binding")
 			}
-			if mode == "custom" && !reflect.DeepEqual(route.Selected, []string{"quality"}) {
+			want, err := selectStrings(offered, gates, "gate")
+			if err != nil || !reflect.DeepEqual(route.Selected, want) {
 				t.Fatal("selected gate position did not resolve its original offered identity")
 			}
 			if _, _, err := d.f.SubmitControl(candidate); err != nil {
@@ -368,7 +366,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	if !reflect.DeepEqual(automatic.RouteGates, catalog) {
 		t.Fatal("automatic request differs from the installed catalog")
 	}
-	initial, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{3}})
+	initial, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve", Gates: []int{3}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +380,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	if len(before.PendingHostActions) != 1 {
 		t.Fatal("reselection requires the unobserved development workspace")
 	}
-	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: []int{3, 4}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +392,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 		t.Fatal(err)
 	}
 	d.run = run
-	choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{3, 4}})
+	choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +434,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 	}
 }
 
-func TestRouteRequestPreservesDevelopedRouteConstraints(t *testing.T) {
+func TestRouteRequestAppliesConfirmedGateChangesDuringDevelopment(t *testing.T) {
 	d := startValidationDriver(t, nil)
 	catalog, err := prompts.PackageRouteCandidates(d.f.admission.Target)
 	if err != nil || len(catalog) < 4 {
@@ -446,52 +444,45 @@ func TestRouteRequestPreservesDevelopedRouteConstraints(t *testing.T) {
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
 	d.confirmRoute(routeDecisionForGates([]string{catalog[2]}))
 	d.drive()
-	action, _ := d.action("engine.development.batch.v6")
-	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, d.run, err = d.f.SubmitControl(request); err != nil {
-		t.Fatal(err)
-	}
-	for _, gates := range [][]int{{4}, {1, 3}, {2, 3}} {
-		choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: gates})
+	action, in := d.action("engine.development.batch.v6")
+	for _, gates := range [][]int{{4}, {1, 3}, {2, 3}, {3, 4}, {}} {
+		request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: gates})
 		if err != nil {
 			t.Fatal(err)
 		}
-		before := driverState(t, d)
-		if _, _, err := d.f.SubmitControl(choice); err == nil || !strings.Contains(err.Error(), "development has started") {
-			t.Fatal("non-additive route was not rejected by the original owner", gates, err)
+		if _, d.run, err = d.f.SubmitControl(request); err != nil {
+			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(before, driverState(t, d)) {
-			t.Fatal("rejected route decision changed authoritative state")
+		choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "custom", Gates: []int{3, 4}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, d.run, err = d.f.SubmitControl(choice); err != nil || !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[2:4]) {
-		t.Fatal("ordinary gate addition was not accepted", err)
-	}
-	if _, ok := d.run.PendingActions[action]; !ok {
-		t.Fatal("route addition replaced the current development attempt")
+		if _, d.run, err = d.f.SubmitControl(choice); err != nil {
+			t.Fatal("confirmed route change was not accepted", gates, err)
+		}
+		want, err := selectStrings(catalog, gates, "gate")
+		if err != nil || !slices.Equal(d.run.Review.SelectedGates, want) {
+			t.Fatal("route change lost the selected obligations", gates, d.run.Review.SelectedGates, err)
+		}
+		if current, ok := d.run.PendingActions[action]; !ok || current.Task != in.Binding.Task {
+			t.Fatal("validation selection replaced the current development attempt")
+		}
 	}
 }
 
-func TestRouteRequestUsesChildCatalogAndKeepsMergeMasterLocked(t *testing.T) {
+func TestRouteRequestUsesChildCatalogAndKeepsTopologyOwnedMergeDuties(t *testing.T) {
 	master, child := controlChildren(t)
 	before := driverState(t, master)
-	if _, err := master.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute}); err == nil {
-		t.Fatal("merge master opened ordinary route selection")
+	configuration, err := master.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})
+	if err != nil || configuration.Event.Request.Configuration == nil {
+		t.Fatal("merge master did not prepare its current configuration", err)
 	}
 	if !reflect.DeepEqual(before, driverState(t, master)) {
-		t.Fatal("rejected merge preview changed state")
+		t.Fatal("configuration preview changed state")
 	}
 	if offered, err := child.f.RequestWorkflowChoice(); err != nil || !offered {
 		t.Fatal("child initial route was not offered", offered, err)
 	}
-	var err error
 	child.run, err = child.f.Show()
 	if err != nil {
 		t.Fatal(err)
@@ -504,7 +495,7 @@ func TestRouteRequestUsesChildCatalogAndKeepsMergeMasterLocked(t *testing.T) {
 	if !reflect.DeepEqual(initial.RouteGates, catalog[2:]) {
 		t.Fatal("child catalog lost ordinary gates or retained QA")
 	}
-	choice, err := child.f.PrepareControl(ControlInput{Ask: askPosition(t, child.run, protocol.ControlSelectRoute), Choice: "full"})
+	choice, err := child.f.PrepareControl(ControlInput{Ask: askPosition(t, child.run, protocol.ControlSelectRoute), Choice: "approve"})
 	if err != nil {
 		t.Fatal(err)
 	}

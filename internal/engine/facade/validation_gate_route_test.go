@@ -12,23 +12,18 @@ import (
 
 // Gate-only routes keep their confirmed identity and execute exactly their ordinary gates.
 func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
-	for _, mode := range []string{"default", "custom"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, selected := range [][]string{{"quality", "security"}, {"quality"}} {
+		t.Run(strings.Join(selected, ","), func(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
 			passPreDevelopmentReviews(t, d, commandPlan())
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
-			route := protocol.RouteDecision{Mode: mode, Gates: []string{"blackbox", "quality", "whitebox", "security"}}
-			selected := []string{"quality", "security"}
-			if mode == "custom" {
-				route.Selected = []string{"quality"}
-				selected = route.Selected
-			}
+			route := protocol.RouteDecision{Gates: []string{"blackbox", "quality", "whitebox", "security"}, Selected: selected}
 			d.confirmRoute(route)
 			d.reopen()
-			if d.run.Review.RouteMode != mode || !slices.Equal(d.run.Review.SelectedGates, selected) {
-				t.Fatalf("confirmed route = %s %v", d.run.Review.RouteMode, d.run.Review.SelectedGates)
+			if !d.run.Review.RouteConfirmed || !slices.Equal(d.run.Review.SelectedGates, selected) {
+				t.Fatalf("confirmed route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 			}
 			d.drive()
 			id, in := d.action("engine.development.batch.v6")
@@ -72,8 +67,8 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 				t.Fatalf("gate-only run status = %s", d.run.Status)
 			}
 			state := driverState(t, d)
-			if state.RouteMode != mode || !slices.Equal(state.SelectedGates, selected) {
-				t.Fatalf("persisted completed route = %s %v", state.RouteMode, state.SelectedGates)
+			if !state.RouteConfirmed || !slices.Equal(state.SelectedGates, selected) {
+				t.Fatalf("persisted completed route = %t %v", state.RouteConfirmed, state.SelectedGates)
 			}
 			for id, entry := range state.Cost.Dispatches {
 				if strings.Contains(entry.Target, "qa.") {
@@ -95,17 +90,17 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 	}
 }
 
-func TestDefaultRouteRequiresConfirmedDevelopmentPlan(t *testing.T) {
+func TestGateSelectionRequiresConfirmedDevelopmentPlan(t *testing.T) {
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
-	route := protocol.RouteDecision{Mode: "default", Gates: []string{"blackbox", "whitebox", "quality"}}
-	if err := controlError(t, d, protocol.ControlSelectRoute, "default", protocol.ReviewDecisionPayload{Route: &route}); err == nil || !strings.Contains(err.Error(), "plan") {
-		t.Fatalf("unconfirmed default development plan = %v", err)
+	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality"}, Selected: []string{"quality"}}
+	if err := controlError(t, d, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err == nil || !strings.Contains(err.Error(), "plan") {
+		t.Fatalf("unconfirmed development plan = %v", err)
 	}
 	d.reopen()
 	state := driverState(t, d)
-	if state.RouteMode != "" || len(state.SelectedGates) != 0 {
-		t.Fatalf("unconfirmed plan bound default route: %s %v", state.RouteMode, state.SelectedGates)
+	if state.RouteConfirmed || len(state.SelectedGates) != 0 {
+		t.Fatalf("unconfirmed plan bound gate selection: %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 }

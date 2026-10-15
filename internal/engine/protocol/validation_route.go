@@ -6,32 +6,6 @@ import (
 	"formal-gates/internal/engine/coverage"
 )
 
-func (e *Engine) validateRouteChange(s *State, selected []string) error {
-	if !pipelineEnabled(s, e.cfg.Definition) || s.Validation == nil {
-		return nil
-	}
-	started := false
-	for _, binding := range s.DispatchBindings {
-		if s.validationRole(binding.Task, e.cfg.Definition) == "engine.development.batch.v6" {
-			started = true
-		}
-	}
-	if !started {
-		return nil
-	}
-	for _, gate := range s.SelectedGates {
-		if !slices.Contains(selected, gate) {
-			return validationError("development has started; route cannot remove an existing obligation")
-		}
-	}
-	for _, gate := range selected {
-		if !slices.Contains(s.SelectedGates, gate) && (slices.Contains([]string{"blackbox", "whitebox"}, gate) || slices.Contains(reservedRouteGates, gate)) {
-			return validationError("development has started; route can add only ordinary gates")
-		}
-	}
-	return nil
-}
-
 // Validation invalidation does not itself retire the unique repair duty.
 // Route continuity or explicit requirement carry may retain its signed Attempt;
 // THAW, replacement and disposition retire that Attempt through their owners.
@@ -96,6 +70,10 @@ func (e *Engine) rebindValidationRoute(s *State) {
 	}
 	e.retireValidationWave(s, w.ID, "confirmed route changed the validation obligation")
 	if s.Validation.Candidate != nil {
+		if s.validateFinalCoverage() != nil {
+			s.Validation.Candidate = nil
+			return
+		}
 		e.freezeValidationWave(s, w.Scope, "", w.SourceTasks)
 	}
 }

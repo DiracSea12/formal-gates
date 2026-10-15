@@ -217,7 +217,7 @@ regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定�
 传递原对象与工件绑定，不要求模型手抄 identity/digest。`start` 校验确认来源、当前工件
 与结构一致，旧 receipt 配当前不同工件在首写前拒绝。
 
-若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和 default/full/custom 路线，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
+若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和普通门确认，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
 
 ### 4.2 正常 Ask
 
@@ -225,10 +225,10 @@ regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定�
 
 1. lightweight/regular（尚未明确时）；
 2. 高置信拆分建议的精确拓扑，包括边界、数量、依赖和并行度；
-3. regular 非分片 run 和每个 child 的 default/full/custom 路线：非分片 default 选择全部普通门、不含双 QA；full 选择全部普通门与双 QA（QA 阶段较重，适合大型任务）；custom 可选非空子集或全集并保留身份。child 不含普通 QA，default/full 均选择全部普通门。来源为 `references/formal-flow.md` 与当前 `internal/engine/protocol/review.go`；推荐仍须用户确认。
+3. regular 非分片 run 和每个 child 的门与开发计划确认：Ask 钉住当前完整候选门目录，按启动时冻结的命名配置预选普通门与 QA，可改选任意子集（含空集）或全集。初始仅有“默认”配置，主节点启用、无普通 QA、全普通门、执行选择继承宿主；配置同时保存流程节点及各组的平台/模型/推理强度，黑盒与白盒各为一组。child 候选不含普通 QA，各自独立确认；推荐仍须用户确认。
 4. 经 Operator 核实成立的产品审/技术审每条 P0–P3 finding 的 confirm/dismiss，以及对已接纳 review finding/adjudication 的语义纠正；Ask 已附唯一完整 remedy 时 confirm 同时批准 remedy，存在多个用户拥有的修法或纠正选项时继续澄清并按 §5.1 确认完整候选的 review-delta。
 
-child 路线可在界面批量接受统一默认，但状态中逐 child 保存独立决定。低置信不拆或不确定由引擎自动记录 no-split 理由，不制造无意义 Ask。
+命名配置同时保存流程节点与各执行组 tuple；运行中可明确选择保存配置或编辑本次节点，复用 SELECT_ROUTE 的完整配置、候选与 continuation 影响确认。修改默认不自动传播；启用过去或跳过节点后沿原节点继续。child 路线可在界面批量接受统一默认，但状态中逐 child 保存独立决定。低置信不拆或不确定由引擎自动记录 no-split 理由，不制造无意义 Ask。
 
 ### 4.3 条件 Ask
 
@@ -410,7 +410,7 @@ Controller/validator 负责结构校验，覆盖率、mutation、property-based 
 
 `start` 不接受也不冻结拆分意向（取消 `--split` 强制声明）。拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认：高置信要拆时 Ask 精确拓扑，低置信不拆或不确定由 engine 自动记录 no-split 理由。拓扑确认即绑定点——确认前用户可改变意向、无需重启或 reset；确认后不得重切，变更走用户需求变化、reset/rebuild 或 abort。
 
-master 确认拓扑后，Controller 执行固定 child-creation plan：ENGINE_LOCAL 持久化 intent、分配 childRunID、创建 PREPARING child state 并注入 bindings；每个 Git/SVN/P4 workspace/client 再由 VCS adapter 独立 StepSpec 创建/对账；ENGINE 校验全部 typed receipts/identity 后，才原子提交 `sliceID -> childRunID` map 并解锁 child。child 继承完整产品/技术审和拓扑，各自持久化 default/full/custom 路线；只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。
+master 确认拓扑后，Controller 执行固定 child-creation plan：ENGINE_LOCAL 持久化 intent、分配 childRunID、创建 PREPARING child state 并注入 bindings；每个 Git/SVN/P4 workspace/client 再由 VCS adapter 独立 StepSpec 创建/对账；ENGINE 校验全部 typed receipts/identity 后，才原子提交 `sliceID -> childRunID` map 并解锁 child。child 继承完整产品/技术审和拓扑，各自持久化所选普通门与精确开发计划；只开发并执行所选普通门，不选择、不执行普通黑盒/白盒 QA。
 
 child 达标后进入可恢复 `SLICE_READY`，不独立最终 SEALED、不删除恢复信息。durable receipt 至少包含：
 

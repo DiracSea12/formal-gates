@@ -130,7 +130,7 @@ func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validation
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: d.revision, git: f.vcs}
-	child.confirmSliceRoute(protocol.RouteDecision{Mode: "default", Gates: []string{"quality"}}, sliceLanePlan())
+	child.confirmSliceRoute(protocol.RouteDecision{Gates: []string{"quality"}, Selected: []string{"quality"}}, sliceLanePlan())
 
 	child.drive()
 	id, input := planBatchAction(child, "command")

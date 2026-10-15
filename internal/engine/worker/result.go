@@ -150,8 +150,7 @@ func (item *Check) UnmarshalJSON(raw []byte) error {
 }
 
 type RouteProposal struct {
-	Mode     string `json:"mode"`
-	Selected []int  `json:"selected,omitempty"`
+	Selected []int `json:"selected"`
 }
 type Completion struct {
 	DoD          []string `json:"dod"`

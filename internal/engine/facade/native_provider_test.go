@@ -799,9 +799,8 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					}
 					child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 					reopenNativeProviderDriver(t, child, name, runner)
-					route := protocol.RouteDecision{Mode: "full", Gates: []string{"quality", "security"}}
+					route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
 					if index == 1 {
-						route.Mode = "custom"
 						route.Selected = []string{"quality"}
 					}
 					development := sliceLanePlan()

@@ -239,7 +239,7 @@ func TestNextWorkflowChoiceRetainsOriginalUserConfirmation(t *testing.T) {
 	s.ReviewSeries.ProductReview.Effective = review.EffectiveStatus{Status: "PASS", RequirementRevision: "rev-1"}
 	s.ReviewSeries.StartReadiness.Effective = review.EffectiveStatus{Status: "PASS", RequirementRevision: "rev-1"}
 	s.Topology = nil
-	s.RouteMode = ""
+	s.RouteConfirmed = false
 	if s.NextWorkflowChoice(e.cfg.Definition) != ControlConfirmTopology {
 		t.Fatal("missing original topology confirmation")
 	}

@@ -553,6 +553,10 @@ func (f *Facade) RequestWorkflowChoice() (bool, error) {
 			return false, loadErr
 		}
 		event, err = protocol.NewRouteRequestEvent(id, request.RouteGates, request.Options...)
+		if err == nil && snap.State.RouteConfigurationRequired() {
+			configuration := snap.State.EffectiveConfiguration()
+			event.Request.Configuration = &configuration
+		}
 	}
 	if err != nil {
 		return false, err
@@ -973,7 +977,7 @@ func (f *Facade) routeRequestPayload(child bool) (*protocol.RequestPayload, erro
 	if child {
 		candidates = slices.DeleteFunc(candidates, func(id string) bool { return id == "blackbox" || id == "whitebox" })
 	}
-	return &protocol.RequestPayload{Control: protocol.ControlSelectRoute, RouteGates: candidates, Options: []protocol.AskOption{{ID: "full", Label: "Run all proposed gates"}, {ID: "custom", Label: "Choose the proposed gates"}}}, nil
+	return &protocol.RequestPayload{Control: protocol.ControlSelectRoute, RouteGates: candidates, Options: []protocol.AskOption{{ID: "approve", Label: "Confirm the selected gates and development plan"}}}, nil
 }
 
 func (f *Facade) originalWorkerMaterials() (map[WorkerMaterial]worker.Material, error) {
