@@ -247,6 +247,9 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	} else if !os.IsNotExist(ownerErr) {
 		return release, ownerErr
 	} else {
+		if binding.ResumeActionID != "" && snap.State.HostActionReceipts[binding.ResumeActionID].Status != "" {
+			return release, fmt.Errorf("worker resume is already executed; observe its original claimed invocation")
+		}
 		catalog, err := prompts.LoadPromptCatalog(f.admission.Target)
 		if err != nil {
 			return release, err
@@ -346,7 +349,7 @@ func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID 
 		invocations, err = claimedWorkerInvocations(f.root, f.runID, material.ActionID, material.AttemptID)
 		for i := range invocations {
 			invocation := &invocations[i]
-			if invocation.binding.ResumeActionID != resumeActionID || workerInvocationDelivered(snap.State, *invocation) {
+			if resumeActionID != "" && invocation.binding.ResumeActionID != resumeActionID || workerInvocationDelivered(snap.State, *invocation) {
 				continue
 			}
 			if selected != nil {
@@ -408,13 +411,26 @@ func (f *Facade) ObserveWorkerTerminal(material WorkerMaterial, identity string)
 	})
 }
 
-// ObserveWorkerStart records only the native adapter's verified live identity;
-// completed source and semantic result admission remain separate.
+// ObserveWorkerStart records the original invocation's verified start and any
+// observed exit. Native execution facts are independent of semantic results.
 func (f *Facade) ObserveWorkerStart(material WorkerMaterial, directory string, verifyStart func(string, string) (string, error)) error {
-	value, err := readWorkerMaterial(material)
+	release, err := f.acquireWriteWindow()
 	if err != nil {
 		return err
 	}
+	defer release()
+	return f.observeWorkerExecution(material, directory, verifyStart)
+}
+
+func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory string, verifyStart func(string, string) (string, error)) error {
+	invocation, err := readNativeWorkerInvocation(f.root, f.runID, directory)
+	if err != nil {
+		return err
+	}
+	if *invocation.binding.WorkerMaterial != material {
+		return fmt.Errorf("native observation differs from its original worker material")
+	}
+	value := invocation.material
 	provider := value.Input.Provider
 	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
 		provider = descriptor.InstallName
@@ -427,20 +443,78 @@ func (f *Facade) ObserveWorkerStart(material WorkerMaterial, directory string, v
 	if err != nil {
 		return err
 	}
-	if _, _, err := f.Submit(event); err != nil {
+	if _, err := f.engine.Submit(event, protocol.Observation{}); err != nil {
 		return err
 	}
-	start, err := protocol.NewLifecycleEventEvent(protocol.EventID("native-start:"+material.Digest), value.Input.Provider, identity, protocol.LifecycleStart)
+	resumeID := invocation.binding.ResumeActionID
+	correlation := identity
+	if resumeID != "" {
+		correlation = resumeID
+	}
+	start, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-start:"+material.Digest+":"+resumeID), value.Input.Provider, correlation, identity, protocol.LifecycleStart)
 	if err != nil {
 		return err
 	}
-	_, _, err = f.Submit(start)
-	if err != nil {
+	if _, err = f.engine.Submit(start, protocol.Observation{}); err != nil {
 		return err
 	}
-	return f.admission.write(func() error {
+	if err := f.admission.write(func() error {
 		return lifecycle.ObserveNativeStart(f.root, f.runID, material.ActionID, value.Input.Provider, identity)
-	})
+	}); err != nil {
+		return err
+	}
+	if resumeID != "" {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return err
+		}
+		intent := snap.State.PendingHostActions[resumeID]
+		if intent.Resume != nil {
+			if intent.Resume.WorkerActionID != material.ActionID || intent.Resume.AttemptID != material.AttemptID || intent.Resume.Identity != identity {
+				return fmt.Errorf("native resume observation differs from its original signed target")
+			}
+			event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("native-resume:"+resumeID), resumeID, protocol.HostActionResumeAgent, value.Input.Provider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: protocol.LifecycleStart})
+			if err != nil {
+				return err
+			}
+			if _, err := f.engine.Submit(event, protocol.Observation{}); err != nil {
+				return err
+			}
+		}
+	}
+	var exit struct {
+		ExitCode      *int   `json:"exit_code"`
+		RequestDigest string `json:"request_digest"`
+	}
+	body, err := os.ReadFile(filepath.Join(directory, "exit.json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, &exit); err != nil || exit.ExitCode == nil {
+		return fmt.Errorf("native terminal observation requires its original exit receipt")
+	}
+	var process struct {
+		RequestDigest string `json:"request_digest"`
+	}
+	body, err = os.ReadFile(filepath.Join(directory, "process.json"))
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, &process); err != nil || process.RequestDigest == "" || exit.RequestDigest != process.RequestDigest {
+		return fmt.Errorf("native terminal observation differs from its original owned process")
+	}
+	if err := f.ObserveWorkerTerminal(material, identity); err != nil {
+		return err
+	}
+	stop, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-stopped:"+material.Digest+":"+resumeID), value.Input.Provider, correlation, identity, protocol.LifecycleStop)
+	if err != nil {
+		return err
+	}
+	_, err = f.engine.Submit(stop, protocol.Observation{})
+	return err
 }
 
 // RequestWorkflowChoice creates only an original control Ask. The current

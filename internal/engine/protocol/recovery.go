@@ -487,6 +487,23 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
 	}
+	if intent, pending := state.PendingHostActions[actionID]; pending && intent.Resume != nil {
+		_, obsolete := state.ObsoleteActions[intent.Resume.WorkerActionID]
+		if state.abortRequested() || state.resetPending() || obsolete || state.NodeContinuationWithdraws(intent) {
+			for _, fact := range e.facts().Facts {
+				if fact.Source == decision.SourceHost && fact.Key == "native-invocation:"+actionID && fact.Value == "UNCLAIMED" {
+					digest, err := e.sourceFacts.Digest()
+					if err != nil || digest != observationDigest {
+						return RecoveryPlan{}, 0, validationError("resume withdrawal requires its original invocation observation")
+					}
+					state.retireNative(intent, "WITHDRAWN", observationDigest, nil, revision+1)
+					plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "unclaimed resume withdrawn from its original native invocation"}
+					committed, _, err := e.commitEffects(state, revision, input, nil)
+					return plan, committed, err
+				}
+			}
+		}
+	}
 	if len(observations) == 1 && (state.abortRequested() || state.resetPending() || state.NodeContinuationWithdraws(state.PendingHostActions[actionID]) || state.WorkspaceMirrorSuperseded(state.PendingHostActions[actionID], e.cfg.Definition)) && observations[0].Resource != nil && observations[0].Promotion == nil {
 		intent, ok := state.PendingHostActions[actionID]
 		observation := observations[0]

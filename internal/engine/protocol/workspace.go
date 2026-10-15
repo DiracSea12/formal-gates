@@ -291,7 +291,10 @@ func (s *State) retireNative(intent HostActionIntent, status, digest string, obs
 	if _, pending := s.PendingHostActions[intent.ActionID]; !pending {
 		return
 	}
-	effect := ReconciledEffect{UnknownReceipt: s.ReconciledEffects[intent.ActionID].UnknownReceipt, Intent: &intent, ActionID: intent.ActionID, Operation: intent.Operation, AdapterOperation: intent.Adapter.Operation, ObservationDigest: digest, Status: status, Revision: revision}
+	effect := ReconciledEffect{UnknownReceipt: s.ReconciledEffects[intent.ActionID].UnknownReceipt, Intent: &intent, ActionID: intent.ActionID, Operation: intent.Operation, ObservationDigest: digest, Status: status, Revision: revision}
+	if intent.Adapter != nil {
+		effect.AdapterOperation = intent.Adapter.Operation
+	}
 	if observation != nil {
 		effect.Promotion, effect.Resource = observation.Promotion, observation.Resource
 	}

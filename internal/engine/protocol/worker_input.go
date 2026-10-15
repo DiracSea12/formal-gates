@@ -28,12 +28,12 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 		}
 		return input, "", nil
 	}
-	intent, issued := s.PendingHostActions[resumeActionID]
+	intent, issued := s.hostIntent(resumeActionID)
 	if !issued || intent.Operation != HostActionResumeAgent || intent.Resume == nil || intent.Resume.WorkerActionID != actionID || intent.Resume.AttemptID != attemptID {
 		return WorkerInput{}, "", fmt.Errorf("worker resume has no matching issued intent")
 	}
-	if _, consumed := s.HostActionReceipts[resumeActionID]; consumed {
-		return WorkerInput{}, "", fmt.Errorf("worker resume intent is already consumed")
+	if _, pending := s.PendingHostActions[resumeActionID]; !pending && s.HostActionReceipts[resumeActionID].Status != HostActionStatusExecuted {
+		return WorkerInput{}, "", fmt.Errorf("worker resume has no observed original execution")
 	}
 	receipt, known := s.SpawnReceipts[actionID]
 	if !known || !inflightWitnessReceipt(receipt.Status) || receipt.agentIdentity() != intent.Resume.Identity {

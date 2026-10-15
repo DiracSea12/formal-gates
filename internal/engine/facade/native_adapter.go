@@ -16,6 +16,7 @@ import (
 	"formal-gates/internal/engine/authoring"
 
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 )
@@ -25,14 +26,14 @@ import (
 // uses the same typed admission after ordinary execution
 // and observation of an operation whose process response was lost.
 func (f *Facade) driveNative() (bool, error) {
-	if f.vcs == nil {
-		return false, nil
-	}
 	snap, err := f.engine.Load()
 	if err != nil {
 		return false, err
 	}
-	if snap.State.NativeRoot == "" {
+	if progress, err := f.observeWorkerResumes(snap.State); progress || err != nil {
+		return progress, err
+	}
+	if f.vcs == nil || snap.State.NativeRoot == "" {
 		return false, nil
 	}
 	ids := make([]string, 0, len(snap.State.PendingHostActions))
@@ -64,6 +65,95 @@ func (f *Facade) driveNative() (bool, error) {
 				return progressed, err
 			}
 
+		}
+	}
+	return false, nil
+}
+
+func (f *Facade) observeWorkerResumes(state *protocol.State) (bool, error) {
+	intents := map[string]protocol.HostActionIntent{}
+	for id, intent := range state.PendingHostActions {
+		if intent.Resume != nil {
+			intents[id] = intent
+		}
+	}
+	for id, effect := range state.ReconciledEffects {
+		if effect.Intent != nil && effect.Intent.Resume != nil && effect.Status == "FULFILLED" {
+			intents[id] = *effect.Intent
+		}
+	}
+	ids := make([]string, 0, len(intents))
+	for id := range intents {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		intent := intents[id]
+		read := func() ([]nativeWorkerInvocation, error) {
+			jobs, err := claimedWorkerInvocations(f.root, f.runID, intent.Resume.WorkerActionID, intent.Resume.AttemptID)
+			var matching []nativeWorkerInvocation
+			for _, job := range jobs {
+				if job.binding.ResumeActionID == id {
+					matching = append(matching, job)
+				}
+			}
+			return matching, err
+		}
+		jobs, err := read()
+		if err != nil {
+			return false, err
+		}
+		if len(jobs) == 0 {
+			if _, pending := state.PendingHostActions[id]; !pending {
+				continue
+			}
+			_, aborted := state.AbortDecision()
+			_, obsolete := state.ObsoleteActions[intent.Resume.WorkerActionID]
+			if !aborted && !state.ResetPending() && !obsolete && !state.NodeContinuationWithdraws(intent) {
+				continue
+			}
+			observe := func() (decision.Observation, error) {
+				jobs, err := read()
+				value := "UNCLAIMED"
+				if len(jobs) != 0 {
+					value = "UNKNOWN"
+				}
+				return decision.Observation{Facts: []decision.Fact{{Source: decision.SourceHost, Key: "native-invocation:" + id, Value: value}}}, err
+			}
+			facts, err := observe()
+			if err != nil {
+				return false, err
+			}
+			digest, err := facts.Digest()
+			if err != nil {
+				return false, err
+			}
+			_, _, err = f.engine.ReconcileHostAction(id, digest, false, false, protocol.Observation{Facts: facts, Read: observe})
+			return err == nil, err
+		}
+		for _, invocation := range jobs {
+			if NativeStartVerifier == nil {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				return false, err
+			}
+			before, err := f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			if err := f.observeWorkerExecution(*invocation.binding.WorkerMaterial, invocation.directory, NativeStartVerifier); err != nil {
+				return false, err
+			}
+			after, err := f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			if after.Revision > before.Revision {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

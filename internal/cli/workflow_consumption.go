@@ -302,6 +302,7 @@ func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Faca
 		return err
 	}
 	provider := request["provider"].(string)
+	resume.ActionID = request["engine"].(map[string]any)["resumeActionId"].(string)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	started := false
@@ -451,49 +452,16 @@ func acceptWorkflowWorker(f *facade.Facade, ref facade.WorkerMaterial, resume pr
 	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
 		nativeProvider = descriptor.InstallName
 	}
-	_, _, identity, err := harness.NativeResultEvidence(nativeProvider, directory, source)
+	_, _, _, err := harness.NativeResultEvidence(nativeProvider, directory, source)
 	if err != nil {
 		return err
 	}
-	key := ref.Digest + ":" + resume.ActionID
-	spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+ref.ActionID), ref.ActionID, provider, identity, protocol.SpawnStatusSpawned)
-	if err != nil {
-		return err
-	}
-	if _, _, err := f.Submit(spawn); err != nil {
-		return err
-	}
-	if err := f.ObserveWorkerTerminal(ref, identity); err != nil {
-		return err
-	}
-	for _, observed := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-		event, err := protocol.NewLifecycleEventEvent(protocol.EventID("native:"+key+":"+observed), provider, identity, observed)
-		if err != nil {
-			return err
-		}
-		if _, _, err := f.Submit(event); err != nil {
-			return err
-		}
-	}
-	if err := observeWorkflowResume(f, resume, provider, identity); err != nil {
+	if err := f.ObserveWorkerStart(ref, directory, harness.NativeStartEvidence); err != nil {
 		return err
 	}
 
 	_, _, err = f.SubmitWorkerResult(facade.WorkerResultEventID(ref, resume.ActionID), ref, directory, source, harness.NativeWorkerResultEvidence)
 	return err
-}
-
-func observeWorkflowResume(f *facade.Facade, resume protocol.HostActionIntent, provider, identity string) error {
-	if resume.Resume != nil {
-		event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("native-resume:"+resume.ActionID), resume.ActionID, protocol.HostActionResumeAgent, provider, nativeIntentCorrelation(resume), resume.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: protocol.LifecycleStart})
-		if err != nil {
-			return err
-		}
-		if _, _, err := f.Submit(event); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent, directory string, request map[string]any) error {
@@ -521,24 +489,7 @@ func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume p
 		_, _, err = f.Submit(event)
 		return err
 	}
-	spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+ref.ActionID), ref.ActionID, provider, nativeIdentity, protocol.SpawnStatusSpawned)
-	if err != nil {
-		return err
-	}
-	if _, _, err := f.Submit(spawn); err != nil {
-		return err
-	}
-	if err := observeWorkflowResume(f, resume, provider, nativeIdentity); err != nil {
-		return err
-	}
-	if err := f.ObserveWorkerTerminal(ref, nativeIdentity); err != nil {
-		return err
-	}
-	stop, err := protocol.NewLifecycleEventEvent(protocol.EventID("native-failed-stop:"+ref.Digest+":"+resume.ActionID), provider, nativeIdentity, protocol.LifecycleStop)
-	if err != nil {
-		return err
-	}
-	if _, _, err := f.Submit(stop); err != nil {
+	if err := f.ObserveWorkerStart(ref, directory, harness.NativeStartEvidence); err != nil {
 		return err
 	}
 	event, err := protocol.NewWorkerResultEvent(facade.WorkerFailureEventID(ref, resume.ActionID), ref.ActionID, provider, protocol.OutcomeRuntimeError, digest, failure.Class)
@@ -590,6 +541,21 @@ func terminateWorkflowWorker(ctx context.Context, f *facade.Facade, intent proto
 		var receipt map[string]any
 		if err := readJSONFileInto(filepath.Join(directory, "exit.json"), &receipt); err != nil {
 			return fmt.Errorf("native termination is UNKNOWN without its exit receipt: %w", err)
+		}
+		var request struct {
+			Engine struct {
+				WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
+			} `json:"engine"`
+		}
+		body, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			return err
+		}
+		if err := f.ObserveWorkerStart(request.Engine.WorkerMaterial, directory, harness.NativeStartEvidence); err != nil {
+			return err
 		}
 	}
 	lifecycle, err := protocol.NewLifecycleEventEvent(protocol.EventID("native-terminated:"+intent.ActionID), provider, intent.Terminate.Identity, protocol.LifecycleStop)

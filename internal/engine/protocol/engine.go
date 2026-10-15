@@ -397,7 +397,7 @@ func (e *Engine) executeHeldSettles(state *State, nextRevision uint64) (bool, er
 		if err := e.applyNativeReceipt(state, intent, state.HostActionReceipts[actionID]); err != nil {
 			return false, err
 		}
-		if intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {
+		if intent.Adapter == nil || nativeOperation(intent.Adapter.Operation) {
 			state.retireNative(intent, "FULFILLED", state.HostActionReceipts[actionID].Digest, nil, nextRevision)
 		}
 		if applicable && intent.Adapter != nil && nativeOperation(intent.Adapter.Operation) {

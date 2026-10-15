@@ -92,6 +92,9 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 	release()
 	release = nil
 	<-stop
+	if err := writeInvocationFile(filepath.Join(directory, "exit.json"), map[string]any{"exit_code": 0, "request_digest": digest, "error": ""}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
@@ -550,7 +553,8 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 	}
 }
 
-func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) {
+func workflowResumeFixture(t *testing.T) (*facade.Facade, string, facade.WorkerMaterial, protocol.HostActionIntent, string) {
+	t.Helper()
 	f, root, ref, originalDirectory := workflowStartFixture(t)
 	_, _, original, finished, err := startWorkflowWorker(context.Background(), f, ref, protocol.HostActionIntent{})
 	if err != nil || original != ref || finished == nil {
@@ -613,9 +617,17 @@ func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) 
 	if resume.Resume == nil || resume.Resume.AttemptID != ref.AttemptID || resume.Resume.Identity != "controlled-session" {
 		t.Fatal("resume changed the original action, attempt or native identity", resume)
 	}
+	return f, root, ref, resume, originalDirectory
+}
+
+func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) {
+	f, root, ref, resume, originalDirectory := workflowResumeFixture(t)
+	previous := facade.NativeStartVerifier
+	facade.NativeStartVerifier = harness.NativeStartEvidence
+	t.Cleanup(func() { facade.NativeStartVerifier = previous })
 	directory := facade.WorkerExecutionDirectory(ref, resume.ActionID)
 	cleanupWorkflowSupervisor(t, directory)
-	candidate, err = f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	candidate, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,9 +665,139 @@ func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) 
 			t.Fatal("reopened consumption repeated the original resume")
 		}
 	}
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Content protocol.State `json:"content"`
+	}
+	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "consumer", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	state := document.Content
+	receipt := state.HostActionReceipts[resume.ActionID]
+	if receipt.Status != protocol.HostActionStatusExecuted || receipt.PayloadDigest != resume.PayloadDigest || receipt.LifecycleEvidence == nil || receipt.LifecycleEvidence.Identity != resume.Resume.Identity || run.AdapterIntents[resume.ActionID].Resume != nil {
+		t.Fatal("native start did not settle only its original resume execution", receipt)
+	}
+	for _, attempt := range run.Attempts {
+		if attempt.ActionID == ref.ActionID && (attempt.ID != ref.AttemptID || attempt.Attempts != 1) {
+			t.Fatal("native resume replay changed its original attempt count", attempt)
+		}
+	}
 	calls, err := os.ReadFile(filepath.Join(root, "supervisor-calls"))
 	want := "harness|supervise|" + originalDirectory + "\nharness|supervise|" + directory + "\n"
 	if err != nil || string(calls) != want {
 		t.Fatal("actual original and resume starts differ", string(calls), err)
+	}
+}
+
+// Original claimed supervisor facts survive a cancelled collector and remain
+// independent of whether the native invocation supplied a semantic result.
+func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
+	for _, execution := range []string{"unclaimed", "running", "exited"} {
+		t.Run(execution, func(t *testing.T) {
+			f, root, ref, resume, originalDirectory := workflowResumeFixture(t)
+			previous := facade.NativeStartVerifier
+			facade.NativeStartVerifier = harness.NativeStartEvidence
+			t.Cleanup(func() { facade.NativeStartVerifier = previous })
+			directory := facade.WorkerExecutionDirectory(ref, resume.ActionID)
+			cleanupWorkflowSupervisor(t, directory)
+			var finished <-chan error
+			if execution != "unclaimed" {
+				request, observedDirectory, original, completed, err := startWorkflowWorker(context.Background(), f, ref, resume)
+				if err != nil || observedDirectory != directory || original != ref || request["identity"] != resume.Resume.Identity {
+					t.Fatal("original resume execution changed its signed invocation", original, request, err)
+				}
+				finished = completed
+				if execution == "exited" {
+					var process map[string]any
+					if err := readJSONFileInto(filepath.Join(directory, "process.json"), &process); err != nil {
+						t.Fatal(err)
+					}
+					child, err := os.FindProcess(int(process["pid"].(float64)))
+					if err != nil || child.Signal(syscall.SIGTERM) != nil {
+						t.Fatal("controlled original resume did not stop", err)
+					}
+					if err := <-finished; err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := f.SubmitControl(request); err != nil {
+				t.Fatal(err)
+			}
+			confirmation, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "abort", Reason: "Stop the original signed native resume"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, run, err := f.SubmitControl(confirmation)
+			if err != nil || accepted.Status != "ACCEPTED" || len(run.PendingActions) != 1 {
+				t.Fatal("control dropped its original resume before observing its native execution", accepted, run.PendingActions, err)
+			}
+			for range 2 {
+				f, err = facade.Open(root, "consumer")
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := consumeWorkflow(IO{}, f, root, "consumer")
+				if err != nil || result.Boundary != "ABORTED" || len(result.Blocked) != 0 {
+					t.Fatal("original native resume prevented typed abort", result, err)
+				}
+				run = result.Run
+			}
+			if harness.NativeJobAlive(directory) || run.Termination == nil || len(run.Termination.PendingActions) != 0 || len(run.Termination.PendingHostActions) != 0 {
+				t.Fatal("abort left original resumed execution or signed responsibility", run.Termination)
+			}
+			if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "consumer", "state.json")); !os.IsNotExist(err) {
+				t.Fatal("abort retained active state", err)
+			}
+			if replay, _, err := f.SubmitControl(confirmation); err != nil || !reflect.DeepEqual(replay, accepted) {
+				t.Fatal("original typed abort did not replay", replay, err)
+			}
+			receipt, executed := run.Termination.HostActionReceipts[resume.ActionID]
+			if execution == "unclaimed" {
+				if executed || run.Termination.ReconciledEffects[resume.ActionID].Status != "WITHDRAWN" {
+					t.Fatal("unclaimed resume fabricated an execution", receipt)
+				}
+			} else {
+				if !executed || receipt.Status != protocol.HostActionStatusExecuted || receipt.PayloadDigest != resume.PayloadDigest || receipt.LifecycleEvidence == nil || receipt.LifecycleEvidence.Identity != resume.Resume.Identity {
+					t.Fatal("observed resume lost its exact original execution receipt", receipt)
+				}
+				attempt := run.Termination.ObsoleteActions[ref.ActionID]
+				if attempt.AttemptID != ref.AttemptID {
+					t.Fatal("abort lost original action/attempt", attempt)
+				}
+				if effect := run.Termination.ReconciledEffects[resume.ActionID]; effect.Status != "FULFILLED" || effect.Intent == nil || !reflect.DeepEqual(*effect.Intent, resume) {
+					t.Fatal("resume lost its original signed responsibility", effect)
+				}
+				start, stop := false, false
+				for _, event := range run.Termination.LifecycleEvents {
+					if event.Correlation == resume.ActionID && event.Identity == resume.Resume.Identity {
+						start = start || event.Event == protocol.LifecycleStart
+						stop = stop || event.Event == protocol.LifecycleStop
+					}
+				}
+				if !start || !stop {
+					t.Fatal("resume was retired without its own observed start/stop")
+				}
+			}
+			calls, err := os.ReadFile(filepath.Join(root, "supervisor-calls"))
+			want := "harness|supervise|" + originalDirectory + "\n"
+			if execution != "unclaimed" {
+				want += "harness|supervise|" + directory + "\n"
+			}
+			if err != nil || string(calls) != want {
+				t.Fatal("abort or recovery repeated a native start", string(calls), err)
+			}
+		})
 	}
 }

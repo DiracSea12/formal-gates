@@ -156,6 +156,13 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 	for _, id := range ids {
 		receipt, known := s.SpawnReceipts[id]
 		stopped := known && (receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop))
+		resume := s.workerResume(id)
+		if resume.Resume != nil {
+			stopped = s.hasCorrelatedLifecycleEvent(resume.ActionID, resume.Resume.Identity, LifecycleStop)
+			if !stopped && !s.hasCorrelatedLifecycleEvent(resume.ActionID, resume.Resume.Identity, LifecycleStart) {
+				continue
+			}
+		}
 		if !known {
 			failures := s.SpawnFailures[id]
 			stopped = len(failures) > 0 && failures[len(failures)-1].FailureClass != authoring.FailureSideEffectUnknown
@@ -226,6 +233,22 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		return true, nil
 	}
 	return changed, nil
+}
+
+func (s *State) workerResume(action string) HostActionIntent {
+	var current HostActionIntent
+	for _, intent := range s.PendingHostActions {
+		if intent.Resume != nil && intent.Resume.WorkerActionID == action && intent.Revision > current.Revision {
+			current = intent
+		}
+	}
+	for _, effect := range s.ReconciledEffects {
+		intent := effect.Intent
+		if effect.Status == "FULFILLED" && intent != nil && intent.Resume != nil && intent.Resume.WorkerActionID == action && intent.Revision > current.Revision {
+			current = *intent
+		}
+	}
+	return current
 }
 func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	d, ok := s.resetDecision()
