@@ -67,3 +67,5 @@ func lockFileBlocking(f *os.File) error {
 		windows.LOCKFILE_EXCLUSIVE_LOCK,
 		0, 1, 0, &windows.Overlapped{})
 }
+
+func releaseLockFile(f *os.File) { _ = f.Close() }

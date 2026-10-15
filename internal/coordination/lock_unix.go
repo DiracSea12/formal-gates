@@ -30,6 +30,12 @@ func lockFileBlocking(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
 }
 
+// A concurrent fork can retain the open file description after this close.
+func releaseLockFile(f *os.File) {
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
+}
+
 // isLockHeld 报告 err 是否表示锁已被其他打开的描述符持有。
 func isLockHeld(err error) bool {
 	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)

@@ -24,8 +24,7 @@ func TestAcquirePathMutualExclusionAndRelease(t *testing.T) {
 		t.Fatalf("second lock error = %v", err)
 	}
 	unlock()
-	// 普通释放即关闭描述符：锁文件保留，锁本身立即可再
-	// 次获取。
+	// 普通释放保留锁文件，锁本身立即可再次获取。
 	after, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("lock file did not persist after release: %v", err)

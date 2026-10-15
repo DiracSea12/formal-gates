@@ -29,9 +29,9 @@ func AcquireRunWaiting(root, runID string) (func(), error) {
 }
 
 // AcquirePath acquires an exclusive, cross-process lock at path and returns
-// the release function. Releasing closes the descriptor, which is what frees
-// the lock; a holder that exits without releasing is freed by the kernel, so
-// recovery needs no staleness rules. Ordinary release preserves the lock file.
+// the release function. Releasing ends the kernel lock and closes its descriptor;
+// a holder that exits without releasing is freed by the kernel, so recovery needs
+// no staleness rules. Ordinary release preserves the lock file.
 func AcquirePath(path, description string) (func(), error) {
 	return acquirePathLock(path, description, false, true)
 }
@@ -63,8 +63,8 @@ func AcquireExistingPathWaiting(path, description string) (func(), error) {
 }
 
 // RetirePath removes a lock path while its caller still holds that canonical
-// lock and has finished all protected business. Ordinary release only closes
-// the descriptor; waiting openers recheck the path before entering business.
+// lock and has finished all protected business. Waiting openers recheck the
+// path before entering business.
 func RetirePath(path string) error {
 	return retirePath(filepath.Clean(path))
 }
@@ -98,14 +98,14 @@ func acquirePathLock(path, description string, waiting, create bool) (func(), er
 		}
 		opened, err := f.Stat()
 		if err != nil {
-			_ = f.Close()
+			releaseLockFile(f)
 			return nil, err
 		}
 		current, err := os.Stat(path)
 		if err == nil && os.SameFile(opened, current) {
-			return func() { _ = f.Close() }, nil
+			return func() { releaseLockFile(f) }, nil
 		}
-		_ = f.Close()
+		releaseLockFile(f)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
