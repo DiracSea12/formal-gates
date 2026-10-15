@@ -2,6 +2,7 @@ package facade
 
 import (
 	"encoding/json"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,7 @@ func TestCancelledStoppedDispatchRetainsManagedNativeCost(t *testing.T) {
 	} {
 		t.Run(string(scenario.control)+"/"+scenario.source, func(t *testing.T) {
 			root := t.TempDir()
+			testkit.ConfigureNativePaths(t, root, meteredProvider)
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 				t.Fatal(err)
 			}

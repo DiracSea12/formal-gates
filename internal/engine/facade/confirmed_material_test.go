@@ -3,6 +3,7 @@ package facade
 import (
 	"bytes"
 	"encoding/json"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 
 func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "zcode")
 	snapshotRepoCommits(t, root)
 	for path, content := range map[string]string{"design.md": "# Selected solution\nUse exact alpha protocol.\n", "reference.md": "# Selected reference\nOriginal beta constraint.\n"} {
 		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0600); err != nil {
@@ -205,6 +207,7 @@ func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
 // following review without editing the immutable original worker material.
 func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "zcode")
 	identities := snapshotRepoCommits(t, root)
 	content, err := os.ReadFile(filepath.Join(root, "requirements.md"))
 	if err != nil {

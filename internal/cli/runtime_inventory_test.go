@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testin
 	}
 
 	project := t.TempDir()
+	testkit.ConfigureNativePaths(t, project, "codex")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)

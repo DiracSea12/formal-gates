@@ -28,6 +28,7 @@ import (
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/prompts"
+	"formal-gates/internal/settings"
 )
 
 type PortableCanaryOptions struct{ Root string }
@@ -275,9 +276,33 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err != nil {
 		return err
 	}
+	configuration, err := settings.Load(root, root)
+	if err != nil {
+		return err
+	}
+	// Synthetic workers bind the installed CLI as a path-only fixture; it
+	// rejects native host arguments instead of starting a model session.
+	binary := filepath.Join(packageRoot, "bin", nativeBinaryName())
+	script := filepath.Join(root, ".gates", "canary.cjs")
+	for field, value := range map[string]string{
+		"claudeExecutable": binary, "codexExecutable": binary, "cursorExecutable": binary,
+		"dshExecutable": binary, "workbuddyExecutable": binary, "zcodeExecutable": binary,
+		"zcodeScript": script,
+	} {
+		configuration.Values.Native[field] = value
+		configuration.Sources[field] = "portable canary"
+	}
+	if admission.Provider == host.ZCode {
+		if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(script, []byte(`throw new Error("portable canary does not start a model host");`), 0600); err != nil {
+			return err
+		}
+	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	f, run, err := facade.Start(facade.StartOptions{RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Settings: &configuration, RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		return err
 	}

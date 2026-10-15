@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,6 +29,7 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 		mustWriteCLI(t, filepath.Join(source, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "zcode", "codex")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)

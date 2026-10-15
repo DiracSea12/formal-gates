@@ -1480,7 +1480,7 @@ func TestEngineReplacementAttemptQuarantinesLateResult(t *testing.T) {
 	if !retired || obsolete.ReplacedBy != currentAttempt.ActionID || obsolete.AttemptID != oldAttempt.ID {
 		t.Fatalf("obsolete action = %+v retired=%v", obsolete, retired)
 	}
-	if obsolete.Bindings != oldAttempt.Bindings || obsolete.Plan != oldAttempt.Plan {
+	if !obsolete.Bindings.Equal(oldAttempt.Bindings) || obsolete.Plan != oldAttempt.Plan {
 		t.Fatalf("obsolete Attempt lost identity: obsolete=%+v old=%+v", obsolete, oldAttempt)
 	}
 

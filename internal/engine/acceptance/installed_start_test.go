@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/testkit"
 	"io"
 	"os"
 	"os/exec"
@@ -41,6 +42,7 @@ func newInstalledStartProject(t *testing.T) installedStartProject {
 		t.Fatal(err)
 	}
 	p := installedStartProject{home: t.TempDir(), project: t.TempDir()}
+	testkit.ConfigureNativePaths(t, p.project, "codex", "zcode")
 	p.binary = executablePath(filepath.Join(p.home, ".local", "bin", "formal-gates"))
 	buildInstalledBinaryAt(t, repository, "./cmd/formal-gates", p.binary)
 	p.source = isolatedInstallSource(t, repository, p.binary)

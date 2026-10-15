@@ -116,6 +116,7 @@ func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
 // CLI 打开 engine run 的唯一合法通道）。
 func startAdmittedEngineRun(t *testing.T, root string, nativeBase ...string) *facade.Facade {
 	t.Helper()
+	testkit.ConfigureNativePaths(t, root, "zcode")
 	source := writeInstallSource(t, "source")
 	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
 		t.Fatal(err)

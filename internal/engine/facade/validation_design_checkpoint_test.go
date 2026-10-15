@@ -133,11 +133,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 				if intent.Resume == nil || intent.Resume.Input == nil || !reflect.DeepEqual(intent.Resume.Input.Manifest, part) || intent.Resume.Input.Binding != in.Binding {
 					t.Fatal("native resume lost recorded design")
 				}
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-				if err != nil {
-					t.Fatal(err)
-				}
-				d.submit(receipt)
+				d.submit(d.resumeReceipt(intent))
 			}
 			d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "completed all designed cases", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &full}}})
 			review, ri := d.action("engine.qa.review.rationale.v2")

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,6 +110,7 @@ func TestAdmissionRejectsStaleInstalledDigest(t *testing.T) {
 func repairGitProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "claude")
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(testRequirementDocument("Sample requirement.")), 0o600); err != nil {
 		t.Fatal(err)
 	}

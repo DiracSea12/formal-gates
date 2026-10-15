@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +78,7 @@ func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
 func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	t.Helper()
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "zcode")
 	write := func(path string, body []byte) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, path), body, 0600); err != nil {

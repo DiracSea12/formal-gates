@@ -63,11 +63,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 					if resume.Resume == nil || resume.Resume.Input == nil || !reflect.DeepEqual(resume.Resume.Input.Completed, partial.Records) || resume.Resume.Input.Binding != in.Binding {
 						t.Fatal("resume lost original FAIL checkpoint")
 					}
-					receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), resume.ActionID, resume.Operation, DefaultProvider, resume.Correlation, resume.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-					if err != nil {
-						t.Fatal(err)
-					}
-					d.submit(receipt)
+					d.submit(d.resumeReceipt(resume))
 				}
 
 				remaining := report

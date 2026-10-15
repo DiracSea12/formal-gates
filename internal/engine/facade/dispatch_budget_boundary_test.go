@@ -8,6 +8,7 @@ package facade
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -334,6 +335,7 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 		t.Run(fmt.Sprintf("lifecycle-first=%t", lifecycleFirst), func(t *testing.T) {
 
 			root := t.TempDir()
+			testkit.ConfigureNativePaths(t, root, meteredProvider)
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -907,6 +909,7 @@ func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
 	for _, source := range []string{"PENDING", "READY", "UNAVAILABLE", "READY_BARRIER"} {
 		t.Run(source, func(t *testing.T) {
 			root := t.TempDir()
+			testkit.ConfigureNativePaths(t, root, meteredProvider)
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 				t.Fatal(err)
 			}

@@ -53,7 +53,7 @@ func TestTransientRecoveryRetainsWorkAfterPreviousDispatchCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := after.State.Attempts[pending.Task]
-	if after.State.PendingActions[action] != pending || current.ID != attempt.ID || current.Bindings != attempt.Bindings {
+	if after.State.PendingActions[action] != pending || current.ID != attempt.ID || !current.Bindings.Equal(attempt.Bindings) {
 		t.Fatal("resume changed the original task or attempt bindings")
 	}
 	resumed := false

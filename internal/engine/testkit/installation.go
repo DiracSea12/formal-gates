@@ -3,6 +3,7 @@ package testkit
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -47,4 +48,52 @@ func Installation(t testing.TB, root, recordID, packageDigest, provider string) 
 	}
 	release()
 	return
+}
+
+// ConfigureNativePaths isolates path-freezing scenarios from installed model
+// hosts. Native host arguments fail against the Go executable; transport tests
+// provide their own protocol peers instead.
+func ConfigureNativePaths(t testing.TB, root string, providers ...string) {
+	t.Helper()
+	executable, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".gates", "config.json")
+	values := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if err := json.Unmarshal(data, &values); err != nil {
+			t.Fatal(err)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, provider := range providers {
+		switch provider {
+		case "claude", "claude-code":
+			values["claudeExecutable"], values["claudeHome"] = executable, t.TempDir()
+		case "codex":
+			values["codexExecutable"], values["codexHome"] = executable, t.TempDir()
+		case "zcode":
+			home := t.TempDir()
+			script := filepath.Join(home, "unavailable.cjs")
+			if err := os.WriteFile(script, []byte(`throw new Error("path-only fixture cannot start a model host");`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			values["zcodeExecutable"], values["zcodeScript"], values["zcodeHome"] = executable, script, home
+		default:
+			t.Fatalf("unsupported path fixture provider %q", provider)
+		}
+	}
+	data, err = json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
 }

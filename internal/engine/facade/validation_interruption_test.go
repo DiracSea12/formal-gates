@@ -198,13 +198,7 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 			if intent.Resume == nil || intent.Resume.Input == nil || intent.Resume.Input.Interruption == nil || intent.Resume.Input.Interruption.InterruptionReason != "" || intent.Resume.Input.Interruption.RequestID != plan.RequestID {
 				t.Fatal("authorized retry lost the latest unknown cause")
 			}
-			start, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
-			d.submit(start)
-			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-			if err != nil {
-				t.Fatal(err)
-			}
-			d.submit(receipt)
+			d.submit(d.resumeReceipt(intent))
 			if d.run.Attempts[input.Binding.Task].ID != original.ID {
 				t.Fatal("cause metadata created a new logical execution")
 			}
@@ -219,11 +213,7 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 		if !reflect.DeepEqual(snap, again) {
 			t.Fatal("reopen rewrote cause evidence")
 		}
-		receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.submit(receipt)
+		d.submit(d.resumeReceipt(intent))
 		if d.run.Attempts[input.Binding.Task].ID != original.ID {
 			t.Fatal("cause metadata created a new logical execution")
 		}

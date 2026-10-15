@@ -790,7 +790,7 @@ func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
 					t.Fatal(err)
 				}
 				obsolete := after.State.ObsoleteActions[action]
-				if obsolete.AttemptID != attempt.ID || obsolete.Bindings != attempt.Bindings || obsolete.Plan != attempt.Plan {
+				if obsolete.AttemptID != attempt.ID || !obsolete.Bindings.Equal(attempt.Bindings) || obsolete.Plan != attempt.Plan {
 					t.Fatal("review carrier lost", obsolete, attempt)
 				}
 				for id, pending := range after.State.PendingActions {

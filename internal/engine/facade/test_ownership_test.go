@@ -20,7 +20,6 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				t.Helper()
 				c := exec.Command("git", args...)
 				c.Dir = dir
-				c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=External Project", "GIT_AUTHOR_EMAIL=external@example.invalid", "GIT_COMMITTER_NAME=External Project", "GIT_COMMITTER_EMAIL=external@example.invalid")
 				b, e := c.CombinedOutput()
 				if e != nil {
 					t.Fatalf("git %v: %v %s", args, e, b)
@@ -28,6 +27,8 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 				return strings.TrimSpace(string(b))
 			}
 			git(root, "init", "-q")
+			git(root, "config", "user.name", "External Project")
+			git(root, "config", "user.email", "external@example.invalid")
 			write := func(dir, file, body string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0644); err != nil {

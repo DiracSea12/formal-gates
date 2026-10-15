@@ -26,15 +26,19 @@ jobs:
         include:
           - os: windows-latest
             suffix: windows-amd64
+            perforce: ntx64
             binary: formal-gates-windows-amd64.exe
           - os: macos-latest
             suffix: macos-arm64
+            perforce: macosx12arm64
             binary: formal-gates-macos-arm64
           - os: macos-15-intel
             suffix: macos-amd64
+            perforce: macosx1015x86_64
             binary: formal-gates-macos-amd64
           - os: ubuntu-latest
             suffix: linux-amd64
+            perforce: linux26x86_64
             binary: formal-gates-linux-amd64
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +47,42 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+      - name: Install Subversion (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y subversion
+      - name: Install Subversion (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install subversion
+      - name: Install native VCS tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP "formal-gates-vcs"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $svnArchive = Join-Path $env:RUNNER_TEMP "sliksvn.zip"
+          Invoke-WebRequest https://sliksvn.com/download/slik-subversion-1-14-5-x64/ -OutFile $svnArchive
+          Expand-Archive -Path $svnArchive -DestinationPath $tools
+          $svnInstaller = Join-Path $tools "Slik-Subversion-1.14.5-x64.msi"
+          $installation = Start-Process msiexec.exe -ArgumentList "/i `"$svnInstaller`" /qn /norestart ADDLOCAL=ALL" -Wait -PassThru
+          if ($installation.ExitCode -notin @(0, 3010)) { throw "Subversion installer exited with $($installation.ExitCode)" }
+          Invoke-WebRequest https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4.exe -OutFile (Join-Path $tools "p4.exe")
+          Invoke-WebRequest https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4d.exe -OutFile (Join-Path $tools "p4d.exe")
+          $tools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          ([Environment]::GetEnvironmentVariable("Path", "Machine") -split ';') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install Perforce (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/formal-gates-vcs"
+          mkdir -p "$tools"
+          curl -fsSL https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4 -o "$tools/p4"
+          curl -fsSL https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4d -o "$tools/p4d"
+          chmod +x "$tools/p4" "$tools/p4d"
+          echo "$tools" >> "$GITHUB_PATH"
       - name: Build native CLI (Windows)
         if: runner.os == 'Windows'
         shell: cmd

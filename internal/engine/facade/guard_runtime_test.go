@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,7 @@ func writeTranscript(t *testing.T, path string, lines []string) {
 // 时结果滞留 COST_PENDING；stop 携 transcript 后下一事务完成并记精确用量。
 func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, meteredProvider)
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}

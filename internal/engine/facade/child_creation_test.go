@@ -174,16 +174,22 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 
 	sibling.drive()
 	siblingID, _ := planBatchAction(sibling, "command")
+	sibling.receipt(siblingID)
+	state = driverState(t, sibling)
+	pending, spawn := state.PendingActions[siblingID], state.SpawnReceipts[siblingID]
 	abortCreationChild(t, master.f)
 	master.drive()
 	if master.run.Status != "ABORTING" {
-		t.Fatal("parent ignored the child's outstanding spawn responsibility")
+		t.Fatal("parent ignored the child's outstanding worker responsibility")
 	}
-	failed, err := protocol.NewSpawnReceiptWithFailureClass(sibling.eventID(), siblingID, sibling.host(), siblingID, protocol.SpawnStatusFailed, "TRANSIENT_ENGINE_ERROR")
-	if err != nil {
-		t.Fatal(err)
+	master.reopen()
+	master.drive()
+	sibling.reopen()
+	state = driverState(t, sibling)
+	if master.run.Status != "ABORTING" || state.PendingActions[siblingID] != pending || state.SpawnReceipts[siblingID] != spawn {
+		t.Fatal("recovery changed the child's outstanding worker identity or responsibility")
 	}
-	sibling.submit(failed)
+	sibling.completeWorkerTerminations()
 	master.drive()
 	if master.run.Status != "ABORTED" {
 		t.Fatal("confirmation-bound members did not cancel", master.run.Status)

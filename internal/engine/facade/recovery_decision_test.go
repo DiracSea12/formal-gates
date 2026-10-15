@@ -92,7 +92,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 						t.Fatal(err)
 					}
 					delivered := false
-					for action, intent := range snapshot.State.PendingHostActions {
+					for _, intent := range snapshot.State.PendingHostActions {
 						identity := ""
 						kind := ""
 						if choice == "fresh" && intent.Terminate != nil && intent.Terminate.WorkerActionID == id {
@@ -112,16 +112,20 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 						if reopen {
 							d.reopen()
 						}
-						observed, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, identity, kind)
-						if err != nil {
-							t.Fatal(err)
+						if intent.Resume != nil {
+							d.submit(d.resumeReceipt(intent))
+						} else {
+							observed, err := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, identity, kind)
+							if err != nil {
+								t.Fatal(err)
+							}
+							d.submit(observed)
+							receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: kind})
+							if err != nil {
+								t.Fatal(err)
+							}
+							d.submit(receipt)
 						}
-						d.submit(observed)
-						receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), action, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: identity, Event: kind})
-						if err != nil {
-							t.Fatal(err)
-						}
-						d.submit(receipt)
 						d.drive()
 						delivered = true
 					}
@@ -260,12 +264,7 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 				} else if intent.Resume == nil {
 					t.Fatalf("finite recovery effect within budget: %+v", intent)
 				}
-				observed, _ := protocol.NewLifecycleEventEvent(d.eventID(), DefaultProvider, id, protocol.LifecycleStart)
-				d.submit(observed)
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-				if err != nil {
-					t.Fatal(err)
-				}
+				receipt := d.resumeReceipt(intent)
 				a := d.submit(receipt)
 				same, r, err := d.f.Submit(receipt)
 				if err != nil || !reflect.DeepEqual(a, same) {
@@ -374,11 +373,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 				if input.Binding != in.Binding || !reflect.DeepEqual(input.Completed, part.Records) || len(input.PendingCases) != 1 || input.PendingCases[0] == part.Records[0].CaseID {
 					t.Fatalf("resume changed actual completed/remaining partition: %+v", input)
 				}
-				receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-				if err != nil {
-					t.Fatal(err)
-				}
-				d.submit(receipt)
+				d.submit(d.resumeReceipt(intent))
 				next := d.run.Attempts[in.Binding.Task]
 				if next.ID != original.ID || next.ActionID != id || next.Attempts != 1 {
 					t.Fatal("resume replaced original checkpoint attempt")
