@@ -93,6 +93,7 @@ func continueBusinessNode(d *validationDriver, id string) ControlCandidate {
 // Existing tasks, original material and the public two-stage control are the
 // source of node continuation; no phase assignment constructs the precondition.
 func TestNodeContinuationEntersExistingReviewAndRouteOwners(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"product-review", "start-readiness", "topology", "route", "development:command", "qa-design:BLACKBOX"} {
 		t.Run(target, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -162,6 +163,7 @@ func TestNodeContinuationEntersExistingReviewAndRouteOwners(t *testing.T) {
 }
 
 func TestNodeContinuationPreparesMissingPlanThroughOriginalOwners(t *testing.T) {
+	t.Parallel()
 	d := nativeMasterDriver(t)
 	decision := continueBusinessNode(d, "development")
 	state := driverState(t, d)
@@ -179,6 +181,7 @@ func TestNodeContinuationPreparesMissingPlanThroughOriginalOwners(t *testing.T) 
 }
 
 func TestNodeContinuationWaitsForExactOldExecutionAndRejectsLateResult(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	old, input := d.action("engine.development.batch.v6")
 	d.receipt(old)
@@ -212,6 +215,7 @@ func TestNodeContinuationWaitsForExactOldExecutionAndRejectsLateResult(t *testin
 }
 
 func TestNodeContinuationRepeatedChoiceRetainsAuthorizedReplacement(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			root := t.TempDir()
@@ -251,6 +255,7 @@ func TestNodeContinuationRepeatedChoiceRetainsAuthorizedReplacement(t *testing.T
 }
 
 func TestNodeContinuationConcurrentAuthorizationsKeepDistinctBatchIdentity(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			root := t.TempDir()
@@ -305,6 +310,7 @@ func TestNodeContinuationConcurrentAuthorizationsKeepDistinctBatchIdentity(t *te
 }
 
 func TestNodeContinuationSavedConfirmationRejectsStaleFreshnessWithoutWriting(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	request, err := d.f.PrepareCurrentControl(ControlInput{Request: protocol.ControlContinueNode, Node: businessNodeNumber(t, d.run, "product-review")})
 	if err != nil {
@@ -342,6 +348,7 @@ func TestNodeContinuationSavedConfirmationRejectsStaleFreshnessWithoutWriting(t 
 }
 
 func TestNodeContinuationEntersValidationOwners(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"qa-review:BLACKBOX", "qa-execution:BLACKBOX", "gate:quality", "candidate", "post-review", "intake"} {
 		t.Run(target, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -391,6 +398,7 @@ func TestNodeContinuationEntersValidationOwners(t *testing.T) {
 }
 
 func TestNodeContinuationPreservesReviewLimitAndSingleExtraGrant(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	for completed := 1; completed < 3; completed++ {
 		continueBusinessNode(d, "product-review")
@@ -433,6 +441,7 @@ func TestNodeContinuationPreservesReviewLimitAndSingleExtraGrant(t *testing.T) {
 }
 
 func TestNodeContinuationReopensRealChildCheckpointAndPreservesParentAuthority(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	child := children[0]
 	old := readSliceReceipt(t, child)
@@ -500,6 +509,7 @@ func TestNodeContinuationReopensRealChildCheckpointAndPreservesParentAuthority(t
 }
 
 func TestNodeContinuationRetainsMainlinePrefixAndRejectsOrdinaryReturnToChild(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	continueBusinessNode(master, "mainline-integration")
 	master.drive()
@@ -551,6 +561,7 @@ func TestNodeContinuationRetainsMainlinePrefixAndRejectsOrdinaryReturnToChild(t 
 }
 
 func TestNodeContinuationChildGrantRecoversThroughOriginalParentObservation(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	child := children[0]
 	old := readSliceReceipt(t, child)
@@ -603,6 +614,7 @@ func TestNodeContinuationChildGrantRecoversThroughOriginalParentObservation(t *t
 }
 
 func TestNodeContinuationShowsOriginalSignedIntegrationClaimBeforeChildChoice(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	interruption := &mergeInterruption{Runner: vcs.ExecRunner{}, point: "merge"}
 	master.f.vcsRunner = interruption
@@ -665,6 +677,7 @@ func TestNodeContinuationShowsOriginalSignedIntegrationClaimBeforeChildChoice(t 
 }
 
 func TestNodeContinuationKeepsIndependentDesignRunningDuringDeveloperStop(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			root := t.TempDir()
@@ -727,6 +740,7 @@ func TestNodeContinuationKeepsIndependentDesignRunningDuringDeveloperStop(t *tes
 }
 
 func TestNodeContinuationCarriedReviewSurvivesReplayAndHonorsRedo(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"qa-review:BLACKBOX", "qa-design:BLACKBOX", "requirement-review", "requirement-design"} {
 		t.Run(target, func(t *testing.T) {
 			root := t.TempDir()
@@ -782,6 +796,7 @@ func TestNodeContinuationCarriedReviewSurvivesReplayAndHonorsRedo(t *testing.T) 
 }
 
 func TestNodeContinuationEntersOriginalRepairResponsibility(t *testing.T) {
+	t.Parallel()
 	d, original, action := nativeRepairReady(t, "P2")
 	d.receipt(action)
 	var target string
@@ -803,6 +818,7 @@ func TestNodeContinuationEntersOriginalRepairResponsibility(t *testing.T) {
 }
 
 func TestNodeContinuationAbortUsesOriginalNativeCleanup(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "quality")
@@ -821,6 +837,7 @@ func TestNodeContinuationAbortUsesOriginalNativeCleanup(t *testing.T) {
 }
 
 func TestNodeContinuationCleanupWaitsForOriginalDeliveryAndCompletes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root, "implementation")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")

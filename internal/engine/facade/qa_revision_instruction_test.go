@@ -13,6 +13,7 @@ import (
 )
 
 func TestQARevisionMaterialCarriesOriginalConfirmedInstruction(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	thaw := func(kind, reason string) ControlCandidate {

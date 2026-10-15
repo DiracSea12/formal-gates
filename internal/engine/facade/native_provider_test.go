@@ -253,6 +253,7 @@ func TestRegularStartPersistsSelectedVCS(t *testing.T) {
 }
 
 func TestLightweightStartDoesNotSelectNativeVCS(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "SVN", RunID: "lightweight", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}})
 	if err != nil {
@@ -488,6 +489,7 @@ func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
 }
 
 func TestSVNCandidateDirectoryPermissions(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"new-parents", "existing-parent", "explicit-empty", "explicit-property", "undeclared-sibling", "extra-empty", "new-parent-property", "existing-parent-property", "test-package"} {
 		t.Run(scenario, func(t *testing.T) {
 			root, base, runner := nativeProviderFixture(t, "svn")
@@ -902,6 +904,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 // An exact committed operation explains only WC revision skew. Foreign file,
 // property and untracked content cannot be normalized by its continuation.
 func TestSVNPromotionRejectsForeignWorkingChanges(t *testing.T) {
+	t.Parallel()
 	root, base, runner := nativeProviderFixture(t, "svn")
 	native := vcs.NewNative(root, "svn", runner)
 	if _, err := runner.Run(root, "svn", "propset", "custom:delivery", "changed", root); err != nil {
@@ -970,6 +973,7 @@ func TestSVNPromotionRejectsForeignWorkingChanges(t *testing.T) {
 }
 
 func TestSVNCompletedPromotionAcceptsNextWorkingInput(t *testing.T) {
+	t.Parallel()
 	root, base, runner := nativeProviderFixture(t, "svn")
 	native := vcs.NewNative(root, "svn", runner)
 	baseRevision, err := runner.Run(root, "svn", "info", "--show-item", "revision", root)
@@ -1046,6 +1050,7 @@ func TestSVNCompletedPromotionAcceptsNextWorkingInput(t *testing.T) {
 
 // Candidate freezing shares the same unfinished SVN commit boundary as delivery.
 func TestSVNCandidateResponseLossKeepsOriginalOperation(t *testing.T) {
+	t.Parallel()
 	root, base, runner := nativeProviderFixture(t, "svn")
 	native := vcs.NewNative(root, "svn", runner)
 	if _, err := runner.Run(root, "svn", "propset", "custom:candidate", "changed", root); err != nil {

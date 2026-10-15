@@ -110,6 +110,7 @@ func askPosition(t *testing.T, run Run, control protocol.ControlKind) int {
 	return 0
 }
 func TestControlCandidateUsesOriginalAskAndPreservesTwoStages(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	before, err := d.f.engine.Load()
 	if err != nil {
@@ -163,6 +164,7 @@ func TestControlCandidateUsesOriginalAskAndPreservesTwoStages(t *testing.T) {
 	}
 }
 func TestControlCandidateBindsCurrentResetAndRejectsStaleDecision(t *testing.T) {
+	t.Parallel()
 	d := plannedValidationDriver(t, nil, commandPlan(), "quality")
 	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlReset})
 	if err != nil {
@@ -194,6 +196,7 @@ func TestControlCandidateBindsCurrentResetAndRejectsStaleDecision(t *testing.T) 
 	}
 }
 func TestRequirementControlBindsOriginalWorkAndCurrentDocument(t *testing.T) {
+	t.Parallel()
 	d := plannedValidationDriver(t, nil, commandPlan(), "quality")
 	req, err := d.f.request()
 	if err != nil {
@@ -263,6 +266,7 @@ func TestRequirementControlBindsOriginalWorkAndCurrentDocument(t *testing.T) {
 }
 
 func TestControlCandidateRejectsAnotherProjectOrRunWithoutWriting(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	candidate, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlAbort})
 	if err != nil {
@@ -290,6 +294,7 @@ func TestControlCandidateRejectsAnotherProjectOrRunWithoutWriting(t *testing.T) 
 }
 
 func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"source-changed", string(persistence.FaultIntentBefore), string(persistence.FaultCommitResponseLost)} {
 		t.Run(scenario, func(t *testing.T) {
 			d := plannedValidationDriver(t, nil, commandPlan(), "quality")
@@ -389,6 +394,7 @@ func TestConfirmedRequirementContentRejectsChangedSourceAndRecoversAtomically(t 
 }
 
 func TestRouteControlUsesOfferedCatalogAndOriginalPlan(t *testing.T) {
+	t.Parallel()
 	for _, gates := range [][]int{{1, 2, 3}, {3}, {}} {
 		t.Run(fmt.Sprint(gates), func(t *testing.T) {
 			d := startValidationDriver(t, nil)
@@ -421,6 +427,7 @@ func TestRouteControlUsesOfferedCatalogAndOriginalPlan(t *testing.T) {
 }
 
 func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	for _, stage := range []string{"unreviewed", "reviewed"} {
 		if stage == "reviewed" {
@@ -519,6 +526,7 @@ func TestRouteRequestSharesAutomaticCatalogAndReplaysConfirmedReselection(t *tes
 }
 
 func TestRouteRequestAppliesConfirmedGateChangesDuringDevelopment(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	catalog, err := prompts.PackageRouteCandidates(d.f.admission.Target)
 	if err != nil || len(catalog) < 4 {
@@ -555,6 +563,7 @@ func TestRouteRequestAppliesConfirmedGateChangesDuringDevelopment(t *testing.T) 
 }
 
 func TestRouteRequestUsesChildCatalogAndKeepsTopologyOwnedMergeDuties(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	before := driverState(t, master)
 	configuration, err := master.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute})

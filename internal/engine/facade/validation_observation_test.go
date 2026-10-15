@@ -11,6 +11,7 @@ import (
 )
 
 func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
+	t.Parallel()
 	for _, decision := range []string{"ACCEPT", "DEFER"} {
 		t.Run(decision, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -82,6 +83,7 @@ func TestSuggestionFactsWaitForRequirementResolution(t *testing.T) {
 }
 
 func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
+	t.Parallel()
 	d, finding, waveID := validationWithGateFinding(t)
 	for i := 0; i < 2; i++ {
 		event, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise requirement"}, protocol.AskOption{ID: "abort", Label: "Keep requirement"})
@@ -133,6 +135,7 @@ func TestFindingFactsResumeOnceAfterAllRequirementAsksResolve(t *testing.T) {
 }
 
 func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, input := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(input)
@@ -187,6 +190,7 @@ func TestConfirmedInventoryRebindsOnlyAfterRequirementBarrier(t *testing.T) {
 }
 
 func TestRequirementRedoDiscardsPendingWaveSettlement(t *testing.T) {
+	t.Parallel()
 	d, finding, waveID := validationWithGateFinding(t)
 	document := validationDocument + "\n"
 	revision := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(document)))

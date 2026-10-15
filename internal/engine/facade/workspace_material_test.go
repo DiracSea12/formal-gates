@@ -16,6 +16,7 @@ import (
 // Formal requirement bytes follow the issued revision; other committed input
 // artifacts remain owned by their native source.
 func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		name := "untracked"
 		if committed {
@@ -138,6 +139,7 @@ func TestWorkspaceMaterialUsesIssuedIdentityAndPreservesNativeContent(t *testing
 
 // Native workspace receipts retain the confirmed context and protect product bytes.
 func TestBlackboxWorkspaceReceiptPreservesConfirmedContext(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		name := "untracked"
 		if committed {
@@ -275,6 +277,7 @@ func TestBlackboxWorkspaceReceiptPreservesConfirmedContext(t *testing.T) {
 // A selected source artifact is a product file rather than the formal requirement.
 // Its committed development value is not replaced by the intake's original bytes.
 func TestWorkspaceMaterialPreservesCommittedSourceArtifact(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)

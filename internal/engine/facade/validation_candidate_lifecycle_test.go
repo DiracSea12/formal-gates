@@ -10,6 +10,7 @@ import (
 
 // Completed external facts remain auditable when authorized QA changes supersede their inputs.
 func TestFinalCandidateCompletionAfterQAChange(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"THAW", "QA_ARTIFACT_REPAIR"} {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", kind, held), func(t *testing.T) {

@@ -881,6 +881,7 @@ func (d *candidateDriver) assertAcceptedReplay(terminal bool) {
 	}
 }
 func TestInstalledCandidateLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"none", "blackbox", "whitebox", "both"} {
 		t.Run(mode, func(t *testing.T) {
 			d := newCandidateDriver(t, mode)
@@ -928,6 +929,7 @@ exit "$result"
 	d.env = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), "CANDIDATE_NATIVE_GIT=" + realGit, "CANDIDATE_NATIVE_LOG=" + d.breakLog, "CANDIDATE_NATIVE_STAGE=" + stage, "CANDIDATE_NATIVE_MARKER=" + d.breakMarker}
 }
 func TestInstalledCandidateResumesNativeWrites(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"workspace", "track", "artifact", "pin", "unknown", "freeze", "promotion", "squash", "delivery", "cleanup"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newCandidateDriver(t, "both")
@@ -959,6 +961,7 @@ func TestInstalledCandidateResumesNativeWrites(t *testing.T) {
 	}
 }
 func TestInstalledCandidateConcurrentDrive(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "both")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
@@ -988,6 +991,7 @@ func TestInstalledCandidateConcurrentDrive(t *testing.T) {
 }
 
 func TestInstalledAcceptedEventsReplayInParallelWithTerminalDrive(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	d.untilValidation()
@@ -1022,6 +1026,7 @@ func TestInstalledAcceptedEventsReplayInParallelWithTerminalDrive(t *testing.T) 
 	d.assertClean()
 }
 func TestInstalledCandidateAbortCleansRegisteredResources(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "both")
 	d.reviews()
 	// A transport can truthfully report that an unsigned worker never started.
@@ -1062,6 +1067,7 @@ func (d *candidateDriver) expectNativeError(fragment string) {
 	d.assertTargetUnchanged()
 }
 func TestInstalledCandidateRejectsUndeclaredContent(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
@@ -1081,6 +1087,7 @@ func TestInstalledCandidateRejectsUndeclaredContent(t *testing.T) {
 	t.Fatal("missing development worker")
 }
 func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "whitebox")
 	d.reviews()
 	for n := 0; n < 6; n++ {
@@ -1107,6 +1114,7 @@ func TestInstalledWhiteboxRejectsProductionInput(t *testing.T) {
 }
 
 func TestInstalledPromotionRejectsTargetChanges(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"dirty", "drift"} {
 		t.Run(change, func(t *testing.T) {
 			d := newCandidateDriver(t, "none")
@@ -1137,6 +1145,7 @@ func TestInstalledPromotionRejectsTargetChanges(t *testing.T) {
 }
 
 func TestInstalledCandidatePreservesUndeclaredIndexEdit(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	for id, input := range d.run.ValidationInputs {
@@ -1163,6 +1172,7 @@ func TestInstalledCandidatePreservesUndeclaredIndexEdit(t *testing.T) {
 }
 
 func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	d.implementation = "package main\nimport (\"os\"; _ \"embed\")\n//go:embed old_test.go\nvar content string\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\"}\n"
@@ -1191,6 +1201,7 @@ func TestInstalledGateRetainsChangedProductionEmbed(t *testing.T) {
 }
 
 func TestInstalledRequirementBarrierPreventsCandidateWrites(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none")
 	d.reviews()
 	var workspaces []protocol.NativeResource

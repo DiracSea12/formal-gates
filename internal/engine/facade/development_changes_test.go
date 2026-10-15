@@ -10,6 +10,7 @@ import (
 )
 
 func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
@@ -213,6 +214,7 @@ func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T
 }
 
 func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmation(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	before, err := d.f.Show()
 	if err != nil {
@@ -248,6 +250,7 @@ func TestReplanRequiresUnchangedSourceAndExactCarryRedoThenUsesOriginalConfirmat
 }
 
 func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *testing.T) {
+	t.Parallel()
 	for _, development := range []bool{true, false} {
 		name := "development-disabled"
 		if development {
@@ -364,6 +367,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 }
 
 func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	developer, _ := d.action("engine.development.batch.v6")
 	qa, _ := d.action("engine.qa.design.v6")
@@ -418,6 +422,7 @@ func TestHandoffRejectsCurrentNonDeveloperAndUnstartedExecution(t *testing.T) {
 }
 
 func TestHandoffWaitsForUnknownSpawnIdentity(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	action, _ := d.action("engine.development.batch.v6")
 	worker := workerNumberForAction(d.run, action)

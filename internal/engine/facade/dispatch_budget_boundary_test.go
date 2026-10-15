@@ -55,6 +55,7 @@ func completeMeteredDispatch(t *testing.T, d *validationDriver, root, action, ag
 // 在途治理派发的瞬态自动恢复不再派发 resume，落 DISPATCH_BUDGET_DISPOSITION
 // Ask（继续执行只能由用户授权一次有限增量）。
 func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// 21 = 首个派发将记录的精确用量（11+3 输入、7 输出）。
 	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":21}`)
@@ -124,6 +125,7 @@ func TestAutomaticResumeAtReachedTokenCapLandsBudgetAsk(t *testing.T) {
 // 在 cap 边界零签发——观察事实（结果＋精确用量）照常落账，Ask 落地，事务不被
 // 边界拒绝（重投必再拒的 wedge 不存在）。
 func TestResultSubmissionSurvivesTokenCapRefillBoundary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":21}`)
 	p := commandPlan()
@@ -222,6 +224,7 @@ func TestResultSubmissionSurvivesTokenCapRefillBoundary(t *testing.T) {
 // 个被阻的恢复效果——授权效果落账（resume intent／其 EXECUTED 回执接纳）即消
 // 耗凭据，其后到达的被阻恢复不放行（不预先累积）。
 func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":0}`)
 	d := startValidationDriverAt(t, root, meteredProvider, nil)
@@ -331,6 +334,7 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 // 延后至 attach，以 lifecycle 解析出的真实身份建立——sidecar 事件先于绑定到达
 // 时计量仍成立，结果走公开接纳记精确用量。
 func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
+	t.Parallel()
 	for _, lifecycleFirst := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lifecycle-first=%t", lifecycleFirst), func(t *testing.T) {
 
@@ -436,6 +440,7 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 // TestTerminalRunEndsLifecycleAttribution：run 终态收口移除 lifecycle 活动标
 // 记（幂等）——终态后晚到的宿主事件归属无 run，不再落入该 run 的事件树。
 func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f, run, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal-lifecycle", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
@@ -529,6 +534,7 @@ func resumeAndComplete(d *validationDriver, action string) error {
 // TestEndedAwaitingResumeCountsAndExhaustsBudget：原恢复 Ask 在任务终态后仍
 // 绑定已终待果条目；EXECUTED 在承载账计数，有限边界只落预算 Ask。
 func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
+	t.Parallel()
 	for _, used := range []int{0, 1} {
 		t.Run(map[int]string{0: "available", 1: "exhausted"}[used], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
@@ -620,6 +626,7 @@ func TestEndedAwaitingResumeCountsAndExhaustsBudget(t *testing.T) {
 // retry slot 是一个授权事实——预算处置 retry 与 RETRY approve 任一通道行使后，
 // 另一通道对同任务的追加即被拒（两个方向都要；max 不得被推到 4）。
 func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
+	t.Parallel()
 	t.Run("budget retry first blocks the RETRY extension", func(t *testing.T) {
 		d := newValidationDriver(t, "blackbox")
 		id, _ := d.action("engine.qa.design.v6")
@@ -737,6 +744,7 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 // 启动 run 经协议幂等入口把重叠补写进先启动 run 的 owner 投影，
 // 双方终态都记 UNAVAILABLE 零数字。
 func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "shared.jsonl")
 	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"base","message":{"usage":{"input_tokens":9,"output_tokens":4}}}`})
@@ -777,6 +785,7 @@ func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
 // 知用量）且已知总量未达 cap——cap 状态诚实 UNAVAILABLE，闸不拦截（已知总量
 // 未达下界），后续治理派发照常签出。
 func TestUnreliableUsageMarksCapUnavailableAndKeepsIssuing(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":100}`)
 	p := commandPlan()
@@ -825,6 +834,7 @@ func TestUnreliableUsageMarksCapUnavailableAndKeepsIssuing(t *testing.T) {
 // 量已达 cap——状态 UNAVAILABLE（余量不可信），但闸保持已知总量下界语义：已
 // 知量达上限仍零签发＋落预算处置 Ask（未知用量只会更多）。
 func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":21}`)
 	p := commandPlan()
@@ -906,6 +916,7 @@ func TestKnownTotalAtCapStillGatesWhenUsageUnreliable(t *testing.T) {
 }
 
 func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"PENDING", "READY", "UNAVAILABLE", "READY_BARRIER"} {
 		t.Run(source, func(t *testing.T) {
 			root := t.TempDir()
@@ -1061,6 +1072,7 @@ func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
 }
 
 func TestAttachedReceiptPreservesAuthorizedResumeIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)

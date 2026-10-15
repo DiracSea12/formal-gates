@@ -14,6 +14,7 @@ import (
 // TestPrewaveReviewFollowsArtifactResponsibility keeps transport facts while
 // requiring independent approval of each replacement test artifact.
 func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"THAW", "QA_ARTIFACT_REPAIR"} {
 		for _, delivery := range []string{"receipted", "result-first", "terminal-first", "retry"} {
 			t.Run(kind+"/"+delivery, func(t *testing.T) {
@@ -68,7 +69,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 					raw, _ := json.Marshal(evidence)
 					var values map[string]any
 					json.Unmarshal(raw, &values)
-					ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+					ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -174,6 +175,7 @@ func TestPrewaveReviewFollowsArtifactResponsibility(t *testing.T) {
 }
 
 func TestPrewaveRequirementDecisionsRetainExactDuty(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"engine.qa.design.v6", "engine.qa.review.rationale.v2"} {
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
@@ -226,6 +228,7 @@ func TestPrewaveRequirementDecisionsRetainExactDuty(t *testing.T) {
 }
 
 func TestPrewaveReopeningPreservesUnobservedDesignTransport(t *testing.T) {
+	t.Parallel()
 	for _, unknown := range []bool{false, true} {
 		for _, replacement := range []bool{false, true} {
 			t.Run(fmt.Sprintf("unknown=%t/requirement-replacement=%t", unknown, replacement), func(t *testing.T) {

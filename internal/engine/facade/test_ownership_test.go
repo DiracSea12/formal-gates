@@ -13,6 +13,7 @@ import (
 )
 
 func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"case", "shared", "production", "unknown", "unassociated", "removed", "renamed", "mode", "unknown-receipt"} {
 		t.Run(variant, func(t *testing.T) {
 			root := t.TempDir()

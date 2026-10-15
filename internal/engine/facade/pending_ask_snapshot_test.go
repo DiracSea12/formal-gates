@@ -14,6 +14,7 @@ import (
 // Pending Ask content and token belong to one snapshot across an intervening
 // receipt; accepted native retry authorization extends its allowance once.
 func TestPendingAskProjectionKeepsOneSnapshot(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "implementation", "validated output")
 	runner := &transientOrganizationRunner{inner: vcs.ExecRunner{}, base: identities[0]}
@@ -222,6 +223,7 @@ func (r *transientOrganizationRunner) RunRaw(dir, command string, input []byte, 
 }
 
 func TestControlAskProjectionsKeepTheirSnapshot(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	pkg := protocol.RequirementDecisionPackage{CandidateRevision: "sha256:clarified-requirement", DeltaDigest: "sha256:formatting", ImpactDigest: "sha256:unchanged-behavior", Source: protocol.RequirementSourceUserInitiated, Classification: protocol.RequirementClassificationPreserved}
 	for _, work := range d.run.RequirementWork {

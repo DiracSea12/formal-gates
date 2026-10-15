@@ -13,6 +13,7 @@ import (
 // Cancellation retires published evidence and native resources, while audit
 // content and terminal replay remain bound to the accepted parent decision.
 func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, lost := range []bool{false, true} {
 		name := "normal"
 		if lost {

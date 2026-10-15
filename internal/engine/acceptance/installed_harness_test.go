@@ -66,6 +66,7 @@ func decodeHarnessReport(t *testing.T, output []byte) installedHarnessReport {
 // entry is runnable from independently built binaries and that its writes
 // remain in the project state namespace across a real process restart.
 func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.Abs(repoRoot(t))
 	if err != nil {
 		t.Fatal(err)

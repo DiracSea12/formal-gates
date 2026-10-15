@@ -17,6 +17,7 @@ import (
 )
 
 func TestFailedDevelopmentBuildCarriesOriginalDiagnosticsToContinuation(t *testing.T) {
+	t.Parallel()
 	const command = "go build app.go"
 	f, state, base := developmentCheckFixture(t,
 		protocol.DevelopmentCheck{ID: "build", Purpose: protocol.CheckFullBuild, Command: command},

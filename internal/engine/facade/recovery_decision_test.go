@@ -10,10 +10,12 @@ import (
 )
 
 func TestRecoveryDecisionAppliesOriginalAttemptChoice(t *testing.T) {
+	t.Parallel()
 	testOriginalAttemptRecovery(t, false)
 }
 
 func TestWorkerFailureCreatesRecoveryForOriginalAttempt(t *testing.T) {
+	t.Parallel()
 	testOriginalAttemptRecovery(t, true)
 }
 
@@ -186,6 +188,7 @@ func testOriginalAttemptRecovery(t *testing.T, workerFailure bool) {
 }
 
 func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -312,6 +315,7 @@ func TestRecoveryRequestReusesPendingEffectAndOriginalAllowance(t *testing.T) {
 }
 
 func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
+	t.Parallel()
 	for _, interruption := range []string{"direct", "worker-failure"} {
 		for _, reopen := range []bool{false, true} {
 			t.Run(interruption+"/"+map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
@@ -407,6 +411,7 @@ func TestResumeCarriesCheckpointAndCompletesOnlyRemainingCases(t *testing.T) {
 }
 
 func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	events := []protocol.Event{}
 	for _, role := range []string{"engine.development.batch.v6", "engine.qa.design.v6"} {
@@ -460,6 +465,7 @@ func TestConcurrentWorkerFailuresKeepIndependentRecoveryRequests(t *testing.T) {
 }
 
 func TestWorkerRecoveryCarryKeepsOriginalAskAndWork(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.development.batch.v6")
 	d.receipt(id)

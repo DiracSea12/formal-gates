@@ -8,6 +8,7 @@ import (
 )
 
 func TestBlackboxInputsRemainIsolatedAfterThaw(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	assertValidationInputModes(t, d)
 	id, in := d.action("engine.qa.design.v6")

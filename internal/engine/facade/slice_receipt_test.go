@@ -199,6 +199,7 @@ func assertMasterReceiptProjection(t *testing.T, master *validationDriver, own *
 }
 
 func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "core-owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
@@ -359,6 +360,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 }
 
 func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
+	t.Parallel()
 	master := receiptMaster(t)
 	master.drive()
 	if len(driverState(t, master).SliceReceipts) != 0 || master.run.Status != "ACTIVE" {
@@ -428,6 +430,7 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 }
 
 func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
+	t.Parallel()
 	for _, point := range []persistence.FaultPoint{"", persistence.FaultIntentBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		t.Run(string(point), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "owner.jsonl")
@@ -484,6 +487,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 }
 
 func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
+	t.Parallel()
 	master := receiptMaster(t)
 	own := driverState(t, master)
 	child := receiptChild(t, master, "core", "lane-core", "all")
@@ -529,6 +533,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 }
 
 func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
+	t.Parallel()
 	for _, scope := range []string{"requirement", "topology", "route"} {
 		t.Run(scope, func(t *testing.T) {
 			master := receiptMaster(t)
@@ -586,6 +591,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 }
 
 func TestMasterDriveAcceptsThePublishedChildReceipt(t *testing.T) {
+	t.Parallel()
 	child := promotedSlice(t, "selected", OwnerBinding{})
 	child.drive()
 	receipt := readSliceReceipt(t, child)

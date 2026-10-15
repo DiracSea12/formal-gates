@@ -17,6 +17,7 @@ import (
 // An existing external test requires an independent semantic judgment before
 // its isolated artifact can affect the final candidate or production view.
 func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
+	t.Parallel()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)

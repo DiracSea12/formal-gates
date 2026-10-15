@@ -9,6 +9,7 @@ import (
 )
 
 func TestAcceptanceIncludesCommittedRefill(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, _ := d.action("engine.development.batch.v6")
 	d.receipt(id)

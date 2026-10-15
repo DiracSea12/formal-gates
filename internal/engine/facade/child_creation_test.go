@@ -39,6 +39,7 @@ func nativeMasterDriver(t *testing.T) *validationDriver {
 // Child creation consumes the confirmed baseline while preserving the original
 // intake and each run's own confirmation history through delivery and cleanup.
 func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
+	t.Parallel()
 	inventory := func(source, point string) *protocol.CoverageInventory {
 		return &protocol.CoverageInventory{
 			Sources: []coverage.RequiredSource{{SourceID: source, Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}},
@@ -197,6 +198,7 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 }
 
 func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.T) {
+	t.Parallel()
 	for _, released := range []bool{false, true} {
 		for _, withdrawn := range []bool{false, true} {
 			t.Run(fmt.Sprintf("released=%t/topology-withdrawn=%t", released, withdrawn), func(t *testing.T) {
@@ -273,6 +275,7 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 }
 
 func TestChildWaitingBoundariesPreserveUserDecisions(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"master-creation", "preparing-child", "slice-checkpoint"} {
 		t.Run(target, func(t *testing.T) {
 			var f *Facade
@@ -457,6 +460,7 @@ func prepareChildFrontier(t *testing.T, master *validationDriver) *protocol.Stat
 }
 
 func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	content := []byte("startup project content\n")
@@ -606,6 +610,7 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 }
 
 func TestPublicStartRejectsChildBeforeRunLockOrWrites(t *testing.T) {
+	t.Parallel()
 	d := splitMaster(t)
 	for _, route := range []string{"regular", "lightweight", ""} {
 		opts := sliceChildStart(d, "caller-child", "lane-core", sliceChildReceipt(d.revision))
@@ -693,6 +698,7 @@ func TestChildWorkspaceReopenPreservesExecutedPrefixes(t *testing.T) {
 }
 
 func TestChildWorkspaceReceiptRejectsWrongContentWithoutRelease(t *testing.T) {
+	t.Parallel()
 	d := splitMaster(t)
 	s := prepareChildFrontier(t, d)
 	for _, intent := range s.PendingHostActions {
@@ -731,6 +737,7 @@ func TestChildWorkspaceReceiptRejectsWrongContentWithoutRelease(t *testing.T) {
 }
 
 func TestChildReleaseReopenUsesCommittedMapAfterLostResponse(t *testing.T) {
+	t.Parallel()
 	for _, point := range []persistence.FaultPoint{persistence.FaultIntentBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		t.Run(string(point), func(t *testing.T) {
 			d := splitMaster(t)
@@ -850,6 +857,7 @@ func abortCreationChild(t *testing.T, child *Facade) protocol.Event {
 }
 
 func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.T) {
+	t.Parallel()
 	d := splitMaster(t)
 	s := prepareChildFrontier(t, d)
 	plan := s.ChildCreation.Children[0]
@@ -906,6 +914,7 @@ func TestPreparingChildAbortStopsCreationAndMasterAbortCleansTargets(t *testing.
 }
 
 func TestPreparingChildDriveUsesParentThenChildWindow(t *testing.T) {
+	t.Parallel()
 	d := splitMaster(t)
 	s := prepareChildFrontier(t, d)
 	child, err := Open(d.f.root, s.ChildCreation.Children[0].RunID)
@@ -940,6 +949,7 @@ func TestPreparingChildDriveUsesParentThenChildWindow(t *testing.T) {
 }
 
 func TestMasterAbortWaitsForReleasedChildEffectsBeforeTargetCleanup(t *testing.T) {
+	t.Parallel()
 	for _, inFlight := range []bool{false, true} {
 		t.Run(fmt.Sprintf("worker=%t", inFlight), func(t *testing.T) {
 			master := splitMaster(t)
@@ -1130,6 +1140,7 @@ func retainNativeEvidence(t *testing.T, f *Facade) {
 // The producer's selected requirement, solution and reference stay together
 // through creation, recovery and a subsequent parent confirmation.
 func TestChildCreationPreservesPreparedMaterialConfirmation(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("changed=%t", changed), func(t *testing.T) {
 			root := t.TempDir()

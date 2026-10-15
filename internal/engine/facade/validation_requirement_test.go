@@ -72,6 +72,7 @@ func confirmValidationDocument(d *validationDriver, redo string, inventory *prot
 // start-readiness 而不重走路线时绑定保持，新计划经一次直接路线重选（同
 // 集＋新计划确认）即可确认并替换执行契约——重选通道常开，无死等。
 func TestReadinessRedoOnBoundRouteConfirmsNewPlanByReselection(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	old, oldInput := planBatchAction(d, "command")
 	var choices []protocol.RequirementWorkDecision
@@ -213,7 +214,7 @@ func materializeUnchangedCandidate(d *validationDriver, candidate coverage.Valid
 		data, _ = json.Marshal(evidence)
 		var values map[string]any
 		_ = json.Unmarshal(data, &values)
-		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
 		if err != nil {
 			d.t.Fatal(err)
 		}
@@ -222,6 +223,7 @@ func materializeUnchangedCandidate(d *validationDriver, candidate coverage.Valid
 }
 
 func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"completed", "in-flight", "staged", "retry", "terminal-first"} {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -303,6 +305,7 @@ func TestRequirementGateRedoPreservesCarriedQAExecution(t *testing.T) {
 }
 
 func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
+	t.Parallel()
 	d, finding, wave := validationWithGateFinding(t)
 	original := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, wave)
@@ -394,6 +397,7 @@ func TestRequirementCarryPreservesRequiredAffectedExecution(t *testing.T) {
 // Explicit carry retains original delivery facts while the confirmed document
 // is assembled into its own candidate through the native receipt owner.
 func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "implementation", "review input")
 	d := completePromotionPipeline(t, nil, root, identities[0])
@@ -484,6 +488,7 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 }
 
 func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"spawned", "awaiting-result", "unknown", "attached", "claimed", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
@@ -717,6 +722,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 }
 
 func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []review.Action{review.ProductReview, review.StartReadiness} {
 		for _, terminal := range []bool{false, true} {
 			name := string(kind)
@@ -831,6 +837,7 @@ func TestRequirementRedoReviewSeriesWaitForOriginalStop(t *testing.T) {
 	}
 }
 func TestRequirementRedoTracksLatestReplacementAndPreservesIndependentWorker(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")

@@ -12,6 +12,7 @@ import (
 
 // Gate-only routes keep their confirmed identity and execute exactly their ordinary gates.
 func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
+	t.Parallel()
 	for _, selected := range [][]string{{"quality", "security"}, {"quality"}} {
 		t.Run(strings.Join(selected, ","), func(t *testing.T) {
 			root := t.TempDir()
@@ -91,6 +92,7 @@ func TestOrdinaryGateRoutesCompleteWithoutQA(t *testing.T) {
 }
 
 func TestGateSelectionRequiresConfirmedDevelopmentPlan(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})

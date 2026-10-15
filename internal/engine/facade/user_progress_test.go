@@ -27,6 +27,7 @@ func workerNumberForAction(run Run, action string) int {
 	return 0
 }
 func TestSupplementaryMessageKeepsOriginalActionAndUncertainDeliveryAcrossReopen(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
@@ -115,6 +116,7 @@ func TestSupplementaryMessageKeepsOriginalActionAndUncertainDeliveryAcrossReopen
 }
 
 func TestCancellationKeepsInFlightMessageDeliveryOwner(t *testing.T) {
+	t.Parallel()
 	for _, outcome := range []string{"accepted", "failed", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")
@@ -212,6 +214,7 @@ func TestCancellationKeepsInFlightMessageDeliveryOwner(t *testing.T) {
 }
 
 func TestProgressUsesActualProcessesAndCursorWithoutCallingOrWriting(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	action, _ := d.action("engine.development.batch.v6")
 	initial, err := d.f.ProgressSince(0, nil)
@@ -279,6 +282,7 @@ func TestProgressUsesActualProcessesAndCursorWithoutCallingOrWriting(t *testing.
 // cursor, in acceptance-revision order; reads across cursor positions and
 // reopen never write state.
 func TestProgressReportsRevisionIncrementalWorkerResults(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	design, designInput := d.action("engine.qa.design.v6")
 	development, developmentInput := d.action("engine.development.batch.v6")
@@ -371,6 +375,7 @@ func observeWorkerDispatch(d *validationDriver, action, status string) string {
 }
 
 func TestProgressRespectsObservedSpawnIdentity(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{protocol.SpawnStatusUnknown, protocol.SpawnStatusSpawned, protocol.SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")

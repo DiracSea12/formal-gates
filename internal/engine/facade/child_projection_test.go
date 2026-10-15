@@ -9,6 +9,7 @@ import (
 )
 
 func TestChildProjectionDistinguishesPlannedAndEstablishedRuns(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	state := driverState(t, master)
 	digest, err := master.f.vcs.TreeDigest(state.AcceptedNativeSnapshot())
@@ -52,6 +53,7 @@ func TestChildProjectionDistinguishesPlannedAndEstablishedRuns(t *testing.T) {
 }
 
 func TestAbortBeforeChildBootstrapKeepsOriginalCleanupAuthority(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	state := driverState(t, master)
 	digest, err := master.f.vcs.TreeDigest(state.AcceptedNativeSnapshot())

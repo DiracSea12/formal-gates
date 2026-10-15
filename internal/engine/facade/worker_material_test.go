@@ -24,6 +24,7 @@ import (
 )
 
 func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
+	t.Parallel()
 	f, root := workerMaterialFacade(t)
 	run, err := f.Drive()
 	if err != nil {
@@ -117,6 +118,7 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 }
 
 func TestWorkerMaterialDriveAndReadOnlyRecovery(t *testing.T) {
+	t.Parallel()
 	f, root := workerMaterialFacade(t)
 	first, err := f.Drive()
 	if err != nil {
@@ -187,6 +189,7 @@ func TestWorkerMaterialDriveAndReadOnlyRecovery(t *testing.T) {
 }
 
 func TestWorkerMaterialRejectsUnconfirmedFirstDriveContent(t *testing.T) {
+	t.Parallel()
 	f, root := workerMaterialFacade(t)
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument+"\nchanged before drive"), 0600); err != nil {
 		t.Fatal(err)
@@ -213,6 +216,7 @@ func readWorkerFile(t *testing.T, path string) []byte {
 }
 
 func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"normal", "terminal", "terminal-reopen", "replaced"} {
 		t.Run(boundary, func(t *testing.T) {
 			f, _ := workerMaterialFacade(t)
@@ -435,6 +439,7 @@ func TestWorkerNativeResultUsesOriginalDigestAndReplay(t *testing.T) {
 }
 
 func TestWorkerIntakeWaitsForResetConfirmation(t *testing.T) {
+	t.Parallel()
 	f, _ := workerMaterialFacade(t)
 	event, err := protocol.NewRequestEvent("request-reset", protocol.ControlReset, protocol.AskOption{ID: "proceed", Label: "Reset with preview"})
 	if err != nil {
@@ -492,6 +497,7 @@ func TestWorkerIntakeWaitsForResetConfirmation(t *testing.T) {
 }
 
 func TestRequirementChangeBeforeFirstDrivePreservesConfirmationBarrier(t *testing.T) {
+	t.Parallel()
 	f, root := workerMaterialFacade(t)
 	document := validationDocument + "\n"
 	sum := sha256.Sum256([]byte(document))

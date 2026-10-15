@@ -21,6 +21,7 @@ import (
 )
 
 func TestReadOnlyDevelopmentPreparationRetainsNativeContinuation(t *testing.T) {
+	t.Parallel()
 	for _, receiptFirst := range []bool{true, false} {
 		name := "receipt-before-result"
 		if !receiptFirst {
@@ -175,6 +176,7 @@ func TestReadOnlyDevelopmentPreparationRetainsNativeContinuation(t *testing.T) {
 }
 
 func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
+	t.Parallel()
 	d := nativeMasterDriver(t)
 	plan := commandPlan()
 	plan.Batches[0].Artifacts = []string{"app.go", "handoff.txt"}
@@ -430,6 +432,7 @@ func submitDevelopmentSemanticFixture(t *testing.T, d *validationDriver, ref Wor
 }
 
 func TestRepairFailedProjectCheckRetainsIssuedObligation(t *testing.T) {
+	t.Parallel()
 	d, input, id := nativeRepairReady(t, "P1")
 	d.receipt(id)
 	issued := driverState(t, d).Attempts[input.Binding.Task]

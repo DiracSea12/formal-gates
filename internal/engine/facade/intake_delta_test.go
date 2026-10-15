@@ -104,6 +104,7 @@ func prepareMaterialRevision(t *testing.T, d *validationDriver, document, soluti
 }
 
 func TestReviewFindingMaterialDeltaRetainsLatestSolutionWithoutFreshWorker(t *testing.T) {
+	t.Parallel()
 	d := materialFindingDriver(t, "P2")
 	original, err := d.f.confirmedIntake(d.run)
 	if err != nil {
@@ -169,6 +170,7 @@ func TestReviewFindingMaterialDeltaRetainsLatestSolutionWithoutFreshWorker(t *te
 }
 
 func TestReviewFindingMaterialDeltaRejectsStaleConfirmationWithoutStateChange(t *testing.T) {
+	t.Parallel()
 	d := materialFindingDriver(t, "P2")
 	confirm := prepareMaterialRevision(t, d, validationDocument+"\n完整说明。\n", "# 方案\n完整说明。", false)
 	request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlAbort})
@@ -193,6 +195,7 @@ func TestReviewFindingMaterialDeltaRejectsStaleConfirmationWithoutStateChange(t 
 }
 
 func TestReviewFindingBlockingMaterialPackageUsesOriginalPublicProducer(t *testing.T) {
+	t.Parallel()
 	d := materialFindingDriver(t, "P1")
 	confirm := prepareMaterialRevision(t, d, validationDocument+"\n改变产品说明。\n", "# 方案\n同步完整方案。", true)
 	if confirm.Event.Decide.Requirement.Source != protocol.RequirementSourceReviewFindingP1 || !confirm.Event.Decide.Requirement.RedoProductReview {
@@ -204,6 +207,7 @@ func TestReviewFindingBlockingMaterialPackageUsesOriginalPublicProducer(t *testi
 }
 
 func TestReviewFindingUnchangedMaterialsDoNotCreateConfirmation(t *testing.T) {
+	t.Parallel()
 	d := materialFindingDriver(t, "P2")
 	confirm := prepareMaterialRevision(t, d, validationDocument, "# 方案\n原一\n共同\n原二", false)
 	before, err := d.f.engine.Load()
@@ -220,6 +224,7 @@ func TestReviewFindingUnchangedMaterialsDoNotCreateConfirmation(t *testing.T) {
 }
 
 func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for path, content := range map[string]string{"notes.txt": "普通需求正文。\n", "design.txt": "原完整方案。\n"} {
 		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0600); err != nil {

@@ -213,6 +213,7 @@ func (r *mergeInterruption) Run(dir, command string, args ...string) (string, er
 }
 
 func TestMainlineReopenAdmitsOriginalNativePrefixes(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"merge", "commit", "cases", "candidate"} {
 		t.Run(point, func(t *testing.T) {
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point}
@@ -270,6 +271,7 @@ func submitMainlineTarget(t *testing.T, master *validationDriver) {
 }
 
 func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineChildren(t, "")
 	state := driverState(t, master)
 	if state.Validation.Candidate == nil || len(state.Validation.Waves) != 1 {
@@ -346,6 +348,7 @@ func TestMainlineIntegratesFixedOrderWithFrozenCasesAndFullChildGates(t *testing
 }
 
 func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
+	t.Parallel()
 	master, _ := mainlineChildren(t, "text")
 	id, input := master.action("engine.merge.resolve.v3")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "app.go" {
@@ -379,6 +382,7 @@ func TestMainlineConflictWorkerHasExactContentAuthority(t *testing.T) {
 }
 
 func TestConflictContextRejectsNonConflictEdits(t *testing.T) {
+	t.Parallel()
 	original := []byte("keep before\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> incoming\nkeep after\n")
 	for name, body := range map[string]string{"valid": "keep before\nchosen\nkeep after\n", "outside": "edited before\nchosen\nkeep after\n", "markers": string(original)} {
 		t.Run(name, func(t *testing.T) {
@@ -401,6 +405,7 @@ func mainlineResult(input protocol.ValidationInput) protocol.ValidationResult {
 }
 
 func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	engine, err := protocol.New(master.f.store, protocol.Config{NativeRoot: master.f.root, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 3, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission), WorkerExecution: workerExecutionBridge(master.f.root, master.f.runID)})
 	if err != nil {
@@ -566,6 +571,7 @@ func TestMainlineCapacityRefillAndRepairUseOneFinalCandidate(t *testing.T) {
 }
 
 func TestMainlineReusesOnlyEqualOriginalFullGateInputs(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", true)
 	master.drive()
 	state := driverState(t, master)
@@ -624,6 +630,7 @@ func assertNoMainlineResources(t *testing.T, master *validationDriver) {
 }
 
 func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"binary", "delete"} {
 		t.Run(kind, func(t *testing.T) {
 			master, _ := mainlineChildren(t, kind)
@@ -683,6 +690,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 }
 
 func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"prefix", "later-commit", "worker"} {
 		t.Run(point, func(t *testing.T) {
 			kind := ""
@@ -746,6 +754,7 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 }
 
 func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
 			master, children := mainlineChildren(t, "")
@@ -935,6 +944,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 }
 
 func TestMainlineTextSeparatorsResolveAndReopen(t *testing.T) {
+	t.Parallel()
 	master, _ := mainlineChildren(t, "markdown")
 	id, input := master.action("engine.merge.resolve.v3")
 	if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 || input.Conflict.Evidence.Conflicts[0].Path != "README.md" {
@@ -963,6 +973,7 @@ func TestMainlineTextSeparatorsResolveAndReopen(t *testing.T) {
 }
 
 func TestConflictContextPreservesSeparatorsBetweenNativeHunks(t *testing.T) {
+	t.Parallel()
 	hunk := "<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> incoming\n"
 	original := []byte("Heading\n=======\n" + hunk + "Middle\n=======\n" + hunk + "Tail\n=======\n")
 	resolved := "Heading\n=======\nchosen\nMiddle\n=======\nchosen again\nTail\n=======\n"
@@ -977,6 +988,7 @@ func TestConflictContextPreservesSeparatorsBetweenNativeHunks(t *testing.T) {
 }
 
 func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
+	t.Parallel()
 	plan := splitCommandPlan("parser", "command", "tooling")
 	var master *protocol.DevelopmentBatch
 	for i := range plan.Batches {

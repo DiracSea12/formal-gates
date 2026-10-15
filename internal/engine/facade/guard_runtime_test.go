@@ -36,6 +36,7 @@ func plannedThreeBatchDriver(t *testing.T, gates ...string) *validationDriver {
 // 立即覆盖全部批次（依赖未 Ready 同样计数）与 QA 设计槽，完成前驱后 basis
 // digest 不随签发进度漂移（额度事实源＝确认计划，非已签发事实）。
 func TestGuardAuthorizedSetCountsConfirmedDependentBatchesStably(t *testing.T) {
+	t.Parallel()
 	d := plannedThreeBatchDriver(t, "blackbox")
 	if d.run.GuardBudget == nil {
 		t.Fatal("guard envelope is not engaged for the confirmed plan")
@@ -63,6 +64,7 @@ func TestGuardAuthorizedSetCountsConfirmedDependentBatchesStably(t *testing.T) {
 // 上限后拒绝并落 DISPATCH_BUDGET_DISPOSITION Ask；「retry」授权一次后续用一
 // 次，再次到达上限重新拒绝（不累积）。
 func TestResumeBudgetBoundaryLandsAskAndOneRetryUnlocksOnce(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	id, _ := d.action("engine.qa.design.v6")
 	d.receipt(id)
@@ -153,6 +155,7 @@ func writeTranscript(t *testing.T, path string, lines []string) {
 // sidecar）——Start→Drive→SPAWNED 建立绑定，宿主 start 事件被接收，stop 未到
 // 时结果滞留 COST_PENDING；stop 携 transcript 后下一事务完成并记精确用量。
 func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	testkit.ConfigureNativePaths(t, root, meteredProvider)
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
@@ -226,6 +229,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 // TestOwnerBaselineAndTerminalDelta：来源稳定的 owner 在 start 取基线、终态量
 // 差值（不含启动前历史）；重复终态处理幂等不重复累计。
 func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "owner.jsonl")
 	writeTranscript(t, transcript, []string{
@@ -276,6 +280,7 @@ func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 // 不存在）＝UNAVAILABLE 零数字，不写估算；同 transcript 重叠的双边事实由
 // dispatch_budget_boundary_test 的 TestOwnerOverlapMarksBothRunsUnavailable 覆盖。
 func TestOwnerMissingBaselineMarksUnavailable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, Request: StartRequest{RunID: "owner-missing", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
@@ -294,6 +299,7 @@ func TestOwnerMissingBaselineMarksUnavailable(t *testing.T) {
 // 有配置且达到＝治理派发零签发＋DISPATCH_BUDGET_DISPOSITION Ask，
 // 「continue」一次授权解锁一个 Ready batch 后重新拦截（不累积）。
 func TestTokenCapConfigurationStates(t *testing.T) {
+	t.Parallel()
 	t.Run("unavailable without config", func(t *testing.T) {
 		d := plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, nil, commandPlan(), "blackbox")
 		if d.run.GuardBudget == nil || d.run.GuardBudget.TokenCapStatus != protocol.TokenCapUnavailable {

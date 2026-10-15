@@ -370,6 +370,7 @@ func readInstalledFile(t *testing.T, path string) []byte {
 }
 
 func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
+	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
 	runID := p.start(t, "regular")
@@ -459,6 +460,7 @@ func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 }
 
 func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
+	t.Parallel()
 	p := newInstalledStartProject(t)
 	namespaces := func() map[string][]string {
 		t.Helper()
@@ -519,6 +521,7 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 }
 
 func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
+	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
 	// Lightweight is an explicit start choice and needs no native repository.
@@ -638,6 +641,7 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 // Filling that input pipe with JSON whitespace proves the process crossed that
 // boundary while leaving the business event pending until normal reinstall.
 func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
+	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
 	runID := p.start(t, "regular")

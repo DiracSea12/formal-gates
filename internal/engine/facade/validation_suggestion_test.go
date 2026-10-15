@@ -9,6 +9,7 @@ import (
 )
 
 func TestSuggestionDispositionPreservesCurrentApprovalAndOpenImpacts(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		choices [2]string

@@ -9,6 +9,7 @@ import (
 )
 
 func TestCaseReviewPassKeepsFailureAllowanceAcrossReopening(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []string{"THAW", "SUGGESTION"} {
 		t.Run(reopen, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -58,6 +59,7 @@ func TestCaseReviewPassKeepsFailureAllowanceAcrossReopening(t *testing.T) {
 }
 
 func TestCaseReviewFailureStreakUsesOneBoundGrant(t *testing.T) {
+	t.Parallel()
 	for _, diagnostic := range []bool{true, false} {
 		t.Run(fmt.Sprintf("diagnostic=%t", diagnostic), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")

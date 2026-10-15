@@ -18,6 +18,7 @@ import (
 // Complete confirmation preserves carried child evidence across recovery;
 // a pending parent review still prevents delivery.
 func TestChildConfirmedParentDocumentPreservesRecoveryAndReviewBoundary(t *testing.T) {
+	t.Parallel()
 	for _, reviewPending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("parent-review-pending-%t", reviewPending), func(t *testing.T) {
 			master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)

@@ -20,6 +20,7 @@ import (
 // An unsigned repair follows its current wave; historical requests retain
 // evidence without presenting a second executable authorization.
 func TestRepairOfferFollowsUnissuedResponsibility(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	ask := d.validationAsk("REPAIR")
 	problems := slices.Clone(ask.Validation.Obligations)
@@ -197,6 +198,7 @@ func decideValidation(d *validationDriver, ask PendingAskFace, choice string, ob
 }
 
 func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	dev, di := d.action("engine.development.batch.v6")
 	failCaseReviews(d, 3)
@@ -249,6 +251,7 @@ func TestPrewaveWaiverBindsFixedInputsWithoutApprovingCases(t *testing.T) {
 }
 
 func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
+	t.Parallel()
 	for _, arrival := range []string{"pending", "staged", "completed"} {
 		t.Run(arrival, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -316,6 +319,7 @@ func TestSameCandidateQARetryPreservesUnselectedGateAndEvidence(t *testing.T) {
 }
 
 func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"receipt-first", "result-first"} {
 		t.Run(delivery, func(t *testing.T) {
 			root := t.TempDir()
@@ -513,6 +517,7 @@ func postwaveRepairOffer(t *testing.T, prepared ...*validationDriver) *validatio
 }
 
 func TestRepairAuthorizationRetainsValidationAndRepairHistory(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	ask := d.validationAsk("REPAIR")
 	snapshot, err := d.f.engine.Load()
@@ -614,6 +619,7 @@ func TestRepairAuthorizationRetainsValidationAndRepairHistory(t *testing.T) {
 }
 
 func TestExactWaiverAndQARetryPreserveUnselectedProblems(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	ask := d.validationAsk("REPAIR")
 	if len(ask.Validation.Obligations) != 2 {
@@ -688,6 +694,7 @@ func TestExactWaiverAndQARetryPreserveUnselectedProblems(t *testing.T) {
 }
 
 func TestUnavailableCaseReviewOffersBoundRedesignAndWaiver(t *testing.T) {
+	t.Parallel()
 	for _, remedy := range []string{"redesign", "waive"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -761,6 +768,7 @@ func completeWaivedCandidate(d *validationDriver) {
 }
 
 func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"qa-redo", "gate-redo", "route-addition"} {
 		t.Run(change, func(t *testing.T) {
 			d := postwaveRepairOffer(t)
@@ -843,6 +851,7 @@ func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) 
 }
 
 func TestRuntimeSkipRetainsExactFailedAttemptWithoutGrantingPass(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	var target string
@@ -877,6 +886,7 @@ func TestRuntimeSkipRetainsExactFailedAttemptWithoutGrantingPass(t *testing.T) {
 }
 
 func TestAbortReconcilesUnknownIdentitiesBeforeCleanup(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
@@ -935,6 +945,7 @@ func TestAbortReconcilesUnknownIdentitiesBeforeCleanup(t *testing.T) {
 }
 
 func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
 			root := t.TempDir()
@@ -975,7 +986,7 @@ func TestAbortSettlesOriginalCandidateReceiptWithoutPromotion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			receipt, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+			receipt, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1037,6 +1048,7 @@ func qaModeAction(d *validationDriver, handler string, mode coverage.ReviewKind)
 }
 
 func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, di := d.action("engine.development.batch.v6")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
@@ -1094,6 +1106,7 @@ func TestCaseSetWaiverKeepsOtherModesStrictAndExpiresOnThaw(t *testing.T) {
 
 // A repair first issued after a QA retry keeps that actual wave and its evidence.
 func TestRepairAuthorizationAfterQARetryKeepsIssuedWave(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	ask := d.validationAsk("REPAIR")
 	if len(ask.Validation.Obligations) != 2 {
@@ -1243,6 +1256,7 @@ func assertAuthorizationReplay(d *validationDriver, event protocol.Event) {
 }
 
 func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{"approve", "waive", "retry_qa"} {
 		t.Run(choice, func(t *testing.T) {
 			d := postwaveRepairOffer(t)
@@ -1307,6 +1321,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 }
 
 func TestQARetryReplacesSelectedExecution(t *testing.T) {
+	t.Parallel()
 	for _, life := range []string{"unissued", "running", "awaiting-result", "completed"} {
 		t.Run(life, func(t *testing.T) {
 			d := postwaveRepairOffer(t)
@@ -1414,6 +1429,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 }
 
 func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
+	t.Parallel()
 	for _, extent := range []string{"partial", "all"} {
 		for _, verdict := range []string{"PASS", "FAIL"} {
 			t.Run(extent+"/"+verdict, func(t *testing.T) {
@@ -1534,6 +1550,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 }
 
 func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	repeatRepairQA(d)
 	d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
@@ -1567,6 +1584,7 @@ func TestRepairIssueRemainsBoundWhileFreshQAResultArrives(t *testing.T) {
 }
 
 func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{"decline", "requirement", "abort"} {
 		t.Run(choice, func(t *testing.T) {
 			var d *validationDriver
@@ -1678,6 +1696,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 }
 
 func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
+	t.Parallel()
 	d := postwaveRepairOffer(t)
 	wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	d.submit(protocol.Event{Kind: protocol.KindRequestControl, Request: &protocol.RequestPayload{Control: protocol.ControlValidation, Options: []protocol.AskOption{{ID: "approve", Label: "Repeat selected QA"}}, Validation: &protocol.ValidationRequest{Kind: "QA_RETRY", Target: wave.ID}}})
@@ -1718,6 +1737,7 @@ func TestValidationRemedyChoicesRefreshBeforeFreshnessBinding(t *testing.T) {
 }
 
 func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, devInput := d.action("engine.development.batch.v6")
 	d.business(dev, protocol.ValidationResult{Binding: devInput.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented command"}})
@@ -1778,6 +1798,7 @@ func TestQARetryKeepsUnselectedQADispatch(t *testing.T) {
 }
 
 func TestAbortCleansRejectedCandidateWithUndeclaredChanges(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")

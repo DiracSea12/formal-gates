@@ -10,6 +10,7 @@ import (
 )
 
 func TestChildControlReadWindowUsesActualMasterAndChild(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	master.drive()
 	child, err := Open(master.f.root, master.run.SliceChildren["lane-core"])

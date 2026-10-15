@@ -206,6 +206,7 @@ func assertConfirmedMaterial(t *testing.T, d *validationDriver, input protocol.V
 
 // Confirmed full material and native content survive delivery and retained user control.
 func TestConfirmedRequirementDeliveryRetainsHumanBoundary(t *testing.T) {
+	t.Parallel()
 	d, child, _, _ := deliveredChildCheckpoint(t, validationDocument+"\n")
 	f, root := child.f, d.f.root
 	request, err := protocol.NewRequestEvent("checkpoint-user-control", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Cancel"})

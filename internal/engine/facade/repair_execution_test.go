@@ -18,6 +18,7 @@ import (
 )
 
 func TestRepairMemberRedoUsesCurrentSourceClosure(t *testing.T) {
+	t.Parallel()
 	d, initial, id := nativeRepairReady(t, "P2")
 	p := repairBatchPlan("FINAL")
 	p.Batches = p.Batches[:2]
@@ -215,6 +216,7 @@ func nativeMemberCompletion(t *testing.T, d *validationDriver, id string, in pro
 }
 
 func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
+	t.Parallel()
 	for _, severity := range []string{"P1", "P2"} {
 		for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 			t.Run(fmt.Sprintf("%s/%s", severity, tier), func(t *testing.T) {
@@ -323,6 +325,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 }
 
 func TestRepairNativeGateFailureKeepsFrozenSource(t *testing.T) {
+	t.Parallel()
 	d, initial, id := nativeRepairReady(t, "P1")
 	p := repairBatchPlan("FINAL")
 	p.Batches = p.Batches[:2]

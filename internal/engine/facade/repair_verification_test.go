@@ -18,6 +18,7 @@ import (
 )
 
 func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
+	t.Parallel()
 	for _, regression := range []bool{true, false} {
 		t.Run(map[bool]string{true: "regression", false: "passed"}[regression], func(t *testing.T) {
 			root := t.TempDir()
@@ -306,6 +307,7 @@ func nativeRepairChecks(t *testing.T, child *validationDriver, sourceActions ...
 }
 
 func TestChildRepairWithoutQACasesUsesNativeCompletion(t *testing.T) {
+	t.Parallel()
 	for _, regression := range []bool{false, true} {
 		t.Run(map[bool]string{false: "passed", true: "regression"}[regression], func(t *testing.T) {
 			child, repair, input := childWithP2GateRepair(t)
@@ -365,6 +367,7 @@ func TestChildRepairWithoutQACasesUsesNativeCompletion(t *testing.T) {
 }
 
 func TestChildRepairWithoutQACasesChecksIntegratedSource(t *testing.T) {
+	t.Parallel()
 	for _, regression := range []bool{false, true} {
 		t.Run(map[bool]string{false: "passed", true: "regression"}[regression], func(t *testing.T) {
 			child, repair, input := childWithP2GateRepair(t)
@@ -441,6 +444,7 @@ func TestChildRepairWithoutQACasesChecksIntegratedSource(t *testing.T) {
 }
 
 func TestPureP2RepairWithApprovedCasesRequiresAffectedCases(t *testing.T) {
+	t.Parallel()
 	d, input, repair := nativeRepairReady(t, "P2")
 	if len(input.Contract.Manifests) == 0 || !input.Binding.PureP2 {
 		t.Fatal("normal repair lacks the approved QA prerequisite")

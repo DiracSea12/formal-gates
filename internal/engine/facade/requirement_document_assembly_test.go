@@ -14,6 +14,7 @@ import (
 )
 
 func TestConfirmedRequirementDocumentAssembly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "implementation", "review input")
 	d := completePromotionPipeline(t, nil, root, identities[0])

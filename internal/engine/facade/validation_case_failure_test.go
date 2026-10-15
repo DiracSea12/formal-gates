@@ -15,6 +15,7 @@ func executionFailureResolution(id string) protocol.FindingResolution {
 }
 
 func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"normal", "held", "checkpoint", "native-resume"} {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -180,6 +181,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 }
 
 func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
+	t.Parallel()
 	d, finding, origin := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, origin)
 	action, input := d.action("engine.repair.v7")
@@ -235,6 +237,7 @@ func TestCompletedCandidateAcceptsNewCorrectedProblem(t *testing.T) {
 }
 
 func TestCaseFailuresRemainModeBound(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -308,6 +311,7 @@ func TestCaseFailuresRemainModeBound(t *testing.T) {
 }
 
 func TestCaseFailureDoesNotPromoteIndependentAdvisories(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "invalid input accepted"}}
 	d.reviewReady()

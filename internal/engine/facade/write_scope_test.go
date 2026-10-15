@@ -17,6 +17,7 @@ import (
 )
 
 func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	sum := sha256.Sum256([]byte(validationDocument))
@@ -138,6 +139,7 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 }
 
 func TestCarriedDevelopmentKeepsPublicWriteScope(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	binary := filepath.Join(t.TempDir(), "formal-gates")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")

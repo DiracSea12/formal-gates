@@ -17,6 +17,7 @@ import (
 // Route confirmation retains the native creation responsibility; normal
 // completion and a lost response admit the same original workspace proof.
 func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
+	t.Parallel()
 	for _, lostResponse := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lost-response=%t", lostResponse), func(t *testing.T) {
 			root := t.TempDir()
@@ -120,10 +121,12 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 }
 
 func TestCarriedPendingWorkspaceKeepsItsOriginalReceipt(t *testing.T) {
+	t.Parallel()
 	pendingWorkspaceRequirementChange(t, false)
 }
 
 func TestReplacedPendingWorkspaceUsesItsNewTask(t *testing.T) {
+	t.Parallel()
 	pendingWorkspaceRequirementChange(t, true)
 }
 
@@ -320,6 +323,7 @@ func pendingWorkspaceRequirementChange(t *testing.T, redo bool) {
 // A confirmed route addition binds a new mirror while retained calls keep
 // their original evidence and observe their native prefix before new writes.
 func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{"pending", "unknown-absent", "unknown-executed", "late-executed"} {
 		t.Run(response, func(t *testing.T) {
 			root := t.TempDir()

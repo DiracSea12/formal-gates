@@ -48,6 +48,7 @@ func fixturePlanRequirements(plan *protocol.GranularityReview, points []requirem
 // Checkpoint review covers completed contributions; final review covers the
 // confirmed project even when no QA gates are selected.
 func TestCheckpointGateUsesCompletedRequirementPoints(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	snapshotRepoCommits(t, root)
 	document := strings.Replace(validationDocument, "- AC-001：正常输入成功，错误输入拒绝。", "- AC-001：正常输入成功。\n- AC-002：错误输入拒绝。", 1)
@@ -143,6 +144,7 @@ func TestCheckpointGateUsesCompletedRequirementPoints(t *testing.T) {
 // A verification-only contribution preserves the candidate while requiring a
 // final review of all responsibilities beyond the preceding checkpoint.
 func TestFinalGateReviewsCompleteScopeForUnchangedCandidate(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	p := commandPlan()

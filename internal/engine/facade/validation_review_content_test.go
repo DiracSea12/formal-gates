@@ -13,6 +13,7 @@ import (
 
 // Actual test bytes and execution establish the unchanged/changed content controls.
 func TestWhiteboxApprovalInheritanceUsesCandidateContent(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("content-changed-%v", changed), func(t *testing.T) {
 

@@ -12,6 +12,7 @@ import (
 // G AC-017 keeps a signed repair's diagnosis stable while a later correction
 // records a different problem for the repaired snapshot's next wave.
 func TestSignedRepairDiagnosisSurvivesCorrectionAndReopen(t *testing.T) {
+	t.Parallel()
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	id, input := d.action("engine.repair.v7")
@@ -84,6 +85,7 @@ func TestSignedRepairDiagnosisSurvivesCorrectionAndReopen(t *testing.T) {
 // Finding provenance may precede a route change. Deferred correction follows
 // the actual signed repair and its materialized candidate, not the report wave.
 func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
+	t.Parallel()
 	d, finding, origin := validationWithGateFinding(t)
 	unlockRouteByRequirementRedo(d)
 	unlockRouteByRequirementRedo(d)
@@ -166,6 +168,7 @@ func TestDeferredCorrectionFollowsActualRepairResponsibility(t *testing.T) {
 // A retired snapshot repair cannot absorb a later diagnosis or be recreated by
 // a different validation projection. Each new problem needs its own decision.
 func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
+	t.Parallel()
 	for _, projection := range []string{"current", "route", "qa-retry", "requirement-carry"} {
 		t.Run(projection, func(t *testing.T) {
 			d, finding, origin := validationWithGateFinding(t)

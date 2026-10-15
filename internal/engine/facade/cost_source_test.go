@@ -23,6 +23,7 @@ func digestOf(value string) string {
 // lifecycle 事件（LifecycleRequired=false 的宽松 provider）不得被当成等待中的
 // 成本来源——解析结果必须是 UNAVAILABLE，否则结果会永久停在 COST_PENDING。
 func TestCostSourceBridgeReportsUnsupportedHostUnavailable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runID, action := "cost-run", "act:cost-1"
 	if err := lifecycle.BindDispatchWithProvider(root, runID, action, "agent-1", "default"); err != nil {
@@ -40,6 +41,7 @@ func TestCostSourceBridgeReportsUnsupportedHostUnavailable(t *testing.T) {
 // TestCostSourceBridgeHoldsObservableHostPending：强 lifecycle 宿主上 stop 证据
 // 未到（start 在账）仍是 PENDING——回执边界等待语义只对可观测宿主成立。
 func TestCostSourceBridgeHoldsObservableHostPending(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runID, action := "cost-run", "act:cost-2"
 	if err := lifecycle.BindDispatchWithProvider(root, runID, action, "agent-2", host.Claude); err != nil {
@@ -57,6 +59,7 @@ func TestCostSourceBridgeHoldsObservableHostPending(t *testing.T) {
 // TestCostSourceBridgeReportsMissingBindingUnavailable：无 lifecycle 绑定的引用
 // 是明确缺源（UNAVAILABLE），不是等待。
 func TestCostSourceBridgeReportsMissingBindingUnavailable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	resolved := CostSourceBridge(root, "cost-run")(protocol.CostSourceRef{RunID: "cost-run", ActionID: "act:missing", Provider: "claude"})
 	if resolved.State != protocol.CostSourceUnavailable || resolved.Reason != "dispatch has no lifecycle binding" {
@@ -65,6 +68,7 @@ func TestCostSourceBridgeReportsMissingBindingUnavailable(t *testing.T) {
 }
 
 func TestCostSourceBridgeResolvesBoundNativeUsage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		provider, content string
 		want              cost.Usage
@@ -98,6 +102,7 @@ func TestCostSourceBridgeResolvesBoundNativeUsage(t *testing.T) {
 }
 
 func TestCostSourceBridgeRetainsMissingSourceReasons(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, provider, refProvider, content, reason string
 		withPath                                     bool

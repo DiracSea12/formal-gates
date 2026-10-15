@@ -68,6 +68,7 @@ func awaitQAInput(t *testing.T, d *validationDriver, ready func(protocol.Validat
 }
 
 func TestQAExecutionBindsCommandsThenComparesOriginalFacts(t *testing.T) {
+	t.Parallel()
 	d, manifest := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		m.Cases[0].Operations = nil
 		m.Cases[0].Steps = "Print accepted input and capture both streams and the exit"
@@ -163,6 +164,7 @@ func buildPreparationExecutable(t *testing.T, directory, source string) string {
 }
 
 func TestShellPreparationExecutesEachCaseAndIsolatesCaseWork(t *testing.T) {
+	t.Parallel()
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "mkdir -p prepared; printf x >> prepared/runs; printf common > prepared/product"}}}}
 		for index := range m.Cases {
@@ -301,6 +303,7 @@ func assertCaseWorkIsolationAndSharedExecutionRecovery(t *testing.T, d *validati
 }
 
 func TestIndependentPreparationActuallyRunsInEachPrivateEnvironment(t *testing.T) {
+	t.Parallel()
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		m.SharedSteps = []coverage.SharedStep{{ID: "install", Procedure: "Exercise independent mutable installation", Independent: true, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/install"; printf x > "$FORMAL_GATES_QA_WORK_DIR/install"; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"`}}}}
 		for index := range m.Cases {
@@ -325,6 +328,7 @@ func TestIndependentPreparationActuallyRunsInEachPrivateEnvironment(t *testing.T
 }
 
 func TestSharedPreparationReusesCompleteRecipeOrRebuildsAllProducts(t *testing.T) {
+	t.Parallel()
 	first := buildPreparationExecutable(t, t.TempDir(), `package main
 import "os"
 func main() {
@@ -508,6 +512,7 @@ func assertPreparationExecutesChangedExternalInput(t *testing.T, invocation stri
 }
 
 func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
+	t.Parallel()
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		for index := range m.Cases {
 			m.Cases[index].Operations = nil
@@ -603,6 +608,7 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 }
 
 func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is unavailable")
 	}
@@ -672,6 +678,7 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 // The shared invocation checkpoint binds only missing invocations before native
 // execution, and same-source commands run there in order without folding.
 func TestSharedInvocationCheckpointExecutesApprovedPrefixAndDeclaredCase(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct{ name, raw string }{
 		{"same-source duplicate commands are not folded", `{"commands":[[{"kind":"SHELL","command":"printf ready > prepared-input"},{"kind":"SHELL","command":"printf ready > prepared-input"}],[{"kind":"SHELL","command":"printf checked > prepared-marker"}],[{"kind":"SHELL","command":"cat prepared-input prepared-marker"}]]}`},
 		{"same-source commands run in order", `{"commands":[[{"kind":"SHELL","command":"printf re > prepared-input"},{"kind":"SHELL","command":"sleep 0.1; printf ady >> prepared-input"}],[{"kind":"SHELL","command":"printf checked > prepared-marker"}],[{"kind":"SHELL","command":"cat prepared-input prepared-marker"}]]}`},

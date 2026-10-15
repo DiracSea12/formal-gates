@@ -17,6 +17,7 @@ import (
 )
 
 func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	snapshotRepoCommits(t, root)
 	files := map[string]string{
@@ -219,6 +220,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 }
 
 func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	plan := commandPlan()
@@ -350,6 +352,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 }
 
 func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	snapshotRepoCommits(t, root)
 	files := map[string]string{

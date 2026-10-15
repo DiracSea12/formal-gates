@@ -12,6 +12,7 @@ import (
 )
 
 func TestStartFlowSelectionPersistsAndProjectsOriginalChoices(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)
@@ -58,6 +59,7 @@ func TestStartFlowSelectionPersistsAndProjectsOriginalChoices(t *testing.T) {
 }
 
 func TestStartRejectsUnknownFlowNodeBeforeRunWrite(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
 		RunID: "selected-flow", Route: "lightweight", FlowSelection: &protocol.FlowSelection{Disabled: []string{"missing-node"}},
@@ -71,6 +73,7 @@ func TestStartRejectsUnknownFlowNodeBeforeRunWrite(t *testing.T) {
 }
 
 func TestDisabledDevelopmentRouteConfirmsWithoutPlan(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)
@@ -118,6 +121,7 @@ func TestDisabledDevelopmentRouteConfirmsWithoutPlan(t *testing.T) {
 }
 
 func TestTerminalViewRetainsFlowSelection(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	want := &protocol.FlowSelection{Disabled: []string{"product-review"}}
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
@@ -137,6 +141,7 @@ func TestTerminalViewRetainsFlowSelection(t *testing.T) {
 }
 
 func TestResetRetainsDisabledReviewSelection(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)

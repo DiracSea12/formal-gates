@@ -10,6 +10,7 @@ import (
 )
 
 func TestGateImpactKeepsItsCandidateAndOriginalResponsibility(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{"INHERIT", "RERUN"} {
 		for _, route := range []bool{false, true} {
 			name := choice

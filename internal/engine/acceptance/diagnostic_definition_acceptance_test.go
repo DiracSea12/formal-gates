@@ -15,6 +15,7 @@ import (
 )
 
 func TestAcceptanceDiagnosticDefinitionExecutability(t *testing.T) {
+	t.Parallel()
 	// executable 路径：完整 registry 编译，源级全步骤断言零诊断、无 marker。
 	t.Run("fully registered test graph encodes without diagnostics", func(t *testing.T) {
 		compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
@@ -69,6 +70,7 @@ func TestAcceptanceDiagnosticDefinitionExecutability(t *testing.T) {
 
 // 协议测试图十步的 kind/authority/runner 物化值必须与各步骤类型一致。
 func TestAcceptanceProtocolGraphStepKinds(t *testing.T) {
+	t.Parallel()
 	cd, _, _ := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 	want := map[string]struct {
 		kind compiler.StepKind

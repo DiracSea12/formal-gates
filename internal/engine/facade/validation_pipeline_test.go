@@ -720,6 +720,7 @@ func nativeExecutionResult(input protocol.ValidationInput, result protocol.Valid
 // supplies typed native facts; physical Facade.Drive is covered by the native
 // public-workflow checks.
 func TestValidationPipelineAdmitsCanonicalReceiptFacts(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	qa, qi := d.action("engine.qa.execution.v4")
@@ -746,6 +747,7 @@ func TestValidationPipelineAdmitsCanonicalReceiptFacts(t *testing.T) {
 }
 
 func TestMissingReviewClosesFiniteAttemptsAndAllowsOneBoundExtra(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	var task protocol.PendingAction
 	for i := 0; i < 3; i++ {
@@ -799,6 +801,7 @@ func TestMissingReviewClosesFiniteAttemptsAndAllowsOneBoundExtra(t *testing.T) {
 }
 
 func TestConfirmedSolutionCoverageAndNonQAEvidenceReachWhitelist(t *testing.T) {
+	t.Parallel()
 	inventory := &protocol.CoverageInventory{
 		Sources:      []coverage.RequiredSource{{SourceID: "SOL-001", Category: coverage.SolutionConstraint, Applicability: coverage.QAApplicability}, {SourceID: "SOL-002", Category: coverage.SolutionConstraint, Applicability: coverage.NonQAApplicability}},
 		Points:       []coverage.AcceptancePoint{{PointID: "SP-001", ObservableBehavior: "operation records its result", Oracle: "record exists after success"}},
@@ -841,6 +844,7 @@ func (d *validationDriver) carryFormattingChange() string {
 }
 
 func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	old := map[string]protocol.PendingAction{}
 	for id, a := range d.run.PendingActions {
@@ -871,6 +875,7 @@ func TestConfirmedCarryKeepsIssuedDevelopmentAndDesign(t *testing.T) {
 }
 
 func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
+	t.Parallel()
 	d := candidateSourceDriver(t, "blackbox", "whitebox", "quality")
 	request, err := d.f.request()
 	if err != nil {
@@ -929,7 +934,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 		data, _ := json.Marshal(e)
 		values := map[string]any{}
 		_ = json.Unmarshal(data, &values)
-		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
+		event, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", values)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -991,6 +996,7 @@ func TestDualQACandidatePreservesReviewedTestBytesAndDeletion(t *testing.T) {
 }
 
 func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
+	t.Parallel()
 	for _, handler := range []string{"engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -1077,6 +1083,7 @@ func TestConfirmedCarryAcceptsOriginalReviewAndWaveEvidence(t *testing.T) {
 }
 
 func TestValidationRequirementRemedyUsesOneConfirmableAsk(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []protocol.AskOptionID{"proceed", "abort"} {
 		t.Run(string(choice), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -1294,7 +1301,7 @@ func (d *validationDriver) candidateReceipt(id string, intent protocol.HostActio
 	data, _ := json.Marshal(evidence)
 	fields := map[string]any{}
 	_ = json.Unmarshal(data, &fields)
-	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
+	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), id, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", fields)
 	if err != nil {
 		d.t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ import (
 // The requirement decision covers the unfinished business duty even when its
 // last execution is over. CARRY keeps its allowance; REDO replaces the duty.
 func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
+	t.Parallel()
 	for _, disposition := range []string{"CARRY", "REDO"} {
 		for _, reopen := range []bool{false, true} {
 			name := disposition + map[bool]string{false: "/normal", true: "/reopen"}[reopen]
@@ -131,6 +132,7 @@ func TestEndedWorkRequiresRequirementDisposition(t *testing.T) {
 // Failed executions remain decisions about the same duty across both pre-wave
 // authoring and frozen validation targets, including a carried invalidated wave.
 func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"engine.qa.design.v6", "engine.qa.review.rationale.v2", "engine.qa.execution.v4", "engine.gate.v3"} {
 		for _, redo := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/redo=%t", role, redo), func(t *testing.T) {
@@ -287,6 +289,7 @@ func TestEndedValidationWorkRetainsItsOwnerAcrossRequirementChange(t *testing.T)
 }
 
 func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
+	t.Parallel()
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replace=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")
@@ -353,6 +356,7 @@ func TestRepeatedRequirementCarryKeepsOriginalRetryBinding(t *testing.T) {
 }
 
 func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
+	t.Parallel()
 	for _, thaw := range []bool{false, true} {
 		t.Run(fmt.Sprintf("thaw=%t", thaw), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
@@ -475,6 +479,7 @@ func TestCarriedRepairRemainsOwedWhileAnotherTargetIsRedone(t *testing.T) {
 }
 
 func TestRequirementBarrierSettlesFailedAttemptByItsDecision(t *testing.T) {
+	t.Parallel()
 	for _, redo := range []bool{false, true} {
 		t.Run(fmt.Sprintf("redo=%t", redo), func(t *testing.T) {
 			d := newValidationDriver(t, "quality")

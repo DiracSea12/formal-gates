@@ -11,6 +11,7 @@ import (
 
 // Invalid worker content ends its execution without completing a semantic review.
 func TestReadinessContentUsesFiniteOriginalAttempt(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"receipt-first", "result-first", "terminal-first", "carried-result-first"} {
 		for _, shape := range []string{"valid", "missing", "bad-dependency"} {
 			t.Run(delivery+"/"+shape, func(t *testing.T) {

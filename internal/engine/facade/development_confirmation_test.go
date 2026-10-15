@@ -14,6 +14,7 @@ import (
 // Requirement replacement must prepare its current plan before asking the user
 // to confirm topology or route, while retaining original requests and evidence.
 func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
+	t.Parallel()
 	for _, control := range []protocol.ControlKind{protocol.ControlConfirmTopology, protocol.ControlSelectRoute} {
 		t.Run(string(control), func(t *testing.T) {
 			root := t.TempDir()

@@ -15,6 +15,7 @@ import (
 )
 
 func TestFindingSeverityCorrectionKeepsRemedyConfirmation(t *testing.T) {
+	t.Parallel()
 	for _, confirmed := range []bool{false, true} {
 		name := "unconfirmed remedy remains pending"
 		if confirmed {

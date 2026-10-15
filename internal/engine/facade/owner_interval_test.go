@@ -35,6 +35,7 @@ func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 // root——共享 transcript 的 run 全部报 UNAVAILABLE（区间确相交），独立
 // transcript 的 run 报精确差值；并行启动不因协调竞争失败。
 func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	type entry struct {
 		id         string
@@ -98,6 +99,7 @@ func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 // 除，终态摘要保留）——重叠标记在 peer 的启动段内双边持久，我方终态不得报
 // 精确假数字。
 func TestVanishedPeerBeforeTerminalStillMarksBothUnavailable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "shared.jsonl")
 	writeTranscript(t, transcript, []string{intervalBaseLine})
@@ -141,6 +143,7 @@ func TestVanishedPeerBeforeTerminalStillMarksBothUnavailable(t *testing.T) {
 // TestTerminalPeerDoesNotOverlapLaterRun：精确性负控——对端先于我启动且已终态
 // （同 transcript），双方都报各自的精确差值，不因留存终态摘要误判重叠。
 func TestTerminalPeerDoesNotOverlapLaterRun(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "shared.jsonl")
 	writeTranscript(t, transcript, []string{intervalBaseLine})
@@ -170,6 +173,7 @@ func TestTerminalPeerDoesNotOverlapLaterRun(t *testing.T) {
 // 放区间（UNAVAILABLE、并补写 first 的重叠标记），双方不再各记一笔精确差值；
 // first 恢复量取同样 UNAVAILABLE。
 func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})

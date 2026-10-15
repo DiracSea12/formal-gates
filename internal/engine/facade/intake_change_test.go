@@ -18,6 +18,7 @@ import (
 // User edits use the same complete material preview and typed confirmation at
 // review, route, development and validation boundaries on a native microproject.
 func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testing.T) {
+	t.Parallel()
 	second := "\n### REQ-002：错误输入\n\n#### 要求\n错误输入拒绝。\n\n#### 验收条件\n- AC-002：错误输入退出码非零。\n\n#### 来源\n用户要求。\n"
 	original := strings.Replace(validationDocument, "正常输入成功，错误输入拒绝。", "正常输入退出码零。", 1) + second
 	for _, boundary := range []string{"product-review", "route-selection", "development", "validation"} {
@@ -183,6 +184,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 }
 
 func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"independent", "same-content", "updated-solution", "changed-solution", "changed-reference"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
@@ -385,6 +387,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 }
 
 func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	snapshotRepoCommits(t, root)
 	for path, content := range map[string]string{"design.md": "# Selected design\nRetain the approved solution.\n", "reference.md": "# Original reference\n"} {

@@ -10,6 +10,7 @@ import (
 )
 
 func TestConfirmedCoveragePreservesEveryRelation(t *testing.T) {
+	t.Parallel()
 	for _, complete := range []bool{false, true} {
 		for _, reopen := range []bool{false, true} {
 			name := map[bool]string{false: "missing", true: "complete"}[complete] + "/" + map[bool]string{false: "normal", true: "reopened"}[reopen]
@@ -89,6 +90,7 @@ func relationManifest(in protocol.ValidationInput) coverage.AcceptanceManifest {
 }
 
 func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"in-flight", "completed"} {
 		t.Run(phase, func(t *testing.T) {
 			inventory := relationInventory()
@@ -143,6 +145,7 @@ func TestConfirmedRelationChangeBlocksCarryUntilDesignIsComplete(t *testing.T) {
 }
 
 func TestSelectedModesShareConfirmedRelations(t *testing.T) {
+	t.Parallel()
 	inventory := relationInventory()
 	inventory.Links = append(inventory.Links, protocol.SourcePoint{SourceID: "SOL-002", PointID: "SP-001"})
 	d := configuredValidationDriver(t, inventory, "blackbox", "whitebox", "quality")

@@ -21,6 +21,7 @@ import (
 )
 
 func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []string{"", "requirements.md", "design.md", "reference.md"} {
 		t.Run("changed="+changed, func(t *testing.T) {
 			root := t.TempDir()
@@ -88,6 +89,7 @@ func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t 
 }
 
 func TestPreparedIntakeKeepsSingleFileDefaultAndLightweightMaterial(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "requirements.md")
 	if err := os.WriteFile(path, []byte("# Confirmed request and solution\n"), 0600); err != nil {
@@ -106,6 +108,7 @@ func TestPreparedIntakeKeepsSingleFileDefaultAndLightweightMaterial(t *testing.T
 }
 
 func TestRegularStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	path := filepath.Join(root, "requirements.md")
@@ -153,6 +156,7 @@ func TestRegularStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testin
 }
 
 func TestPreparedIntakeRegularStartBindsPrecheckedDocument(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	preview, err := PrepareIntake(root, "requirements.md", "", nil, true)
@@ -179,6 +183,7 @@ func TestPreparedIntakeRegularStartBindsPrecheckedDocument(t *testing.T) {
 }
 
 func TestPreparedIntakeStartReusesGeneratedSourceIdentities(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	content := strings.ReplaceAll(strings.ReplaceAll(validationDocument, "REQ-001：", ""), "AC-001：", "")

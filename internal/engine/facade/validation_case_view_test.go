@@ -15,6 +15,7 @@ import (
 
 // Review inheritance consumes both original complete dependency views.
 func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"unchanged", "held", "missing-proof", "baseline-missing", "shared-input-changed", "config-changed", "different-test-ref"} {
 		t.Run(variant, func(t *testing.T) {
 			d := candidateSourceDriver(t, "whitebox")
@@ -119,7 +120,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 						values["reviewViews"] = views
 					}
 				}
-				ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+				ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
 				if err != nil {
 					t.Fatal(err)
 				}

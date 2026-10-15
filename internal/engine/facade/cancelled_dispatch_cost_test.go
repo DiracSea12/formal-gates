@@ -15,6 +15,7 @@ import (
 )
 
 func TestCancelledStoppedDispatchRetainsManagedNativeCost(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		control protocol.ControlKind
 		source  string

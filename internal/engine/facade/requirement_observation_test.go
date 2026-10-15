@@ -15,6 +15,7 @@ import (
 )
 
 func TestResetRequirementConfirmationRechecksLiveFileBeforeRegistration(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unchanged", true: "changed"}[changed], func(t *testing.T) {
 			d := nativeMasterDriver(t)
@@ -114,6 +115,7 @@ func TestResetRequirementConfirmationRechecksLiveFileBeforeRegistration(t *testi
 }
 
 func TestControlMaterialObservationRechecksSelectedSolution(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"reset-request", "reset-decision", "requirement-package", "requirement-confirmation"} {
 		for _, changed := range []bool{false, true} {
 			t.Run(boundary+"/"+map[bool]string{false: "unchanged", true: "changed"}[changed], func(t *testing.T) {

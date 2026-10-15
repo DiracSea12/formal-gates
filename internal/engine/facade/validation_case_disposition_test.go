@@ -12,6 +12,7 @@ import (
 
 // Actual case failures retain their own disposition when another case in the same target is waived.
 func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		name := "normal"
 		if held {
@@ -128,6 +129,7 @@ func TestIndividualCaseDispositionSurvivesSiblingWaiver(t *testing.T) {
 }
 
 func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
+	t.Parallel()
 	for _, rawOpen := range []bool{false, true} {
 		t.Run(fmt.Sprintf("independent-raw=%t", rawOpen), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")

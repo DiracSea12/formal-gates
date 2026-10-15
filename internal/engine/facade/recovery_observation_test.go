@@ -8,6 +8,7 @@ import (
 )
 
 func TestTransientRecoveryRetainsWorkAfterPreviousDispatchCost(t *testing.T) {
+	t.Parallel()
 	d := nativeMasterDriver(t)
 	meterReceiptDispatches(d, 1, 4, 2)
 	passPreDevelopmentReviews(t, d, commandPlan(), review.ProductReview)

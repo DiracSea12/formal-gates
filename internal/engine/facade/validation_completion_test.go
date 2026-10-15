@@ -10,6 +10,7 @@ import (
 )
 
 func TestEmptyWhiteboxPathsDoNotRepeatPromotionAfterRecovery(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "whitebox", "quality")
 	d.fixtureQAResults = map[string]protocol.CheckEvidence{"normal": {ExitCode: 0}, "invalid": {ExitCode: 2}}
 	dev, input := d.action("engine.development.batch.v6")
@@ -112,6 +113,7 @@ func TestEmptyWhiteboxPathsDoNotRepeatPromotionAfterRecovery(t *testing.T) {
 // Completion reconciles approved cases, original evidence and current sources;
 // the wave's COMPLETE label alone cannot authorize native delivery.
 func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
+	t.Parallel()
 	d := repairedExecutionDriver(t)
 	d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 	action, input := d.action("engine.qa.execution.v4")

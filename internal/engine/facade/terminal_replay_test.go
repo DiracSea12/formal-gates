@@ -15,6 +15,7 @@ import (
 // Terminal reads and accepted-event replay expose retained review facts without
 // changing the immutable summary or recreating active state.
 func TestTerminalReadsRetainReviewFacts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := startValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil)
@@ -103,6 +104,7 @@ func TestTerminalReadsRetainReviewFacts(t *testing.T) {
 // Each supported abort control preserves its accepted business identity while
 // signed workers finish through their original lifecycle and typed receipts.
 func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
+	t.Parallel()
 	for _, control := range []protocol.ControlKind{protocol.ControlAbort, protocol.ControlValidation, protocol.ControlRecovery} {
 		t.Run(string(control), func(t *testing.T) {
 			root := t.TempDir()
@@ -254,6 +256,7 @@ func TestTerminalAbortDecisionSurvivesLaterHostFacts(t *testing.T) {
 
 // Accepted events retain their original receipts across every terminal cleanup seam.
 func TestTerminalEventReceiptSurvivesCleanup(t *testing.T) {
+	t.Parallel()
 	for _, seam := range []string{"before-cleanup", "after-cleanup", "intent-before-cleanup", "cleanup-before-summary", "summary-before-intent-removal"} {
 		t.Run(seam, func(t *testing.T) {
 			d := nativeMasterDriver(t)

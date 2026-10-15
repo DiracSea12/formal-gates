@@ -49,6 +49,7 @@ func replay(t *testing.T, cd *compiler.CompiledDefinition, k int) *decision.Stat
 // TestAcceptanceLegalCompletionSequenceGolden：golden 序列逐步合法完成；全部
 // 完成后 Decide 投影 COMPLETE、frontier 清空。
 func TestAcceptanceLegalCompletionSequenceGolden(t *testing.T) {
+	t.Parallel()
 	cd, _, _ := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 	s := newRunState(t, cd)
 	for i, id := range workflowGoldenOrder {
@@ -73,6 +74,7 @@ func TestAcceptanceLegalCompletionSequenceGolden(t *testing.T) {
 
 // TestAcceptanceIllegalCompletionSequencesRejected：三类非法序列全拒。
 func TestAcceptanceIllegalCompletionSequencesRejected(t *testing.T) {
+	t.Parallel()
 	cd, _, _ := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 
 	t.Run("out-of-order", func(t *testing.T) {

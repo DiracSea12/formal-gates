@@ -14,6 +14,7 @@ import (
 )
 
 func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(t *testing.T) {
+	t.Parallel()
 	d := plannedValidationDriver(t, nil, commandPlan(), "quality")
 	dev, di := planBatchAction(d, "command")
 	d.business(dev, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
@@ -160,6 +161,7 @@ func TestCompletedRepairRedoPreservesOriginalEvidenceAndReplacesCandidateSource(
 }
 
 func TestMultipleRepairRedosKeepCausalOrderAndActualBases(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"normal", "reopen", "inflight", "mixed-severity"} {
 		t.Run(scenario, func(t *testing.T) {
 			reopen := scenario == "reopen"

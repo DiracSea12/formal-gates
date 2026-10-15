@@ -21,6 +21,7 @@ import (
 // Probe edits stay in their issued root until normal resource cleanup. The
 // successor consumes the original conclusion and shares delivery edits only.
 func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name, tier, mode string
 		interrupt, abort bool
@@ -196,6 +197,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 // Checkpoint validation releases the next confirmed development group while
 // preserving the target. Delivery includes every group and approved artifact.
 func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"none", "blackbox"} {
 		t.Run(mode, func(t *testing.T) {
 			d := newCandidateDriver(t, mode)
@@ -381,6 +383,7 @@ func (d *candidateDriver) assertAbortedResources() {
 // Abort consumes the original intent after a real successful native prefix;
 // it does not finish that cancelled operation to manufacture a success receipt.
 func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"workspace", "pin", "track", "freeze"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
@@ -422,6 +425,7 @@ func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
 }
 
 func TestInstalledUnknownIncompleteWorkspaceRemainsObserved(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
 	d.pauseOnInterrupt = true
 	d.unknownReceipt = true
@@ -458,6 +462,7 @@ func TestInstalledUnknownIncompleteWorkspaceRemainsObserved(t *testing.T) {
 // Actual Abort withdraws an exact partial UNKNOWN and then cleans its resource.
 // The uncertain response and original intent remain immutable evidence.
 func TestInstalledAbortWithdrawsIncompleteUnknownWorkspace(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
 	d.pauseOnInterrupt = true
 	d.unknownReceipt = true
@@ -516,6 +521,7 @@ func TestInstalledAbortWithdrawsIncompleteUnknownWorkspace(t *testing.T) {
 // A completed UNKNOWN operation supplies its original typed evidence during
 // Abort; observation cannot re-execute it or replace the accepted decision.
 func TestInstalledAbortObservesCompletedUnknownWorkspace(t *testing.T) {
+	t.Parallel()
 	d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
 	d.pauseOnInterrupt = true
 	d.unknownReceipt = true
@@ -545,6 +551,7 @@ func TestInstalledAbortObservesCompletedUnknownWorkspace(t *testing.T) {
 // Lost cleanup responses preserve authoritative control and the original
 // business receipt until the user keeps the requirement or aborts the run.
 func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
+	t.Parallel()
 	for _, control := range []protocol.ControlKind{protocol.ControlRequestRequirementChange, protocol.ControlAbort} {
 		t.Run(string(control), func(t *testing.T) {
 			d := newCandidateDriver(t, "none")

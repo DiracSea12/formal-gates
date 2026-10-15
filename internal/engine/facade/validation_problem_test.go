@@ -9,6 +9,7 @@ import (
 
 // The setup helper submits normal facade events; the oracle is G AC-017.
 func TestAcceptedAdjudicationRemainsCorrectable(t *testing.T) {
+	t.Parallel()
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	old := d.run.Validation.Findings[finding].History[0]
@@ -27,6 +28,7 @@ func TestAcceptedAdjudicationRemainsCorrectable(t *testing.T) {
 
 // C REQ-001 allows unchanged shared instructions to retain their approval.
 func TestUnchangedSharedApprovalInheritance(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -69,6 +71,7 @@ func TestUnchangedSharedApprovalInheritance(t *testing.T) {
 }
 
 func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
+	t.Parallel()
 	d, finding, wave := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, wave)
 	original := d.run.Validation.Findings[finding].History[0]
@@ -121,6 +124,7 @@ func TestResolvedProblemDoesNotReopenRepair(t *testing.T) {
 }
 
 func TestAdjudicationRevisionConflict(t *testing.T) {
+	t.Parallel()
 	d, finding, wave := validationWithGateFinding(t)
 	r := protocol.FindingResolution{FindingID: finding, Decision: "DISMISSED", Supersedes: 1, Requirement: "AC-001", NormalPath: "app run valid-input", Module: "output", RootCause: "original report misread ordering requirement", Consequence: "no defect", Severity: "P2", SeverityRationale: "documented behavior is available", Verification: review.FindingVerification{Scope: "output", Severity: "limited", Causality: "none", Reproduction: "actual allowed output", Classification: "non-defect"}, Reason: "observed requirement permits output order"}
 	_, _, err := d.f.Submit(protocol.Event{ID: d.eventID(), Kind: protocol.KindOperatorObservation, Observation: &protocol.OperatorObservationPayload{Subject: wave, Validation: &protocol.ValidationObservation{Kind: "ADJUDICATE", Findings: []protocol.FindingResolution{r}}}})
@@ -178,9 +182,13 @@ func gateImpactBoundary(t *testing.T) *validationDriver {
 	return d
 }
 
-func TestOtherGateCarryRequiresImpact(t *testing.T) { gateImpactBoundary(t) }
+func TestOtherGateCarryRequiresImpact(t *testing.T) {
+	t.Parallel()
+	gateImpactBoundary(t)
+}
 
 func TestCorrectionBeforeDispatchUsesOnlyCurrentObligation(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)

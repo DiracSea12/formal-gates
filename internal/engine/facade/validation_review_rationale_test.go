@@ -7,6 +7,7 @@ import (
 )
 
 func TestReviewRationaleIsCarriedFromOriginalApproval(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopen"}[reopen], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")

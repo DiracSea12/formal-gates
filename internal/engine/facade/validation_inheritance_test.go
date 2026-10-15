@@ -8,6 +8,7 @@ import (
 )
 
 func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
+	t.Parallel()
 	for _, example := range []struct {
 		name     string
 		affected []string

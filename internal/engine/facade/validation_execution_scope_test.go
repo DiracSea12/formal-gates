@@ -15,6 +15,7 @@ import (
 )
 
 func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		for _, checkpoint := range []bool{false, true} {
 			name := map[bool]string{false: "normal", true: "reopened"}[reopen] + "-" + map[bool]string{false: "complete", true: "checkpoint"}[checkpoint]
@@ -232,6 +233,7 @@ func rejectExecutionScope(d *validationDriver, cases ...string) {
 }
 
 func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"route", "carry", "carry-route", "redo", "qa-retry"} {
 		t.Run(change, func(t *testing.T) {
 			var d *validationDriver
@@ -302,6 +304,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 }
 
 func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.T) {
+	t.Parallel()
 	for _, evidence := range []string{"failure", "disposed-checkpoint"} {
 		t.Run(evidence, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -394,6 +397,7 @@ func TestHostScopeRequiresEveryFailureAndCannotUseDisposedCheckpoint(t *testing.
 }
 
 func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		for _, resultFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/result-first=%t", held, resultFirst), func(t *testing.T) {
@@ -455,6 +459,7 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 }
 
 func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := repairedExecutionDriver(t, plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality"))
@@ -472,6 +477,7 @@ func TestHostCanFixScopeAfterRequirementCarryBeforeDispatch(t *testing.T) {
 }
 
 func TestQAExecutionWaitsForAllRequirementAsksAndKeepsOriginalReceipts(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "reopened"}[reopen], func(t *testing.T) {
 			d := repairedExecutionDriver(t)

@@ -69,7 +69,7 @@ func onlyCandidate(t *testing.T, d *validationDriver, stage string) protocol.Hos
 }
 func candidateFailure(t *testing.T, d *validationDriver, intent protocol.HostActionIntent, class authoring.FailureClass) protocol.Event {
 	t.Helper()
-	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusFailed, class, map[string]any{})
+	e, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusFailed, class, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +104,7 @@ func releaseRequirement(t *testing.T, d *validationDriver, request protocol.Even
 }
 
 func TestCandidateFailureRoutesKeepTheirOriginalEffect(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"DEVELOPMENT", "AUTHORING", "QA_ARTIFACT", "REVIEW_READY"} {
 		for _, class := range []authoring.FailureClass{authoring.FailureBlockedBug, authoring.FailureInvariantViolation, authoring.FailureBusinessReject, authoring.FailureUserActionRequired, authoring.FailureSideEffectUnknown} {
 			for _, held := range []bool{false, true} {
@@ -175,6 +176,7 @@ func TestCandidateFailureRoutesKeepTheirOriginalEffect(t *testing.T) {
 }
 
 func TestCandidateTransientAttemptsRequireOneBoundExtra(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"DEVELOPMENT", "AUTHORING", "QA_ARTIFACT", "REVIEW_READY"} {
 		t.Run(stage, func(t *testing.T) {
 			d, intent := candidateAtStage(t, stage)
@@ -244,11 +246,12 @@ func TestCandidateTransientAttemptsRequireOneBoundExtra(t *testing.T) {
 }
 
 func TestCandidateUnknownCompletionUsesTypedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"DEVELOPMENT", "AUTHORING", "QA_ARTIFACT", "REVIEW_READY"} {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", stage, held), func(t *testing.T) {
 				d, intent := candidateAtStage(t, stage)
-				unknown, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
+				unknown, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -332,6 +335,7 @@ func TestCandidateUnknownCompletionUsesTypedEvidence(t *testing.T) {
 }
 
 func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		for _, firstWorker := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/worker-first=%t", held, firstWorker), func(t *testing.T) {
@@ -443,6 +447,7 @@ func TestBusinessSpawnExhaustionUsesOriginalTaskAllowance(t *testing.T) {
 // A completed candidate changes readiness in the same transaction; pure
 // observation receipts are covered independently by the protocol tests.
 func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"DEVELOPMENT", "AUTHORING", "QA_ARTIFACT", "REVIEW_READY"} {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", stage, held), func(t *testing.T) {
@@ -520,6 +525,7 @@ func TestCandidateCompletionRefillsReadyWork(t *testing.T) {
 }
 
 func TestSpawnTransportRetryKeepsSpentSlotAfterSuccess(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, input := d.action("engine.development.batch.v6")
 	failed, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), id, d.host(), "failed-transport", protocol.SpawnStatusFailed, authoring.FailureTransientEngine)

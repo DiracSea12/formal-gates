@@ -20,6 +20,7 @@ import (
 
 // TestReviewFaceProjectsLedgerAndBindings：投影纯函数逐项断言。
 func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
+	t.Parallel()
 	set := review.NewSet()
 	set, _, err := review.RecordCandidate(set, "run-face", review.ProductReview,
 		review.Dispatch{ID: "dispatch-1", RequirementRevision: "rev-1"},
@@ -100,6 +101,7 @@ func TestReviewFaceProjectsLedgerAndBindings(t *testing.T) {
 // revision、finding 身份与 CAS 代数全部在审查面内，Show 的审查面自足
 // 于裁决输入；纠正后重投影把有效裁决如实带出面。
 func TestReviewFaceComposesTheCorrectionInput(t *testing.T) {
+	t.Parallel()
 	set := review.NewSet()
 	set, _, err := review.RecordCandidate(set, "run-compose", review.ProductReview,
 		review.Dispatch{ID: "dispatch-compose", RequirementRevision: "rev-1"},
@@ -145,6 +147,7 @@ func TestReviewFaceComposesTheCorrectionInput(t *testing.T) {
 }
 
 func TestReviewFaceBindsSuccessiveCorrectionsToEachFinding(t *testing.T) {
+	t.Parallel()
 	const runID = "run-finding-decisions"
 	set, _, err := review.RecordCandidate(review.NewSet(), runID, review.ProductReview,
 		review.Dispatch{ID: "dispatch-findings", RequirementRevision: "rev-1"},
@@ -225,6 +228,7 @@ func TestReviewFaceBindsSuccessiveCorrectionsToEachFinding(t *testing.T) {
 // 修订确认（revision/classification/scope/来源）进入只读投影；只有受理
 // 初始账目（或账本为空）时不带最近修订。
 func TestReviewFaceProjectsRequirementState(t *testing.T) {
+	t.Parallel()
 	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
@@ -274,6 +278,7 @@ func TestReviewFaceProjectsRequirementState(t *testing.T) {
 }
 
 func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
+	t.Parallel()
 	f := newEngineRouteFacade(t, "work-decision-face")
 	registry := compiler.NewRegistry()
 	for _, err := range []error{
@@ -327,6 +332,7 @@ func TestFacadeProjectsWorkIdentitiesForRequirementDecisions(t *testing.T) {
 // TestReviewFaceProjectsGrantProvenance：每条额外轮授权都以 id/reason/占用
 // 态投影——占用态随整轮失效回收而回落，未占用授权在位则如实可见。
 func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
+	t.Parallel()
 	runID := "run-grants"
 	verification := review.OperatorVerification{
 		Checks:   []string{"binding", "completeness", "evidence", "locations", "normal-entry", "requirement-match", "scope", "severity"},
@@ -409,6 +415,7 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 // TestLightweightRunCarriesReviewFace：lightweight run 的 show/drive 投影
 // 带完整审查面（两条初始 series、无拓扑、无路线选择）。
 func TestLightweightRunCarriesReviewFace(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	request := StartRequest{
 		RunID: "lightweight-review-face", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,

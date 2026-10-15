@@ -14,6 +14,7 @@ import (
 // Waiting submissions re-read the current event/terminal owner. The native
 // owner may accept a receipt or finish cleanup before releasing its window.
 func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"recorded", "mismatch", "terminal-recorded", "terminal-new"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
@@ -135,6 +136,7 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 }
 
 func TestAcceptedNativeSubmissionReplayDoesNotWait(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	f := startSnapshotRun(t, root, "exact-replay", base)

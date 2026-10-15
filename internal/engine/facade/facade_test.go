@@ -38,6 +38,7 @@ func testReceipt() IntakeConfirmationReceipt {
 }
 
 func TestLightweightVerticalLoopAndReplay(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	request := StartRequest{
 		RunID: "lightweight-replay", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
@@ -110,6 +111,7 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 }
 
 func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	receipt := testReceipt()
 	receipt.RequirementRevision = ""
@@ -127,6 +129,7 @@ func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 }
 
 func TestStartRequiresExplicitRouteBeforeRunWrite(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"", " "} {
 		t.Run(fmt.Sprintf("route=%q", route), func(t *testing.T) {
 			root := t.TempDir()
@@ -147,6 +150,7 @@ func TestStartRequiresExplicitRouteBeforeRunWrite(t *testing.T) {
 }
 
 func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	request := StartRequest{
 		RunID: "concurrent-start", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
@@ -201,6 +205,7 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 }
 
 func TestStartRecoversIncompleteStartIntent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runID := "recover-start-intent"
 	stateDir := filepath.Join(root, EngineNamespace, runID)
@@ -230,6 +235,7 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 // 当半启动清除——可区分 already-exists 拒绝、终态摘要字节不变、Open 仍可
 // 用、过期 intent 被清。
 func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	options := StartOptions{Root: root, Request: StartRequest{
 		RunID: "summary-retention", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
@@ -270,6 +276,7 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 }
 
 func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
 	unlock, err := coordination.AcquirePath(admission.RegistryPath+".lock", "admission")
@@ -324,6 +331,7 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 }
 
 func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runID := "recover-terminal-intent"
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
@@ -402,6 +410,7 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 }
 
 func TestIntakeDigestCanonicalizesArtifactOrderAndBindsAuthorityAndTransport(t *testing.T) {
+	t.Parallel()
 	left := testReceipt()
 	left.Artifacts = append(left.Artifacts, IntakeArtifact{Path: "design.md", Revision: "design-rev"})
 	right := left
@@ -438,6 +447,7 @@ func TestIntakeDigestCanonicalizesArtifactOrderAndBindsAuthorityAndTransport(t *
 }
 
 func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	requirement := []byte("# requirement\n")
 	solution := []byte("# solution\n")
@@ -566,6 +576,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 // 报错，Drive 冻结签发也不报错（等待用户而非错误）；放弃后断言屏障解除
 // 与需求确认包投影消失。
 func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
+	t.Parallel()
 	f := newEngineRouteFacade(t, "pending-ask-face")
 	pkg := protocol.RequirementDecisionPackage{
 		CandidateRevision: "rev-2", DeltaDigest: "sha256:delta-face", ImpactDigest: "sha256:impact-face",
@@ -634,6 +645,7 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 // 限控制 Ask（requestID/control/options/即时 token，按 requestID 排序）
 // ——非需求变化的 Ask 同样可见；携包特化面只留给需求变化 Ask。
 func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
+	t.Parallel()
 	f := newEngineRouteFacade(t, "pending-asks-face")
 	options := []protocol.AskOption{{ID: "no-split", Label: "不拆分"}, {ID: "split", Label: "拆分"}}
 	topology, err := protocol.NewRequestEvent("req-face-topology", protocol.ControlConfirmTopology, options...)

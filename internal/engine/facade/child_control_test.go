@@ -118,6 +118,7 @@ func retainResetState(t *testing.T, d *validationDriver, authority string) {
 }
 
 func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
+	t.Parallel()
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
 	before := driverState(t, child)
 	parentBefore := driverState(t, master)
@@ -276,6 +277,7 @@ func assertResetResourceOwnership(t *testing.T, d *validationDriver, before *pro
 	t.Fatal("reset omitted its durable cleanup receipt")
 }
 func TestMasterResetCascadesOneConfirmation(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	for id := range master.run.PendingActions {
 		master.receipt(id)
@@ -295,6 +297,7 @@ func TestMasterResetCascadesOneConfirmation(t *testing.T) {
 }
 
 func TestMasterResetPreservesPlannedAndPreparingChildren(t *testing.T) {
+	t.Parallel()
 	for _, created := range []int{0, 1} {
 		t.Run(fmt.Sprint(created), func(t *testing.T) {
 			master := splitMaster(t)
@@ -385,6 +388,7 @@ func TestMasterResetPreservesPlannedAndPreparingChildren(t *testing.T) {
 }
 
 func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) {
+	t.Parallel()
 	for _, gates := range [][]string{{"quality", "security"}, {"blackbox", "security"}} {
 		t.Run(fmt.Sprint(gates), func(t *testing.T) {
 			d := nativeMasterDriver(t)
@@ -479,6 +483,7 @@ func TestResetRebuildsStandaloneValidationFromRetainedDevelopment(t *testing.T) 
 	}
 }
 func TestMasterRequirementBarrierProtectsChildWrites(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	child.drive()
 	request, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlRequestRequirementChange, protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
@@ -505,6 +510,7 @@ func TestMasterRequirementBarrierProtectsChildWrites(t *testing.T) {
 	}
 }
 func TestMasterRequirementConfirmationCarriesChildOrigin(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	origin := driverState(t, child).SliceChild.RequirementRevision
 	intake := driverState(t, child).IntakeConfirmationReceipt
@@ -528,6 +534,7 @@ func TestMasterRequirementConfirmationCarriesChildOrigin(t *testing.T) {
 	}
 }
 func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
+	t.Parallel()
 	owner := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, owner, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: owner, Provider: meteredProvider})
@@ -599,6 +606,7 @@ func requirementChildChoices(t *testing.T, d *validationDriver) []protocol.Child
 }
 
 func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
+	t.Parallel()
 	_, child := controlChildren(t)
 	plan := sliceLanePlan()
 	dependent := plan.Batches[0]
@@ -676,6 +684,7 @@ func TestResetRetainsResponsibilityUntilWorkerStop(t *testing.T) {
 }
 
 func TestTerminalMaterialsFinishBeforeSeal(t *testing.T) {
+	t.Parallel()
 	master, _ := mainlineChildren(t, "")
 	for len(master.run.ValidationInputs) > 0 {
 		submitMainlineTarget(t, master)
@@ -745,6 +754,7 @@ func TestTerminalMaterialsFinishBeforeSeal(t *testing.T) {
 }
 
 func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
+	t.Parallel()
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
 	before := driverState(t, master)
 	choices := requirementChildChoices(t, master)
@@ -826,6 +836,7 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 }
 
 func TestMasterRequirementCarryRetainsOriginalNativePrefix(t *testing.T) {
+	t.Parallel()
 	master, children := mainlineReady(t, "", false)
 	runner := &mergeInterruption{Runner: vcs.ExecRunner{}, point: "later-commit"}
 	master.f.vcsRunner, master.f.vcs = runner, vcs.New(master.f.root, runner)
@@ -886,6 +897,7 @@ func TestMasterRequirementCarryRetainsOriginalNativePrefix(t *testing.T) {
 }
 
 func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
+	t.Parallel()
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
 	physical := driverState(t, child)
 	origin := physical.SliceChild.RequirementRevision
@@ -963,6 +975,7 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 }
 
 func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
+	t.Parallel()
 	master, _ := controlChildren(t)
 	parent := driverState(t, master)
 	if len(parent.ChildCreation.Children) != 2 {

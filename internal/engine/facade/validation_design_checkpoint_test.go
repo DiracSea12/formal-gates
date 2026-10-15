@@ -11,6 +11,7 @@ import (
 )
 
 func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -83,6 +84,7 @@ func TestDesignRetentionPassesOriginalAdmissionAndKeepsReviewInheritance(t *test
 }
 
 func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
+	t.Parallel()
 	for _, resume := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reopen", true: "native-resume"}[resume], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -151,6 +153,7 @@ func TestDesignCheckpointsPreserveDutyAndResumeRecordedCases(t *testing.T) {
 }
 
 func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -189,6 +192,7 @@ func TestDesignCheckpointCannotOmitPreviouslyApprovedCase(t *testing.T) {
 }
 
 func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	id, in := d.action("engine.development.batch.v6")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
@@ -249,6 +253,7 @@ func TestDesignCompletionRequiresCoverageAndLocksOnlyItsMode(t *testing.T) {
 }
 
 func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -278,6 +283,7 @@ func TestThawRetiresCheckpointedDesignWithoutLosingLateEvidence(t *testing.T) {
 }
 
 func TestDesignIncrementExplicitRemovalSurvivesReplayAndRecovery(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	design, input := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(input)

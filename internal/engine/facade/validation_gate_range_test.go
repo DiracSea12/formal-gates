@@ -10,6 +10,7 @@ import (
 )
 
 func TestRegularStartRequiresNativeBaseBeforeWriting(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-base", Route: "regular", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "target", "package", DefaultProvider)})
 	if err == nil {
@@ -21,6 +22,7 @@ func TestRegularStartRequiresNativeBaseBeforeWriting(t *testing.T) {
 }
 
 func TestGateRangeRequiresBoundOwnershipEvidence(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"missing", "duplicate", "empty-path", "wrong-parameters"} {
 		t.Run(variant, func(t *testing.T) {
 			d, intent := candidateAtStage(t, "REVIEW_READY")
@@ -63,6 +65,7 @@ func TestGateRangeRequiresBoundOwnershipEvidence(t *testing.T) {
 }
 
 func TestGateRangeKeepsRunBaseAcrossRepairRouteAndRequirement(t *testing.T) {
+	t.Parallel()
 	d := gateImpactBoundary(t)
 	w := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 	if w.Candidate == d.run.Validation.Waves[0].Candidate {
@@ -89,6 +92,7 @@ func TestGateRangeKeepsRunBaseAcrossRepairRouteAndRequirement(t *testing.T) {
 }
 
 func TestGateRangeOwnershipIsNotLimitedToCurrentMaterializationPaths(t *testing.T) {
+	t.Parallel()
 	d, intent := candidateAtStage(t, "REVIEW_READY")
 	ev := candidateCompletion(t, d, intent)
 	// This native range also contains a test artifact carried in the base;
@@ -105,6 +109,7 @@ func TestGateRangeOwnershipIsNotLimitedToCurrentMaterializationPaths(t *testing.
 }
 
 func TestGateOwnershipEvidenceRequiresReviewReadyStage(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"DEVELOPMENT", "AUTHORING", "QA_ARTIFACT"} {
 		t.Run(stage, func(t *testing.T) {
 			d, intent := candidateAtStage(t, stage)

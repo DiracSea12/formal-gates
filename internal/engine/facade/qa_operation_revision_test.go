@@ -13,6 +13,7 @@ import (
 )
 
 func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)

@@ -22,6 +22,7 @@ import (
 // CompiledDefinition。无 skip 的复刻注册表编译产物必须等于协议图的完整
 // registry 编译身份，校验复刻与夹具注册表一致。
 func TestAcceptanceRegistryCompleteness(t *testing.T) {
+	t.Parallel()
 	t.Run("complete resolution produces CompiledDefinition", func(t *testing.T) {
 		cd, _, digest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 		if cd.MissingEngineAdapter {
@@ -96,6 +97,7 @@ func TestAcceptanceRegistryCompleteness(t *testing.T) {
 // TestAcceptanceMutationEnumerationRejected：对步骤表的每类系统性破坏，compiler
 // 必须拒绝（INVARIANT_VIOLATION），并命中对应的 distinguishing 分支文案。
 func TestAcceptanceMutationEnumerationRejected(t *testing.T) {
+	t.Parallel()
 	rows := []struct {
 		name   string
 		mutate func(d *compiler.Definition)
@@ -186,6 +188,7 @@ func TestAcceptanceMutationEnumerationRejected(t *testing.T) {
 // 都是单调不变量（一旦违反，删除/置零类操作无法修复），因此任意非空组合
 // 必拒。种子固定，失败可复现。
 func TestAcceptanceMutationFuzzRejected(t *testing.T) {
+	t.Parallel()
 	fanJoinIndex := func(d *compiler.Definition) int { return stepIndex(t, d, "fan.join") }
 	fanSplitIndex := func(d *compiler.Definition) int { return stepIndex(t, d, "fan.split") }
 	children := map[string]bool{"fan.slice": true, "fan.transport": true}

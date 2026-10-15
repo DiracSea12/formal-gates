@@ -7,6 +7,7 @@ import (
 )
 
 func TestSharedApprovalRetainsItsOwnContentAndRationale(t *testing.T) {
+	t.Parallel()
 	for _, variation := range []string{"unchanged", "changed-instructions", "changed-reason"} {
 		t.Run(variation, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")

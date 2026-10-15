@@ -69,6 +69,7 @@ func completeSliceGates(t *testing.T, child *validationDriver) {
 }
 
 func TestSliceDisabledQualityRoleKeepsRealRouteAndEmptyGateEvidence(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	selection := &protocol.FlowSelection{Disabled: []string{"gate", "qa"}}
@@ -169,6 +170,7 @@ func assertSliceRequestEvidence(t *testing.T, child *validationDriver, receipt p
 }
 
 func TestSliceReceiptBindsTheAuthorizedGeneratedRequest(t *testing.T) {
+	t.Parallel()
 	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{})
 	child.drive()
 	assertSliceRequestEvidence(t, child, readSliceReceipt(t, child), offer, event)
@@ -185,6 +187,7 @@ func assertNoSuccessfulSliceReceipt(t *testing.T, child *validationDriver) {
 }
 
 func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
+	t.Parallel()
 	t.Run("selected gate missing", func(t *testing.T) {
 		child := reviewReadySlice(t, "all", OwnerBinding{})
 		id, input := child.gateAction("quality")
@@ -254,6 +257,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 }
 
 func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing.jsonl")
 	child := promotedSlice(t, "selected", OwnerBinding{Transcript: path, Provider: meteredProvider})
 	child.drive()
@@ -264,6 +268,7 @@ func TestSliceCheckpointPreservesUnavailableOwner(t *testing.T) {
 }
 
 func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
 	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{Transcript: path, Provider: meteredProvider})
@@ -307,6 +312,7 @@ func TestConcurrentSliceCheckpointFreezesOwnerOnce(t *testing.T) {
 }
 
 func TestSliceChildPromotionReachesRecoverableCheckpoint(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"all", "selected"} {
 		t.Run(mode, func(t *testing.T) {
 			child := promotedSlice(t, mode, OwnerBinding{})
@@ -396,6 +402,7 @@ func readSliceReceipt(t *testing.T, child *validationDriver) protocol.SliceRecei
 }
 
 func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, path, []string{intervalBaseLine})
 	child, offer, event := promotedSliceWithAuthorizedRetry(t, "all", OwnerBinding{Transcript: path, Provider: meteredProvider})
@@ -458,6 +465,7 @@ func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
 }
 
 func TestSliceCheckpointRecoveryUsesTheSameFrozenReceipt(t *testing.T) {
+	t.Parallel()
 	for _, point := range []persistence.FaultPoint{persistence.FaultIntentBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		t.Run(string(point), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "owner.jsonl")

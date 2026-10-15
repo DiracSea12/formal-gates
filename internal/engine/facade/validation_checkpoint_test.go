@@ -8,6 +8,7 @@ import (
 )
 
 func TestExecutionCheckpointKeepsCasesPendingUntilEveryEdgeCompletes(t *testing.T) {
+	t.Parallel()
 	for _, status := range []coverage.ExecutionStatus{coverage.ExecutedPass, coverage.ExecutedFail} {
 		t.Run(string(status), func(t *testing.T) {
 			inventory := &protocol.CoverageInventory{

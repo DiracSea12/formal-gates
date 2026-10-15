@@ -92,6 +92,7 @@ func installationFiles(t *testing.T, root string) map[string]string {
 }
 
 func TestStartRecoveryKeepsAdmissionThroughRootAlias(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "project")
 	if err := os.Symlink(root, alias); err != nil {
@@ -180,6 +181,7 @@ func TestRetainedInstallationKeepsNamespaceAndReadOnlyReplay(t *testing.T) {
 }
 
 func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	for _, missing := range []string{"namespace", "generation", "lease", "token", "target", "provider"} {
@@ -215,6 +217,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 }
 
 func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	id := "interrupted-start"
@@ -240,6 +243,7 @@ func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
 }
 
 func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
+	t.Parallel()
 	for _, point := range []persistence.FaultPoint{persistence.FaultIntentBefore, persistence.FaultIntentAfter, persistence.FaultReplaceBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		for _, fenced := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fenced=%t", point, fenced), func(t *testing.T) {
@@ -311,6 +315,7 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 // acceptance on replay. Independent input must be read against the recovered
 // revision before acceptance.
 func TestSubmitPreservesPendingCommitAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, point := range []persistence.FaultPoint{persistence.FaultIntentAfter, persistence.FaultExecuteAfter, persistence.FaultCommitResponseLost} {
 		for _, replay := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/replay=%t", point, replay), func(t *testing.T) {
@@ -446,6 +451,7 @@ func TestSubmitPreservesPendingCommitAndReplay(t *testing.T) {
 }
 
 func TestFencedDispatchClaimDoesNotWriteLifecycleBinding(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriverAt(t, t.TempDir(), meteredProvider, nil)
 	id := ""
 	for action := range d.run.PendingActions {
@@ -470,6 +476,7 @@ func TestFencedDispatchClaimDoesNotWriteLifecycleBinding(t *testing.T) {
 }
 
 func TestNewInstallationStartsWithoutWritingFencedOwnerPeer(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	transcript := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, transcript, []string{intervalBaseLine})
@@ -494,6 +501,7 @@ func TestNewInstallationStartsWithoutWritingFencedOwnerPeer(t *testing.T) {
 }
 
 func TestFencedTerminalWindowsRetainEvidenceAndAllowPureReplay(t *testing.T) {
+	t.Parallel()
 	for _, window := range []string{"intent", "cleanup", "summary", "remove-intent", "end-lifecycle", "complete"} {
 		t.Run(window, func(t *testing.T) {
 			root := t.TempDir()
@@ -608,6 +616,7 @@ func TestInstallationSubprocess(t *testing.T) {
 }
 
 func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
@@ -770,6 +779,7 @@ func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 }
 
 func TestFencedUnknownAttachmentPreservesItsObservation(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriverAt(t, t.TempDir(), meteredProvider, nil)
 	id := ""
 	for action := range d.run.PendingActions {
@@ -811,6 +821,7 @@ func TestFencedUnknownAttachmentPreservesItsObservation(t *testing.T) {
 }
 
 func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
+	t.Parallel()
 	for _, window := range []string{"before-intent", "before-effect", "before-result"} {
 		t.Run(window, func(t *testing.T) {
 			root := t.TempDir()
@@ -901,6 +912,7 @@ func TestPromotionFencingPreservesIntentAndExecutedNativeFact(t *testing.T) {
 }
 
 func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
+	t.Parallel()
 	for _, window := range []string{"publish", "handoff", "discovery", "replay"} {
 		t.Run(window, func(t *testing.T) {
 			master := receiptMaster(t)
@@ -973,6 +985,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 }
 
 func TestCheckpointFencingLeavesTheChildActive(t *testing.T) {
+	t.Parallel()
 	child := promotedSlice(t, "selected", OwnerBinding{})
 	before, err := os.ReadFile(filepath.Join(child.f.stateDir, "state.json"))
 	if err != nil {
@@ -1022,6 +1035,7 @@ func (runner *admittedGitRunner) RunRaw(dir, command string, input []byte, args 
 }
 
 func TestNativePromotionHoldsItsActualAdmissionWindow(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "application", "reviewed changes")
 	d := completePromotionPipeline(t, nil, root, identities[0])

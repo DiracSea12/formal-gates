@@ -10,6 +10,7 @@ import (
 // Every revoking control retains the original resumed execution until that
 // invocation's own stop arrives; a stop from its previous call is insufficient.
 func TestControlWaitsForCurrentResumedExecution(t *testing.T) {
+	t.Parallel()
 	for _, control := range []string{"reset", "requirement-redo", "node-continuation"} {
 		t.Run(control, func(t *testing.T) {
 			d := newValidationDriver(t, "quality")

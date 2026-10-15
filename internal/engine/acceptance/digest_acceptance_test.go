@@ -22,6 +22,7 @@ import (
 // 与定义语义完全相同、仅实现侧不同的 registry 变体，编译产物的制品字节与
 // DefinitionDigest 逐字节不变。
 func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T) {
+	t.Parallel()
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 	if canonicalDigest != definition.WorkflowDefinitionDigest {
 		t.Fatalf("canonical digest = %s, want fixture identity %s", canonicalDigest, definition.WorkflowDefinitionDigest)
@@ -76,6 +77,7 @@ func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T)
 // 否则用例夹具自身有缺陷），每类变异后 DefinitionDigest 必变，且各类变异
 // 之间互不碰撞（不同语义维度进入不同制品字段）。
 func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) {
+	t.Parallel()
 	reg := augmentedRegistry(t)
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), reg)
 	if canonicalDigest != definition.WorkflowDefinitionDigest {

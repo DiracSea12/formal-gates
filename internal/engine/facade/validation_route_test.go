@@ -51,6 +51,7 @@ func gateRepairResult(in protocol.ValidationInput) protocol.ValidationResult {
 	return protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "apply documented ordering", AffectedCases: []string{"normal"}, CaseRuns: []protocol.RepairCaseEvidence{{Mode: coverage.ReviewBlackbox, CaseID: "normal", Result: coverage.ExecutedPass, Procedure: "run app valid-input", Observation: "ordered output", Comparison: "matches documented order"}}}}
 }
 func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
+	t.Parallel()
 	d, finding, oldID := validationWithGateFinding(t)
 	oldDigest := d.run.Validation.Waves[0].ExpectedDigest
 	unlockRouteByRequirementRedo(d)
@@ -77,6 +78,7 @@ func TestRouteAdditionPreservesFindingOwnership(t *testing.T) {
 	}
 }
 func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
+	t.Parallel()
 	d, finding, oldID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, oldID)
 	repairID, repairInput := d.action("engine.repair.v7")
@@ -110,6 +112,7 @@ func TestRouteAdditionPreservesIssuedRepair(t *testing.T) {
 }
 
 func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
+	t.Parallel()
 	for _, replacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "original", true: "replacement"}[replacement], func(t *testing.T) {
 			d, finding, oldID := validationWithGateFinding(t)
@@ -138,6 +141,7 @@ func TestThawDoesNotReviveRetiredRepair(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -163,6 +167,7 @@ func TestRouteAdditionPreservesIssuedReview(t *testing.T) {
 }
 
 func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	before := driverState(t, d)
@@ -205,6 +210,7 @@ func TestRepeatedRouteKeepsFrozenObligation(t *testing.T) {
 }
 
 func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	unlockRouteByRequirementRedo(d)
@@ -231,6 +237,7 @@ func TestAddedGateRebuildsCollectingValidation(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(in)
@@ -260,6 +267,7 @@ func TestRouteAdditionPreservesIssuedDesign(t *testing.T) {
 }
 
 func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution.v4")
@@ -290,6 +298,7 @@ func TestRouteAdditionReopensCompletedValidation(t *testing.T) {
 }
 
 func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"staged", "receipted", "terminal"} {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -353,6 +362,7 @@ func TestRouteChangeRetiresStagedAndLateValidationResults(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		t.Run(stage, func(t *testing.T) {
 			d := newValidationDriver(t, "whitebox", "quality")
@@ -408,6 +418,7 @@ func TestRouteAdditionPreservesCandidateMaterialization(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
+	t.Parallel()
 	d, finding, waveID := validationWithGateFinding(t)
 	resolveGateFinding(d, finding, waveID)
 	id, in := d.action("engine.repair.v7")
@@ -437,6 +448,7 @@ func TestRouteAdditionPreservesRepairRetryBudget(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	id, in := d.gateAction("quality")
@@ -473,6 +485,7 @@ func TestRouteAdditionPreservesExplicitDisposition(t *testing.T) {
 // ——绑定解除（RouteConfirmed 清空、已生效义务在册），重新 Ask/决定照常接纳并
 // 落账新绑定，开发继续。
 func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "quality")
 	if !d.run.Review.RouteConfirmed || len(d.run.Review.SelectedGates) != 1 {
 		t.Fatalf("fixture route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
@@ -492,6 +505,7 @@ func TestRouteRedoUnlocksTheBoundSelection(t *testing.T) {
 
 // Gate and QA changes retain the confirmed requirement and rebuild the selected obligations.
 func TestDevelopedRouteAcceptsConfirmedGateAndQAChanges(t *testing.T) {
+	t.Parallel()
 	for _, selected := range [][]string{{"quality"}, {"blackbox", "whitebox", "quality"}, {"blackbox", "security"}, {"blackbox"}, {}} {
 		t.Run(fmt.Sprint(selected), func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -512,6 +526,7 @@ func TestDevelopedRouteAcceptsConfirmedGateAndQAChanges(t *testing.T) {
 }
 
 func TestGateReselectionCanAddQAAfterDevelopment(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
@@ -548,6 +563,7 @@ func TestGateReselectionCanAddQAAfterDevelopment(t *testing.T) {
 }
 
 func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
+	t.Parallel()
 	d, finding, waveID := validationWithGateFinding(t)
 	source := d.run.Validation.Waves[0].Candidate.Identity
 	resolveGateFinding(d, finding, waveID)
@@ -584,6 +600,7 @@ func TestRouteAdditionPreservesRequiredAffectedExecution(t *testing.T) {
 }
 
 func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution.v4")
@@ -657,6 +674,7 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 // ——绑定后同集重选经一次路线再确认（确认随载荷重取）重新落账，决定台账
 // 记两次选择，开发照常派发计划任务。
 func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
+	t.Parallel()
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one cohesive command"}})
@@ -683,6 +701,7 @@ func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
 }
 
 func TestCarriedPrewaveWorkRetainsConfirmedSources(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"requirement", "solution", "changed-solution"} {
 		for _, role := range []string{"design", "review"} {
 			t.Run(source+"/"+role, func(t *testing.T) {
@@ -760,6 +779,7 @@ func TestCarriedPrewaveWorkRetainsConfirmedSources(t *testing.T) {
 }
 
 func TestCarriedPrewaveResultSurvivesDeliveryOrder(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"design", "review"} {
 		for _, delivery := range []string{"staged", "quarantine", "retry"} {
 			t.Run(role+"/"+delivery, func(t *testing.T) {

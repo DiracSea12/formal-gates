@@ -39,6 +39,7 @@ func (d *validationDriver) disposeGate(gate string) {
 }
 
 func TestGateCarryPreservesEvidenceAndCandidateScopedDisposition(t *testing.T) {
+	t.Parallel()
 	for _, verdict := range []string{"PASS", "FAIL"} {
 		for _, original := range []string{"PASS", "DISPOSED"} {
 			t.Run(verdict+"/"+original, func(t *testing.T) {

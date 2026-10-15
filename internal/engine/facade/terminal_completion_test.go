@@ -66,6 +66,7 @@ func concludePromoted(t *testing.T) *validationDriver {
 // 拒后，wave 完成与晋升绑定两个事实齐备时，Drive 把 run 收口到 COMPLETE 且引
 // 擎 phase 进入 TERMINAL。
 func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T) {
+	t.Parallel()
 	d := concludePromoted(t)
 	summary, err := d.f.readSummary()
 	if err != nil {
@@ -80,6 +81,7 @@ func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T
 // 缺其一都不达终态——wave 未完成时晋升被拒（不得出现「先绑定后收集」的交
 // 错）；wave 完成而未晋升时晋升等待 Operator fact 仍在。
 func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
+	t.Parallel()
 	t.Run("promotion rejected before wave conclusion", func(t *testing.T) {
 		root := t.TempDir()
 		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
@@ -143,6 +145,7 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 // TestTerminalDriveReplayIsReadOnly：终态后的重入 Drive 只读——不 bump
 // revision、不改写权威状态字节，也不改写已落盘的终态摘要字节。
 func TestTerminalDriveReplayIsReadOnly(t *testing.T) {
+	t.Parallel()
 	d := concludePromoted(t)
 	revision := d.run.Revision
 	statePath := filepath.Join(d.f.stateDir, "state.json")

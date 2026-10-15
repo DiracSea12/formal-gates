@@ -181,6 +181,7 @@ func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent 
 }
 
 func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
+	t.Parallel()
 	command := "printf '%s' 'a b' | cat > generated; printf x >> executions; printf '%s' 'a b'"
 	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "quoted", Purpose: protocol.CheckFullBuild, Command: command}, protocol.DevelopmentCheck{ID: "dependent", Purpose: protocol.CheckFullTests, Command: "test \"$(cat generated)\" = 'a b'; printf 'dependent'"})
 	intent := developmentCheckIntent(t, f, s, base, "quoted", command)
@@ -275,6 +276,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 }
 
 func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
+	t.Parallel()
 	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "exit-comparison", Purpose: protocol.CheckFullBuild, Command: "sh -c 'exit 2'; test $? -eq 1"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "exit-comparison", "sh -c 'exit 2'; test $? -eq 1")
 	result := observeDevelopmentCheck(t, f, s, intent, true)
@@ -291,6 +293,7 @@ func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
 }
 
 func TestDevelopmentCheckAbortSettlesProcess(t *testing.T) {
+	t.Parallel()
 	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "cancel", Purpose: protocol.CheckFullBuild, Command: "printf 'started'; sleep 10"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "cancel", "printf 'started'; sleep 10")
 	invoked := false
@@ -322,6 +325,7 @@ func TestDevelopmentCheckAbortSettlesProcess(t *testing.T) {
 }
 
 func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
+	t.Parallel()
 	for _, successful := range []bool{true, false} {
 		t.Run(map[bool]string{true: "pass", false: "fail"}[successful], func(t *testing.T) {
 			root := t.TempDir()
@@ -439,6 +443,7 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 }
 
 func TestDevelopmentCheckSourceChangeCannotProveInput(t *testing.T) {
+	t.Parallel()
 	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "source-change", Purpose: protocol.CheckFullBuild, Command: "printf changed > app.txt; printf 'exit zero'"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
 	intent := developmentCheckIntent(t, f, s, base, "source-change", "printf changed > app.txt; printf 'exit zero'")
 	result := observeDevelopmentCheck(t, f, s, intent, true)
@@ -448,6 +453,7 @@ func TestDevelopmentCheckSourceChangeCannotProveInput(t *testing.T) {
 }
 
 func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
@@ -558,6 +564,7 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 }
 
 func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)

@@ -126,6 +126,7 @@ func startSnapshotRun(t *testing.T, root, runID, base string) *Facade {
 // BaseSnapshot 变成事实——合法（可复现且为 HEAD 祖先或相等）接纳并规范化为小
 // 写；分叉身份与非法形态可区分拒绝。
 func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "second")
 	base, head := identities[0], identities[len(identities)-1]
@@ -192,6 +193,7 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 // 压回单提交并重解析绑定；晋升后经真实 Drive 收口到 COMPLETE（引擎 phase
 // TERMINAL、终态摘要落盘），晋升后新增提交在终态边界被最后防线拒绝。
 func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -327,6 +329,7 @@ func TestCandidatePromotionSquashesMultiCommitRangeAndCompletesTerminal(t *testi
 // TestCandidatePromotionNoOpConfirmsSingleCommit：区间单提交时晋升为确认当前
 // HEAD（身份不变），等待解除。
 func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
@@ -371,6 +374,7 @@ func TestCandidatePromotionNoOpConfirmsSingleCommit(t *testing.T) {
 // TestPrepareCandidateRejectsUncommittedChanges：晋升拒绝被跟踪修改与未跟踪
 // 交付文件；wave COMPLETE 准入后、执行前拒绝，不产生 Git 副作用。
 func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root, "dev commit")[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
@@ -407,6 +411,7 @@ func TestPrepareCandidateRejectsUncommittedChanges(t *testing.T) {
 
 // A native blackbox workspace receipt owns the active QA projection and source.
 func TestBlackboxWorkspaceReceiptProjectsOriginalSource(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
@@ -522,6 +527,7 @@ func (d *validationDriver) reviewPass(plan *protocol.GranularityReview) {
 
 // A frozen blackbox set retires its projection while retaining native ownership.
 func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
@@ -600,6 +606,7 @@ func TestQAWorktreeClearsWhenBlackboxSetFreezes(t *testing.T) {
 // 是已验证候选：区间累积了改变内容的新提交时，重新组织因内容与已验证最终候
 // 选不符被拒（漂移须重验）。
 func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	run := func(args ...string) {
@@ -717,6 +724,7 @@ func prepareApprovedPromotionPrefix(t *testing.T, d *validationDriver, message s
 // 化屏障期间的晋升在意图准入处拒绝（Phase A 停止 candidate promotion）——多提
 // 交区间保持原样（零 Git 副作用），且 REQUEST 落账撤销写资格、保留原观察债务。
 func TestPromotionFrozenByRequirementChangeBarrierLeavesHistoryUntouched(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -760,6 +768,7 @@ func TestPromotionFrozenByRequirementChangeBarrierLeavesHistoryUntouched(t *test
 // TestTerminalRunRejectsPromotionWithoutTouchingHistory：终态 run 的晋升误调
 // 用在意图准入处拒绝（活动期要求），被改写前的 Git 历史保持原样。
 func TestTerminalRunRejectsPromotionWithoutTouchingHistory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -797,6 +806,7 @@ func TestTerminalRunRejectsPromotionWithoutTouchingHistory(t *testing.T) {
 // 变——脏树与身份漂移都拒绝且 run 保持活动（phase 非终态、错误可辨识）；回
 // 到已绑定晋升身份后 Drive 恢复 COMPLETE。
 func TestTerminalSealingRejectsDirtyTreeAndDriftUntilReorganized(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -845,6 +855,7 @@ func TestTerminalSealingRejectsDirtyTreeAndDriftUntilReorganized(t *testing.T) {
 // target 重开零变化）；execute 后崩溃（squash 已发生、意图仍在）经重入收敛——
 // 重解析得新 HEAD、覆盖意图、区间单提交确认、提交绑定，终态可达。
 func TestPromotionIntentSurvivesExecuteCrashAndReentryConverges(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -904,6 +915,7 @@ func TestPromotionIntentSurvivesExecuteCrashAndReentryConverges(t *testing.T) {
 // A delivered target awaits seal after actual native cleanup. Content drift
 // rejects publication; restoring the approved identity resumes the same path.
 func TestTerminalCheckpointDriftRejectsPublicationUntilContentRestored(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -1007,6 +1019,7 @@ func (r *publicationDriftRunner) Run(dir, command string, args ...string) (strin
 // seal 窗口与发布窗口：Drive 以同一身份判据拒绝（不呈现 COMPLETE、摘要不落
 // 盘）；恢复已验证内容（reset --hard 晋升身份）后重放发布 COMPLETE。
 func TestTerminalPublicationRejectsDriftAfterSealVerification(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -1093,6 +1106,7 @@ func (r *promotionWindowObserver) Run(dir, command string, args ...string) (stri
 // 存活、接纳之后零个 reset/commit 写命令。窗口内的同步提交会等待调用方自身
 // 持有的锁（死锁），屏障竞争只能以双执行流表示。
 func TestRequirementChangeAdmissionWaitsForThePromotionWindow(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -1183,6 +1197,7 @@ func TestRequirementChangeAdmissionWaitsForThePromotionWindow(t *testing.T) {
 // An accepted Abort Ask precedes the promotion window. Its decision waits for
 // that window and must use the freshness token after the intervening receipts.
 func TestAbortDecisionAdmissionWaitsForThePromotionWindow(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -1284,6 +1299,7 @@ func TestAbortDecisionAdmissionWaitsForThePromotionWindow(t *testing.T) {
 // 窗口落账，真实终止与清理完成后晋升在意图准入处拒绝：零 Git 写、
 // 多提交区间原样、拒绝可辨识。
 func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -1340,6 +1356,7 @@ func TestPromotionFrozenByAbortDecisionLeavesHistoryUntouched(t *testing.T) {
 // 织：意图消费为空、晋升身份＝组织后 HEAD、内容摘要与候选绑定、工作区干
 // 净，终态可达。
 func TestPromotionResumeAfterResetInterruptionBindsOrganizedHead(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -1414,6 +1431,7 @@ func (r *commitFailureRunner) Run(dir, command string, args ...string) (string, 
 // 绑定原意图——无补偿写（组织头建立在 base 上、HEAD 不是意图目标）、意图消
 // 费为空、树摘要绑定、终态可达。
 func TestPromotionResumeAfterCommitFailureBindsOrganizedHead(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -1483,6 +1501,7 @@ func TestPromotionResumeAfterCommitFailureBindsOrganizedHead(t *testing.T) {
 // 未暂存修改＝不是本操作的中间态：重入拒绝（指明先处理工作区）、HEAD 不动、
 // 用户修改原样保留；用户清理后重入完成组织。
 func TestPromotionRejectsUserWorkspaceChangesUntilCleaned(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -1550,6 +1569,7 @@ func TestPromotionRejectsUserWorkspaceChangesUntilCleaned(t *testing.T) {
 // （组织形态驻留、原观察债务保留），屏障解除后重入——原意图经 count==1 无 squash 直绑已
 // 组织形态（§9.2「外部事实已精确满足预期时只提交结果」）。
 func TestPromotionBindsParkedOrganizationAfterBarrierRelease(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
@@ -1618,6 +1638,7 @@ func TestPromotionBindsParkedOrganizationAfterBarrierRelease(t *testing.T) {
 // HEAD 内容漂移（净树≠已验证候选）时重入——内容前置门先行拒绝：零 Git 副作
 // 用（HEAD 不动）且不重开、不覆盖未决意图。
 func TestPromotionContentDriftWithLiveIntentRejectsBeforeGitWrites(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "dev commit", "review commit")
 	base := identities[0]
@@ -1682,6 +1703,7 @@ func promotionInputForTest(t *testing.T, d *validationDriver, sourceIdentity, me
 // Completed native effects retain their original receipts across new source
 // qualification. Late and repeated receipts cannot change the current mapping.
 func TestPromotionReceiptsRetainEvidenceAfterSourceReplacement(t *testing.T) {
+	t.Parallel()
 	d, first, originalProof := completedPromotionAwaitingReceipt(t)
 	if err := d.f.engine.RecordCandidatePromotion(first.ActionID, originalProof, protocol.Observation{}); err != nil {
 		t.Fatal(err)
@@ -1816,7 +1838,7 @@ func completedPromotionAwaitingReceipt(t *testing.T) (*validationDriver, protoco
 	if err := vcs.New(root, nil).Commit(firstParams.Promotion.Message); err != nil {
 		t.Fatal(err)
 	}
-	unknown, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), first.ActionID, "op.candidate", DefaultProvider, first.Correlation, first.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
+	unknown, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), first.ActionID, "op.candidate", d.host(), first.Correlation, first.PayloadDigest, protocol.HostActionStatusUnknown, "", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1954,6 +1976,7 @@ func requalifyPromotionSource(t *testing.T, d *validationDriver, message string,
 // UNKNOWN with a real staged remainder permits observation, never another
 // native execution. Public reentry preserves its original debt and receipt.
 func TestUnknownPromotionPartialPrefixDoesNotExecuteOnReentry(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "development", "validated output")
 	d := completePromotionPipeline(t, nil, root, identities[0])
@@ -2049,6 +2072,7 @@ func (r *commitFailureRunner) RunRaw(dir, command string, input []byte, args ...
 // An immutable delivery is reconciled through public Drive without replacing
 // either form of the newly confirmed document with the historical value.
 func TestCompletedPromotionReconcilesAfterRequirementConfirmation(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []bool{false, true} {
 		t.Run(fmt.Sprintf("staged=%t", stage), func(t *testing.T) {
 			d, first, originalProof := completedPromotionAwaitingReceipt(t)

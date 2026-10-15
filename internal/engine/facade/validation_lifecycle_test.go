@@ -59,6 +59,7 @@ func (d *validationDriver) chooseValidation(req protocol.ValidationRequest, reme
 
 // Accepted design work, semantic reviews and execution retries retain separate identities.
 func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "whitebox", "quality")
 	dev, input := d.action("engine.development.batch.v6")
 	d.business(dev, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "implemented input rejection"}})
@@ -126,6 +127,7 @@ func TestTestOnlyRedesignKeepsIndependentTaskAndReviewIdentity(t *testing.T) {
 }
 
 func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	var task string
 	for i := 0; i < 2; i++ {
@@ -187,6 +189,7 @@ func TestRetryOfferSurvivesIndependentProgressAndReopen(t *testing.T) {
 }
 
 func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T) {
+	t.Parallel()
 	for _, remedy := range []string{"QA_ARTIFACT_REPAIR", "DISMISS"} {
 		t.Run(remedy, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -297,6 +300,7 @@ func TestDismissedFindingPreservesFailedQAEvidenceUntilDisposition(t *testing.T)
 }
 
 func TestGateInputExcludesQAMaterialsAcrossReopen(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	for i := 0; i < 2; i++ {

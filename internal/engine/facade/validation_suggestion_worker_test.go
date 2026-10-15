@@ -12,6 +12,7 @@ import (
 )
 
 func TestApprovedQASuggestionsHaveIssuedSemanticDuty(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, in := d.action("engine.qa.design.v6")
 	m := simpleManifest(in)
@@ -26,6 +27,7 @@ func TestApprovedQASuggestionsHaveIssuedSemanticDuty(t *testing.T) {
 }
 
 func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
+	t.Parallel()
 	for _, affected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "defer", true: "accepted-case-change"}[affected], func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -111,6 +113,7 @@ func TestQASuggestionWorkerPreservesApprovalAndResumesOnce(t *testing.T) {
 }
 
 func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	dev, development := d.action("engine.development.batch.v6")
 	id, in := qaModeAction(d, "engine.qa.design.v6", coverage.ReviewBlackbox)
@@ -169,6 +172,7 @@ func TestQASuggestionsShareCompletedModeBarrier(t *testing.T) {
 }
 
 func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	id, in := d.action("engine.qa.execution.v4")
@@ -196,6 +200,7 @@ func TestQASuggestionDutyFollowsConfirmedCaseThaw(t *testing.T) {
 }
 
 func TestAcceptedSuggestionReachesIssuedCaseRevision(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	id, input := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(input)

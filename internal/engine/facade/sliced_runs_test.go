@@ -235,6 +235,7 @@ func abortRun(t *testing.T, d *validationDriver) {
 // 绑定成功且同事务锁定 RouteConfirmed=true、SelectedGates=[merge-qa, merge-gate]；
 // 绑定后 master 不进开发段、不再抬 SELECT_ROUTE。
 func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
+	t.Parallel()
 	for name, owners := range map[string][]protocol.ACOwner{
 		"missing-owner": nil,
 		"duplicate":     {{AC: "AC-001", Owner: "lane-core"}, {AC: "AC-001", Owner: "lane-tooling"}},
@@ -298,6 +299,7 @@ func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 // TestSplitBindingRequiresNoPendingRouteAsk：未决 SELECT_ROUTE Ask 存在时不
 // 绑定 split——绑定后的 run 不携带不可能再决定的路线 Ask。
 func TestSplitBindingRequiresNoPendingRouteAsk(t *testing.T) {
+	t.Parallel()
 	d := splitMasterDriver(t)
 	ask, err := protocol.NewRouteRequestEvent(d.eventID(), []string{"blackbox", "whitebox", "gate.quality"}, protocol.AskOption{ID: "approve", Label: "全部门"})
 	if err != nil {
@@ -320,6 +322,7 @@ func TestSplitBindingRequiresNoPendingRouteAsk(t *testing.T) {
 // 射、child 状态含继承事实，全程无自身审查轮，携片内计划的 QA-free 路线
 // 确认后推进开发段；继承拓扑不可重切。
 func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-lane-core", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
@@ -392,6 +395,7 @@ func operatorBoundary(t *testing.T, d *validationDriver) string {
 // 前进——未选路线时提示选择分片路线，选完路线后经 adapter 前置进入开发；
 // 文档继承 master 的确认绑定，计划随路线一次确认。
 func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	child.drive()
 	if boundary := operatorBoundary(t, child); !strings.Contains(boundary, "select the slice route") {
@@ -420,6 +424,7 @@ func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 // 发派发任务；断言具体 batch/task 与 DevelopmentInput 内容（片内计划即执
 // 行契约）。
 func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-dispatch", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
@@ -452,6 +457,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 // TestSliceChildRouteWithoutPlanIsRejected：child 路线决定缺片内计划（提案
 // 为空）可区分拒绝、零写；摘要与提案不一致同样拒绝。
 func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-unplanned", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {
@@ -483,6 +489,7 @@ func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
 // TestChildCreationIsFrozenByRequirementBarrier：需求变化写屏障（Phase A）在
 // 位时 child 认领可区分拒绝、零写；Ask 了结后照常认领。
 func TestChildCreationIsFrozenByRequirementBarrier(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	ask, err := protocol.NewRequestEvent(master.eventID(), protocol.ControlRequestRequirementChange,
 		protocol.AskOption{ID: "proceed", Label: "Revise"}, protocol.AskOption{ID: "abort", Label: "Keep"})
@@ -516,6 +523,7 @@ func TestChildCreationIsFrozenByRequirementBarrier(t *testing.T) {
 // （分片名是 child 认领键），重复声明在绑定校验（slice.go splitACOwners）
 // 可区分拒绝、零写。
 func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
+	t.Parallel()
 	master := splitMasterDriver(t)
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
 	topology.Slices = []string{"lane-core", "lane-core"}
@@ -537,6 +545,7 @@ func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 // 换约接纳并切换执行契约（换约后派发批次来自新计划）。开发前的同集同计
 // 划重选照常（用户决定本身即确认）。
 func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
+	t.Parallel()
 	master, child := controlChildren(t)
 	child.drive()
 	first := sliceLanePlan()
@@ -635,6 +644,7 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 
 // 所选普通门真实执行至 wave COMPLETE，全程不产生 QA 派发。
 func TestSliceChildSelectedGatesExecuteToCompletion(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	f, run, err := semanticValidationFacade(t, sliceChildStart(master, "child-gates", "lane-core", sliceChildReceipt(master.revision)))
 	if err != nil {

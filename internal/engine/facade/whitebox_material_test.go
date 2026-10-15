@@ -11,6 +11,7 @@ import (
 )
 
 func TestWhiteboxSemanticRevisionReusesExactAuthoringMaterials(t *testing.T) {
+	t.Parallel()
 	d, runner := startNativeProviderDriver(t, "svn")
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})

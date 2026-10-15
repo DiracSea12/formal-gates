@@ -11,6 +11,7 @@ import (
 // A preparation interrupted before native owner creation can precede an
 // explicitly carried requirement revision and the current owned invocation.
 func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox")
@@ -110,6 +111,7 @@ func TestAgentExecutionExcludesUnclaimedCarriedMaterial(t *testing.T) {
 // All claimed invocations of the signed action/attempt retain their evidence
 // when the host resumes the original native identity.
 func TestAgentExecutionRetainsOriginalAndResumedOwners(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	action, _ := d.action("engine.development.batch.v6")
 	claim := func(ref WorkerMaterial, resume string) string {

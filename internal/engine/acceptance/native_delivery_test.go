@@ -11,6 +11,7 @@ import (
 // Development starts from the accepted native HEAD; base continues to own the
 // review and squash range. Frozen and delivered content includes existing inputs.
 func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
+	t.Parallel()
 	for _, ancestor := range []bool{true, false} {
 		name := "startup-base"
 		if ancestor {

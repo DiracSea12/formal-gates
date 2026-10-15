@@ -8,6 +8,7 @@ import (
 )
 
 func TestReadinessClassificationConstrainsBlockers(t *testing.T) {
+	t.Parallel()
 	for _, category := range []string{"", "implementation-detail", "acceptance-entry"} {
 		t.Run(category, func(t *testing.T) {
 			d := startValidationDriver(t, nil)

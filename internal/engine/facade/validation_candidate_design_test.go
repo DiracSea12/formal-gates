@@ -137,6 +137,7 @@ func freezeCandidateSource(t *testing.T, d *validationDriver, p protocol.Candida
 // Identical manifests can name different test implementations. A completed
 // candidate belongs to the accepted design that supplied its actual test bytes.
 func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"QA_ARTIFACT", "REVIEW_READY"} {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%t", stage, held), func(t *testing.T) {
@@ -222,7 +223,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 					raw, _ = json.Marshal(evidence)
 					var values map[string]any
 					_ = json.Unmarshal(raw, &values)
-					ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", DefaultProvider, intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
+					ev, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), intent.ActionID, "op.candidate", d.host(), intent.Correlation, intent.PayloadDigest, "EXECUTED", "", values)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -275,7 +276,7 @@ func TestCandidateCompletionRetainsDesignSource(t *testing.T) {
 				if stage == "QA_ARTIFACT" {
 					badValues := maps.Clone(oldReceipt.HostAction.AdapterEvidence.Values)
 					badValues["workspaceId"] = "different-workspace"
-					bad, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), old.ActionID, "op.candidate", DefaultProvider, old.Correlation, old.PayloadDigest, "EXECUTED", "", badValues)
+					bad, err := protocol.NewAdapterHostActionReceiptEvent(d.eventID(), old.ActionID, "op.candidate", d.host(), old.Correlation, old.PayloadDigest, "EXECUTED", "", badValues)
 					if err != nil {
 						t.Fatal(err)
 					}

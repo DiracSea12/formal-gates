@@ -84,6 +84,7 @@ func planBatchAction(d *validationDriver, batch string) (string, protocol.Valida
 	return "", protocol.ValidationInput{}
 }
 func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
+	t.Parallel()
 	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 		for _, reopen := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/reopen=%t", tier, reopen), func(t *testing.T) {
@@ -221,6 +222,7 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 }
 
 func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reopen=%t", reopen), func(t *testing.T) {
 			p := commandPlan()
@@ -333,6 +335,7 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 }
 
 func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
+	t.Parallel()
 	p := commandPlan()
 	second := p.Batches[0]
 	second.ID = "dependent"
@@ -413,6 +416,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	}
 }
 func TestSpikeConclusionUnlocksDevelopmentWithoutEnteringCandidate(t *testing.T) {
+	t.Parallel()
 	for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 		t.Run(tier, func(t *testing.T) {
 			p := commandPlan()
@@ -471,6 +475,7 @@ func TestSpikeConclusionUnlocksDevelopmentWithoutEnteringCandidate(t *testing.T)
 }
 
 func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T) {
+	t.Parallel()
 	finish := func(d *validationDriver, action review.Action, plan *protocol.GranularityReview) (string, protocol.Event) {
 		d.t.Helper()
 		var id string
@@ -640,6 +645,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 }
 
 func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
+	t.Parallel()
 	d := nativeMasterDriver(t)
 	passPreDevelopmentReviews(t, d, splitCommandPlan())
 	topology := splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"})
@@ -706,6 +712,7 @@ func TestSplitTopologyConfirmsExactPlanAndReopens(t *testing.T) {
 }
 
 func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
+	t.Parallel()
 	master := splitMaster(t)
 	master.drive()
 	parent := driverState(t, master)
@@ -747,6 +754,7 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 }
 
 func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.T) {
+	t.Parallel()
 	master := nativeMasterDriver(t)
 	plan := splitCommandPlan()
 	plan.VerificationTier = "CHECKPOINT"

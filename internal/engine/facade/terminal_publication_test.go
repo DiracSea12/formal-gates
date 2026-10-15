@@ -11,6 +11,7 @@ import (
 
 // Public terminal status waits for the immutable summary committed by Drive.
 func TestAbortPublicationWaitsForCleanup(t *testing.T) {
+	t.Parallel()
 	d := nativeMasterDriver(t)
 	for id := range d.run.PendingActions {
 		d.receipt(id)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestDisposedValidationTargetRetiresEveryRetryDelivery(t *testing.T) {
+	t.Parallel()
 	for _, delivery := range []string{"staged", "receipted", "terminal", "late-runtime-error"} {
 		t.Run(delivery, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -113,6 +114,7 @@ func TestDisposedValidationTargetRetiresEveryRetryDelivery(t *testing.T) {
 }
 
 func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
+	t.Parallel()
 	for _, retry := range []bool{false, true} {
 		for _, choice := range []string{"REPAIR", "DISMISS", "decline"} {
 			t.Run(fmt.Sprintf("retry=%v/%s", retry, choice), func(t *testing.T) {
@@ -185,6 +187,7 @@ func TestDispositionSuspendsSignedRepairUntilUserChooses(t *testing.T) {
 }
 
 func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
+	t.Parallel()
 	for _, terminal := range []bool{false, true} {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			d, finding, wave := validationWithGateFinding(t)
@@ -232,6 +235,7 @@ func TestDismissalRetiresSignedRepairBeforeLateResult(t *testing.T) {
 }
 
 func TestUnavailableTargetDispositionAfterQARerun(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{"approve", "waive", "dispose"} {
 		t.Run(choice, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox", "quality")
@@ -300,6 +304,7 @@ func TestUnavailableTargetDispositionAfterQARerun(t *testing.T) {
 }
 
 func TestUnavailableTargetDisposalRejectsReplacedQADuty(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox", "quality")
 	d.reviewReady()
 	var target string

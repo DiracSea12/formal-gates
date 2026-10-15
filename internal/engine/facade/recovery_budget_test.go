@@ -9,6 +9,7 @@ import (
 )
 
 func TestRecoveryBudgetRetryPreservesOriginalEffectAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, cap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finite", true: "finite-and-token-cap"}[cap], func(t *testing.T) {
 			root := t.TempDir()

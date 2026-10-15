@@ -14,6 +14,7 @@ import (
 )
 
 func TestParentAbortCancelsCurrentAndReplacedChildren(t *testing.T) {
+	t.Parallel()
 	master, child, _, _ := deliveredChildCheckpoint(t, validationDocument)
 	before := driverState(t, master)
 	choices := requirementChildChoices(t, master)

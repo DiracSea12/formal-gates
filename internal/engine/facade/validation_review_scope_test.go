@@ -8,6 +8,7 @@ import (
 
 // A baseline is established by a valid FULL review, including after invalid incremental evidence.
 func TestFirstReviewRequiresFullBaseline(t *testing.T) {
+	t.Parallel()
 	for _, order := range []string{"normal", "result-first", "held"} {
 		t.Run(order, func(t *testing.T) {
 			d := newValidationDriver(t, "blackbox")

@@ -19,6 +19,7 @@ import (
 // Native registration must survive the ordinary filesystem spelling of a
 // workspace when Git reports its canonical directory spelling.
 func TestNativeWorkspaceObservationUsesDirectoryIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -71,6 +72,7 @@ func TestNativeWorkspaceObservationUsesDirectoryIdentity(t *testing.T) {
 // Each observation is a real Git prefix of the issued operation. Missing
 // inputs are incomplete; a different native ref remains a conflict.
 func TestNativeWorkspaceObservationDistinguishesIncompleteAndConflict(t *testing.T) {
+	t.Parallel()
 	for _, prefix := range []string{"requirement", "ref", "mirror", "conflict"} {
 		t.Run(prefix, func(t *testing.T) {
 			root := t.TempDir()
@@ -158,6 +160,7 @@ func TestNativeWorkspaceObservationDistinguishesIncompleteAndConflict(t *testing
 // HEAD identity alone does not prove that a mutable authoring package graph
 // describes the immutable source commit used to authorize a removed test.
 func TestNativeOwnershipRejectsMutableGraphAsImmutableSource(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -199,6 +202,7 @@ func TestNativeOwnershipRejectsMutableGraphAsImmutableSource(t *testing.T) {
 // An unchanged freeze can lose its response without producing a commit. Its
 // clean native tree and original ref prove completion without another write.
 func TestNativeUnchangedFreezeObservedWithoutWrites(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -249,6 +253,7 @@ func TestNativeUnchangedFreezeObservedWithoutWrites(t *testing.T) {
 // Native existence and ownership are independent: embedding an existing
 // runtime input in a test cannot authorize changing it as a QA artifact.
 func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"runtime-input", "production-input", "new-fixture", "removed-fixture", "test-mode"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
@@ -382,6 +387,7 @@ func (r *nativeFailureObservationRunner) RunRaw(dir, command string, input []byt
 }
 
 func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
+	t.Parallel()
 	for _, unavailable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unavailable=%t", unavailable), func(t *testing.T) {
 			root := t.TempDir()
@@ -435,6 +441,7 @@ func TestNativeFailureClassificationRequiresPositiveObservation(t *testing.T) {
 
 // A candidate cannot freeze a workspace with an undeclared verification artifact.
 func TestNativeCandidateRejectsUndeclaredChangesWithoutWrites(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()

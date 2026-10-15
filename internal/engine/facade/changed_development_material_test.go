@@ -14,6 +14,7 @@ import (
 )
 
 func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T) {
+	t.Parallel()
 	for _, approvedArtifact := range []bool{false, true} {
 		t.Run(fmt.Sprintf("approved=%t", approvedArtifact), func(t *testing.T) {
 			d, _ := startNativeProviderDriver(t, "svn")

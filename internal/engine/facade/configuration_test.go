@@ -121,6 +121,7 @@ func TestConfigurationNodeEditPreservesLaterTemporaryExecutionChoice(t *testing.
 }
 
 func TestConfigurationNodeEditPreservesConfirmedGateAndQASelection(t *testing.T) {
+	t.Parallel()
 	d := plannedValidationDriverAt(t, t.TempDir(), "zcode", nil, commandPlan(), "blackbox", "quality")
 	off := false
 	_, _ = confirmConfiguration(t, d.f, ConfigurationInput{FlowNode: "repair", Enabled: &off})
@@ -131,6 +132,7 @@ func TestConfigurationNodeEditPreservesConfirmedGateAndQASelection(t *testing.T)
 }
 
 func TestConfigurationDisablingCompletedReadinessRetainsConfirmedPlan(t *testing.T) {
+	t.Parallel()
 	d := plannedValidationDriverAt(t, t.TempDir(), "zcode", nil, commandPlan(), "quality")
 	before := driverState(t, d)
 	original, err := d.f.DevelopmentPlan(routeDecisionForGates([]string{"quality"}))
@@ -164,6 +166,7 @@ func TestConfigurationDisablingCompletedReadinessRetainsConfirmedPlan(t *testing
 }
 
 func TestConfigurationEnablingSkippedReadinessWaitsForItsOriginalReview(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	intake, err := PrepareIntake(root, "requirements.md", "", nil, true)

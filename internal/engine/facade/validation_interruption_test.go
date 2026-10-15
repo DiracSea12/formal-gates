@@ -13,6 +13,7 @@ import (
 )
 
 func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	id, input := d.action("engine.qa.design.v6")
 	for attempt := 0; attempt < 2; attempt++ {
@@ -63,6 +64,7 @@ func TestSemanticRejectionFeedbackFollowsOriginalRetry(t *testing.T) {
 }
 
 func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		name := "normal"
 		if held {
@@ -145,6 +147,7 @@ func TestInterruptedExecutionKeepsCauseAndCompletedRows(t *testing.T) {
 }
 
 func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
 	id, input := d.action("engine.qa.execution.v4")
@@ -221,6 +224,7 @@ func TestNativeResumeUsesLatestActualInterruption(t *testing.T) {
 }
 
 func TestInvalidInterruptedRowsDoNotReplaceProgress(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
 	id, input := d.action("engine.qa.execution.v4")
@@ -250,6 +254,7 @@ func TestInvalidInterruptedRowsDoNotReplaceProgress(t *testing.T) {
 }
 
 func TestLatestRuntimeCauseSurvivesInvalidRowsAndEndsAtRedo(t *testing.T) {
+	t.Parallel()
 	d := newValidationDriver(t, "blackbox")
 	d.reviewReady()
 	id, input := d.action("engine.qa.execution.v4")

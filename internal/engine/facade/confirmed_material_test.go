@@ -20,6 +20,7 @@ import (
 )
 
 func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	testkit.ConfigureNativePaths(t, root, "zcode")
 	snapshotRepoCommits(t, root)
@@ -206,6 +207,7 @@ func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
 // The public material producer must carry a user's settled finding into the
 // following review without editing the immutable original worker material.
 func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	testkit.ConfigureNativePaths(t, root, "zcode")
 	identities := snapshotRepoCommits(t, root)

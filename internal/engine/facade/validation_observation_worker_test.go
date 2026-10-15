@@ -14,6 +14,7 @@ import (
 )
 
 func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"complete", "mandatory-and-selected", "illegal-impact"} {
 		t.Run(scenario, func(t *testing.T) {
 			d := gateImpactBoundary(t)
@@ -195,6 +196,7 @@ func TestSemanticObservationFixesAffectedScopeAndGateImpactTogether(t *testing.T
 }
 
 func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
+	t.Parallel()
 	for _, execution := range []string{"unclaimed", "owned", "spawned", "unknown"} {
 		t.Run(execution, func(t *testing.T) {
 			d := gateImpactBoundary(t)
