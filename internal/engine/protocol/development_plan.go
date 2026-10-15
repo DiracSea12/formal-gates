@@ -676,7 +676,7 @@ func (s *State) plannedBatchSource(task runtime.TaskKey) (DevelopmentBatch, bool
 	return DevelopmentBatch{}, false
 }
 func (s *State) currentPlanTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) runtime.TaskKey {
-	return s.currentPlanTaskFrom(planTask(cd, p, id), p, id)
+	return s.currentPlanTaskFrom(pipelineTask(cd, "engine.development.batch.v6", ""), p, id)
 }
 func (s *State) currentPlanTaskFrom(task runtime.TaskKey, p *GranularityReview, id string) runtime.TaskKey {
 	task.Scope = planTaskScope(p, id)

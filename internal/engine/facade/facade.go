@@ -1636,18 +1636,11 @@ func isMissingEngineState(err error) bool {
 }
 
 func (f *Facade) project() (Run, error) {
-	snap, err := f.engine.Load()
+	projection, err := f.engine.Project(protocol.Observation{})
 	if err != nil {
 		return Run{}, err
 	}
-	plan, _, err := f.engine.Plan(protocol.Observation{})
-	if err != nil {
-		return Run{}, err
-	}
-	work, err := f.engine.RequirementWork()
-	if err != nil {
-		return Run{}, err
-	}
+	snap, plan, work := projection.Snapshot, projection.Plan, projection.RequirementWork
 	// COMPLETE 的单一权威是引擎 phase TERMINAL：regular 的 decide 边界在
 	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复），lightweight 的
 	// CompleteAll 已在引擎内相变。

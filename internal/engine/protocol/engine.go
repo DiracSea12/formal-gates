@@ -627,6 +627,28 @@ func (e *Engine) Plan(input Observation) (*decision.Plan, uint64, error) {
 	return plan, revision, nil
 }
 
+// Projection binds the next boundary and requirement work to one validated
+// snapshot, so every field describes the same durable revision.
+type Projection struct {
+	Snapshot        Snapshot
+	Plan            *decision.Plan
+	RequirementWork []RequirementWork
+}
+
+// Project reads the authoritative state once and derives its read-only views.
+func (e *Engine) Project(input Observation) (Projection, error) {
+	e = e.observing(input)
+	snapshot, err := e.Load()
+	if err != nil {
+		return Projection{}, err
+	}
+	plan, err := e.decide(snapshot.State)
+	if err != nil {
+		return Projection{}, err
+	}
+	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.requirementWork(e.cfg.Definition)}, nil
+}
+
 // Drive advances deterministic engine-internal steps, then performs the
 // standard Decide → SelectIssued cycle until an external boundary (or
 // Complete) is reached.  No external event is accepted here; callers must use
