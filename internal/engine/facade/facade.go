@@ -184,6 +184,7 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
+	Execution    *protocol.ExecutionSelection      `json:"execution,omitempty"`
 	Continuation *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
 	Validation   *protocol.ValidationRequest       `json:"validation,omitempty"`
 	RoundGrant   *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
@@ -1377,10 +1378,14 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 // Submit serializes new typed events with native execution. Exact accepted
 // replay stays read-only; waiting callers consult the current ledger again.
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
+	return f.submit(event, false)
+}
+
+func (f *Facade) submit(event protocol.Event, selectExecution bool) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
-	accepted, recorded, err := f.recordedEvent(event)
+	accepted, recorded, err := f.recordedSubmission(event, selectExecution)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1393,7 +1398,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, err
 	}
 	defer unlock()
-	accepted, recorded, err = f.recordedEvent(event)
+	accepted, recorded, err = f.recordedSubmission(event, selectExecution)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
@@ -1402,6 +1407,22 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return accepted, run, err
 	}
 	var observation protocol.Observation
+	if event.Request != nil && event.Request.Execution != nil {
+		if err := f.validateExecutionSelection(event.Request.Execution); err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+	}
+	if event.Decide != nil && event.Decide.Execution != nil {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		if selection := snap.State.PendingAsks[string(event.Decide.Request)].Execution; selection != nil {
+			if err := f.validateExecutionSelection(selection); err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+		}
+	}
 	if event.Request != nil && event.Request.Control == protocol.ControlReset {
 		snap, err := f.engine.Load()
 		if err != nil {
@@ -1488,6 +1509,12 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	acceptance, err := f.engine.Submit(event, observation)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
+	}
+	if selectExecution && acceptance.Status == "ACCEPTED" {
+		acceptance, err = f.confirmExecutionSelection(event, acceptance)
+		if err != nil {
+			return acceptance, Run{}, err
+		}
 	}
 	if err := f.syncResetRequirement(); err != nil {
 		return acceptance, Run{}, err
@@ -1789,6 +1816,7 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
+			Execution:    ask.Execution,
 			Continuation: ask.Continuation,
 			Validation:   ask.Validation,
 			RequestID:    id,

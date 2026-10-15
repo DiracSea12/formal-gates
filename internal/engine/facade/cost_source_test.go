@@ -128,3 +128,101 @@ func TestCostSourceBridgeRetainsMissingSourceReasons(t *testing.T) {
 		})
 	}
 }
+
+func TestExecutionSelectionCostUsesOnlyClaimedInvocations(t *testing.T) {
+	f, root := workerMaterialFacade(t)
+	run, err := f.Drive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready WorkerMaterial
+	for _, ref := range run.WorkerMaterials {
+		ready = ref
+	}
+	oldRequest, oldSupervisor, oldDirectory, _, err := f.WorkerExecutionRequest(ready, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(oldDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(oldDirectory, "native-request.json"), oldRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(oldDirectory, "request.json"), oldSupervisor); err != nil {
+		t.Fatal(err)
+	}
+	platform := selectionPlatformFixture(t, "selected", true)
+	descriptor, err := host.Lookup("zcode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform.descriptor.ReadUsage = descriptor.ReadUsage
+	platform.descriptor.LifecycleRequired = true
+	selectExecution(t, f, ExecutionSelectionInput{Node: "product-review", Platform: platform.descriptor.ID, Model: "Careful"})
+	release, err := AdmitExecution(oldDirectory, oldSupervisor)
+	if release != nil {
+		release()
+	}
+	if err == nil {
+		t.Fatal("pre-selection material unexpectedly admitted")
+	}
+	if _, err := os.Stat(filepath.Join(oldDirectory, "owner")); !os.IsNotExist(err) {
+		t.Fatal("rejected preparation acquired ownership", err)
+	}
+	request, _, directory, selected, err := f.WorkerExecutionRequest(ready, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ActionID != ready.ActionID || directory == oldDirectory {
+		t.Fatal("selection did not refresh material for the same action")
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(directory, "native-request.json"), request); err != nil {
+		t.Fatal(err)
+	}
+	release, err = AdmitExecution(directory, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = os.WriteFile(filepath.Join(directory, "owner"), nil, 0600)
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(directory, "native-events.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"sessionId":"session","turnId":"selected","type":"turn.completed","payload":{"usage":{"source":"provider","modelRequestCount":1,"inputTokens":100,"cacheReadTokens":40,"outputTokens":10}}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(directory, "source.json"), map[string]any{"transcript": transcript}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.BindDispatchWithProvider(root, f.runID, selected.ActionID, "session", platform.descriptor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifecycle.ObserveNativeCompletion(root, f.runID, selected.ActionID, platform.descriptor.ID, "session"); err != nil {
+		t.Fatal(err)
+	}
+	verifier := func(provider, observed string, source map[string]any) ([]byte, string, string, error) {
+		if provider != platform.descriptor.ID || observed != directory || source["transcript"] != transcript {
+			t.Fatal("cost verification lost its original provider/invocation/transcript", provider, observed, source)
+		}
+		return []byte("answer"), "sha256:answer", "session", nil
+	}
+	resolve := CostSourceBridge(root, f.runID, verifier)
+	ref := protocol.CostSourceRef{RunID: f.runID, ActionID: selected.ActionID, Provider: platform.descriptor.ID, Correlation: "session"}
+	want := cost.Usage{InputCacheHitTokens: 40, InputCacheMissTokens: 60, OutputTokens: 10}
+	for range 2 {
+		if resolved := resolve(ref); resolved.State != protocol.CostSourceReady || resolved.Usage != want || resolved.Reason != "" {
+			t.Fatalf("unclaimed preparation affected measured execution: %+v", resolved)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(oldDirectory, "owner"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if resolved := resolve(ref); resolved.State != protocol.CostSourceUnavailable || resolved.Usage != want || !strings.Contains(resolved.Reason, "original run/action/provider/material") {
+		t.Fatalf("claimed foreign execution lost its unavailable evidence: %+v", resolved)
+	}
+}

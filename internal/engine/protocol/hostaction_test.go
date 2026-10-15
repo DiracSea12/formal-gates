@@ -475,6 +475,13 @@ func TestAgentHostActionVariantsRequireDurableLifecycleEvidence(t *testing.T) {
 	if resume.Operation != HostActionResumeAgent || resume.Resume == nil || resume.Terminate != nil || resume.Adapter != nil {
 		t.Fatalf("resume union = %+v", resume)
 	}
+	resumedStart, err := NewCorrelatedLifecycleEvent("evt-resume-start", testProvider, resume.ActionID, "agent-review-1", LifecycleStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(resumedStart, observedInput); err != nil {
+		t.Fatal(err)
+	}
 	resumeReceipt, err := NewAgentHostActionReceiptEvent(
 		"evt-agent-resumed", resume.ActionID, HostActionResumeAgent, testProvider, "corr-resume",
 		resume.PayloadDigest, HostActionStatusExecuted, "", LifecycleEvidence{Identity: "agent-review-1", Event: LifecycleStart},
@@ -486,7 +493,7 @@ func TestAgentHostActionVariantsRequireDurableLifecycleEvidence(t *testing.T) {
 		t.Fatalf("submit resume receipt: %v", err)
 	}
 
-	stop, err := NewLifecycleEventEvent("evt-agent-stop", testProvider, "agent-review-1", LifecycleStop)
+	stop, err := NewCorrelatedLifecycleEvent("evt-agent-stop", testProvider, resume.ActionID, "agent-review-1", LifecycleStop)
 	if err != nil {
 		t.Fatalf("stop event: %v", err)
 	}
@@ -521,6 +528,37 @@ func TestAgentHostActionVariantsRequireDurableLifecycleEvidence(t *testing.T) {
 	final := engine.LoadMustSucceed(t)
 	if final.State.HostActionReceipts[resume.ActionID].Operation != HostActionResumeAgent || final.State.HostActionReceipts[terminate.ActionID].Operation != HostActionTerminateAgent {
 		t.Fatalf("agent HostAction receipts = %+v", final.State.HostActionReceipts)
+	}
+}
+
+func TestAttachedWorkerLifecycleUsesOriginalTransportCorrelation(t *testing.T) {
+	for _, correlation := range []string{"native-worker", "original-transport"} {
+		t.Run(correlation, func(t *testing.T) {
+			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
+			receipt := s.SpawnReceipts[pending.ActionID]
+			receipt.Status, receipt.Correlation, receipt.LifecycleIdentity = SpawnStatusAttached, "original-transport", "native-worker"
+			s.SpawnReceipts[pending.ActionID] = receipt
+			s.LifecycleEvents = []LifecycleEventRecord{{Provider: receipt.Provider, Correlation: correlation, Identity: receipt.agentIdentity(), Event: LifecycleStart}, {Provider: receipt.Provider, Correlation: correlation, Identity: receipt.agentIdentity(), Event: LifecycleStop}}
+			terminate, err := e.agentHostIntent(s, HostActionTerminateAgent, pending.ActionID, receipt.agentIdentity(), "Stop original work", "", 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof := &HostActionReceiptPayload{ActionID: terminate.ActionID, Operation: HostActionTerminateAgent, Provider: receipt.Provider, PayloadDigest: terminate.PayloadDigest, Status: HostActionStatusExecuted, LifecycleEvidence: &LifecycleEvidence{Identity: receipt.agentIdentity(), Event: LifecycleStop}}
+			exact := correlation == receipt.Correlation
+			if err := e.validateHostActionEvidence(s, terminate, proof); (err == nil) != exact {
+				t.Fatal("termination evidence did not retain the original correlation and identity", err)
+			}
+			if _, err := e.stopControlledWorkers(s, "stop-original", "Stop ", 4, true); err != nil {
+				t.Fatal(err)
+			}
+			_, retired := s.ObsoleteActions[pending.ActionID]
+			if retired != exact {
+				t.Fatal("worker retirement used a different invocation's stop", retired, exact)
+			}
+			if !exact && (s.PendingActions[pending.ActionID] != pending || len(s.PendingHostActions) != 1) {
+				t.Fatal("unmatched lifecycle evidence lost the original termination duty")
+			}
+		})
 	}
 }
 

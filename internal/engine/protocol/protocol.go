@@ -143,14 +143,21 @@ const (
 
 // AttemptBindings 是判断中断能否安全续接的权威绑定投影。task、外部
 // snapshot 与执行责任任一变化，都不能复用原 Attempt。
+// model 或 reasoningEffort 缺字段时读取 run 冻结值；显式空值使用原生默认。
 type AttemptBindings struct {
-	Task           runtime.TaskKey `json:"task"`
-	Snapshot       string          `json:"snapshot"`
-	Responsibility string          `json:"responsibility"`
+	Task            runtime.TaskKey `json:"task"`
+	Snapshot        string          `json:"snapshot"`
+	Responsibility  string          `json:"responsibility"`
+	Model           *string         `json:"model,omitempty"`
+	ReasoningEffort *string         `json:"reasoningEffort,omitempty"`
 }
 
 func (b AttemptBindings) Equal(other AttemptBindings) bool {
-	return b.Task == other.Task && b.Snapshot == other.Snapshot && b.Responsibility == other.Responsibility
+	return b.Task == other.Task && b.Snapshot == other.Snapshot && b.Responsibility == other.Responsibility && equalExecutionValue(b.Model, other.Model) && equalExecutionValue(b.ReasoningEffort, other.ReasoningEffort)
+}
+
+func equalExecutionValue(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 // PlanIdentity 记录授权一次签发的 canonical 决策身份。分量摘要用于定位
@@ -207,6 +214,7 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
+	Execution      *ExecutionSelection      `json:"execution,omitempty"`
 	Continuation   *NodeContinuationPreview `json:"continuation,omitempty"`
 	Reset          *ResetPreview            `json:"reset,omitempty"`
 	ResetRequestID string                   `json:"resetRequestId,omitempty"`
@@ -237,6 +245,7 @@ type PendingAsk struct {
 
 // RecordedDecision preserves the user decision and its typed action.
 type RecordedDecision struct {
+	Execution    *ExecutionSelection       `json:"execution,omitempty"`
 	Continuation *NodeContinuationDecision `json:"continuation,omitempty"`
 	Reset        *ResetDecision            `json:"reset,omitempty"`
 	Review       *ReviewDecisionPayload    `json:"review,omitempty"`
@@ -510,8 +519,8 @@ type State struct {
 	Decisions                 map[string]RecordedDecision `json:"decisions"`
 	Events                    map[string]EventRecord      `json:"events"`
 
-	// RunProvider 是 run 绑定的宿主 provider 身份（Init 落账）：一切携带
-	// provider 的事件/回执与之精确比对，不同或为空即硬拒绝。
+	// RunProvider identifies the admitted controller. Worker execution belongs
+	// to its original Attempt bindings, independently of the controller host.
 	RunProvider string `json:"runProvider"`
 	// DispatchIssueRevisions 按 actionID 落账每个派发的签发代数（签发
 	// 路径唯一写两处：issueInto/installReplacement；终态清理不删——

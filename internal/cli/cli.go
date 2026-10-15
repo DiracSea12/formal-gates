@@ -337,7 +337,8 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 }
 
 var workflowSubcommands = map[string]func([]string, IO) (int, error){
-	"replan": runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
+	"execution-options": runWorkflowExecutionOptions,
+	"replan":            runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview,
 }
 
 func runWorkflowStart(args []string, streams IO) (int, error) {
@@ -780,7 +781,7 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if !*singleStep && workflowControlEvent(event) {
+	if !*singleStep && workflowControlEvent(event) && (event.Request == nil || event.Request.Control != protocol.ControlSelectExecution) {
 		value, executionErr := consumeWorkflow(streams, f, *root, *runID)
 		value.Acceptance = &acceptance
 		return printCurrentWorkflowConsumption(streams, f, value, *machine, executionErr)

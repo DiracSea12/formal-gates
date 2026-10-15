@@ -140,10 +140,7 @@ func TestRecoveryBudgetRetryPreservesOriginalEffectAndReplay(t *testing.T) {
 			if !reflect.DeepEqual(replayed.State.PendingHostActions, snapshot.State.PendingHostActions) {
 				t.Fatal("Drive/reopen repeated the signed effect")
 			}
-			receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), resume.ActionID, resume.Operation, d.host(), resume.Correlation, resume.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: id, Event: protocol.LifecycleStart})
-			if err != nil {
-				t.Fatal(err)
-			}
+			receipt := d.resumeReceipt(resume)
 			first := d.submit(receipt)
 			revision := d.run.Revision
 			if repeated := d.submit(receipt); !reflect.DeepEqual(first, repeated) || d.run.Revision != revision {

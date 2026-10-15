@@ -59,8 +59,8 @@ func CostSourceBridge(root, runID string, verifier ...func(string, string, map[s
 // lifecycle journal 绑定；identity 不可变，native 观察核对该身份。
 func dispatchClaimBridge(root, owningRunID string, admission Admission) protocol.DispatchClaim {
 	return func(runID, actionID, identity, provider string) error {
-		if runID != owningRunID || provider != admission.Provider {
-			return fmt.Errorf("UNREGISTERED_INSTALL: dispatch claim does not match its owning run/provider")
+		if runID != owningRunID {
+			return fmt.Errorf("UNREGISTERED_INSTALL: dispatch claim does not match its owning run")
 		}
 		return admission.write(func() error { return lifecycle.BindDispatchWithProvider(root, runID, actionID, identity, provider) })
 	}
@@ -91,6 +91,12 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 			continue
 		}
 		directory := filepath.Join(actionDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			missing = errors.Join(missing, err)
+			continue
+		}
 		requestBytes, err := os.ReadFile(filepath.Join(directory, "native-request.json"))
 		if err != nil {
 			missing = errors.Join(missing, err)

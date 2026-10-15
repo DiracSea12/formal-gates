@@ -235,6 +235,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 		return release, err
 	}
 	var value worker.Material
+	var originalRequest map[string]any
 	if _, ownerErr := os.Stat(filepath.Join(directory, "owner")); ownerErr == nil {
 		original, err := readNativeWorkerInvocation(f.root, f.runID, directory)
 		if err != nil {
@@ -244,6 +245,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 			return release, fmt.Errorf("worker execution differs from its claimed original action/attempt")
 		}
 		value = original.material
+		originalRequest = original.request
 	} else if !os.IsNotExist(ownerErr) {
 		return release, ownerErr
 	} else {
@@ -278,15 +280,22 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 		workspace = value.Input.Validation.Workspace.Path
 	}
 	known := map[string]any{"provider": provider, "prompt": value.Prompt, "schema": value.ResultSchema, "read_only": value.ReadOnly, "workspace": workspace, "runtime_files": f.runtimeFiles}
-	if snap.State.Settings != nil {
-		known["model"] = snap.State.Settings.Values.Model
-		known["reasoning_effort"] = snap.State.Settings.Values.ReasoningEffort
+	known["model"] = value.Input.Execution.Model
+	known["reasoning_effort"] = value.Input.Execution.ReasoningEffort
+	if originalRequest != nil {
+		for _, key := range []string{"binding", "permission_mode", "native_store", "model", "reasoning_effort", "runtime_files"} {
+			known[key] = originalRequest[key]
+		}
 	}
 	for key, expected := range known {
 		if actual, supplied := request[key]; supplied && !jsonValuesEqual(actual, expected) {
 			return release, fmt.Errorf("worker execution %s differs from issued material", key)
 		}
-		request[key] = expected
+		if expected == nil || originalRequest == nil && (key == "model" || key == "reasoning_effort") && expected == "" {
+			delete(request, key)
+		} else {
+			request[key] = expected
+		}
 	}
 	for key := range request {
 		switch key {
@@ -344,11 +353,15 @@ func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID 
 		input, _, err = snap.State.WorkerExecutionIdentity(material.ActionID, material.AttemptID, resumeActionID, f.definition)
 	}
 	var selected *nativeWorkerInvocation
+	var resumeRequest map[string]any
 	if err == nil {
 		var invocations []nativeWorkerInvocation
 		invocations, err = claimedWorkerInvocations(f.root, f.runID, material.ActionID, material.AttemptID)
 		for i := range invocations {
 			invocation := &invocations[i]
+			if resumeActionID != "" && invocation.binding.ResumeActionID == "" {
+				resumeRequest = invocation.request
+			}
 			if resumeActionID != "" && invocation.binding.ResumeActionID != resumeActionID || workerInvocationDelivered(snap.State, *invocation) {
 				continue
 			}
@@ -358,17 +371,12 @@ func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID 
 			}
 			selected = invocation
 		}
-		if err == nil && selected != nil && *selected.binding.WorkerMaterial != material {
+		if err == nil && selected == nil {
 			catalog, loadErr := prompts.LoadPromptCatalog(f.admission.Target)
 			if loadErr != nil {
 				err = loadErr
 			} else {
-				current, renderErr := f.workerMaterial(input, catalog, false)
-				if renderErr != nil {
-					err = renderErr
-				} else if current != material {
-					err = fmt.Errorf("worker request is neither the current issuance nor its original claimed invocation")
-				}
+				material, err = f.workerMaterial(input, catalog, true)
 			}
 		}
 	}
@@ -387,6 +395,13 @@ func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID 
 	}
 	directory := WorkerExecutionDirectory(material, resumeActionID)
 	request := map[string]any{"engine": map[string]any{"root": f.root, "runId": f.runID, "workerMaterial": material, "resumeActionId": resumeActionID}}
+	if resumeRequest != nil {
+		for _, key := range []string{"binding", "permission_mode", "native_store"} {
+			if value, ok := resumeRequest[key]; ok {
+				request[key] = value
+			}
+		}
+	}
 	release, err = AdmitExecution(directory, request)
 	if err != nil {
 		return nil, nil, "", WorkerMaterial{}, err
@@ -580,7 +595,11 @@ func (f *Facade) AgentExecution(intent protocol.HostActionIntent) (provider stri
 	for _, invocation := range invocations {
 		directories = append(directories, invocation.directory)
 	}
-	return snap.State.RunProvider, directories, release, nil
+	choice, ok := snap.State.ActionExecutionChoice(target.WorkerActionID)
+	if !ok {
+		return "", nil, release, fmt.Errorf("native agent effect has no original execution choice")
+	}
+	return choice.Provider, directories, release, nil
 }
 
 // WorkerExecutionDirectory locates evidence for the original material or signed

@@ -17,6 +17,7 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 	t.Helper()
 	cd := compiledCanonicalWorkflow(t)
 	s, _, task := developmentCheckState(t)
+	s.RunProvider = "host"
 	if role == "engine.repair.v7" {
 		task = pipelineTask(cd, role, "repair-candidate")
 		s.Validation.Waves = []ValidationWave{{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}}
@@ -30,14 +31,13 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 	delete(s.Results, "edit-action")
 	pending := PendingAction{ActionID: "edit-action", Task: task, Step: string(task.Step), AttemptID: "same-attempt"}
 	s.PendingActions = map[string]PendingAction{pending.ActionID: pending}
-	s.Attempts = map[runtime.TaskKey]Attempt{task: {IssuedAction: decision.IssuedAction{ActionID: pending.ActionID, Task: task}, ID: pending.AttemptID, Business: true, Attempts: 1, MaxAttempts: 2, Work: &binding}}
-	s.SpawnReceipts = map[string]SpawnReceipt{pending.ActionID: {ActionID: pending.ActionID, Task: task, Status: SpawnStatusSpawned, LifecycleIdentity: "original-native-session"}}
+	s.Attempts = map[runtime.TaskKey]Attempt{task: {IssuedAction: decision.IssuedAction{ActionID: pending.ActionID, Task: task}, ID: pending.AttemptID, Bindings: AttemptBindings{Task: task, Responsibility: s.RunProvider}, Business: true, Attempts: 1, MaxAttempts: 2, Work: &binding}}
+	s.SpawnReceipts = map[string]SpawnReceipt{pending.ActionID: {ActionID: pending.ActionID, Task: task, Provider: s.RunProvider, Correlation: "original-native-session", Status: SpawnStatusSpawned, LifecycleIdentity: "original-native-session"}}
 	s.RecoverableResults = map[string][]WorkerResult{}
 	s.ObsoleteActions = map[string]ObsoleteAction{}
 	s.DispatchIssueRevisions = map[string]uint64{pending.ActionID: 1}
 	s.Tasks[task] = runtime.TaskRunning
 	s.Validation.Document = requirement.FrozenRequirementProjection{Content: "confirmed requirement"}
-	s.RunProvider = "host"
 	bindings, err := bindInternalSteps(cd, definition.Registry(), nil)
 	if err != nil {
 		t.Fatal(err)

@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"maps"
 	"math/big"
@@ -1488,7 +1489,11 @@ func zcodeExecute(request any, directory string, probe bool, services ...Executi
 	}
 	defer session.close()
 	if probe {
-		return session.probeResult(req.binding)
+		result, err := session.probeResult(req.binding)
+		if err == nil && getOf(request, "selection_options") == true {
+			result["selection_options"] = zcodeSelectionOptions(session.snapshot, nativeSelectionString(getOf(request, "selection_model")))
+		}
+		return result, err
 	}
 	if err := session.prepareTurn(req); err != nil {
 		return nil, err
@@ -1500,6 +1505,35 @@ func zcodeExecute(request any, directory string, probe bool, services ...Executi
 		return nil, err
 	}
 	return session.settleTurn()
+}
+
+func zcodeSelectionOptions(snapshot any, target string) host.SelectionCatalogue {
+	current := nativeModelSelection(zcodeSelection(snapshot))
+	catalogue := host.SelectionCatalogue{Current: current, Default: current, Source: "ZCode session settings"}
+	if target == "" {
+		target = current.Model
+	}
+	for _, entry := range listOf(getOf(getOf(getOf(snapshot, "settings"), "model"), "available")) {
+		ref, ok := getOf(entry, "ref").(map[string]any)
+		if !ok {
+			continue
+		}
+		encoded, err := CanonicalJSON(ref)
+		if err != nil {
+			continue
+		}
+		option := host.ModelOption{Value: string(encoded), Label: nativeSelectionString(getOf(entry, "name"))}
+		if option.Label == "" {
+			option.Label = nativeSelectionString(getOf(entry, "label"))
+		}
+		if option.Value == target {
+			reasoning := zcodeAdvertisedReasoning(snapshot, ref)
+			option.Efforts = nativeStringValues(getOf(reasoning, "levels"), "")
+			option.DefaultEffort = nativeSelectionString(getOf(reasoning, "default"))
+		}
+		catalogue.Models = append(catalogue.Models, option)
+	}
+	return catalogue
 }
 
 // zcodeRequest is one execution's parsed request: the workspace, the binding

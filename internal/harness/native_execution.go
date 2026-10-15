@@ -229,6 +229,11 @@ func inheritNativeIdentity(directory string, request map[string]any, impl native
 			continue
 		}
 		prior := filepath.Join(filepath.Dir(directory), entry.Name())
+		if _, err := os.Stat(filepath.Join(prior, "owner")); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
 		original, err := readJSONFile(filepath.Join(prior, "native-request.json"))
 		if err != nil {
 			return err

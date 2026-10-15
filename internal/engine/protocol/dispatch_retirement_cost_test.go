@@ -138,7 +138,9 @@ func TestFreshExecutionUsesFinalOriginalCostBeforeBudget(t *testing.T) {
 			e.cfg.CostSource = continuationCostResolver(t, state, pending, probe)
 			e.dispatchCostHeld(state, pending.ActionID)
 			state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: pending.ActionID, AttemptID: pending.AttemptID, Task: pending.Task, Action: RecoveryAsk, RequestID: "recover", Handoff: handoff})
-			state.LifecycleEvents = append(state.LifecycleEvents, LifecycleEventRecord{Provider: state.RunProvider, Identity: state.SpawnReceipts[pending.ActionID].agentIdentity(), Event: LifecycleStop})
+			for _, event := range []string{LifecycleStart, LifecycleStop} {
+				state.LifecycleEvents = append(state.LifecycleEvents, LifecycleEventRecord{Provider: state.RunProvider, Correlation: state.SpawnReceipts[pending.ActionID].agentIdentity(), Identity: state.SpawnReceipts[pending.ActionID].agentIdentity(), Event: event})
+			}
 			cap := int64(20)
 			state.TokenCapMaxTokens = &cap
 			probe.usage = cost.Usage{InputCacheMissTokens: 25, OutputTokens: 7}
@@ -160,7 +162,9 @@ func TestHandoffRetainsOriginalCostAndMetersReplacementSeparately(t *testing.T) 
 	probe := &costSourceProbe{state: CostSourceReady, usage: cost.Usage{InputCacheMissTokens: 25, OutputTokens: 7}}
 	e.cfg.CostSource = continuationCostResolver(t, state, pending, probe)
 	state.RecoveryRecords = append(state.RecoveryRecords, RecoveryRecord{ActionID: pending.ActionID, AttemptID: pending.AttemptID, Task: pending.Task, Action: RecoveryAsk, RequestID: "handoff", Handoff: true})
-	state.LifecycleEvents = append(state.LifecycleEvents, LifecycleEventRecord{Provider: state.RunProvider, Identity: state.SpawnReceipts[pending.ActionID].agentIdentity(), Event: LifecycleStop})
+	for _, event := range []string{LifecycleStart, LifecycleStop} {
+		state.LifecycleEvents = append(state.LifecycleEvents, LifecycleEventRecord{Provider: state.RunProvider, Correlation: state.SpawnReceipts[pending.ActionID].agentIdentity(), Identity: state.SpawnReceipts[pending.ActionID].agentIdentity(), Event: event})
+	}
 	attempt := state.Attempts[pending.Task]
 	if err := e.applyAttemptRecovery(state, pending, attempt, RecoveryNewAttempt, "handoff", 3); err != nil {
 		t.Fatal(err)
@@ -169,7 +173,7 @@ func TestHandoffRetainsOriginalCostAndMetersReplacementSeparately(t *testing.T) 
 	if replacement.ActionID == pending.ActionID || replacement.Attempts != attempt.Attempts || replacement.MaxAttempts != attempt.MaxAttempts || replacement.PreviousAction != pending.ActionID || !reflect.DeepEqual(replacement.Work, attempt.Work) || state.dispatchTokenTotal() != 32 {
 		t.Fatalf("handoff lost original work/cost or charged retry: %+v", replacement)
 	}
-	state.SpawnReceipts[replacement.ActionID] = SpawnReceipt{ActionID: replacement.ActionID, Task: replacement.Task, Correlation: "replacement-worker", Status: SpawnStatusSpawned}
+	state.SpawnReceipts[replacement.ActionID] = SpawnReceipt{ActionID: replacement.ActionID, Task: replacement.Task, Provider: state.RunProvider, Correlation: "replacement-worker", Status: SpawnStatusSpawned}
 	expected := CostSourceRef{RunID: state.RunID, ActionID: replacement.ActionID, Provider: state.RunProvider, Correlation: "replacement-worker"}
 	e.cfg.CostSource = func(ref CostSourceRef) ResolvedCostSource {
 		if ref != expected {

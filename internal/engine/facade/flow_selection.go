@@ -9,13 +9,14 @@ import (
 // business nodes that can be selected for continuation.
 type FlowNodeFace struct {
 	definition.FlowNode
-	Enabled bool `json:"enabled"`
+	Enabled   bool                     `json:"enabled"`
+	Execution protocol.ExecutionChoice `json:"execution"`
 }
 
 func flowNodeFaces(state *protocol.State) []FlowNodeFace {
 	var nodes []FlowNodeFace
 	for _, node := range definition.MainFlowNodes() {
-		nodes = append(nodes, FlowNodeFace{FlowNode: node, Enabled: state.FlowNodeEnabled(node.ID)})
+		nodes = append(nodes, FlowNodeFace{FlowNode: node, Enabled: state.FlowNodeEnabled(node.ID), Execution: state.EffectiveExecutionChoice(node.ID)})
 	}
 	return nodes
 }

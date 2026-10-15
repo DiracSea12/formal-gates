@@ -155,11 +155,11 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 	changed := false
 	for _, id := range ids {
 		receipt, known := s.SpawnReceipts[id]
-		stopped := known && (receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop))
+		stopped := known && (receipt.Status == SpawnStatusFailed || s.hasCorrelatedLifecycleEvent(receipt.Provider, s.workerLifecycleCorrelation(id), receipt.agentIdentity(), LifecycleStop))
 		resume := s.workerResume(id)
 		if resume.Resume != nil {
-			stopped = s.hasCorrelatedLifecycleEvent(resume.ActionID, resume.Resume.Identity, LifecycleStop)
-			if !stopped && !s.hasCorrelatedLifecycleEvent(resume.ActionID, resume.Resume.Identity, LifecycleStart) {
+			stopped = s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStop)
+			if !stopped && !s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStart) {
 				continue
 			}
 		}
@@ -188,7 +188,7 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 					s.Events[string(event.ID)] = EventRecord{Digest: digest, Acceptance: accepted}
 					receipt, known = s.SpawnReceipts[id]
 					changed = true
-					stopped = known && (receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop))
+					stopped = known && (receipt.Status == SpawnStatusFailed || s.hasCorrelatedLifecycleEvent(receipt.Provider, s.workerLifecycleCorrelation(id), receipt.agentIdentity(), LifecycleStop))
 				} else {
 					_, result := s.Results[id]
 					_, staged := s.StagedResults[id]
@@ -233,6 +233,13 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		return true, nil
 	}
 	return changed, nil
+}
+
+func (s *State) workerLifecycleCorrelation(action string) string {
+	if resume := s.workerResume(action); resume.Resume != nil {
+		return resume.ActionID
+	}
+	return s.SpawnReceipts[action].Correlation
 }
 
 func (s *State) workerResume(action string) HostActionIntent {

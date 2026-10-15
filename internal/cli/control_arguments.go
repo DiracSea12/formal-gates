@@ -25,6 +25,7 @@ type controlArguments struct {
 	value                 facade.ControlInput
 	requirement           facade.RequirementChangeInput
 	validation            facade.ValidationControlInput
+	execution             facade.ExecutionSelectionInput
 	request               string
 	validationMode        string
 	gates, owners         stringListFlag
@@ -96,6 +97,10 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 	text("request", &a.request, "control", "semantic control request")
 	number("ask", &a.value.Ask, "control", "current Ask number")
 	number("node", &a.value.Node, "control", "current business node number to continue from")
+	text("execution-node", &a.execution.Node, "execution", "main-flow node name or displayed flow-node number for temporary execution selection")
+	text("platform", &a.execution.Platform, "execution", "native platform name or displayed platform number")
+	text("model", &a.execution.Model, "execution", "native model name, label or displayed model number")
+	text("effort", &a.execution.Effort, "execution", "native reasoning effort value or displayed effort number")
 	text("choice", &a.value.Choice, "control", "offered semantic choice")
 	text("reason", &a.value.Reason, "control", "decision reason")
 	list("gate", &a.gates, "control", "current gate number")
@@ -221,13 +226,14 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 }
 
 func (a *controlArguments) input() (facade.ControlInput, bool, error) {
-	provided, requirementProvided, validationProvided, reviewProvided := false, false, false, false
+	provided, requirementProvided, validationProvided, reviewProvided, executionProvided := false, false, false, false, false
 	a.fs.Visit(func(f *flag.Flag) {
 		group, ok := a.groups[f.Name]
 		provided = provided || ok
 		reviewProvided = reviewProvided || group == "review-verification"
 		requirementProvided = requirementProvided || group == "requirement"
 		validationProvided = validationProvided || group == "validation"
+		executionProvided = executionProvided || group == "execution"
 	})
 	out := a.value
 	if reviewProvided {
@@ -236,6 +242,13 @@ func (a *controlArguments) input() (facade.ControlInput, bool, error) {
 		out.ReviewVerification = &v
 	}
 	out.Request = protocol.ControlKind(a.request)
+	if executionProvided {
+		value := a.execution
+		out.Execution = &value
+		if out.Request == "" {
+			out.Request = protocol.ControlSelectExecution
+		}
+	}
 	if out.Node != 0 && out.Request == "" {
 		out.Request = protocol.ControlContinueNode
 	}

@@ -18,6 +18,7 @@ import (
 // one-based in the current Show projection; zero owner denotes master-merge.
 // It carries no event identity, freshness token, original digest or work binding.
 type ControlInput struct {
+	Execution          *ExecutionSelectionInput `json:"execution,omitempty"`
 	ReviewVerification *ReviewVerificationInput `json:"reviewVerification,omitempty"`
 	Node               int                      `json:"node,omitempty"`
 	Request            protocol.ControlKind     `json:"request,omitempty"`
@@ -114,6 +115,9 @@ func selectStrings(values []string, positions []int, label string) ([]string, er
 }
 
 func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
+	if input.Execution != nil && input.Request == "" {
+		input.Request = protocol.ControlSelectExecution
+	}
 	if input.Node != 0 && input.Request == "" {
 		input.Request = protocol.ControlContinueNode
 	}
@@ -131,6 +135,9 @@ func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
 
 func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, error) {
 	candidate := ControlCandidate{Root: f.root, Input: input, Run: run}
+	if input.Execution != nil && (input.Request != protocol.ControlSelectExecution || input.Node != 0 || input.Ask != 0) {
+		return candidate, fmt.Errorf("execution selection cannot be combined with another control or Ask")
+	}
 	if input.ReviewVerification != nil {
 		if input.Request != "" || input.Ask != 0 {
 			return candidate, fmt.Errorf("review verification cannot submit a user decision")
@@ -166,6 +173,16 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		event.Kind = protocol.KindRequestControl
 		event.Request = &protocol.RequestPayload{Control: input.Request}
 		switch input.Request {
+		case protocol.ControlSelectExecution:
+			if input.Execution == nil {
+				return candidate, fmt.Errorf("execution selection requires a node and the user's platform, model or effort choice")
+			}
+			selection, err := f.prepareExecutionSelection(*input.Execution)
+			if err != nil {
+				return candidate, err
+			}
+			event.Request.Execution = selection
+			event.Request.Options = []protocol.AskOption{{ID: "approve", Label: "采用所选节点的临时执行选择"}, {ID: "decline", Label: "保留当前选择"}}
 		case protocol.ControlAbort:
 			event.Request.Options = []protocol.AskOption{{ID: "abort", Label: "Abort the run"}, {ID: "decline", Label: "Keep the run"}}
 		case protocol.ControlContinueNode:
@@ -295,6 +312,13 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		}
 		event.Decide.Request, event.Decide.Token, event.Decide.Choice = protocol.RequestID(ask.RequestID), ask.Token, choice
 		switch ask.Control {
+		case protocol.ControlSelectExecution:
+			if choice == "approve" {
+				if ask.Execution == nil {
+					return candidate, fmt.Errorf("execution Ask has no original selection")
+				}
+				event.Decide.Execution = &protocol.ExecutionSelectionDecision{Digest: ask.Execution.CanonicalDigest()}
+			}
 		case protocol.ControlContinueNode:
 			if choice == "approve" {
 				p := ask.Continuation
@@ -540,7 +564,7 @@ func (f *Facade) SubmitControl(candidate ControlCandidate) (protocol.Acceptance,
 			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation differs from its complete original difference")
 		}
 	}
-	return f.Submit(candidate.Event)
+	return f.submit(candidate.Event, candidate.Event.Request != nil && candidate.Event.Request.Control == protocol.ControlSelectExecution)
 }
 
 func correctionFromRun(run Run, input ControlInput) (review.CorrectionInput, error) {

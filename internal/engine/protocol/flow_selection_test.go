@@ -137,8 +137,25 @@ func TestDisabledTechnicalReviewWaitsForDevelopmentPreparation(t *testing.T) {
 	if series := s.ReviewSeries.StartReadiness; series.Effective.Status == "PASS" || series.FirstPass || series.Issued != 0 || len(series.RawCandidates) != 0 {
 		t.Fatalf("disabled technical review gained evidence: %+v", series)
 	}
-	if err := askAndDecideRejecting(t, e, dir, ControlConfirmTopology, "unprepared-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single task"}}); err == nil {
-		t.Fatal("topology decision accepted without development preparation")
+	request, err := NewRequestEvent("unprepared-topology", ControlConfirmTopology, topologyOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := e.Submit(request, Observation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = e.LoadMustSucceed(t).State
+	if !s.PendingAsks[string(request.ID)].Resolved || s.Topology != nil || s.Phase != runtime.PhaseStartReadiness || len(s.Decisions) != 0 {
+		t.Fatal("unprepared topology request authorized work or escaped retirement")
+	}
+	before := stateBytesOf(t, dir)
+	decision, err := NewReviewDecideEvent("authorize-unprepared-topology", RequestID(request.ID), accepted.FreshnessToken, "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "single task"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Submit(decision, Observation{}); err == nil || rejectionCode(t, err) != CodeRequestResolved || !bytes.Equal(before, stateBytesOf(t, dir)) {
+		t.Fatal("retired topology request accepted a decision or changed state", err)
 	}
 }
 

@@ -33,11 +33,12 @@ type (
 type ControlKind string
 
 const (
-	ControlValidation   ControlKind = "VALIDATION"
-	ControlReset        ControlKind = "RESET"
-	ControlAbort        ControlKind = "ABORT"
-	ControlRecovery     ControlKind = "RECOVER_ATTEMPT"
-	ControlContinueNode ControlKind = "CONTINUE_NODE"
+	ControlValidation      ControlKind = "VALIDATION"
+	ControlReset           ControlKind = "RESET"
+	ControlAbort           ControlKind = "ABORT"
+	ControlRecovery        ControlKind = "RECOVER_ATTEMPT"
+	ControlContinueNode    ControlKind = "CONTINUE_NODE"
+	ControlSelectExecution ControlKind = "SELECT_EXECUTION"
 	// 四个开发前审查/拓扑/路线业务控制（总需求 §6.2、§7.3.5、§8.1.1）：
 	// Ask 创建方给出选项集，DECIDE 携带与控制一一对应的 typed Review
 	// 载荷分支（REVIEW_ROUND_GRANT 的 decline 选项除外）。
@@ -55,7 +56,7 @@ const (
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
 	switch k {
-	case ControlValidation, ControlReset, ControlAbort, ControlRecovery, ControlContinueNode,
+	case ControlValidation, ControlReset, ControlAbort, ControlRecovery, ControlContinueNode, ControlSelectExecution,
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 		ControlRequestRequirementChange:
 		return true
@@ -128,6 +129,7 @@ func (k EventKind) Valid() bool {
 // without a package to freeze work during clarification. A later update binds
 // the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
+	Execution    *ExecutionSelection
 	Continuation *NodeContinuationRequest
 	Handoff      *DevelopmentHandoffRequest
 	Validation   *ValidationRequest
@@ -156,6 +158,7 @@ type DevelopmentHandoffRequest struct {
 // 控制携带 typed Requirement 载荷（或作为 decline 两者皆空）。两个变体
 // 指针同时只允许一个非空。
 type DecidePayload struct {
+	Execution    *ExecutionSelectionDecision
 	Continuation *NodeContinuationDecision
 	Validation   *ValidationDecision
 	Request      RequestID
@@ -497,7 +500,7 @@ func NewTaskEvent(id EventID, task runtime.TaskKey, attempt string, status runti
 
 // NewSpawnReceiptEvent 构造 SpawnReceipt 事件：actionID/provider/
 // correlation/status 非空且 status 属封闭集合。Provider 由接纳层对照
-// run 绑定硬校验（不降级 default）。
+// 原 action 的执行绑定硬校验（不降级 default）。
 func NewSpawnReceiptEvent(id EventID, actionID, provider, correlation, status string) (Event, error) {
 	return NewSpawnReceiptWithFailureClass(id, actionID, provider, correlation, status, "")
 }
@@ -675,6 +678,16 @@ func (e Event) Validate() error {
 		} else if e.Request.Continuation != nil {
 			return validationError("该请求不接受节点继续载荷")
 		}
+		if e.Request.Control == ControlSelectExecution {
+			if e.Request.Execution == nil {
+				return validationError("execution selection requires its node and choice")
+			}
+			if err := e.Request.Execution.validate(); err != nil {
+				return err
+			}
+		} else if e.Request.Execution != nil {
+			return validationError("this control does not accept an execution selection")
+		}
 	case KindDecide:
 		if strings.TrimSpace(string(e.Decide.Request)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide request id is empty"}
@@ -684,6 +697,11 @@ func (e Event) Validate() error {
 		}
 		if strings.TrimSpace(string(e.Decide.Choice)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide choice is empty"}
+		}
+		if e.Decide.Execution != nil {
+			if e.Decide.Execution.Digest == "" || e.Decide.Review != nil || e.Decide.Requirement != nil || e.Decide.Reset != nil || e.Decide.Validation != nil || e.Decide.Continuation != nil {
+				return validationError("execution decision requires only its original selection digest")
+			}
 		}
 		if e.Decide.Review != nil && e.Decide.Requirement != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide payload must carry at most one typed variant (review or requirement)"}
@@ -886,6 +904,7 @@ type eventWire struct {
 }
 
 type requestWire struct {
+	Execution    *ExecutionSelection         `json:"execution,omitempty"`
 	Continuation *NodeContinuationRequest    `json:"continuation,omitempty"`
 	Handoff      *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
 	Validation   *ValidationRequest          `json:"validation,omitempty"`
@@ -898,6 +917,7 @@ type requestWire struct {
 }
 
 type decideEventWire struct {
+	Execution    *ExecutionSelectionDecision `json:"execution,omitempty"`
 	Continuation *NodeContinuationDecision   `json:"continuation,omitempty"`
 	Reset        *ResetDecision              `json:"reset,omitempty"`
 	Validation   *ValidationDecision         `json:"validation,omitempty"`
@@ -981,10 +1001,12 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		options = append(options, e.Request.Options...)
 		w.Request = &requestWire{Handoff: e.Request.Handoff, Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
 		w.Request.Continuation = e.Request.Continuation
+		w.Request.Execution = e.Request.Execution
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Reset: e.Decide.Reset, Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
 		w.Decide.Continuation = e.Decide.Continuation
+		w.Decide.Execution = e.Decide.Execution
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}

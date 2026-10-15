@@ -2082,7 +2082,7 @@ func TestDualAskRedoIssuesFreshWorkOnlyAfterTheBarrierLifts(t *testing.T) {
 		}
 	}
 	snap = engine.LoadMustSucceed(t)
-	if receipt := snap.State.SpawnReceipts[product]; receipt.ActionID != product || receipt.Task != original.Task || receipt.Provider != testProvider || receipt.Correlation != "worker:"+product || !reflect.DeepEqual(snap.State.lifecycleMatches(receipt.Correlation), []string{"worker:" + product}) {
+	if receipt := snap.State.SpawnReceipts[product]; receipt.ActionID != product || receipt.Task != original.Task || receipt.Provider != testProvider || receipt.Correlation != "worker:"+product || !reflect.DeepEqual(snap.State.lifecycleMatches(testProvider, receipt.Correlation), []string{"worker:" + product}) {
 		t.Fatal("barrier lost the original dispatch's exact receipt and lifecycle pair")
 	}
 	if !reflect.DeepEqual(snap.State.PendingActions[product], original) || len(snap.State.PendingActions) != 1 || snap.State.ReviewSeries.ProductReview.Completed != 0 {
@@ -3259,7 +3259,7 @@ func TestBarrierLiftBindsTheFreshReviewAuthorizationOnce(t *testing.T) {
 		}
 	}
 	state = engine.LoadMustSucceed(t).State
-	if receipt := state.SpawnReceipts[fourth]; receipt.ActionID != fourth || receipt.Task != original.Task || receipt.Provider != testProvider || receipt.Correlation != "worker:"+fourth || !reflect.DeepEqual(state.lifecycleMatches(receipt.Correlation), []string{"worker:" + fourth}) {
+	if receipt := state.SpawnReceipts[fourth]; receipt.ActionID != fourth || receipt.Task != original.Task || receipt.Provider != testProvider || receipt.Correlation != "worker:"+fourth || !reflect.DeepEqual(state.lifecycleMatches(testProvider, receipt.Correlation), []string{"worker:" + fourth}) {
 		t.Fatal("barrier lost the granted dispatch's exact receipt and lifecycle pair")
 	}
 	if !reflect.DeepEqual(state.PendingActions[fourth], original) || state.ReviewSeries.ProductReview.Completed != 3 || state.ReviewSeries.ProductReview.ExtraConsumed != 0 {

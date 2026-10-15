@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 // streamAdapter supplies platform differences to the shared print-mode lifecycle.
@@ -20,6 +22,7 @@ type streamAdapter struct {
 	provider, prefix   string
 	capture            func() (map[string]any, error)
 	probe              func(string, string, map[string]string) (map[string]any, error)
+	selectionOptions   func(string, string, string, map[string]string, string) (host.SelectionCatalogue, error)
 	arguments          func(any, string, string, string, map[string]string, string) ([]string, string, error)
 	selection          func(any) map[string]any
 	checkSelection     func(any, map[string]any) error
@@ -49,6 +52,10 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	}
 	workspace, _ := getOf(request, "workspace").(string)
 	if probe {
+		if getOf(request, "selection_options") == true && adapter.selectionOptions != nil {
+			catalogue, err := adapter.selectionOptions(executable, workspace, directory, environment, nativeSelectionString(getOf(request, "selection_model")))
+			return map[string]any{"selection_options": catalogue, "model_calls": 0}, err
+		}
 		return adapter.probe(executable, workspace, environment)
 	}
 	prompt, ok := getOf(request, "prompt").(string)

@@ -297,6 +297,32 @@ func (d *validationDriver) receipt(id string) {
 	d.submit(e)
 }
 
+// Resume receipts cite the signed call's start and original execution provider.
+func (d *validationDriver) resumeReceipt(intent protocol.HostActionIntent) protocol.Event {
+	d.t.Helper()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if intent.Resume == nil {
+		d.t.Fatal("resume receipt requires its original signed target")
+	}
+	choice, ok := snapshot.State.ActionExecutionChoice(intent.Resume.WorkerActionID)
+	if !ok {
+		d.t.Fatal("resume receipt has no original execution owner")
+	}
+	started, err := protocol.NewCorrelatedLifecycleEvent(d.eventID(), choice.Provider, intent.ActionID, intent.Resume.Identity, protocol.LifecycleStart)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	d.submit(started)
+	receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, choice.Provider, intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Resume.Identity, Event: protocol.LifecycleStart})
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	return receipt
+}
+
 // Termination evidence uses each signed intent's original worker identity.
 func (d *validationDriver) completeWorkerTerminations() {
 	d.t.Helper()

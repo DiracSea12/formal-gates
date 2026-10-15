@@ -145,13 +145,13 @@ func recoveryAskOptions() []AskOption {
 // lifecycle buffer. One correlation may legitimately have multiple paired
 // identities; preserving that cardinality is what makes the Operator branch
 // observable instead of collapsing it into a caller-provided string set.
-func (s *State) lifecycleMatches(correlation string) []string {
+func (s *State) lifecycleMatches(provider, correlation string) []string {
 	if correlation == "" {
 		return nil
 	}
 	seen := map[string]bool{}
 	for _, record := range s.LifecycleEvents {
-		if record.Correlation == correlation && s.lifecyclePaired(correlation, record.Identity) {
+		if record.Provider == provider && record.Correlation == correlation && s.lifecyclePaired(provider, correlation, record.Identity) {
 			seen[record.Identity] = true
 		}
 	}
@@ -293,9 +293,8 @@ func (e *Engine) RecoverAttempt(actionID string, interruption Interruption, inpu
 	if err != nil {
 		return RecoveryPlan{}, 0, err
 	}
-	currentBindings := AttemptBindings{
-		Task: pending.Task, Snapshot: fingerprint, Responsibility: state.RunProvider,
-	}
+	currentBindings := attempt.Bindings
+	currentBindings.Task, currentBindings.Snapshot = pending.Task, fingerprint
 	plan := decideRecovery(interruption, !attempt.Bindings.Equal(currentBindings))
 	if pending, exists := state.pendingAttemptRecovery(actionID, attempt.ID); exists {
 		return pending, revision, nil
@@ -399,7 +398,7 @@ func (e *Engine) ReconcileUnknownReceipt(actionID string, input Observation) (Re
 // Attachment is an observation; result acceptance remains in the transaction epilogue.
 func (e *Engine) reconcileUnknownReceipt(state *State, actionID string, nextRevision uint64) RecoveryPlan {
 	receipt := state.SpawnReceipts[actionID]
-	matches := state.lifecycleMatches(receipt.Correlation)
+	matches := state.lifecycleMatches(receipt.Provider, receipt.Correlation)
 	plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(matches)})
 	if len(matches) == 1 {
 		receipt.Status = SpawnStatusAttached
@@ -411,7 +410,7 @@ func (e *Engine) reconcileUnknownReceipt(state *State, actionID string, nextRevi
 		// 回执同一回调）。claim 失败只降级计量来源（UNAVAILABLE）留痕，不否
 		// 决挂接；零/多匹配不 claim（身份不可判定即不可计量）。
 		if e.cfg.ClaimDispatch != nil {
-			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, matches[0], state.RunProvider); claimErr != nil {
+			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, matches[0], receipt.Provider); claimErr != nil {
 				state.appendRecovery(RecoveryRecord{
 					ActionID: actionID,
 					Detail:   fmt.Sprintf("lifecycle dispatch claim failed; the dispatch cost source degrades to unavailable: %v", claimErr),
@@ -439,7 +438,7 @@ func (e *Engine) reconcileUnknownReceipt(state *State, actionID string, nextRevi
 func (e *Engine) attachObservedReceipts(state *State, nextRevision uint64) bool {
 	ids := []string{}
 	for id, receipt := range state.SpawnReceipts {
-		if receipt.Status == SpawnStatusUnknown && state.liveDispatch(id) && len(state.lifecycleMatches(receipt.Correlation)) == 1 {
+		if receipt.Status == SpawnStatusUnknown && state.liveDispatch(id) && len(state.lifecycleMatches(receipt.Provider, receipt.Correlation)) == 1 {
 			ids = append(ids, id)
 		}
 	}
@@ -559,7 +558,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			adapterOperation = intent.Adapter.Operation
 		}
 		state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: adapterOperation, ObservationDigest: observationDigest, Status: "FULFILLED", Revision: nextRevision}
-		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Step: intent.Step, Provider: state.RunProvider, Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: HostActionStatusReconciled, Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": HostActionStatusReconciled})}
+		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Step: intent.Step, Provider: state.hostActionProvider(intent), Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: HostActionStatusReconciled, Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": HostActionStatusReconciled})}
 		// 对账即外部事实已满足（与 EXECUTED 回执接纳同一条 settle 语义，
 		// 不再次执行）：intent 清算入同一清算账，由事务收尾单点
 		//（commitEffects）与屏障期挂起的清算共用一条执行路径。

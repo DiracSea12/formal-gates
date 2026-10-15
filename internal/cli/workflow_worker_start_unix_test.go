@@ -23,6 +23,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
@@ -33,6 +34,11 @@ import (
 func TestWorkflowSupervisorProcess(t *testing.T) {
 	if os.Getenv("WORKFLOW_SUPERVISOR_PROCESS") != "1" {
 		return
+	}
+	if id := os.Getenv("WORKFLOW_SELECTION_PROVIDER_ID"); id != "" {
+		if err := host.Register(workflowSelectionPlatform{descriptor: host.Descriptor{ID: id, InstallName: os.Getenv("WORKFLOW_SELECTION_INSTALL_NAME"), Installable: true}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	args := os.Args[len(os.Args)-3:]
 	if args[0] != "harness" || args[1] != "supervise" {
@@ -99,6 +105,11 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 
 func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
+	return workflowStartPlatformFixture(t, "workbuddy", nil, selections...)
+}
+
+func workflowStartPlatformFixture(t *testing.T, provider string, native map[string]string, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
+	t.Helper()
 	root, home, bin := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", filepath.Join(home, ".workbuddy"))
@@ -111,7 +122,7 @@ func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (
 		t.Fatal(err)
 	}
 	receipt := writerIntakeReceipt(t, root)
-	registry, target, generation, lease, token := testkit.Installation(t, root, "consumer-runtime", "sha256:package", "workbuddy")
+	registry, target, generation, lease, token := testkit.Installation(t, root, "consumer-runtime", "sha256:package", provider)
 	catalog, err := prompts.LoadPromptCatalog(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +151,14 @@ func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (
 	if err := os.WriteFile(filepath.Join(target, "bin", "formal-gates"), []byte(launcher), 0700); err != nil {
 		t.Fatal(err)
 	}
-	admission := &facade.Admission{RegistryPath: registry, Target: target, Root: root, Provider: "workbuddy", PackageDigest: "sha256:package", InstalledTargetIdentity: "consumer-runtime", Generation: generation, Lease: lease, Token: token}
+	admission := &facade.Admission{RegistryPath: registry, Target: target, Root: root, Provider: provider, PackageDigest: "sha256:package", InstalledTargetIdentity: "consumer-runtime", Generation: generation, Lease: lease, Token: token}
+	if native != nil {
+		body, err := json.Marshal(native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteCLI(t, filepath.Join(root, ".gates", "config.json"), string(body))
+	}
 	mustWriteCLI(t, filepath.Join(root, "README.md"), "independent command components\n")
 	mustWriteCLI(t, filepath.Join(root, ".gitignore"), ".gates/\n.formal-gates-resources/\n")
 	runner := vcs.ExecRunner{}
@@ -244,6 +262,162 @@ func TestWorkflowPendingAskStartsOriginalWorkerAndReusesOwnership(t *testing.T) 
 	}
 	if calls, err := os.ReadFile(filepath.Join(root, "supervisor-calls")); err != nil || string(calls) != "harness|supervise|"+directory+"\n" {
 		t.Fatal("consumer repeated or changed the actual native start", string(calls), err)
+	}
+}
+
+type workflowSelectionPlatform struct{ descriptor host.Descriptor }
+
+func (p workflowSelectionPlatform) HostDescriptor() *host.Descriptor { return &p.descriptor }
+func (p workflowSelectionPlatform) SelectionOptions(string, map[string]string, string) (host.SelectionCatalogue, error) {
+	return host.SelectionCatalogue{Models: []host.ModelOption{{Value: "target-model", Efforts: []string{"high"}}}, Source: "controlled native catalogue"}, nil
+}
+
+func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *testing.T) {
+	for _, provider := range []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy"} {
+		for _, invocation := range []string{"cross-platform", "unavailable", "controller"} {
+			t.Run(provider+"/"+invocation, func(t *testing.T) {
+				missing := invocation == "unavailable"
+				root, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				executable, home := filepath.Join(root, "native-cli"), filepath.Join(root, "native-home")
+				mustWriteCLI(t, executable, "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s\\n' '--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk'\n")
+				if err := os.Chmod(executable, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(home, 0700); err != nil {
+					t.Fatal(err)
+				}
+				native := map[string]string{provider + "Executable": executable}
+				if provider != "dsh" {
+					native[provider+"Home"] = home
+				}
+				if provider == "zcode" {
+					native["zcodeScript"] = filepath.Join(root, "server.cjs")
+					mustWriteCLI(t, native["zcodeScript"], "controlled native server")
+				}
+				if provider == "workbuddy" {
+					native["workbuddyProductConfig"] = filepath.Join(home, ".workbuddy", "cache", "acc-product-config-v3.json")
+					mustWriteCLI(t, native["workbuddyProductConfig"], `{}`)
+				}
+				controller := "workbuddy"
+				if provider == "workbuddy" {
+					controller = "codex"
+					native["codexExecutable"] = executable
+				}
+				if invocation == "controller" {
+					controller = provider
+				}
+				f, _, ready, _ := workflowStartPlatformFixture(t, controller, native)
+				before, err := f.Show()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if invocation != "controller" && before.Settings.Values.Native[provider+"ConfigRoot"] != "" {
+					t.Fatal("target platform was already frozen by the controller")
+				}
+				if provider == "dsh" {
+					home, err = filepath.EvalSymlinks(os.Getenv("HOME"))
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				var controllerBindingJSON []byte
+				if invocation == "controller" {
+					binding, err := harness.NativeBinding(provider, before.Settings.Values)
+					if err != nil {
+						t.Fatal(err)
+					}
+					controllerBindingJSON, err = json.Marshal(binding)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Setenv("HOME", t.TempDir())
+					t.Setenv("FORMAL_GATES_ZCODE_CREDENTIALS", filepath.Join(t.TempDir(), "changed-credentials.json"))
+				}
+				platform := workflowSelectionPlatform{descriptor: host.Descriptor{ID: strings.ToLower(t.Name()), InstallName: provider, Installable: true}}
+				if err := host.Register(platform); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("WORKFLOW_SELECTION_PROVIDER_ID", platform.descriptor.ID)
+				t.Setenv("WORKFLOW_SELECTION_INSTALL_NAME", provider)
+				candidate, err := f.PrepareControl(facade.ControlInput{Execution: &facade.ExecutionSelectionInput{Node: "product-review", Platform: platform.descriptor.ID, Model: "target-model", Effort: "high"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := f.SubmitControl(candidate); err != nil {
+					t.Fatal(err)
+				}
+				issued, _, directory, selected, err := f.WorkerExecutionRequest(ready, "")
+				if err != nil || issued["provider"] != provider || selected.ActionID != ready.ActionID {
+					t.Fatal("selection lost its native provider or original action", issued, selected, err)
+				}
+				cleanupWorkflowSupervisor(t, directory)
+				if missing {
+					if err := os.Remove(executable); err != nil {
+						t.Fatal(err)
+					}
+				}
+				request, observed, original, _, err := startWorkflowWorker(context.Background(), f, ready, protocol.HostActionIntent{})
+				if missing {
+					if err == nil || !strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "frozen native paths required") {
+						t.Fatalf("missing selected executable did not fail at its native resolver: %v", err)
+					}
+					for _, name := range []string{"owner", "process.json"} {
+						if _, err := os.Stat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+							t.Fatal("unavailable selection started an execution", name, err)
+						}
+					}
+					return
+				}
+				if err != nil || observed != directory || original != selected || request["model"] != "target-model" || request["reasoning_effort"] != "high" {
+					t.Fatal("new native invocation lost its issued selection", request, observed, original, err)
+				}
+				binding := request["binding"].(map[string]any)
+				launch := binding["launch"].(map[string]any)
+				environment := binding["environment"].(map[string]any)
+				if launch["executable"] != executable || environment["HOME"] != home {
+					t.Fatal("new invocation did not resolve the selected platform's paths", binding)
+				}
+				var saved map[string]any
+				bindingJSON, err := json.Marshal(binding)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if invocation == "controller" && string(bindingJSON) != string(controllerBindingJSON) {
+					t.Fatal("controller execution followed changed native environment", binding)
+				}
+				if err := readJSONFileInto(filepath.Join(directory, "native-request.json"), &saved); err != nil {
+					t.Fatal(err)
+				}
+				if body, err := json.Marshal(saved["binding"]); err != nil || string(body) != string(bindingJSON) {
+					t.Fatal("original request did not persist its resolved binding", saved["binding"], err)
+				}
+				process, err := os.ReadFile(filepath.Join(directory, "process.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(executable); err != nil {
+					t.Fatal(err)
+				}
+				reused, _, _, _, err := startWorkflowWorker(context.Background(), f, ready, protocol.HostActionIntent{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if body, err := json.Marshal(reused["binding"]); err != nil || string(body) != string(bindingJSON) {
+					t.Fatal("claimed invocation recaptured native configuration", reused["binding"], err)
+				}
+				currentProcess, err := os.ReadFile(filepath.Join(directory, "process.json"))
+				if err != nil || !reflect.DeepEqual(process, currentProcess) {
+					t.Fatal("claimed invocation restarted its original process", err)
+				}
+				after, err := f.Show()
+				if err != nil || !reflect.DeepEqual(before.Settings, after.Settings) {
+					t.Fatal("temporary platform binding changed frozen run defaults", err)
+				}
+			})
+		}
 	}
 }
 

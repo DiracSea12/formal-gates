@@ -9,6 +9,7 @@ package harness
 import (
 	"fmt"
 	"formal-gates/internal/engine/authoring"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"io"
 	"os"
@@ -177,6 +178,43 @@ func dshSelection(raw any) (map[string]any, error) {
 		out[textOf(id)] = getOf(option, "currentValue")
 	}
 	return out, nil
+}
+
+func dshSelectionOptions(raw any) host.SelectionCatalogue {
+	catalogue := host.SelectionCatalogue{Source: "ACP configOptions"}
+	for _, option := range listOf(getOf(raw, "configOptions")) {
+		switch getOf(option, "id") {
+		case "model":
+			catalogue.Current.Model = nativeSelectionString(getOf(option, "currentValue"))
+			var collect func(any)
+			collect = func(options any) {
+				for _, entry := range listOf(options) {
+					if nested, ok := entryOf(entry, "options"); ok {
+						collect(nested)
+					} else if value := nativeSelectionString(getOf(entry, "value")); value != "" {
+						catalogue.Models = append(catalogue.Models, host.ModelOption{Value: value, Label: nativeSelectionString(getOf(entry, "name"))})
+					}
+				}
+			}
+			collect(getOf(option, "options"))
+		case "reasoning_effort":
+			catalogue.Current.Effort = nativeSelectionString(getOf(option, "currentValue"))
+		}
+	}
+	catalogue.Default = catalogue.Current
+	for i := range catalogue.Models {
+		if catalogue.Models[i].Value != catalogue.Current.Model {
+			continue
+		}
+		catalogue.Models[i].Efforts = []string{}
+		catalogue.Models[i].DefaultEffort = catalogue.Current.Effort
+		for _, option := range listOf(getOf(raw, "configOptions")) {
+			if getOf(option, "id") == "reasoning_effort" {
+				catalogue.Models[i].Efforts = nativeStringValues(getOf(option, "options"), "value")
+			}
+		}
+	}
+	return catalogue
 }
 
 // nativePackageRoot locates the package supplying the native host assets.
@@ -472,6 +510,30 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 		}
 		identity = observed
 		attached = true
+		if getOf(request, "selection_options") == true {
+			catalogue := dshSelectionOptions(created)
+			target := nativeSelectionString(getOf(request, "selection_model"))
+			for _, option := range catalogue.Models {
+				if option.Value != target || target == catalogue.Current.Model {
+					continue
+				}
+				changed, err := client.request("session/set_config_option", map[string]any{"sessionId": identity, "configId": "model", "value": target}, nativeUnbounded)
+				if err != nil {
+					return nil, err
+				}
+				updated := dshSelectionOptions(changed)
+				if updated.Current.Model != target {
+					return nil, fmt.Errorf("DSH_CONFIG: queried model selection was not applied")
+				}
+				catalogue.Models = updated.Models
+				break
+			}
+			if _, err := client.request("session/close", map[string]any{"sessionId": identity}, nativeUnbounded); err != nil {
+				return nil, err
+			}
+			attached = false
+			return map[string]any{"selection_options": catalogue, "model_calls": 0}, nil
+		}
 		configured, err = dshSelection(created)
 		if err != nil {
 			return nil, err

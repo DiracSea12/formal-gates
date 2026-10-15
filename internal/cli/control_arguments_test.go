@@ -53,6 +53,27 @@ func TestControlArgumentsPreserveAllSemanticFieldsAndSelectedPositions(t *testin
 	}
 }
 
+func TestControlArgumentsExecutionSelectionKeepsPartialSemanticChoices(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want facade.ExecutionSelectionInput
+	}{
+		{[]string{"--execution-node", "development", "--model", "Careful"}, facade.ExecutionSelectionInput{Node: "development", Model: "Careful"}},
+		{[]string{"--execution-node", "3", "--effort", "2"}, facade.ExecutionSelectionInput{Node: "3", Effort: "2"}},
+		{[]string{"--execution-node", "development", "--platform", "workbuddy", "--model", "1"}, facade.ExecutionSelectionInput{Node: "development", Platform: "workbuddy", Model: "1"}},
+	} {
+		fs := flag.NewFlagSet("execution selection", flag.ContinueOnError)
+		a := registerControlArguments(fs)
+		if err := fs.Parse(test.args); err != nil {
+			t.Fatal(err)
+		}
+		input, provided, err := a.input()
+		if err != nil || !provided || input.Request != protocol.ControlSelectExecution || input.Node != 0 || input.Execution == nil || *input.Execution != test.want {
+			t.Fatal("semantic execution choices became another control or gained invented fields", input, err)
+		}
+	}
+}
+
 func TestControlArgumentsDistinguishAbsentAndExplicitEmptyFields(t *testing.T) {
 	for _, test := range []struct {
 		args     []string

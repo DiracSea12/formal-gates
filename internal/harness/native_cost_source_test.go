@@ -59,6 +59,9 @@ func meteredNativeJob(t *testing.T, root, provider, turn, events, transcript str
 		}
 	}
 	write(filepath.Join(directory, "native-request.json"), request)
+	if err := os.WriteFile(filepath.Join(directory, "owner"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if transcript == "" {
 		transcript = filepath.Join(directory, "native-events.jsonl")
 	}

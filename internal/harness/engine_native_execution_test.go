@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -548,6 +549,46 @@ func TestEngineNativeUnknownOwnerNeverStartsTurn(t *testing.T) {
 	}
 	if nativePeerTurns(t, s) != 0 {
 		t.Fatal("unknown original effect started a native turn")
+	}
+}
+
+func TestNativeIdentityInheritanceUsesOnlyClaimedInvocations(t *testing.T) {
+	for _, claimed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("claimed=%t", claimed), func(t *testing.T) {
+			root := t.TempDir()
+			prior, current := filepath.Join(root, "prepared"), filepath.Join(root, "selected")
+			for _, directory := range []string{prior, current} {
+				if err := os.Mkdir(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := map[string]any{"provider": "zcode", "engine": map[string]any{"workerMaterial": map[string]any{"actionId": "original-action", "attemptId": "original-attempt"}}}
+			if err := writeAtomicJSON(filepath.Join(prior, "native-request.json"), request); err != nil {
+				t.Fatal(err)
+			}
+			if claimed {
+				if err := os.WriteFile(filepath.Join(prior, "owner"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			impl, err := nativeImplementationFor("zcode")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = prepareNativeInvocation(current, request, impl)
+			if claimed {
+				if err == nil || !strings.Contains(err.Error(), "original native invocation is UNKNOWN") {
+					t.Fatalf("claimed unknown invocation was replaced: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(current, "owner")); !os.IsNotExist(err) {
+					t.Fatal("blocked invocation acquired ownership", err)
+				}
+			} else if err != nil {
+				t.Fatal("unclaimed preparation blocked the selected invocation", err)
+			} else if _, err := os.Stat(filepath.Join(current, "owner")); err != nil {
+				t.Fatal("selected invocation did not acquire ownership", err)
+			}
+		})
 	}
 }
 

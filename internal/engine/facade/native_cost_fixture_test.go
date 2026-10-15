@@ -91,12 +91,13 @@ func writeManagedCostSource(t *testing.T, root, runID, action, provider, identit
 		t.Fatal(err)
 	}
 	var material WorkerMaterial
+	var value worker.Material
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var value worker.Material
+		value = worker.Material{}
 		if err := json.Unmarshal(raw, &value); err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +108,7 @@ func writeManagedCostSource(t *testing.T, root, runID, action, provider, identit
 		break
 	}
 	if material.Path == "" {
-		value := worker.Material{ReadOnly: true, Input: protocol.WorkerInput{RunID: runID, Provider: provider, Pending: protocol.PendingAction{ActionID: action, AttemptID: "attempt"}}}
+		value = worker.Material{ReadOnly: true, Input: protocol.WorkerInput{RunID: runID, Provider: provider, Pending: protocol.PendingAction{ActionID: action, AttemptID: "attempt"}}}
 		raw, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)
@@ -138,7 +139,14 @@ func writeManagedCostSource(t *testing.T, root, runID, action, provider, identit
 			t.Fatal(err)
 		}
 	}
-	write("native-request.json", map[string]any{"provider": descriptor.InstallName, "engine": map[string]any{"root": root, "runId": runID, "workerMaterial": material, "resumeActionId": ""}})
+	workspace := root
+	if value.Input.Validation != nil && value.Input.Validation.Workspace != nil {
+		workspace = value.Input.Validation.Workspace.Path
+	}
+	write("native-request.json", map[string]any{"provider": descriptor.InstallName, "workspace": workspace, "prompt": value.Prompt, "read_only": value.ReadOnly, "schema": value.ResultSchema, "engine": map[string]any{"root": root, "runId": runID, "workerMaterial": material, "resumeActionId": ""}})
+	if err := os.WriteFile(filepath.Join(directory, "owner"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := os.ReadFile(transcript)
 	if err != nil {
 		t.Fatal(err)

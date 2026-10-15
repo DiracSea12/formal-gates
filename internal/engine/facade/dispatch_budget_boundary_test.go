@@ -278,15 +278,7 @@ func TestBudgetContinueUnlocksOneBlockedRecoveryOnly(t *testing.T) {
 		t.Fatalf("continue authorization unlocked the wrong or no effect: %+v", resumeIntent)
 	}
 	// 授权的恢复执行完成，其审查 PASS 推进到下一条派发。
-	observed, err := protocol.NewLifecycleEventEvent(d.eventID(), d.host(), first, protocol.LifecycleStart)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.submit(observed)
-	receipt, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), resumeIntent.ActionID, resumeIntent.Operation, d.host(), resumeIntent.Correlation, resumeIntent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: first, Event: protocol.LifecycleStart})
-	if err != nil {
-		t.Fatal(err)
-	}
+	receipt := d.resumeReceipt(resumeIntent)
 	d.submit(receipt)
 	reviewTranscript := filepath.Join(root, "review-worker.jsonl")
 	writeTranscript(t, reviewTranscript, []string{`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0}}}`})
@@ -527,10 +519,7 @@ func resumeAndComplete(d *validationDriver, action string) error {
 	if intent.Resume == nil || intent.Resume.WorkerActionID != action || intent.Resume.Identity != action || intent.Correlation == "" {
 		d.t.Fatalf("recovery lost original worker binding: %+v", intent)
 	}
-	ev, err := protocol.NewAgentHostActionReceiptEvent(d.eventID(), intent.ActionID, intent.Operation, d.host(), intent.Correlation, intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: action, Event: protocol.LifecycleStart})
-	if err != nil {
-		d.t.Fatal(err)
-	}
+	ev := d.resumeReceipt(intent)
 	d.submit(ev)
 	return nil
 }

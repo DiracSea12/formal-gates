@@ -174,7 +174,8 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 		t.Fatalf("plan identity: %v", err)
 	}
 	sampleDigest, _ := observedInput.Facts.Digest()
-	if attempt.Bindings != (AttemptBindings{Task: key, Snapshot: sampleDigest, Responsibility: testProvider}) || attempt.Plan != wantIdentity {
+	nativeDefault := ""
+	if !attempt.Bindings.Equal(AttemptBindings{Task: key, Snapshot: sampleDigest, Responsibility: testProvider, Model: &nativeDefault, ReasoningEffort: &nativeDefault}) || attempt.Plan != wantIdentity {
 		t.Fatalf("attempt bindings/plan = %+v / %+v", attempt.Bindings, attempt.Plan)
 	}
 	pending, ok := snap.State.PendingActions["act:review/review.worker"]

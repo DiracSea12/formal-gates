@@ -63,7 +63,7 @@ func (e *Engine) dispatchCostHeld(state *State, actionID string) bool {
 	}
 	resolved := e.cfg.CostSource(CostSourceRef{
 		RunID: state.RunID, ActionID: actionID,
-		Provider: state.RunProvider, Correlation: receipt.Correlation,
+		Provider: receipt.Provider, Correlation: receipt.Correlation,
 	})
 	if resolved.State != CostSourcePending {
 		_, _, current := state.workerActionTarget(actionID)
@@ -143,7 +143,7 @@ func (e *Engine) recordRetiredDispatchCosts(state *State, expectedRevision uint6
 			continue
 		}
 		receipt := state.SpawnReceipts[id]
-		resolved := e.cfg.CostSource(CostSourceRef{RunID: state.RunID, ActionID: id, Provider: state.RunProvider, Correlation: receipt.Correlation})
+		resolved := e.cfg.CostSource(CostSourceRef{RunID: state.RunID, ActionID: id, Provider: receipt.Provider, Correlation: receipt.Correlation})
 		if resolved.State == CostSourceReady || resolved.State == CostSourceUnavailable {
 			e.recordDispatchCost(state, id, resolved, true)
 		}

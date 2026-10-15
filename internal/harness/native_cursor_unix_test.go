@@ -1026,6 +1026,9 @@ func TestCursorOriginalInvocationCarriesSavedStore(t *testing.T) {
 			s.save(t)
 			originalDirectory := s.directory
 			if completed {
+				if err := claimJob(s.directory, s.request); err != nil {
+					t.Fatal(err)
+				}
 				if source, err := cursorExecute(s.request, s.directory, false); err != nil {
 					t.Fatalf("original completion: %v %v", source, err)
 				}

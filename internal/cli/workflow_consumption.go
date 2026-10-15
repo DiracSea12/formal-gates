@@ -367,19 +367,37 @@ func startWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.Worke
 		if err := ctx.Err(); err != nil {
 			return nil, "", facade.WorkerMaterial{}, nil, err
 		}
-		run, err := f.Show()
-		if err != nil {
-			return nil, "", facade.WorkerMaterial{}, nil, err
+		if _, bound := request["binding"]; !bound {
+			run, err := f.Show()
+			if err != nil {
+				return nil, "", facade.WorkerMaterial{}, nil, err
+			}
+			var configured settings.Effective
+			if run.Settings != nil {
+				configured = *run.Settings
+			}
+			configured.Values.Model, _ = request["model"].(string)
+			configured.Values.ReasoningEffort, _ = request["reasoning_effort"].(string)
+			var start facade.StartRequest
+			if err := readJSONFileInto(filepath.Join(filepath.Dir(filepath.Dir(ref.Path)), "request.json"), &start); err != nil {
+				return nil, "", facade.WorkerMaterial{}, nil, err
+			}
+			controller, err := host.Lookup(start.Provider)
+			if err != nil {
+				return nil, "", facade.WorkerMaterial{}, nil, err
+			}
+			if provider != controller.InstallName {
+				configured, err = settings.Freeze(provider, configured)
+				if err != nil {
+					return nil, "", facade.WorkerMaterial{}, nil, err
+				}
+			}
+			binding, err := harness.NativeBinding(provider, configured.Values)
+			if err != nil {
+				return nil, "", facade.WorkerMaterial{}, nil, err
+			}
+			request["binding"] = binding
 		}
-		var configured settings.Values
-		if run.Settings != nil {
-			configured = run.Settings.Values
-		}
-		binding, err := harness.NativeBinding(provider, configured)
-		if err != nil {
-			return nil, "", facade.WorkerMaterial{}, nil, err
-		}
-		request["binding"] = binding
 		if err := os.MkdirAll(directory, 0700); err != nil {
 			return nil, "", facade.WorkerMaterial{}, nil, err
 		}
@@ -557,13 +575,6 @@ func terminateWorkflowWorker(ctx context.Context, f *facade.Facade, intent proto
 		if err := f.ObserveWorkerStart(request.Engine.WorkerMaterial, directory, harness.NativeStartEvidence); err != nil {
 			return err
 		}
-	}
-	lifecycle, err := protocol.NewLifecycleEventEvent(protocol.EventID("native-terminated:"+intent.ActionID), provider, intent.Terminate.Identity, protocol.LifecycleStop)
-	if err != nil {
-		return err
-	}
-	if _, _, err := f.Submit(lifecycle); err != nil {
-		return err
 	}
 	event, err := protocol.NewAgentHostActionReceiptEvent(protocol.EventID("native-termination:"+intent.ActionID), intent.ActionID, protocol.HostActionTerminateAgent, provider, nativeIntentCorrelation(intent), intent.PayloadDigest, protocol.HostActionStatusExecuted, "", protocol.LifecycleEvidence{Identity: intent.Terminate.Identity, Event: protocol.LifecycleStop})
 	if err != nil {

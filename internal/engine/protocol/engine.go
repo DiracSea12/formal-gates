@@ -164,6 +164,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 			state.FlowSelection = &FlowSelection{Disabled: slices.Clone(sliceStart.FlowSelection.Disabled)}
 		}
 		binding := sliceStart.Binding
+		binding.InheritedExecution = slices.Clone(binding.InheritedExecution)
 		state.SliceChild = &binding
 		topology := copyTopology(sliceStart.Topology)
 		state.Topology = &topology
@@ -462,7 +463,7 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 		if receipt.Status != SpawnStatusUnknown || !s.liveDispatch(actionID) {
 			continue
 		}
-		plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(s.lifecycleMatches(receipt.Correlation))})
+		plan := DecideRecovery(Interruption{ReceiptUnknown: true, LifecycleMatches: len(s.lifecycleMatches(receipt.Provider, receipt.Correlation))})
 		if plan.Action == RecoveryOperator {
 			view.OperatorFacts = append(view.OperatorFacts, decision.Fact{Source: decision.SourceReceipt, Key: actionID, Value: plan.Detail})
 		}
@@ -830,7 +831,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, inpu
 		return nil, 0, err
 	}
 	state.retainExpected(plan.Next.Ready)
-	issued, err = state.issueInto(issued, revision+1, snapshot, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
+	issued, err = state.issueInto(issued, revision+1, snapshot, e.cfg.Definition, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}
@@ -1021,7 +1022,7 @@ func (s *State) liveDispatch(dispatchID string) bool {
 // guardGate is the dispatch-budget judgment at this funnel: it runs before the
 // duplicate/transition checks and every ledger write (it only reads the
 // ledgers), so a refusal leaves zero state change.
-func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action, guardGate func(decision.IssuedSet) error) (decision.IssuedSet, error) {
+func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot string, cd *compiler.CompiledDefinition, plan PlanIdentity, retryMax func(authoring.StepID) int, reviewSeriesOf func(authoring.StepID) review.Action, guardGate func(decision.IssuedSet) error) (decision.IssuedSet, error) {
 	if guardGate != nil {
 		if err := guardGate(issued); err != nil {
 			return nil, err
@@ -1048,11 +1049,12 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		}
 	}
 	for _, action := range issued {
+		choice := s.EffectiveExecutionChoice(s.ExecutionNode(action.Task, cd))
 		attempt := Attempt{
 			IssuedAction: action,
 			ID:           "att:" + action.Task.String() + ":" + strconv.FormatUint(nextRevision, 10),
 			Bindings: AttemptBindings{
-				Task: action.Task, Snapshot: snapshot, Responsibility: responsibility,
+				Task: action.Task, Snapshot: snapshot, Responsibility: choice.Provider, Model: &choice.Model, ReasoningEffort: &choice.ReasoningEffort,
 			},
 			Plan: plan,
 			// Attempts counts transient executions observed for this logical
@@ -1223,7 +1225,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		case err == nil:
 			// 照常接纳，落入常规分支。
 		case errors.Is(err, errPhaseAQuarantine):
-			if perr := state.checkProvider(ev.Result.Provider); perr != nil {
+			if perr := state.checkProvider(ev.Result.Provider, state.actionProvider(ev.Result.ActionID)); perr != nil {
 				return Acceptance{}, nil, false, perr
 			}
 			return e.quarantineWorkerResult(state, ev, nextRevision)
@@ -1334,6 +1336,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			ask.Validation = value
 			_, ask.Options = state.validationOffer(*value)
 		}
+		if ev.Request.Control == ControlSelectExecution {
+			selection := *ev.Request.Execution
+			ask.Execution = &selection
+			ask.Options = []AskOption{{ID: "approve", Label: "Apply this choice to unstarted calls"}, {ID: "decline", Label: "Keep the current execution choices"}}
+		}
 		// SELECT_ROUTE 的候选门全集必填且形状合法（与决定侧候选表同一定义
 		// 点），通过后钉进 Ask：用户确认边界以此为唯一权威，DECIDE 的候选
 		// 表必须与之集合相等（admitReviewDecision 核对）。schema 层不校验
@@ -1427,6 +1434,11 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, err
 			}
 		}
+		if ask.Control == ControlSelectExecution || ev.Decide.Execution != nil {
+			if err := e.acceptExecutionSelection(state, ask, ev.Decide); err != nil {
+				return Acceptance{}, nil, false, err
+			}
+		}
 		if ask.Control == ControlRecovery {
 			record, known := state.recoveryRequest(requestID)
 			if _, _, current := e.recoveryAttempt(state, record); !known || !current {
@@ -1438,6 +1450,12 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
 			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset, Continuation: ev.Decide.Continuation,
+		}
+		if ask.Control == ControlSelectExecution && ev.Decide.Choice == "approve" {
+			recorded := state.Decisions[requestID]
+			selection := *ask.Execution
+			recorded.Execution = &selection
+			state.Decisions[requestID] = recorded
 		}
 		if ask.Control == ControlContinueNode && ev.Decide.Choice == "approve" {
 			for id, pending := range state.PendingAsks {
@@ -1512,13 +1530,13 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}, state, true, nil
 
 	case KindSpawnReceipt:
-		// SpawnReceipt 接纳：provider 与 run 绑定精确比对；
+		// SpawnReceipt 接纳：provider 与原 action 执行绑定精确比对；
 		// 已有同 actionID 回执时按 payload digest 判定——逐字节重发幂等
 		// （不重复回执效果，新 event ID 仍占台账），字节不同硬拒绝。
 		// 首到回执按在途或 terminal 后仍等待结果的原签发身份
 		// 落账（声明签发态）；SPAWNED 同时配对暂存的 result-before-
 		// receipt（同一事务内完成接纳与补位签发）。
-		if err := state.checkProvider(ev.Spawn.Provider); err != nil {
+		if err := state.checkProvider(ev.Spawn.Provider, state.actionProvider(ev.Spawn.ActionID)); err != nil {
 			return Acceptance{}, nil, false, err
 		}
 		actionID := ev.Spawn.ActionID
@@ -1593,7 +1611,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 出的真实身份建立；零/多匹配不 claim（计量来源诚实 UNAVAILABLE）。
 		// sidecar 写失败只降级该派发的计量来源，不否决回执落账。
 		if e.cfg.ClaimDispatch != nil && ev.Spawn.Status == SpawnStatusSpawned {
-			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, ev.Spawn.Correlation, state.RunProvider); claimErr != nil {
+			if claimErr := e.cfg.ClaimDispatch(state.RunID, actionID, ev.Spawn.Correlation, ev.Spawn.Provider); claimErr != nil {
 				state.appendRecovery(RecoveryRecord{
 					ActionID: actionID,
 					Detail:   fmt.Sprintf("lifecycle dispatch claim failed; the dispatch cost source degrades to unavailable: %v", claimErr),
@@ -1624,7 +1642,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// 重放共用）——结果级摘要幂等/冲突、obsolete 认领、重走态的
 		// floor 比对与按声明终止重签发、result-before-receipt 暂存与回
 		// 执配对后的完成（frontier 推进＋容量补位）。
-		if err := state.checkProvider(ev.Result.Provider); err != nil {
+		if err := state.checkProvider(ev.Result.Provider, state.actionProvider(ev.Result.ActionID)); err != nil {
 			return Acceptance{}, nil, false, err
 		}
 		acceptance, wrote, err := e.admitWorkerResultRecord(state, ev.Result.ActionID, ev.Result, string(ev.ID), "", revision, nextRevision, input)
@@ -1694,7 +1712,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// HostAction 回执接纳：provider 精确比对；已清账的
 		// 回执按 payload digest 幂等/冲突；回执必须与 pending intent 的
 		// operation 与参数 digest 精确一致；接纳即清账 intent。
-		if err := state.checkProvider(ev.HostAction.Provider); err != nil {
+		if err := state.checkHostActionProvider(ev.HostAction.ActionID, ev.HostAction.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
 		actionID := ev.HostAction.ActionID
@@ -1845,10 +1863,10 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		// buffer 效果，新 event ID 仍占台账；
 		// receipt 对账从原事件按 correlation/identity 计算 start/stop 配对；
 		// stop 没有先行 start 则不是合法 observation。
-		if err := state.checkProvider(ev.Lifecycle.Provider); err != nil {
+		if err := state.checkLifecycleProvider(ev.Lifecycle.Provider); err != nil {
 			return Acceptance{}, nil, false, err
 		}
-		if ev.Lifecycle.Event == LifecycleStop && !state.hasCorrelatedLifecycleEvent(ev.Lifecycle.Correlation, ev.Lifecycle.Identity, LifecycleStart) {
+		if ev.Lifecycle.Event == LifecycleStop && !state.hasCorrelatedLifecycleEvent(ev.Lifecycle.Provider, ev.Lifecycle.Correlation, ev.Lifecycle.Identity, LifecycleStart) {
 			return Acceptance{}, nil, false, &RejectedError{
 				Code:   CodeEventSchemaInvalid,
 				Detail: fmt.Sprintf("lifecycle stop for %q has no preceding start", ev.Lifecycle.Identity),
@@ -1871,7 +1889,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			Event: ev.Lifecycle.Event, Digest: payloadDigest,
 		})
 		status := "ACCEPTED"
-		if !state.lifecycleClaimed(ev.Lifecycle.Correlation) {
+		if !state.lifecycleClaimed(ev.Lifecycle.Provider, ev.Lifecycle.Correlation) {
 			status = "BUFFERED"
 		}
 		return Acceptance{
@@ -2542,7 +2560,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, input Observation) ([
 	if err != nil {
 		return nil, err
 	}
-	issued, err = state.issueInto(issued, nextRevision, snapshot, state.RunProvider, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
+	issued, err = state.issueInto(issued, nextRevision, snapshot, e.cfg.Definition, identity, e.retryMaxAttempts, e.reviewSeriesOf, e.guardIssuanceGate(state))
 	for _, action := range issued {
 		e.bindBusinessAttempt(state, action.Task)
 	}
@@ -2616,7 +2634,11 @@ func (e *Engine) validateHostActionEvidence(state *State, intent HostActionInten
 		if target == nil || receipt.LifecycleEvidence == nil || receipt.LifecycleEvidence.Identity != target.Identity {
 			return &RejectedError{Code: CodeIntentMismatch, Detail: "host action lifecycle evidence does not match the typed agent target"}
 		}
-		if !state.hasLifecycleEvent(receipt.LifecycleEvidence.Identity, receipt.LifecycleEvidence.Event) {
+		correlation := state.workerLifecycleCorrelation(target.WorkerActionID)
+		if intent.Resume != nil {
+			correlation = intent.ActionID
+		}
+		if !state.hasCorrelatedLifecycleEvent(receipt.Provider, correlation, receipt.LifecycleEvidence.Identity, receipt.LifecycleEvidence.Event) {
 			return &RejectedError{Code: CodeIntentMismatch, Detail: fmt.Sprintf("lifecycle evidence %s/%s is not present in the durable buffer", receipt.LifecycleEvidence.Identity, receipt.LifecycleEvidence.Event)}
 		}
 	case HostActionExecuteAdapterOperation:
@@ -2699,13 +2721,12 @@ func digestOfCanonical(v any) string {
 	return encoder.Digest(data)
 }
 
-// checkProvider 硬校验 provider 身份：与 run 绑定不同（含空）即拒绝，
-// 不降级 default。
-func (s *State) checkProvider(observed string) error {
-	if observed == "" || observed != s.RunProvider {
+// checkProvider checks the identity supplied by the event against its owner.
+func (s *State) checkProvider(observed, expected string) error {
+	if observed == "" || observed != expected {
 		return &RejectedError{
 			Code:   CodeProviderMismatch,
-			Detail: fmt.Sprintf("provider %q != run binding %q (no default downgrade)", observed, s.RunProvider),
+			Detail: fmt.Sprintf("provider %q != original binding %q (no default downgrade)", observed, expected),
 		}
 	}
 	return nil
@@ -2713,10 +2734,10 @@ func (s *State) checkProvider(observed string) error {
 
 // lifecyclePaired reports whether one correlation/identity pair has both
 // lifecycle edges in the durable observation buffer.
-func (s *State) lifecyclePaired(correlation, identity string) bool {
+func (s *State) lifecyclePaired(provider, correlation, identity string) bool {
 	var start, stop bool
 	for _, record := range s.LifecycleEvents {
-		if record.Correlation != correlation || record.Identity != identity {
+		if record.Provider != provider || record.Correlation != correlation || record.Identity != identity {
 			continue
 		}
 		switch record.Event {
@@ -2729,27 +2750,18 @@ func (s *State) lifecyclePaired(correlation, identity string) bool {
 	return start && stop
 }
 
-func (s *State) lifecycleClaimed(correlation string) bool {
+func (s *State) lifecycleClaimed(provider, correlation string) bool {
 	for _, receipt := range s.SpawnReceipts {
-		if receipt.Correlation == correlation {
+		if receipt.Provider == provider && receipt.Correlation == correlation {
 			return true
 		}
 	}
 	return false
 }
 
-func (s *State) hasLifecycleEvent(identity, event string) bool {
+func (s *State) hasCorrelatedLifecycleEvent(provider, correlation, identity, event string) bool {
 	for _, record := range s.LifecycleEvents {
-		if record.Provider == s.RunProvider && record.Identity == identity && record.Event == event {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *State) hasCorrelatedLifecycleEvent(correlation, identity, event string) bool {
-	for _, record := range s.LifecycleEvents {
-		if record.Provider == s.RunProvider && record.Correlation == correlation && record.Identity == identity && record.Event == event {
+		if record.Provider == provider && record.Correlation == correlation && record.Identity == identity && record.Event == event {
 			return true
 		}
 	}

@@ -5,6 +5,7 @@ package harness
 // observer for live completion and recovery; it never replays a prompt.
 
 import (
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"os"
 	"os/exec"
@@ -112,7 +113,67 @@ func claudeCheckSelection(request any, selection map[string]any) error {
 	return nil
 }
 
-var claudeStream = streamAdapter{provider: "claude", prefix: "CLAUDE", capture: claudeCaptureBinding, probe: claudeProbe, arguments: claudeArguments, selection: streamSelection, checkSelection: claudeCheckSelection, sessionUnavailable: streamSessionUnavailable}
+var claudeStream = streamAdapter{provider: "claude", prefix: "CLAUDE", capture: claudeCaptureBinding, probe: claudeProbe, selectionOptions: claudeSelectionOptions, arguments: claudeArguments, selection: streamSelection, checkSelection: claudeCheckSelection, sessionUnavailable: streamSessionUnavailable}
+
+func claudeSelectionOptions(executable, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
+	catalogue := host.SelectionCatalogue{Source: "Claude SDK initialize and get_settings"}
+	client, err := nativeSelectionControl(executable, workspace, directory, environment)
+	if err != nil {
+		return catalogue, err
+	}
+	defer client.close()
+	initialized, err := nativeControlRequest(client, "initialize")
+	if err != nil {
+		return catalogue, err
+	}
+	settings, err := nativeControlRequest(client, "get_settings")
+	if err != nil {
+		return catalogue, err
+	}
+	effective := getOf(settings, "effective")
+	catalogue.Current = host.ModelSelection{Model: nativeSelectionString(getOf(effective, "model")), Effort: nativeSelectionString(getOf(effective, "effortLevel"))}
+	modelValue := func(entry any) string {
+		value := nativeSelectionString(getOf(entry, "resolvedModel"))
+		if value == "" {
+			value = nativeSelectionString(getOf(entry, "value"))
+		}
+		return value
+	}
+	entries := listOf(getOf(initialized, "models"))
+	for _, entry := range entries {
+		value := modelValue(entry)
+		if getOf(entry, "value") == catalogue.Current.Model {
+			catalogue.Current.Model = value
+		}
+		if target == nativeSelectionString(getOf(entry, "value")) {
+			target = value
+		}
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		value := modelValue(entry)
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		option := host.ModelOption{Value: value, Label: nativeSelectionString(getOf(entry, "displayName"))}
+		if value == target || target == "" && value == catalogue.Current.Model {
+			option.Efforts = nativeStringValues(getOf(entry, "supportedEffortLevels"), "")
+			if getOf(entry, "supportsEffort") == false {
+				option.Efforts = []string{}
+			}
+			if value == catalogue.Current.Model {
+				option.DefaultEffort = catalogue.Current.Effort
+			}
+		}
+		catalogue.Models = append(catalogue.Models, option)
+	}
+	catalogue.Default.Model = catalogue.Current.Model
+	if target == "" || target == catalogue.Current.Model {
+		catalogue.Default.Effort = catalogue.Current.Effort
+	}
+	return catalogue, nil
+}
 
 func claudeExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
 	return streamExecute(claudeStream, request, directory, probe)

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"io"
 	"os"
@@ -400,6 +401,10 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 		return cmd
 	}
 	if probe {
+		if getOf(request, "selection_options") == true {
+			catalogue, err := cursorSelectionOptions(command)
+			return map[string]any{"selection_options": catalogue, "model_calls": 0}, err
+		}
 		version, err := command("--version").Output()
 		if err != nil {
 			return nil, err
@@ -581,6 +586,42 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 		return nil, err
 	}
 	return source, nil
+}
+
+// The public models command reports selection IDs and labels, but omits the
+// parameter definitions its native model service uses for effort selection.
+func cursorSelectionOptions(command func(...string) *exec.Cmd) (host.SelectionCatalogue, error) {
+	catalogue := host.SelectionCatalogue{Source: "Cursor models; effort options not reported by CLI"}
+	cmd := command("models")
+	cmd.Env = append(cmd.Env, "NO_COLOR=1", "CLICOLOR=0")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return catalogue, fmt.Errorf("CURSOR_MODELS: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	for _, line := range strings.Split(ansi.ReplaceAllString(string(output), ""), "\n") {
+		value, label, ok := strings.Cut(strings.TrimSpace(line), " - ")
+		if !ok {
+			continue
+		}
+		markers := ""
+		if index := strings.LastIndex(label, " ("); index >= 0 && strings.HasSuffix(label, ")") {
+			markers, label = label[index+2:len(label)-1], label[:index]
+		}
+		catalogue.Models = append(catalogue.Models, host.ModelOption{Value: value, Label: label})
+		for _, marker := range strings.Split(markers, ", ") {
+			switch marker {
+			case "current":
+				catalogue.Current.Model = value
+			case "default":
+				catalogue.Default.Model = value
+			}
+		}
+	}
+	if len(catalogue.Models) == 0 {
+		return catalogue, fmt.Errorf("CURSOR_MODELS: native CLI returned no model options: %s", strings.TrimSpace(string(output)))
+	}
+	return catalogue, nil
 }
 
 func cursorObserve(directory string) (map[string]any, error) {

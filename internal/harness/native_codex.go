@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"io"
 	"os"
@@ -487,6 +488,10 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 		return nil, err
 	}
 	if probe {
+		if getOf(request, "selection_options") == true {
+			catalogue, err := codexSelectionOptions(client, workspace, nativeSelectionString(getOf(request, "selection_model")))
+			return map[string]any{"selection_options": catalogue, "model_calls": 0}, err
+		}
 		if err = client.close(); err != nil {
 			return nil, err
 		}
@@ -670,6 +675,51 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 		return nil, err
 	}
 	return source, nil
+}
+
+func codexSelectionOptions(client *nativeClient, workspace, target string) (host.SelectionCatalogue, error) {
+	catalogue := host.SelectionCatalogue{Source: "Codex model/list and config/read"}
+	configuration, err := client.request("config/read", map[string]any{"cwd": workspace, "includeLayers": false}, nativeUnbounded)
+	if err != nil {
+		return catalogue, err
+	}
+	config := getOf(configuration, "config")
+	catalogue.Current = host.ModelSelection{Model: nativeSelectionString(getOf(config, "model")), Effort: nativeSelectionString(getOf(config, "model_reasoning_effort"))}
+	cursor := ""
+	for {
+		params := map[string]any{"includeHidden": true}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		page, err := client.request("model/list", params, nativeUnbounded)
+		if err != nil {
+			return catalogue, err
+		}
+		for _, entry := range listOf(getOf(page, "data")) {
+			value := nativeSelectionString(getOf(entry, "model"))
+			if value == "" {
+				value = nativeSelectionString(getOf(entry, "id"))
+			}
+			if catalogue.Current.Model == "" && getOf(entry, "isDefault") == true {
+				catalogue.Current.Model = value
+			}
+			catalogue.Models = append(catalogue.Models, host.ModelOption{Value: value, Label: nativeSelectionString(getOf(entry, "displayName"))})
+			if value == target || target == "" && value == catalogue.Current.Model {
+				option := &catalogue.Models[len(catalogue.Models)-1]
+				option.Efforts = nativeStringValues(getOf(entry, "supportedReasoningEfforts"), "reasoningEffort")
+				option.DefaultEffort = nativeSelectionString(getOf(entry, "defaultReasoningEffort"))
+			}
+			if value == catalogue.Current.Model && catalogue.Current.Effort == "" {
+				catalogue.Current.Effort = nativeSelectionString(getOf(entry, "defaultReasoningEffort"))
+			}
+		}
+		cursor = nativeSelectionString(getOf(page, "nextCursor"))
+		if cursor == "" {
+			break
+		}
+	}
+	catalogue.Default = catalogue.Current
+	return catalogue, nil
 }
 
 // codexObserve uses the original job request, acknowledged thread/turn and raw

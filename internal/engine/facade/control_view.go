@@ -95,6 +95,9 @@ func (f *Facade) ControlRuns() ([]Run, error) {
 // PrepareCurrentControl selects only an existing Ask by its displayed number.
 // The original target, request, token and semantic assembly own the candidate.
 func (f *Facade) PrepareCurrentControl(input ControlInput) (ControlCandidate, error) {
+	if input.Execution != nil && input.Request == "" {
+		input.Request = protocol.ControlSelectExecution
+	}
 	if input.Node != 0 && input.Request == "" {
 		input.Request = protocol.ControlContinueNode
 	}

@@ -34,6 +34,7 @@ const (
 // 是 MasterRunID——child 沿用 master 的整体产品/技术审选择与已有结论，不自行增加 series。
 // InheritedIntake 保存创建时完整材料确认，不随后续 ParentChange 替换。
 type SliceChildBinding struct {
+	InheritedExecution  []ExecutionSelection        `json:"inheritedExecution,omitempty"`
 	MasterRunID         string                      `json:"masterRunId"`
 	SliceID             string                      `json:"sliceId"`
 	RequirementRevision string                      `json:"requirementRevision"`

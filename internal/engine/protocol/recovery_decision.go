@@ -149,7 +149,8 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 		return nil
 	}
 	identity := receipt.agentIdentity()
-	if !executed && (operation == HostActionResumeAgent || !s.hasLifecycleEvent(identity, LifecycleStop)) {
+	lifecycleCorrelation := s.workerLifecycleCorrelation(pending.ActionID)
+	if !executed && (operation == HostActionResumeAgent || !s.hasCorrelatedLifecycleEvent(receipt.Provider, lifecycleCorrelation, identity, LifecycleStop)) {
 		if operation == HostActionResumeAgent && e.guardEffectBudget(s, pending.ActionID, revision) != nil {
 			// 预算边界＝Ask 已落账（本函数运行在事务收尾内，随外层提交），
 			// 效果不创建、返回 nil——Ask 即进展，不是错误。

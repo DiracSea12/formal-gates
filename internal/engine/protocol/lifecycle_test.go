@@ -44,7 +44,7 @@ func TestLifecyclePairRetainsOriginalEvents(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	mid := engine.LoadMustSucceed(t)
-	if len(mid.State.lifecycleMatches("agent-review-1")) != 0 {
+	if len(mid.State.lifecycleMatches(testProvider, "agent-review-1")) != 0 {
 		t.Fatal("unpaired start matched")
 	}
 	acceptance, err := engine.Submit(lifecycleEvent(t, "evt-lc-2", "agent-review-1", LifecycleStop), observedInput)
@@ -55,8 +55,8 @@ func TestLifecyclePairRetainsOriginalEvents(t *testing.T) {
 		t.Fatalf("acceptance = %+v", acceptance)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if !reflect.DeepEqual(snap.State.lifecycleMatches("agent-review-1"), []string{"agent-review-1"}) {
-		t.Fatalf("paired identities = %+v", snap.State.lifecycleMatches("agent-review-1"))
+	if !reflect.DeepEqual(snap.State.lifecycleMatches(testProvider, "agent-review-1"), []string{"agent-review-1"}) {
+		t.Fatalf("paired identities = %+v", snap.State.lifecycleMatches(testProvider, "agent-review-1"))
 	}
 	if recorded := snap.State.Events["evt-lc-2"].Acceptance; !reflect.DeepEqual(recorded, acceptance) || recorded.Revision == 0 {
 		t.Fatalf("recorded acceptance = %+v, returned %+v", recorded, acceptance)
@@ -93,7 +93,7 @@ func TestLifecyclePairBeforeReceiptPreservesOriginalClaim(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 	beforeReceipt := engine.LoadMustSucceed(t)
-	if beforeReceipt.State.lifecycleClaimed("agent-review-1") {
+	if beforeReceipt.State.lifecycleClaimed(testProvider, "agent-review-1") {
 		t.Fatal("pair claimed before receipt")
 	}
 	for _, id := range []string{"evt-lc-before-start", "evt-lc-before-stop"} {
@@ -106,7 +106,7 @@ func TestLifecyclePairBeforeReceiptPreservesOriginalClaim(t *testing.T) {
 	}
 	snap := engine.LoadMustSucceed(t)
 	receipt := snap.State.SpawnReceipts[reviewAction]
-	if !snap.State.lifecycleClaimed("agent-review-1") || receipt.Provider != testProvider || receipt.Correlation != "agent-review-1" || !reflect.DeepEqual(snap.State.lifecycleMatches(receipt.Correlation), []string{"agent-review-1"}) {
+	if !snap.State.lifecycleClaimed(testProvider, "agent-review-1") || receipt.Provider != testProvider || receipt.Correlation != "agent-review-1" || !reflect.DeepEqual(snap.State.lifecycleMatches(testProvider, receipt.Correlation), []string{"agent-review-1"}) {
 		t.Fatalf("receipt did not claim the original pair: %+v", receipt)
 	}
 	if !reflect.DeepEqual(snap.State.LifecycleEvents, beforeReceipt.State.LifecycleEvents) {
@@ -156,7 +156,7 @@ func TestLifecycleUnclaimedPairIsBufferedAndLoneStopRejected(t *testing.T) {
 		t.Fatalf("stranger stop: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if snap.State.lifecycleClaimed("agent-stranger") {
+	if snap.State.lifecycleClaimed(testProvider, "agent-stranger") {
 		t.Fatal("stranger identity claimed")
 	}
 	for _, id := range []string{"evt-lc-a", "evt-lc-b"} {
@@ -180,7 +180,7 @@ func TestLifecycleUnclaimedPairIsBufferedAndLoneStopRejected(t *testing.T) {
 	if snap2.Revision != beforeLoneStop.Revision || !reflect.DeepEqual(snap2.State, beforeLoneStop.State) {
 		t.Fatal("rejected lone stop changed state")
 	}
-	if len(snap2.State.lifecycleMatches("agent-review-1")) != 0 {
+	if len(snap2.State.lifecycleMatches(testProvider, "agent-review-1")) != 0 {
 		t.Fatal("unpaired identity matched")
 	}
 }
@@ -258,8 +258,8 @@ func TestUnknownReceiptUsesDurableLifecycleCardinality(t *testing.T) {
 		t.Fatalf("multiple-match operator fact = %+v", view.OperatorFacts)
 	}
 
-	if !reflect.DeepEqual(snap.State.lifecycleMatches("spawn-correlation"), []string{"agent-a", "agent-b"}) || len(snap.State.LifecycleEvents) != 4 {
-		t.Fatalf("original lifecycle pairs = %+v, events=%+v", snap.State.lifecycleMatches("spawn-correlation"), snap.State.LifecycleEvents)
+	if !reflect.DeepEqual(snap.State.lifecycleMatches(testProvider, "spawn-correlation"), []string{"agent-a", "agent-b"}) || len(snap.State.LifecycleEvents) != 4 {
+		t.Fatalf("original lifecycle pairs = %+v, events=%+v", snap.State.lifecycleMatches(testProvider, "spawn-correlation"), snap.State.LifecycleEvents)
 	}
 }
 

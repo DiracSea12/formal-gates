@@ -12,10 +12,90 @@ import (
 	"runtime"
 	"strings"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 )
 
-var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit, usageTranscript: workbuddyUsageTranscript}
+var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, selectionOptions: workbuddySelectionOptions, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit, usageTranscript: workbuddyUsageTranscript}
+
+func workbuddySelectionOptions(executable, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
+	catalogue := host.SelectionCatalogue{Source: "WorkBuddy initialize and get_available_models"}
+	client, err := nativeSelectionControl(executable, workspace, directory, environment)
+	if err != nil {
+		return catalogue, err
+	}
+	defer client.close()
+	initialized, err := nativeControlRequest(client, "initialize")
+	if err != nil {
+		return catalogue, err
+	}
+	models, err := nativeControlRequest(client, "get_available_models")
+	if err != nil {
+		return catalogue, err
+	}
+	catalogue.Current.Model = nativeSelectionString(getOf(initialized, "currentModelId"))
+	catalogue.Default.Model = catalogue.Current.Model
+	if target == "" {
+		target = catalogue.Current.Model
+	}
+	for _, entry := range listOf(getOf(models, "rawModels")) {
+		option := host.ModelOption{Value: nativeSelectionString(getOf(entry, "id")), Label: nativeSelectionString(getOf(entry, "name"))}
+		reasoning := getOf(entry, "reasoning")
+		effort := nativeSelectionString(getOf(reasoning, "defaultEffort"))
+		if effort == "" {
+			effort = nativeSelectionString(getOf(reasoning, "effort"))
+		}
+		if option.Value == catalogue.Current.Model {
+			catalogue.Default.Effort = effort
+		}
+		if option.Value == target {
+			option.Efforts = nativeStringValues(getOf(reasoning, "supportedEfforts"), "")
+			if option.Efforts == nil && getOf(entry, "supportsReasoning") == true {
+				option.Efforts, err = workbuddyCLIEfforts(executable, workspace, environment)
+				if err != nil {
+					return catalogue, err
+				}
+			}
+			if getOf(entry, "supportsReasoning") == false {
+				option.Efforts = []string{}
+			}
+			option.DefaultEffort = effort
+		}
+		catalogue.Models = append(catalogue.Models, option)
+	}
+	return catalogue, nil
+}
+
+// WorkBuddy's native selector uses the CLI effort choices when the selected
+// reasoning model does not publish a narrower supportedEfforts list.
+func workbuddyCLIEfforts(executable, workspace string, environment map[string]string) ([]string, error) {
+	cmd := exec.Command(executable, "--help")
+	cmd.Dir = workspace
+	cmd.Env = nativeChildEnvironment(environment)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.Contains(line, "--effort ") {
+			continue
+		}
+		_, choices, ok := strings.Cut(line, "(")
+		if !ok {
+			continue
+		}
+		choices, _, ok = strings.Cut(choices, ")")
+		if !ok {
+			continue
+		}
+		out := []string{}
+		for _, effort := range strings.Split(choices, ",") {
+			out = append(out, strings.TrimSpace(effort))
+		}
+		return out, nil
+	}
+	return nil, nil
+}
 
 func workbuddyCaptureBinding() (map[string]any, error) {
 	native, sources := map[string]string{}, map[string]string{}
@@ -169,11 +249,6 @@ func workbuddyReconcile(directory string, process any, services ...ExecutionServ
 }
 func workbuddyArguments(request any, directory, executable, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
 	effort, _ := getOf(request, "reasoning_effort").(string)
-	switch effort {
-	case "", "minimal", "low", "medium", "high", "xhigh", "max":
-	default:
-		return nil, "", &blockedError{message: "WORKBUDDY_CONFIG: unsupported reasoning effort"}
-	}
 	identity, _ := getOf(request, "identity").(string)
 	resume := identity != ""
 	if resume {

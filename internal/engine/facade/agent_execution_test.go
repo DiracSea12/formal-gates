@@ -118,6 +118,12 @@ func TestAgentExecutionRetainsOriginalAndResumedOwners(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if resume == "" {
+			request["binding"] = map[string]any{"identity": "original-native-configuration"}
+			request["permission_mode"] = "original-permission"
+		} else if !jsonValuesEqual(request["binding"], map[string]any{"identity": "original-native-configuration"}) || request["permission_mode"] != "original-permission" {
+			t.Fatal("resume did not inherit the original claimed native configuration", request)
+		}
 		if err := os.MkdirAll(directory, 0700); err != nil {
 			t.Fatal(err)
 		}

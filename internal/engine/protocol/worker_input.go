@@ -45,6 +45,7 @@ func (s *State) WorkerExecutionIdentity(actionID, attemptID, resumeActionID stri
 // WorkerInput is a projection of an issued action, not another work ledger.
 // Review and Validation carry their existing owners' exact business context.
 type WorkerInput struct {
+	Execution                ExecutionChoice                         `json:"execution"`
 	DevelopmentDisabled      bool                                    `json:"developmentDisabled,omitempty"`
 	RequirementPoints        []requirement.Point                     `json:"requirementPoints"`
 	Intake                   *IntakeConfirmationReceipt              `json:"intake,omitempty"`
@@ -127,7 +128,8 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 	if !ok {
 		return WorkerInput{}, false
 	}
-	input := WorkerInput{Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: s.RunProvider, VCS: s.VCSName, Pending: pending, Handler: string(payload.Handler), InputCodec: step.IO.InputCodec, OutputCodec: step.IO.OutputCodec, RequirementDocument: s.Validation.Document}
+	execution, _ := s.ActionExecutionChoice(id)
+	input := WorkerInput{Execution: execution, Intake: s.CurrentIntakeConfirmation(), RunID: s.RunID, Provider: execution.Provider, VCS: s.VCSName, Pending: pending, Handler: string(payload.Handler), InputCodec: step.IO.InputCodec, OutputCodec: step.IO.OutputCodec, RequirementDocument: s.Validation.Document}
 	if pending.ReviewSeries == review.StartReadiness {
 		input.DevelopmentDisabled = !s.FlowNodeEnabled("development")
 	}
