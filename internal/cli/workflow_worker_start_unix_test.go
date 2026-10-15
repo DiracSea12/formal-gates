@@ -268,7 +268,7 @@ func TestWorkflowPendingAskStartsOriginalWorkerAndReusesOwnership(t *testing.T) 
 type workflowSelectionPlatform struct{ descriptor host.Descriptor }
 
 func (p workflowSelectionPlatform) HostDescriptor() *host.Descriptor { return &p.descriptor }
-func (p workflowSelectionPlatform) SelectionOptions(string, map[string]string, string) (host.SelectionCatalogue, error) {
+func (p workflowSelectionPlatform) SelectionOptions(string, string, map[string]string, string) (host.SelectionCatalogue, error) {
 	return host.SelectionCatalogue{Models: []host.ModelOption{{Value: "target-model", Efforts: []string{"high"}}}, Source: "controlled native catalogue"}, nil
 }
 

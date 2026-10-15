@@ -46,15 +46,11 @@ type zcodeScenario struct {
 
 // zcodeTestNodePeer executes credential JavaScript with Node and keeps the
 // scripted app-server for native protocol requests.
-func zcodeTestNodePeer(t *testing.T, scenario *zcodeScenario, data string) map[string]any {
+func zcodeTestNodePeer(t *testing.T, scenario *zcodeScenario, data, helper string) map[string]any {
 	t.Helper()
 	client := zcodeTestAccountClient(t, data)
 	launch := objectOrEmpty(scenario.request["binding"].(map[string]any)["launch"])
 	peer, script := textOf(launch["executable"]), textOf(launch["script"])
-	helper, err := zcodeCredentialHelperPath()
-	if err != nil {
-		t.Fatal(err)
-	}
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	wrapper := filepath.Join(filepath.Dir(peer), "node")
 	body := "#!/bin/sh\ncase \"$1\" in\n" + quote(helper) + ")\n" +
@@ -711,6 +707,10 @@ func TestZcodeExecuteSelection(t *testing.T) {
 // readiness precedes the delivery, the host's answer is read back and
 // recorded, and an answer that does not confirm the overlay is refused.
 func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
+	helper, err := zcodeCredentialHelperPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	data := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(data, ".zcode", "v2"), 0o755); err != nil {
 		t.Fatal(err)
@@ -752,7 +752,7 @@ func TestZcodeExecuteDeliverAccountProviders(t *testing.T) {
 	}
 	accountScenario := func(steps func(string) []peerStep) *zcodeScenario {
 		scenario := newZcodeScenario(t, steps, pin)
-		binding := zcodeTestNodePeer(t, scenario, data)
+		binding := zcodeTestNodePeer(t, scenario, data, helper)
 		binding["cataloguePinned"] = true
 		binding["environment"].(map[string]any)[zcodeBuiltinCatalogueEnv] = catalogue
 		scenario.request["binding"] = binding
@@ -1192,6 +1192,10 @@ func TestZcodeExecuteInheritedCatalogueSkipsAccountOverlay(t *testing.T) {
 }
 
 func TestZcodeProbeAccountOverlayMatchesNativeLoginState(t *testing.T) {
+	helper, err := zcodeCredentialHelperPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	data := t.TempDir()
 	store := filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)
 	if err := os.MkdirAll(filepath.Dir(store), 0700); err != nil {
@@ -1224,7 +1228,7 @@ func TestZcodeProbeAccountOverlayMatchesNativeLoginState(t *testing.T) {
 			}, func(request map[string]any) {
 				request["probe"], request["identity"] = true, tc.previous
 			})
-			binding := zcodeTestNodePeer(t, scenario, data)
+			binding := zcodeTestNodePeer(t, scenario, data, helper)
 			binding["cataloguePinned"] = true
 			binding["environment"].(map[string]any)[zcodeBuiltinCatalogueEnv] = catalogue
 			scenario.request["binding"] = binding

@@ -222,8 +222,8 @@ func zcodeProviderEnvironment(script string, data ...string) map[string]string {
 }
 
 // zcodePinnedCatalogue is the catalogue a launcher pinned this binding to, or
-// "" for a host's own (pinned_catalogue). Only a launcher-selected catalogue
-// receives the account overlay; inherited host environment paths do not.
+// "" for a host's own (pinned_catalogue). Only a frozen launcher catalogue
+// receives the account overlay; unpinned host paths do not.
 func zcodePinnedCatalogue(binding map[string]any) string {
 	if getOf(binding, "cataloguePinned") != true {
 		return ""
@@ -248,6 +248,9 @@ func zcodeCaptureBinding() (map[string]any, error) {
 }
 
 func zcodeResolvePaths(native, sources map[string]string) error {
+	if _, frozen := native["zcodeCataloguePinned"]; frozen {
+		return nil
+	}
 	config := settings.Values{Native: native}
 	executable := config.NativeString("zcodeExecutable")
 	node, err := exec.LookPath(executable)
@@ -302,9 +305,13 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 		personalSource = zcodePersonalConfigEnv
 	}
 	if environment := zcodeProviderEnvironment(script, data); environment != nil {
-		catalogue = resolveNativePath(environment[zcodeBuiltinCatalogueEnv])
-		personal = environment[zcodePersonalConfigEnv]
-		catalogueSource, personalSource = "zcodeScript", "zcodeDataBaseDir"
+		// The native bootstrap accepts a complete provider pair as its runtime
+		// paths. A bundled seed fills only a missing pair.
+		if catalogue == "" || personal == "" {
+			catalogue = resolveNativePath(environment[zcodeBuiltinCatalogueEnv])
+			personal = environment[zcodePersonalConfigEnv]
+			catalogueSource, personalSource = "zcodeScript", "zcodeDataBaseDir"
+		}
 		pinned = "true"
 	}
 	credentials := strings.TrimSpace(os.Getenv(zcodeCredentialHelperEnv))
@@ -1670,6 +1677,9 @@ func zcodeOpenSession(req zcodeRequest, directory string, probe bool) (*zcodeSes
 	if catalogue != "" {
 		if _, err := client.request("runtime/capabilities", map[string]any{}); err != nil {
 			return nil, err
+		}
+		if !filepath.IsAbs(catalogue) {
+			catalogue = filepath.Join(req.workspace, catalogue)
 		}
 		if _, err := zcodeDeliverAccountProviders(client, catalogue, req.wanted, directory); err != nil {
 			return nil, err

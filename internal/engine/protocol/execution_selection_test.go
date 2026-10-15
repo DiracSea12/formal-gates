@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"formal-gates/internal/cost"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
 	"formal-gates/internal/requirement"
@@ -165,14 +167,14 @@ func TestPlatformSelectionPreservesNativeOmissionAfterRestart(t *testing.T) {
 
 func TestExecutionSelectionPreservesParallelAndAuxiliaryResponsibilities(t *testing.T) {
 	e, before, issued := parallelValidationInputState(t)
-	selection := ExecutionSelection{Node: "qa", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model", ReasoningEffort: "off"}}
+	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model", ReasoningEffort: "off"}}
 	selectExecution(t, e, "choose-qa", selection)
 	after := e.LoadMustSucceed(t).State
 	qa, other := 0, 0
 	for _, action := range issued {
 		original, _ := before.ActionExecutionChoice(action.ActionID)
 		want := original
-		if after.ExecutionNode(action.Task, e.cfg.Definition) == "qa" {
+		if after.ExecutionNode(action.Task, e.cfg.Definition) == "qa-blackbox" {
 			want = selection.Choice
 			qa++
 		} else {
@@ -215,11 +217,11 @@ func TestExecutionSelectionRejectsWrongDecisionWithoutChangingChoice(t *testing.
 
 func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
 	e, _, issued := parallelValidationInputState(t)
-	selection := ExecutionSelection{Node: "qa", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model"}}
+	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model"}}
 	selectExecution(t, e, "qa-provider", selection)
 	var action string
 	for _, item := range issued {
-		if e.LoadMustSucceed(t).State.ExecutionNode(item.Task, e.cfg.Definition) == "qa" {
+		if e.LoadMustSucceed(t).State.ExecutionNode(item.Task, e.cfg.Definition) == "qa-blackbox" {
 			action = item.ActionID
 			break
 		}
@@ -277,17 +279,17 @@ func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
 }
 
 func TestChildExecutionChoiceIsCreationSnapshot(t *testing.T) {
-	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"chosen": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa", Choice: ExecutionChoice{Provider: host.Claude, Model: "parent-model"}}}}}
+	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"chosen": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "parent-model"}}}}}
 	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
 	start := parent.ChildStart(ChildPreparation{SliceID: "core"})
-	parent.Decisions["later"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "qa", Choice: ExecutionChoice{Provider: host.Codex, Model: "later-model"}}}
+	parent.Decisions["later"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Codex, Model: "later-model"}}}
 	retried := parent.ChildStart(ChildPreparation{SliceID: "core"})
 	if !reflect.DeepEqual(start.Binding.InheritedExecution, retried.Binding.InheritedExecution) {
 		t.Fatal("retrying child creation changed the inherited execution choices")
 	}
 	child := &State{RunProvider: host.Codex, SliceChild: &start.Binding, Decisions: map[string]RecordedDecision{}}
 	want := ExecutionChoice{Provider: host.Claude, Model: "parent-model"}
-	if child.EffectiveExecutionChoice("qa") != want || len(child.Decisions) != 0 {
+	if child.EffectiveExecutionChoice("qa-blackbox") != want || len(child.Decisions) != 0 {
 		t.Fatal("child lost its inherited value or forged a user decision")
 	}
 	body, err := json.Marshal(child)
@@ -295,7 +297,7 @@ func TestChildExecutionChoiceIsCreationSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var recovered State
-	if err := json.Unmarshal(body, &recovered); err != nil || recovered.EffectiveExecutionChoice("qa") != want {
+	if err := json.Unmarshal(body, &recovered); err != nil || recovered.EffectiveExecutionChoice("qa-blackbox") != want {
 		t.Fatal("restart changed inherited execution choice", err)
 	}
 	start.Binding.InheritedExecution[0].Choice.Model = "local-change"
@@ -359,5 +361,167 @@ func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
 	}
 	if got, ok := s.ActionExecutionChoice(pending.ActionID); !ok || got != choice || s.executionChoice(s.ObsoleteActions[pending.ActionID].Bindings) != choice {
 		t.Fatal("retirement changed the original execution selection", got, ok)
+	}
+}
+
+func TestQAExecutionSelectionsUseLatestApplicableDecision(t *testing.T) {
+	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-model", ReasoningEffort: "high"}
+	black := ExecutionChoice{Provider: host.Codex, Model: "black-model", ReasoningEffort: "medium"}
+	white := ExecutionChoice{Provider: host.Claude, Model: "white-model"}
+	state := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{}}
+	for _, selection := range []ExecutionSelection{{Node: "qa", Choice: shared}, {Node: "qa-blackbox", Choice: black}, {Node: "qa-whitebox", Choice: white}, {Node: "qa", Choice: shared}} {
+		revision := uint64(len(state.Decisions) + 1)
+		state.Decisions[strconv.FormatUint(revision, 10)] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: revision, Execution: &selection}
+		body, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var recovered State
+		if err := json.Unmarshal(body, &recovered); err != nil {
+			t.Fatal(err)
+		}
+		wantBlack, wantWhite := shared, shared
+		if revision == 2 || revision == 3 {
+			wantBlack = black
+		}
+		if revision == 3 {
+			wantWhite = white
+		}
+		if recovered.EffectiveExecutionChoice("qa-blackbox") != wantBlack || recovered.EffectiveExecutionChoice("qa-whitebox") != wantWhite || recovered.EffectiveExecutionChoice("qa") != shared {
+			t.Fatal("saved QA choices did not use their original applicable revisions", revision, recovered.ExecutionSelections())
+		}
+	}
+	state.SliceChild = &SliceChildBinding{InheritedExecution: []ExecutionSelection{{Node: "qa-whitebox", Choice: white}, {Node: "qa", Choice: shared}}}
+	state.Decisions = nil
+	if state.EffectiveExecutionChoice("qa-blackbox") != shared || state.EffectiveExecutionChoice("qa-whitebox") != white {
+		t.Fatal("shared child snapshot replaced its specific group value")
+	}
+	state.SliceChild.InheritedExecution = []ExecutionSelection{{Node: "qa", Choice: shared}}
+	if state.EffectiveExecutionChoice("qa-blackbox") != shared || state.EffectiveExecutionChoice("qa-whitebox") != shared {
+		t.Fatal("shared child snapshot lost either QA group")
+	}
+}
+
+func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
+	e, before, issued := parallelValidationInputState(t)
+	var claimed string
+	for _, action := range issued {
+		if before.validationMode(action.Task) == coverage.ReviewBlackbox {
+			claimed = action.ActionID
+		}
+	}
+	if claimed == "" {
+		t.Fatal("fixture did not issue real blackbox work")
+	}
+	e.cfg.WorkerExecution = func(p PendingAction, a Attempt) (*SpawnReceiptPayload, error) {
+		if p.ActionID == claimed {
+			return &SpawnReceiptPayload{ActionID: claimed, Provider: a.Bindings.Responsibility, Correlation: "original-owner", Status: SpawnStatusUnknown}, nil
+		}
+		return nil, nil
+	}
+	black := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "black-model", ReasoningEffort: "off"}}
+	white := ExecutionSelection{Node: "qa-whitebox", Choice: ExecutionChoice{Provider: host.Codex, Model: "white-model", ReasoningEffort: "high"}}
+	selectExecution(t, e, "black-group", black)
+	selectExecution(t, e, "white-group", white)
+	after := e.LoadMustSucceed(t).State
+	whiteCount := 0
+	for _, action := range issued {
+		want, _ := before.ActionExecutionChoice(action.ActionID)
+		if before.validationMode(action.Task) == coverage.ReviewWhitebox {
+			want = white.Choice
+			whiteCount++
+		}
+		if got, ok := after.ActionExecutionChoice(action.ActionID); !ok || got != want {
+			t.Fatal("group selection changed another group or native-owned call", action.Task, got, want)
+		}
+	}
+	if whiteCount == 0 || after.EffectiveExecutionChoice(black.Node) != black.Choice || after.EffectiveExecutionChoice(white.Node) != white.Choice {
+		t.Fatal("QA group choices were not independent")
+	}
+	entry := ConfirmedRevision{StateRevision: 100, Revision: "revised-requirement"}
+	for _, action := range issued {
+		entry.WorkDecisions = append(entry.WorkDecisions, RequirementWorkDecision{Work: RequirementWork{Task: action.Task}, Disposition: RequirementWorkRedo})
+	}
+	after.RequirementRevisions = append(after.RequirementRevisions, entry)
+	for index, action := range issued {
+		if got, want := after.ExecutionNode(replacementWorkTask(entry, index), e.cfg.Definition), before.ExecutionNode(action.Task, e.cfg.Definition); got != want {
+			t.Fatal("authorized replacement lost its source QA group", got, want)
+		}
+	}
+}
+
+func TestSharedQARequestReplaysAndCompletesOriginalAsk(t *testing.T) {
+	e, before, issued := parallelValidationInputState(t)
+	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "shared-native-model"}}
+	request := Event{ID: "saved-shared-request", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
+	accepted, err := e.Submit(request, Observation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The saved request and Ask carry the shared QA format.
+	snapshot := e.LoadMustSucceed(t)
+	selection.Node = "qa"
+	ask := snapshot.State.PendingAsks[accepted.RequestID]
+	ask.Execution = &selection
+	snapshot.State.PendingAsks[accepted.RequestID] = ask
+	record := snapshot.State.Events[string(request.ID)]
+	record.Digest, err = request.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.State.Events[string(request.ID)] = record
+	if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(e.store, e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Submit(request, Observation{}); err != nil {
+		t.Fatal("saved shared request was not replayable", err)
+	}
+	token, err := reopened.Freshness(RequestID(accepted.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := Event{ID: "saved-shared-decision", Kind: KindDecide, Decide: &DecidePayload{Request: RequestID(accepted.RequestID), Token: token, Choice: "approve", Execution: &ExecutionSelectionDecision{Digest: selection.CanonicalDigest()}}}
+	if _, err := reopened.Submit(decision, Observation{}); err != nil {
+		t.Fatal("saved shared Ask did not complete", err)
+	}
+	after := reopened.LoadMustSucceed(t).State
+	for _, action := range issued {
+		want, _ := before.ActionExecutionChoice(action.ActionID)
+		if before.validationMode(action.Task) == coverage.ReviewBlackbox || before.validationMode(action.Task) == coverage.ReviewWhitebox {
+			want = selection.Choice
+		}
+		if got, _ := after.ActionExecutionChoice(action.ActionID); got != want {
+			t.Fatal("shared Ask lost its original QA scope", action.Task, got, want)
+		}
+	}
+	request.ID = "new-shared-request"
+	if _, err := reopened.Submit(request, Observation{}); err == nil {
+		t.Fatal("new request accepted an ambiguous shared QA node")
+	}
+}
+
+func TestSharedQACreationSnapshotPreservesMergeExecution(t *testing.T) {
+	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-qa-model", ReasoningEffort: "high"}
+	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"shared": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa", Choice: shared}}}}
+	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
+	start := parent.ChildStart(ChildPreparation{SliceID: "core"})
+	parent.Decisions["later"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Codex, Model: "black-model"}}}
+	child := &State{RunProvider: host.Codex, SliceChild: &start.Binding, SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Generation: 1}}
+	body, err := json.Marshal(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered State
+	if err := json.Unmarshal(body, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	cd := compiledCanonicalWorkflow(t)
+	task := pipelineTask(cd, "engine.qa.design.v6", recovered.nextDesignScope(coverage.ReviewMerge, cd))
+	if recovered.ExecutionNode(task, cd) != "qa" || recovered.EffectiveExecutionChoice(recovered.ExecutionNode(task, cd)) != shared || recovered.EffectiveExecutionChoice("qa-blackbox") != shared || recovered.EffectiveExecutionChoice("qa-whitebox") != shared {
+		t.Fatal("child creation lost shared QA's original modes or merge execution")
 	}
 }

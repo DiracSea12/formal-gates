@@ -20,7 +20,8 @@ type SelectionCatalogue struct {
 	Source  string         `json:"source"`
 }
 
+// SelectionAdapter queries native metadata in the admitted runtime that owns its assets.
 type SelectionAdapter interface {
 	Adapter
-	SelectionOptions(root string, native map[string]string, model string) (SelectionCatalogue, error)
+	SelectionOptions(root, runtimeTarget string, native map[string]string, model string) (SelectionCatalogue, error)
 }

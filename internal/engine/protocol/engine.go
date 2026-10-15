@@ -1337,6 +1337,9 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			_, ask.Options = state.validationOffer(*value)
 		}
 		if ev.Request.Control == ControlSelectExecution {
+			if !slices.Contains(ExecutionNodeIDs(), ev.Request.Execution.Node) {
+				return Acceptance{}, nil, false, validationError("execution selection requires an existing execution node")
+			}
 			selection := *ev.Request.Execution
 			ask.Execution = &selection
 			ask.Options = []AskOption{{ID: "approve", Label: "Apply this choice to unstarted calls"}, {ID: "decline", Label: "Keep the current execution choices"}}

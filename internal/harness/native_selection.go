@@ -1,15 +1,19 @@
 package harness
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 )
 
-func (p *nativePlatform) SelectionOptions(root string, native map[string]string, model string) (host.SelectionCatalogue, error) {
+func (p *nativePlatform) SelectionOptions(root, runtimeTarget string, native map[string]string, model string) (host.SelectionCatalogue, error) {
 	values := maps.Clone(native)
 	if values == nil {
 		values = map[string]string{}
@@ -26,15 +30,28 @@ func (p *nativePlatform) SelectionOptions(root string, native map[string]string,
 		return host.SelectionCatalogue{}, err
 	}
 	defer os.RemoveAll(directory)
-	result, err := p.implementation.execute(map[string]any{"binding": binding, "workspace": root, "read_only": true, "selection_options": true, "selection_model": model}, directory, true)
-	if err != nil {
+	request := map[string]any{"provider": p.InstallName, "binding": binding, "workspace": root, "read_only": true, "probe": true, "selection_options": true, "selection_model": model}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), request); err != nil {
 		return host.SelectionCatalogue{}, err
 	}
-	catalogue, ok := result["selection_options"].(host.SelectionCatalogue)
-	if !ok {
+	cmd := exec.Command(filepath.Join(runtimeTarget, "bin", "formal-gates"), "harness", "native", directory)
+	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return host.SelectionCatalogue{}, fmt.Errorf("%s native model options: %w: %s", p.InstallName, err, stderr.String())
+	}
+	var result struct {
+		Catalogue *host.SelectionCatalogue `json:"selection_options"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return host.SelectionCatalogue{}, err
+	}
+	if result.Catalogue == nil {
 		return host.SelectionCatalogue{}, fmt.Errorf("%s: native model options are unavailable", p.InstallName)
 	}
-	return catalogue, nil
+	return *result.Catalogue, nil
 }
 
 func nativeModelSelection(value any) host.ModelSelection {

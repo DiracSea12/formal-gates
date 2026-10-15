@@ -13,7 +13,7 @@ func runWorkflowExecutionOptions(args []string, streams IO) (int, error) {
 	runChoice := fs.Int("run", 0, "select a run by its displayed number")
 	machine := fs.Bool("machine", false, "print the complete native option catalogue")
 	input := facade.ExecutionSelectionInput{}
-	fs.StringVar(&input.Node, "execution-node", "", "main-flow node name or displayed flow-node number")
+	fs.StringVar(&input.Node, "execution-node", "", "execution group name or displayed execution-node number")
 	fs.StringVar(&input.Platform, "platform", "", "native platform name or displayed platform number")
 	fs.StringVar(&input.Model, "model", "", "native model name, label or displayed model number")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {

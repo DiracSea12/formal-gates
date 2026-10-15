@@ -435,6 +435,9 @@ func TestZcodePathFreezeKeepsInheritedCatalogueValues(t *testing.T) {
 		}
 		t.Setenv(zcodeBuiltinCatalogueEnv, "other-catalogue.json")
 		t.Setenv(zcodePersonalConfigEnv, "other-personal.json")
+		if err := zcodeResolvePaths(native, sources); err != nil {
+			t.Fatal(err)
+		}
 		binding, err := zcodeConfiguredBinding(settings.Values{Native: native})
 		if err != nil {
 			t.Fatal(err)
@@ -449,7 +452,7 @@ func TestZcodePathFreezeKeepsInheritedCatalogueValues(t *testing.T) {
 			t.Fatal("inherited catalogue source was lost", sources)
 		}
 	}
-	// A launcher fallback takes precedence over inherited catalogue variables.
+	// An incomplete native pair uses the launcher's fallback pair.
 	fallback := filepath.Join(root, "config", "provider", "zcode-builtin.json")
 	if err := os.MkdirAll(filepath.Dir(fallback), 0700); err != nil {
 		t.Fatal(err)
@@ -457,8 +460,57 @@ func TestZcodePathFreezeKeepsInheritedCatalogueValues(t *testing.T) {
 	if err := os.WriteFile(fallback, []byte("not a catalogue document"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	for _, pair := range [][2]string{{"inherited-catalogue.json", ""}, {"", "inherited-personal.json"}, {"", ""}} {
+		t.Setenv(zcodeBuiltinCatalogueEnv, pair[0])
+		t.Setenv(zcodePersonalConfigEnv, pair[1])
+		native, sources := map[string]string{"zcodeExecutable": node, "zcodeScript": script}, map[string]string{}
+		if err := zcodeResolvePaths(native, sources); err != nil || native["zcodeBuiltinCatalogue"] != fallback || native["zcodePersonalConfig"] != filepath.Join(root, ".zcode", "v2", zcodePersonalConfig) || sources["zcodeBuiltinCatalogue"] != "zcodeScript" || sources["zcodePersonalConfig"] != "zcodeDataBaseDir" || native["zcodeCataloguePinned"] != "true" {
+			t.Fatal("incomplete native pair did not use launcher fallback", native, sources, err)
+		}
+	}
+}
+
+func TestZcodePathFreezeKeepsNativeProviderPairOverBundledSeed(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	root := resolveNativePath(t.TempDir())
+	script := filepath.Join(root, "glm", "zcode.cjs")
+	seed := filepath.Join(root, "config", "provider", "zcode-builtin.json")
+	for _, path := range []string{script, seed} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := filepath.Join(root, "native-runtime", "zcode-builtin.json")
+	personal := filepath.Join(root, "native-personal.json")
+	t.Setenv(zcodeBuiltinCatalogueEnv, " "+active+" ")
+	t.Setenv(zcodePersonalConfigEnv, " "+personal+" ")
 	native, sources := map[string]string{"zcodeExecutable": node, "zcodeScript": script}, map[string]string{}
-	if err := zcodeResolvePaths(native, sources); err != nil || native["zcodeBuiltinCatalogue"] != fallback || sources["zcodeBuiltinCatalogue"] != "zcodeScript" || native["zcodeCataloguePinned"] != "true" {
-		t.Fatal("launcher fallback did not keep original precedence", native, sources, err)
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["zcodeBuiltinCatalogue"] != active || native["zcodePersonalConfig"] != personal {
+		t.Fatalf("native provider pair replaced by bundled seed: %v", native)
+	}
+	binding, err := zcodeConfiguredBinding(settings.Values{Native: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := zcodeLaunchEnvironment(binding)
+	if environment[zcodeBuiltinCatalogueEnv] != active || environment[zcodePersonalConfigEnv] != personal || zcodePinnedCatalogue(binding) != active {
+		t.Fatalf("native provider pair lost at launch: %v", binding)
+	}
+	if sources["zcodeBuiltinCatalogue"] != zcodeBuiltinCatalogueEnv || sources["zcodePersonalConfig"] != zcodePersonalConfigEnv {
+		t.Fatalf("native provider pair sources changed: %v", sources)
+	}
+	t.Setenv(zcodeBuiltinCatalogueEnv, "other-catalogue.json")
+	t.Setenv(zcodePersonalConfigEnv, "other-personal.json")
+	if err := zcodeResolvePaths(native, sources); err != nil || native["zcodeBuiltinCatalogue"] != active || native["zcodePersonalConfig"] != personal || native["zcodeCataloguePinned"] != "true" {
+		t.Fatalf("frozen provider pair followed ambient paths: %v %v", native, err)
 	}
 }

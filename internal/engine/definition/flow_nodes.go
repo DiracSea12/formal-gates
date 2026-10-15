@@ -20,3 +20,19 @@ func MainFlowNodes() []FlowNode {
 		{ID: "repair", Description: "已成立问题的业务返修", Handlers: []authoring.HandlerID{"engine.repair.v7", "engine.repair.verify.v2"}},
 	}
 }
+
+// ExecutionNodes derives selectable execution groups from the main-flow catalogue.
+func ExecutionNodes() []FlowNode {
+	var nodes []FlowNode
+	for _, node := range MainFlowNodes() {
+		if node.ID != "qa" {
+			nodes = append(nodes, node)
+			continue
+		}
+		node.ID, node.Description = "qa-blackbox", "黑盒 QA 的设计、独立审查与执行"
+		nodes = append(nodes, node)
+		node.ID, node.Description = "qa-whitebox", "白盒 QA 的设计、独立审查与执行"
+		nodes = append(nodes, node)
+	}
+	return nodes
+}

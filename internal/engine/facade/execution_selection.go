@@ -29,7 +29,7 @@ type ExecutionOptions struct {
 }
 
 func executionNode(value string) (definition.FlowNode, error) {
-	nodes := definition.MainFlowNodes()
+	nodes := definition.ExecutionNodes()
 	if n, err := strconv.Atoi(value); err == nil {
 		return position(nodes, n, "执行节点")
 	}
@@ -38,7 +38,7 @@ func executionNode(value string) (definition.FlowNode, error) {
 			return node, nil
 		}
 	}
-	return definition.FlowNode{}, fmt.Errorf("unknown execution node %q (available: %v)", value, protocol.FlowNodeIDs())
+	return definition.FlowNode{}, fmt.Errorf("unknown execution node %q (available: %v)", value, protocol.ExecutionNodeIDs())
 }
 
 func selectionPlatform(value string) (host.Descriptor, error) {
@@ -71,7 +71,7 @@ func executionPlatforms() []string {
 	return names
 }
 
-func selectionCatalogue(root string, state *protocol.State, provider, model string) (host.SelectionCatalogue, error) {
+func (f *Facade) selectionCatalogue(state *protocol.State, provider, model string) (host.SelectionCatalogue, error) {
 	adapter, err := host.LookupAdapter(provider)
 	if err != nil {
 		return host.SelectionCatalogue{}, err
@@ -84,7 +84,7 @@ func selectionCatalogue(root string, state *protocol.State, provider, model stri
 	if state.Settings != nil {
 		native = state.Settings.Values.Native
 	}
-	return options.SelectionOptions(root, native, model)
+	return options.SelectionOptions(f.root, f.admission.Target, native, model)
 }
 
 func selectionModel(catalogue host.SelectionCatalogue, value string) (host.ModelOption, error) {
@@ -134,7 +134,7 @@ func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptio
 	if platform != effective.Provider {
 		model = ""
 	}
-	catalogue, err := selectionCatalogue(f.root, snap.State, platform, model)
+	catalogue, err := f.selectionCatalogue(snap.State, platform, model)
 	if err != nil {
 		return ExecutionOptions{}, err
 	}
@@ -144,7 +144,7 @@ func (f *Facade) executionOptions(input ExecutionSelectionInput) (ExecutionOptio
 			return ExecutionOptions{}, err
 		}
 		if option.Value != model {
-			catalogue, err = selectionCatalogue(f.root, snap.State, platform, option.Value)
+			catalogue, err = f.selectionCatalogue(snap.State, platform, option.Value)
 			if err != nil {
 				return ExecutionOptions{}, err
 			}
@@ -248,7 +248,7 @@ func (f *Facade) validateExecutionSelection(selection *protocol.ExecutionSelecti
 	if err != nil {
 		return err
 	}
-	catalogue, err := selectionCatalogue(f.root, snap.State, selection.Choice.Provider, selection.Choice.Model)
+	catalogue, err := f.selectionCatalogue(snap.State, selection.Choice.Provider, selection.Choice.Model)
 	if err != nil {
 		return err
 	}

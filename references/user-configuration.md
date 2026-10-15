@@ -42,8 +42,8 @@ WorkBuddy CLI 的 effort 合同为 minimal/low/medium/high/xhigh/max，模型实
 不重读修改后的配置，不重置用量、次数、授权或并发。动态 token cap/授权仍由原
 cost/guard owner 持有，设置展示只投影其当前有效值。修改配置作用于后续新 run。
 
-运行中的临时执行选择使用现有主流程节点，不修改上述用户或项目默认文件。先查询目标
-节点与平台的原生选项；节点可写 `show` 的 `flowNodes` 序号、节点 ID 或完整描述。
+运行中的临时执行选择使用从主流程目录派生的执行组，不修改上述用户或项目默认文件。先查询目标
+节点与平台的原生选项；节点可写 `show` 的 `executionNodes` 序号、节点 ID 或完整描述。
 模型和 effort 可写查询返回的序号或原名称；不需要抄请求 ID、摘要或执行绑定。
 
 ```bash
@@ -51,6 +51,8 @@ formal-gates workflow execution-options --root <repo> --execution-node developme
 formal-gates workflow execution-options --root <repo> --execution-node development --platform workbuddy --model 2
 formal-gates workflow submit --root <repo> --execution-node development --platform workbuddy --model 2 --effort high
 formal-gates workflow submit --root <repo> --execution-node development --effort medium
+formal-gates workflow submit --root <repo> --execution-node qa-blackbox --platform codex --model 2 --effort high
+formal-gates workflow submit --root <repo> --execution-node qa-whitebox --platform workbuddy --model 1 --effort medium
 ```
 
 同平台只给模型或 effort 时，其他项沿用该节点当前有效选择。改变平台时只传同时
@@ -66,5 +68,8 @@ formal-gates workflow submit --root <repo> --execution-node development --effort
 重启读取 run 已保存的选择与调用事实。新 child 继承父创建计划当时的选择；已存在
 child 不跟随父后续改变，要调整它时用 `--run` 先选中该 child。
 
-节点仍为产品审查、开发前技术审查、开发、QA、普通/合并门、返修这六项，执行顺序与
-节点开关不变。未列入主要节点的辅助任务沿本次 run 冻结默认值。
+`flowNodes` 仍展示产品审查、开发前技术审查、开发、QA、普通/合并门、返修六项流程
+开关，执行顺序不变。`executionNodes` 将 QA 展开为 `qa-blackbox`（黑盒 QA）和
+`qa-whitebox`（白盒 QA）；两组各自选择平台、模型和 effort，每组内部的设计、独立
+审查与执行共用该组选择。其余执行组沿用流程节点 ID。合并 QA 和辅助任务沿本次
+run 冻结默认值；已保存的共享 QA 选择仍按原值读取。

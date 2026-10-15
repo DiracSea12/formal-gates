@@ -562,3 +562,28 @@ func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
 		t.Fatal(err)
 	}
 }
+
+func TestWorkflowViewSeparatesQAExecutionGroupsFromFlowSwitch(t *testing.T) {
+	root := t.TempDir()
+	f := startAdmittedEngineRun(t, root)
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := workflowRunView(run)
+	flow := view["flowNodes"].([]map[string]any)
+	execution := view["executionNodes"].([]map[string]any)
+	if len(flow) != 6 || len(execution) != 7 || execution[3]["id"] != "qa-blackbox" || execution[4]["id"] != "qa-whitebox" {
+		t.Fatal("view lost independent QA execution choices or changed flow switches", view)
+	}
+	for _, node := range flow {
+		if _, exists := node["execution"]; exists {
+			t.Fatal("flow switch displayed a shared execution tuple", node)
+		}
+	}
+	for index, node := range execution {
+		if node["node"] != index+1 || node["description"] == "" || node["execution"] != run.ExecutionNodes[index].Execution {
+			t.Fatal("execution choice lost its selection identity or effective tuple", node)
+		}
+	}
+}

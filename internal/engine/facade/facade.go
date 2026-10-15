@@ -97,6 +97,7 @@ type Envelope = persistence.Envelope
 type Run struct {
 	FlowSelection        *protocol.FlowSelection              `json:"flowSelection,omitempty"`
 	FlowNodes            []FlowNodeFace                       `json:"flowNodes,omitempty"`
+	ExecutionNodes       []ExecutionNodeFace                  `json:"executionNodes,omitempty"`
 	TaskMessages         map[string]protocol.TaskMessage      `json:"taskMessages,omitempty"`
 	Settings             *settings.Effective                  `json:"settings,omitempty"`
 	MasterRunID          string                               `json:"masterRunId,omitempty"`
@@ -1662,6 +1663,7 @@ func (f *Facade) project() (Run, error) {
 	run := Run{
 		FlowSelection:              snap.State.FlowSelection,
 		FlowNodes:                  flowNodeFaces(snap.State),
+		ExecutionNodes:             executionNodeFaces(snap.State),
 		ReviewVerificationContexts: verificationContexts,
 		TaskMessages:               snap.State.TaskMessages,
 		Settings:                   stateSettings(snap.State),
@@ -2067,6 +2069,7 @@ func runFromSummary(summary TerminalSummary) Run {
 	if s := summary.Termination; s != nil {
 		run.FlowSelection = s.FlowSelection
 		run.FlowNodes = flowNodeFaces(s)
+		run.ExecutionNodes = executionNodeFaces(s)
 		run.Review = reviewFace(s)
 		run.ReviewVerifications = s.PendingReviewVerifications()
 		run.TaskMessages = s.TaskMessages

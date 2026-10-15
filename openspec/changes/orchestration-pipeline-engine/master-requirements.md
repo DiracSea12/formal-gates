@@ -230,7 +230,7 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 10. **错误与恢复**：invalid event、retryable I/O、fatal corruption、必要单次操作限时后的恢复、provider/bridge/mismatch、HostAction、adopt-external 完整转换、候选 freeze/reuse/promotion/cleanup 与所有本地副作用崩溃窗口；promotion 后 receipt 前恢复不得重复集成。
 11. **旧 run 与旧入口**：缺版本和任一版本不匹配稳定 `UNSUPPORTED_RUN_VERSION`；`diagnose` 原始只读；无迁移、legacy 续跑、handoff、旧公开命令、兼容别名或 cleanup 删除后门。
 12. **VCS 程序化契约与 3×2**：三种 provider 的探测/status/diff/track/integrate/commit/snapshot、whitebox workspace、完整候选 freeze、identity-preserving 或 digest-equivalent promotion、resource registry cleanup、冲突窄代理边界、typed artifact、UNKNOWN reconcile 和禁止代理写 VCS；Git、SVN、P4 各跑通非分片与分片 master/child/merge，共六个权威单元格。
-13. **宿主资格**：DSH、Claude Code、Codex、Cursor、ZCode 的受管原生 adapter 与实际宿主能力分别取证；正常正式流程只使用本 run 选定的平台。额度或能力不可用的宿主如实 skip/unverified，不发模型请求、不计为 PASS，不把安装成功视为真实模型或工具前拦截证明。
+13. **宿主资格**：DSH、Claude Code、Codex、Cursor、ZCode 的受管原生 adapter 与实际宿主能力分别取证；正常正式流程只使用本 run 冻结默认或已确认执行组选择绑定的平台。额度或能力不可用的宿主如实 skip/unverified，不发模型请求、不计为 PASS，不把安装成功视为真实模型或工具前拦截证明。
 14. **执行证据归属**：源码、输入、candidate、provider/VCS 和原始 receipt/source 必须明确对应。验证仅因受影响行为、具体失败或未决风险扩大；仍有效的原证据沿原归属复用，不因 revision 变化重复全部完整流程，不用不同能力或输入的记录冒充当前结果。
 15. **黑盒边界**：文档化正常入口、常见误操作和已知恢复/崩溃窗口；对抗输入、恶意/手工状态编辑、权限/不可变文件和未支持 OS 只作 P3、不阻塞。
 16. **canonical 制品与身份**：compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写；authoring source 重新生成 checked-in 制品字节无 diff（独立于 round-trip 的 freshness CI）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节；只改 handler 实现不改 ID 与定义语义时 definition digest 不变而 package digest 变，改变 dependency/policy/reason/schema ID/handler ID/join 语义时 definition digest 必变；registry 对每个 ID 精确解析一次，缺失、重复或 kind 不匹配拒绝；packageDigest 执行绑定（含 runtime sibling 实际摘要校验与 adopt receipt 路径）有正反向测试。
@@ -259,6 +259,7 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 - 完整需求/方案仍须单独确认；lightweight 是 start bootstrap 例外，full/custom 在拆分决定后确认。
 - 所有用户选择能力保留为 typed Ask/available action，经唯一 `submit` 入口落账。
 - 用户可自由组合产品审、开发前技术审、初始开发、QA、质量门审查和业务返修六项主要职责，保持所选职责原有相对顺序与并行关系。QA 按设计、独立审查、执行整条链运行；黑盒、白盒在线路阶段各按整组选取，具体模式仅由原 SelectedGates 持有，关闭 QA 职责也关闭 merge QA。启动入口从同源定义目录展示并绑定明确用户选择，state 只保存这一份主流程选择，恢复和节点继续均不改变它；关闭职责不暗跑、不伪造 PASS。初始开发与业务返修分别选择，关闭返修仍保留真实失败与义务。质量门审查独立控制普通门、固定合并门与返修成员门，关闭时不建立门目标、不补写门 PASS；child 继承同一选择，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
+- 运行中的临时执行选择从主流程目录派生，黑盒 QA 与白盒 QA 各自可选平台、模型和推理强度，同组设计、独立审查与执行共用该组配置；其余主要职责分别选择，辅助任务及合并 QA 不新增公开选择。流程开关与顺序不变。选择沿原 Decisions 持久化，只更新该组未 claim 的调用；已 claim 调用及其恢复保留原 Attempt 绑定。child 继承创建时快照，既存 child 不随父后续选择改变；已保存的共享 QA 选择及其请求重放保持原语义。
 - 产品/技术审 P0/P1 修订做完整新鲜复审；P2/P3 逐项询问并修复，但不因级别本身复审。
 - 产品审和技术审各自最多自动完成三轮语义审查；只有有效 PASS/FAIL 计轮，revision 变化不清零。仍需第 4 轮时由 typed Ask 逐动作、逐轮授权；授权增加一个 fresh-review TaskKey，不增加该任务的 retry 次数，split child 不另开额度。
 - 只有用户主动需求变化使用影响集增量复审，且可发生在任意非终态时刻；不计也不重置 run 级 wave。

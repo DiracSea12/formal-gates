@@ -732,7 +732,7 @@ func RunNative(directory string, errout io.Writer, services ...ExecutionServices
 		writeNativeError(resolved, err, errout)
 		return 1
 	}
-	encoded, err := CanonicalJSON(result)
+	encoded, err := canonicalBody(result)
 	if err != nil {
 		writeNativeError(resolved, err, errout)
 		return 1

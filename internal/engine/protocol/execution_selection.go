@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
 )
@@ -17,7 +19,7 @@ type ExecutionChoice struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
-// ExecutionSelection is a user choice for one existing main-flow responsibility.
+// ExecutionSelection is a user choice for one selectable execution group.
 // Decisions owns future choices; Attempt bindings own each issued execution.
 type ExecutionSelection struct {
 	Node   string          `json:"node"`
@@ -28,11 +30,25 @@ type ExecutionSelectionDecision struct {
 	Digest string `json:"digest"`
 }
 
+func ExecutionNodeIDs() []string {
+	nodes := definition.ExecutionNodes()
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, node.ID)
+	}
+	return ids
+}
+
+func executionSelectionApplies(selected, node string) bool {
+	return selected == node || selected == "qa" && (node == "qa-blackbox" || node == "qa-whitebox")
+}
+
 func (s ExecutionSelection) CanonicalDigest() string { return digestOfCanonical(s) }
 
 func (s ExecutionSelection) validate() error {
-	if !slices.Contains(FlowNodeIDs(), s.Node) {
-		return validationError("execution selection requires an existing main-flow node")
+	// Saved shared-QA events retain their schema for exact replay.
+	if s.Node != "qa" && !slices.Contains(ExecutionNodeIDs(), s.Node) {
+		return validationError("execution selection requires an existing execution node")
 	}
 	adapter, err := host.Lookup(s.Choice.Provider)
 	if err != nil || adapter.ID != s.Choice.Provider {
@@ -58,12 +74,16 @@ func (s *State) EffectiveExecutionChoice(node string) ExecutionChoice {
 		for _, inherited := range s.SliceChild.InheritedExecution {
 			if inherited.Node == node {
 				choice = inherited.Choice
+				break
+			}
+			if executionSelectionApplies(inherited.Node, node) {
+				choice = inherited.Choice
 			}
 		}
 	}
 	var revision uint64
 	for _, decision := range s.Decisions {
-		if decision.Control == ControlSelectExecution && decision.Choice == "approve" && decision.Execution != nil && decision.Execution.Node == node && decision.Revision > revision {
+		if decision.Control == ControlSelectExecution && decision.Choice == "approve" && decision.Execution != nil && executionSelectionApplies(decision.Execution.Node, node) && decision.Revision > revision {
 			choice, revision = decision.Execution.Choice, decision.Revision
 		}
 	}
@@ -71,11 +91,12 @@ func (s *State) EffectiveExecutionChoice(node string) ExecutionChoice {
 }
 
 func (s *State) ExecutionSelections() []ExecutionSelection {
-	selections := make([]ExecutionSelection, 0, len(FlowNodeIDs()))
-	for _, node := range FlowNodeIDs() {
+	selections := make([]ExecutionSelection, 0, len(ExecutionNodeIDs()))
+	for _, node := range ExecutionNodeIDs() {
 		selections = append(selections, ExecutionSelection{Node: node, Choice: s.EffectiveExecutionChoice(node)})
 	}
-	return selections
+	// The shared QA snapshot carries merge QA's effective execution.
+	return append(selections, ExecutionSelection{Node: "qa", Choice: s.EffectiveExecutionChoice("qa")})
 }
 
 // ExecutionNode uses the main-flow catalogue. Auxiliary responsibilities retain
@@ -83,7 +104,16 @@ func (s *State) ExecutionSelections() []ExecutionSelection {
 func (s *State) ExecutionNode(task runtime.TaskKey, cd *compiler.CompiledDefinition) string {
 	for _, step := range cd.Steps {
 		if step.Header.ID == task.Step {
-			return flowStepNode(step)
+			node := flowStepNode(step)
+			if node == "qa" {
+				switch s.validationMode(task) {
+				case coverage.ReviewBlackbox:
+					return "qa-blackbox"
+				case coverage.ReviewWhitebox:
+					return "qa-whitebox"
+				}
+			}
+			return node
 		}
 	}
 	return ""
@@ -192,7 +222,7 @@ func (e *Engine) acceptExecutionSelection(s *State, ask PendingAsk, decision *De
 	}
 	var unclaimed []PendingAction
 	for id, pending := range s.PendingActions {
-		if s.ExecutionNode(pending.Task, e.cfg.Definition) != ask.Execution.Node {
+		if !executionSelectionApplies(ask.Execution.Node, s.ExecutionNode(pending.Task, e.cfg.Definition)) {
 			continue
 		}
 		if _, known := s.SpawnReceipts[id]; known {
