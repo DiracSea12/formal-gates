@@ -3,12 +3,10 @@ package harness
 // Cursor owns its chat store and model selection. The adapter preserves its
 // native stream and exit and observes those same originals after execution.
 import (
-	"bufio"
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
@@ -34,26 +32,15 @@ func cursorCaptureBinding() (map[string]any, error) {
 func cursorResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("cursorExecutable")
-	path, err := exec.LookPath(executable)
+	path, executableSource, err := nativeExecutablePath(executable)
 	if err != nil {
 		return &blockedError{message: "CURSOR_UNAVAILABLE: cursor-agent is not on PATH"}
 	}
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
-	}
 	home := config.NativeString("cursorHome")
 	explicitHome := home != ""
-	homeSource := "configured"
-	if !explicitHome {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		homeSource = "HOME"
-		if runtime.GOOS == "windows" {
-			homeSource = "USERPROFILE"
-		}
+	home, homeSource, err := nativeUserHome(home)
+	if err != nil {
+		return err
 	}
 	nativeHome := native["cursorConfigRoot"]
 	configSource := "cursorHome"
@@ -110,14 +97,10 @@ func cursorResolvePaths(native, sources map[string]string) error {
 		store = "default"
 		storeSource = "platform default"
 	}
-	for name, value := range map[string]string{"cursorExecutable": resolveNativePath(path), "cursorHome": resolveNativePath(home), "cursorConfigRoot": resolveNativePath(nativeHome), "cursorDataRoot": resolveNativePath(data), "cursorCompileCache": resolveNativePath(cache), "cursorCredentialStore": store} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{"cursorExecutable": executableSource, "cursorHome": homeSource, "cursorConfigRoot": configSource, "cursorDataRoot": dataSource, "cursorCompileCache": cacheSource, "cursorCredentialStore": storeSource} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	recordNativePaths(native, sources,
+		map[string]string{"cursorExecutable": resolveNativePath(path), "cursorHome": resolveNativePath(home), "cursorConfigRoot": resolveNativePath(nativeHome), "cursorDataRoot": resolveNativePath(data), "cursorCompileCache": resolveNativePath(cache), "cursorCredentialStore": store},
+		map[string]string{"cursorExecutable": executableSource, "cursorHome": homeSource, "cursorConfigRoot": configSource, "cursorDataRoot": dataSource, "cursorCompileCache": cacheSource, "cursorCredentialStore": storeSource},
+	)
 	return nil
 }
 
@@ -367,13 +350,9 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
-	binding := objectOrEmpty(getOf(request, "binding"))
-	if len(binding) == 0 {
-		var err error
-		binding, err = cursorCaptureBinding()
-		if err != nil {
-			return nil, err
-		}
+	binding, err := nativeExecutionBinding(request, cursorCaptureBinding)
+	if err != nil {
+		return nil, err
 	}
 	launch := objectOrEmpty(getOf(binding, "launch"))
 	executable, _ := getOf(launch, "executable").(string)
@@ -386,18 +365,12 @@ func cursorExecute(request any, directory string, probe bool, services ...Execut
 	if script, _ := launch["script"].(string); script != "" && getOf(launch, "node") == nil {
 		prefix = append(prefix, script)
 	}
-	environment := map[string]string{}
-	for key, value := range objectOrEmpty(getOf(binding, "environment")) {
-		environment[key] = textOf(value)
-	}
+	environment := nativeBindingEnvironment(binding)
 	workspace := resolveNativePath(textOf(getOf(request, "workspace")))
 	command := func(args ...string) *exec.Cmd {
 		cmd := exec.Command(prefix[0], append(append([]string{}, prefix[1:]...), args...)...)
 		cmd.Dir = workspace
-		cmd.Env = os.Environ()
-		for key, value := range environment {
-			cmd.Env = append(cmd.Env, key+"="+value)
-		}
+		cmd.Env = nativeChildEnvironment(environment)
 		return cmd
 	}
 	if probe {
@@ -649,53 +622,38 @@ func cursorObserve(directory string) (map[string]any, error) {
 	if !valuesEqual(getOf(getOf(source, "process"), "exit_code"), 0) || !valuesEqual(getOf(getOf(source, "process"), "error"), "") {
 		return nil, &blockedError{message: "CURSOR_PROCESS: native process did not exit successfully"}
 	}
-	file, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	reader := bufio.NewReaderSize(file, 64*1024)
 	initialized := false
 	var terminal map[string]any
-	for {
-		line, readErr := readNativeLine(reader)
-		if line != "" || readErr == nil {
-			value, err := decodeNativeJSON([]byte(line))
-			if err != nil {
-				return nil, err
-			}
-			event, ok := value.(map[string]any)
-			if !ok {
-				return nil, &blockedError{message: "CURSOR_NATIVE: native message is not an object"}
-			}
-			// Hook notifications carry their own conversation/subagent IDs. Only the
-			// stream's native session_id can identify a root init or terminal result.
-			if session, _ := event["session_id"].(string); session != "" && session != identity {
-				return nil, &blockedError{message: "CURSOR_BINDING: mixed native session identities"}
-			}
-			if terminal != nil {
-				return nil, &blockedError{message: "CURSOR_RESULT: native message after terminal result"}
-			}
-			if valuesEqual(event["type"], "system") && valuesEqual(event["subtype"], "init") {
-				if initialized || !valuesEqual(event["session_id"], identity) || resolveNativePath(textOf(event["cwd"])) != workspace || !valuesEqual(event["model"], getOf(getOf(getOf(source, "native_selection"), "model"), "displayName")) {
-					return nil, &blockedError{message: "CURSOR_BINDING: native init does not match source"}
-				}
-				initialized = true
-			}
-			if valuesEqual(event["type"], "result") {
-				requestID, _ := event["request_id"].(string)
-				if !initialized || !valuesEqual(event["session_id"], identity) || !valuesEqual(event["subtype"], "success") || !valuesEqual(event["is_error"], false) || requestID == "" {
-					return nil, &blockedError{message: "CURSOR_RESULT: native result failed or lacks its request identity"}
-				}
-				terminal = event
-			}
+	err = forEachNativeEvent(directory, func(value any) error {
+		event, ok := value.(map[string]any)
+		if !ok {
+			return &blockedError{message: "CURSOR_NATIVE: native message is not an object"}
 		}
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				return nil, readErr
-			}
-			break
+		// Hook notifications carry their own conversation/subagent IDs. Only the
+		// stream's native session_id can identify a root init or terminal result.
+		if session, _ := event["session_id"].(string); session != "" && session != identity {
+			return &blockedError{message: "CURSOR_BINDING: mixed native session identities"}
 		}
+		if terminal != nil {
+			return &blockedError{message: "CURSOR_RESULT: native message after terminal result"}
+		}
+		if valuesEqual(event["type"], "system") && valuesEqual(event["subtype"], "init") {
+			if initialized || !valuesEqual(event["session_id"], identity) || resolveNativePath(textOf(event["cwd"])) != workspace || !valuesEqual(event["model"], getOf(getOf(getOf(source, "native_selection"), "model"), "displayName")) {
+				return &blockedError{message: "CURSOR_BINDING: native init does not match source"}
+			}
+			initialized = true
+		}
+		if valuesEqual(event["type"], "result") {
+			requestID, _ := event["request_id"].(string)
+			if !initialized || !valuesEqual(event["session_id"], identity) || !valuesEqual(event["subtype"], "success") || !valuesEqual(event["is_error"], false) || requestID == "" {
+				return &blockedError{message: "CURSOR_RESULT: native result failed or lacks its request identity"}
+			}
+			terminal = event
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if terminal == nil {
 		return nil, &blockedError{message: "CURSOR_RESULT: native terminal result is missing"}

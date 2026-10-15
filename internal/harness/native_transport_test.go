@@ -448,6 +448,32 @@ func TestForEachSessionEvent(t *testing.T) {
 	}
 }
 
+func TestNativeEventStreamPreservesProtocolFrames(t *testing.T) {
+	directory := t.TempDir()
+	long := strings.Repeat("x", 200_000)
+	body := "{\"session_id\":\"stream\",\"n\":9007199254740993}\r\n" +
+		"{\"id\":4,\"result\":{\"threadId\":\"rpc\"}}\r" +
+		"{\"sessionId\":\"acp\"}\n\"" + long + "\"\nnull"
+	if err := os.WriteFile(filepath.Join(directory, "native-events.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var seen []any
+	if err := forEachNativeEvent(directory, func(value any) error {
+		seen = append(seen, value)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{
+		map[string]any{"session_id": "stream", "n": json.Number("9007199254740993")},
+		map[string]any{"id": json.Number("4"), "result": map[string]any{"threadId": "rpc"}},
+		map[string]any{"sessionId": "acp"}, long, nil,
+	}
+	if !valuesEqual(seen, want) {
+		t.Fatal("event order, JSON values or native protocol fields changed")
+	}
+}
+
 // TestEvidenceSourceShape pins the receipt: provider, identity, the caller's
 // extra keys, then proofs for the original evidence files; usage_evidence is null when
 // empty.

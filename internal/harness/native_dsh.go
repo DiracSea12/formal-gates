@@ -13,7 +13,6 @@ import (
 	"formal-gates/internal/settings"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -423,28 +422,19 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
 		return nil, mkdirErr
 	}
-	// A binding with entries is used as captured; an absent or empty one means
-	// nothing was captured yet and the provider is bound now.
-	binding := objectOrEmpty(getOf(request, "binding"))
-	var executable string
-	if len(binding) > 0 {
-		launch, entryErr := mustEntry(binding, "launch")
-		if entryErr != nil {
-			return nil, entryErr
-		}
-		executableValue, entryErr := mustEntry(launch, "executable")
-		if entryErr != nil {
-			return nil, entryErr
-		}
-		executable = textOf(executableValue)
-	} else {
-		captured, captureErr := dshCaptureBinding()
-		if captureErr != nil {
-			return nil, captureErr
-		}
-		binding = captured
-		executable = textOf(getOf(getOf(binding, "launch"), "executable"))
+	binding, err := nativeExecutionBinding(request, dshCaptureBinding)
+	if err != nil {
+		return nil, err
 	}
+	launch, entryErr := mustEntry(binding, "launch")
+	if entryErr != nil {
+		return nil, entryErr
+	}
+	executableValue, entryErr := mustEntry(launch, "executable")
+	if entryErr != nil {
+		return nil, entryErr
+	}
+	executable := textOf(executableValue)
 	workspaceValue, entryErr := mustEntry(request, "workspace")
 	if entryErr != nil {
 		return nil, entryErr
@@ -462,10 +452,7 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	if err != nil {
 		return nil, err
 	}
-	environment := map[string]string{}
-	for key, value := range objectOrEmpty(binding["environment"]) {
-		environment[key] = textOf(value)
-	}
+	environment := nativeBindingEnvironment(binding)
 	client, err := newDSHClient([]string{executable, "--profile", "acp", "--patch", patch}, workspace, directory, environment)
 	if err != nil {
 		return nil, err
@@ -629,23 +616,15 @@ func dshCaptureBinding() (map[string]any, error) {
 
 func dshResolvePaths(native, sources map[string]string) error {
 	executable := settings.Values{Native: native}.NativeString("dshExecutable")
-	path, err := exec.LookPath(executable)
+	path, executableSource, err := nativeExecutablePath(executable)
 	if err != nil {
 		return &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
 	}
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
-	}
-	home, err := os.UserHomeDir()
+	home, homeSource, err := nativeUserHome("")
 	if err != nil {
 		return err
 	}
 	home = resolveNativePath(home)
-	homeSource := "HOME"
-	if runtime.GOOS == "windows" {
-		homeSource = "USERPROFILE"
-	}
 	nativeHome := native["dshConfigRoot"]
 	rootSource := "DSH_HOME"
 	if nativeHome == "" {
@@ -660,14 +639,10 @@ func dshResolvePaths(native, sources map[string]string) error {
 			nativeHome = filepath.Join(home, nativeHome[2:])
 		}
 	}
-	for name, value := range map[string]string{"dshExecutable": resolveNativePath(path), "dshHome": home, "dshConfigRoot": resolveNativePath(nativeHome)} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{"dshExecutable": executableSource, "dshHome": homeSource, "dshConfigRoot": rootSource} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	recordNativePaths(native, sources,
+		map[string]string{"dshExecutable": resolveNativePath(path), "dshHome": home, "dshConfigRoot": resolveNativePath(nativeHome)},
+		map[string]string{"dshExecutable": executableSource, "dshHome": homeSource, "dshConfigRoot": rootSource},
+	)
 	return nil
 }
 

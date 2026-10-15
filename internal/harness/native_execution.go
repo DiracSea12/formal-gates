@@ -8,6 +8,23 @@ import (
 	"path/filepath"
 )
 
+// nativeExecutionBinding uses a captured binding with entries as issued.
+func nativeExecutionBinding(request any, capture func() (map[string]any, error)) (map[string]any, error) {
+	binding := objectOrEmpty(getOf(request, "binding"))
+	if len(binding) == 0 {
+		return capture()
+	}
+	return binding, nil
+}
+
+func nativeBindingEnvironment(binding any) map[string]string {
+	environment := map[string]string{}
+	for key, value := range objectOrEmpty(getOf(binding, "environment")) {
+		environment[key] = textOf(value)
+	}
+	return environment
+}
+
 // StopNativeJob uses the original supervisor observation/cancellation path.
 func StopNativeJob(directory string) error {
 	request, err := readJSONFile(filepath.Join(directory, "request.json"))

@@ -287,6 +287,38 @@ func isIntegerLiteral(v any) bool {
 
 // --- paths ---------------------------------------------------------------------
 
+func nativeExecutablePath(executable string) (string, string, error) {
+	path, err := exec.LookPath(executable)
+	source := "PATH"
+	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
+		source = "configured"
+	}
+	return path, source, err
+}
+
+func nativeUserHome(home string) (string, string, error) {
+	if home != "" {
+		return home, "configured", nil
+	}
+	home, err := os.UserHomeDir()
+	source := "HOME"
+	if runtime.GOOS == "windows" {
+		source = "USERPROFILE"
+	}
+	return home, source, err
+}
+
+func recordNativePaths(native, sources, paths, origins map[string]string) {
+	for name, value := range paths {
+		native[name] = value
+	}
+	for name, source := range origins {
+		if sources[name] == "" || sources[name] == "default" {
+			sources[name] = source
+		}
+	}
+}
+
 // resolveNativePath resolves an absolute, cleaned path and its existing symlinks.
 // Missing trailing components retain the resolved nearest existing prefix.
 func resolveNativePath(path string) string {
@@ -430,6 +462,22 @@ func verifyNativeSource(directory string, source any, provider string) error {
 // Only one decoded line is alive at a time: native-events.jsonl reaches tens
 // of megabytes on a long turn, and the whole turn is never held in memory.
 func forEachSessionEvent(directory string, identity any, handle func(record map[string]any) error) error {
+	return forEachNativeLine(directory, func(path, line string) error {
+		return handleSessionLine(path, line, identity, handle)
+	})
+}
+
+func forEachNativeEvent(directory string, handle func(any) error) error {
+	return forEachNativeLine(directory, func(_, line string) error {
+		value, err := decodeNativeJSON([]byte(line))
+		if err != nil {
+			return err
+		}
+		return handle(value)
+	})
+}
+
+func forEachNativeLine(directory string, handle func(path, line string) error) error {
 	path := filepath.Join(directory, "native-events.jsonl")
 	file, err := os.Open(path)
 	if err != nil {
@@ -443,7 +491,7 @@ func forEachSessionEvent(directory string, identity any, handle func(record map[
 		// stripping (an empty line is a non-JSON failure); the empty read at
 		// clean EOF is not a line at all.
 		if line != "" || readErr == nil {
-			if err := handleSessionLine(path, line, identity, handle); err != nil {
+			if err := handle(path, line); err != nil {
 				return err
 			}
 		}

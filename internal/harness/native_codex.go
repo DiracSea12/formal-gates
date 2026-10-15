@@ -5,7 +5,6 @@ package harness
 // evidence on live completion and recovery. Recovery never starts a turn.
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -16,10 +15,8 @@ import (
 	"formal-gates/internal/settings"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -152,26 +149,15 @@ func codexCaptureBinding() (map[string]any, error) {
 func codexResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("codexExecutable")
-	path, err := exec.LookPath(executable)
+	path, executableSource, err := nativeExecutablePath(executable)
 	if err != nil {
 		return &blockedError{message: "CODEX_UNAVAILABLE: codex is not on PATH"}
 	}
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
-	}
 	home := config.NativeString("codexHome")
 	explicitHome := home != ""
-	homeSource := "configured"
-	if !explicitHome {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		homeSource = "HOME"
-		if runtime.GOOS == "windows" {
-			homeSource = "USERPROFILE"
-		}
+	home, homeSource, err := nativeUserHome(home)
+	if err != nil {
+		return err
 	}
 	home = resolveNativePath(home)
 	nativeHome := native["codexConfigRoot"]
@@ -187,14 +173,10 @@ func codexResolvePaths(native, sources map[string]string) error {
 			nativeHome = filepath.Join(home, ".codex")
 		}
 	}
-	for name, value := range map[string]string{"codexExecutable": resolveNativePath(path), "codexHome": home, "codexConfigRoot": resolveNativePath(nativeHome)} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{"codexExecutable": executableSource, "codexHome": homeSource, "codexConfigRoot": rootSource} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	recordNativePaths(native, sources,
+		map[string]string{"codexExecutable": resolveNativePath(path), "codexHome": home, "codexConfigRoot": resolveNativePath(nativeHome)},
+		map[string]string{"codexExecutable": executableSource, "codexHome": homeSource, "codexConfigRoot": rootSource},
+	)
 	return nil
 }
 
@@ -420,13 +402,9 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
-	binding := objectOrEmpty(getOf(request, "binding"))
-	if len(binding) == 0 {
-		var err error
-		binding, err = codexCaptureBinding()
-		if err != nil {
-			return nil, err
-		}
+	binding, err := nativeExecutionBinding(request, codexCaptureBinding)
+	if err != nil {
+		return nil, err
 	}
 	if err := codexValidateBinding(binding); err != nil {
 		return nil, err
@@ -435,10 +413,7 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 	if executable == "" {
 		return nil, &bindingError{message: "CODEX_BINDING: missing executable"}
 	}
-	environment := map[string]string{}
-	for key, value := range objectOrEmpty(binding["environment"]) {
-		environment[key] = textOf(value)
-	}
+	environment := nativeBindingEnvironment(binding)
 	workspace, _ := getOf(request, "workspace").(string)
 	events, err := os.OpenFile(filepath.Join(directory, "native-events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -767,42 +742,27 @@ func codexObserve(directory string, services ...ExecutionServices) (map[string]a
 		return nil, &blockedError{message: "CODEX_BINDING: recorded selection differs from native provenance"}
 	}
 	configured, acknowledged := false, false
-	file, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
+	var terminal, usage any
+	err = forEachNativeEvent(directory, func(frame any) error {
+		result := getOf(frame, "result")
+		configured = configured || valuesEqual(result, getOf(source, "configuration"))
+		acknowledged = acknowledged || valuesEqual(getOf(result, "turn"), getOf(source, "turn_ack"))
+		p := getOf(frame, "params")
+		method := getOf(frame, "method")
+		if valuesEqual(getOf(p, "threadId"), thread) {
+			if valuesEqual(method, "turn/completed") && valuesEqual(getOf(getOf(p, "turn"), "id"), turn) {
+				terminal = getOf(p, "turn")
+			}
+			if valuesEqual(getOf(p, "turnId"), turn) {
+				if valuesEqual(method, "thread/tokenUsage/updated") {
+					usage = getOf(p, "tokenUsage")
+				}
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer file.Close()
-	reader := bufio.NewReaderSize(file, 64*1024)
-	var terminal, usage any
-	for {
-		line, readErr := readNativeLine(reader)
-		if line != "" || readErr == nil {
-			frame, err := decodeNativeJSON([]byte(line))
-			if err != nil {
-				return nil, err
-			}
-			result := getOf(frame, "result")
-			configured = configured || valuesEqual(result, getOf(source, "configuration"))
-			acknowledged = acknowledged || valuesEqual(getOf(result, "turn"), getOf(source, "turn_ack"))
-			p := getOf(frame, "params")
-			method := getOf(frame, "method")
-			if valuesEqual(getOf(p, "threadId"), thread) {
-				if valuesEqual(method, "turn/completed") && valuesEqual(getOf(getOf(p, "turn"), "id"), turn) {
-					terminal = getOf(p, "turn")
-				}
-				if valuesEqual(getOf(p, "turnId"), turn) {
-					if valuesEqual(method, "thread/tokenUsage/updated") {
-						usage = getOf(p, "tokenUsage")
-					}
-				}
-			}
-		}
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				return nil, readErr
-			}
-			break
-		}
 	}
 	if !configured || !acknowledged {
 		return nil, &blockedError{message: "CODEX_BINDING: original native configuration/turn response is missing"}

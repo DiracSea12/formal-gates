@@ -253,13 +253,9 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 	}
 	config := settings.Values{Native: native}
 	executable := config.NativeString("zcodeExecutable")
-	node, err := exec.LookPath(executable)
+	node, executableSource, err := nativeExecutablePath(executable)
 	if err != nil {
 		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
-	}
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
 	}
 	script, hasScript := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT")
 	scriptSource := "FORMAL_GATES_ZCODE_SCRIPT"
@@ -274,17 +270,10 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
 	}
 	home := config.NativeString("zcodeHome")
-	homeSource := "configured"
 	explicitHome := home != ""
-	if !explicitHome {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		homeSource = "HOME"
-		if runtime.GOOS == "windows" {
-			homeSource = "USERPROFILE"
-		}
+	home, homeSource, err := nativeUserHome(home)
+	if err != nil {
+		return err
 	}
 	home = resolveNativePath(home)
 	data := home
@@ -319,22 +308,15 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 	if credentials == "" {
 		credentials, credentialSource = filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile), "zcodeDataBaseDir"
 	}
-	for name, value := range map[string]string{
+	recordNativePaths(native, sources, map[string]string{
 		"zcodeExecutable": resolveNativePath(node), "zcodeScript": script, "zcodeHome": home,
 		"zcodeDataBaseDir": data, "zcodeBuiltinCatalogue": catalogue,
 		"zcodePersonalConfig": personal, "zcodeCredentialStore": resolveNativePath(credentials), "zcodeCataloguePinned": pinned,
-	} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{
+	}, map[string]string{
 		"zcodeExecutable": executableSource, "zcodeScript": scriptSource, "zcodeHome": homeSource,
 		"zcodeDataBaseDir": dataSource, "zcodeBuiltinCatalogue": catalogueSource,
 		"zcodePersonalConfig": personalSource, "zcodeCredentialStore": credentialSource, "zcodeCataloguePinned": "zcodeScript",
-	} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	})
 	return nil
 }
 
@@ -1568,14 +1550,9 @@ func zcodeParseRequest(request any) (zcodeRequest, error) {
 	}
 	var req zcodeRequest
 	req.workspace = resolveNativePath(textOf(workspaceValue))
-	// A binding with entries is used as captured; an absent or empty one means
-	// nothing was captured yet and the provider is bound now.
-	req.binding = objectOrEmpty(getOf(request, "binding"))
-	if len(req.binding) == 0 {
-		req.binding, err = zcodeCaptureBinding()
-		if err != nil {
-			return zcodeRequest{}, err
-		}
+	req.binding, err = nativeExecutionBinding(request, zcodeCaptureBinding)
+	if err != nil {
+		return zcodeRequest{}, err
 	}
 	req.previous, _ = getOrOf(request, "identity", "").(string)
 	modelValue, _ := getOrOf(request, "model", "").(string)

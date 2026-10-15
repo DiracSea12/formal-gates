@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -25,26 +24,15 @@ func claudeCaptureBinding() (map[string]any, error) {
 func claudeResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("claudeExecutable")
-	path, err := exec.LookPath(executable)
+	path, executableSource, err := nativeExecutablePath(executable)
 	if err != nil {
 		return &blockedError{message: "CLAUDE_UNAVAILABLE: claude is not on PATH"}
 	}
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
-	}
 	home := config.NativeString("claudeHome")
 	explicitHome := home != ""
-	homeSource := "configured"
-	if !explicitHome {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		homeSource = "HOME"
-		if runtime.GOOS == "windows" {
-			homeSource = "USERPROFILE"
-		}
+	home, homeSource, err := nativeUserHome(home)
+	if err != nil {
+		return err
 	}
 	home = resolveNativePath(home)
 	nativeHome := native["claudeConfigRoot"]
@@ -60,14 +48,10 @@ func claudeResolvePaths(native, sources map[string]string) error {
 			nativeHome = filepath.Join(home, ".claude")
 		}
 	}
-	for name, value := range map[string]string{"claudeExecutable": resolveNativePath(path), "claudeHome": home, "claudeConfigRoot": resolveNativePath(nativeHome)} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{"claudeExecutable": executableSource, "claudeHome": homeSource, "claudeConfigRoot": rootSource} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	recordNativePaths(native, sources,
+		map[string]string{"claudeExecutable": resolveNativePath(path), "claudeHome": home, "claudeConfigRoot": resolveNativePath(nativeHome)},
+		map[string]string{"claudeExecutable": executableSource, "claudeHome": homeSource, "claudeConfigRoot": rootSource},
+	)
 	return nil
 }
 

@@ -108,11 +108,7 @@ func workbuddyCaptureBinding() (map[string]any, error) {
 func workbuddyResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("workbuddyExecutable")
-	path, err := exec.LookPath(executable)
-	executableSource := "PATH"
-	if filepath.IsAbs(executable) || strings.ContainsAny(executable, `/\`) {
-		executableSource = "configured"
-	}
+	path, executableSource, err := nativeExecutablePath(executable)
 	if err != nil && executable == "codebuddy" && runtime.GOOS == "darwin" {
 		path = "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
 		_, err = os.Stat(path)
@@ -122,17 +118,10 @@ func workbuddyResolvePaths(native, sources map[string]string) error {
 		return &blockedError{message: "WORKBUDDY_UNAVAILABLE: configured native CLI is unavailable"}
 	}
 	home := config.NativeString("workbuddyHome")
-	homeSource := "configured"
 	explicitHome := home != ""
-	if !explicitHome {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		homeSource = "HOME"
-		if runtime.GOOS == "windows" {
-			homeSource = "USERPROFILE"
-		}
+	home, homeSource, err := nativeUserHome(home)
+	if err != nil {
+		return err
 	}
 	home = resolveNativePath(home)
 	nativeHome := native["workbuddyConfigRoot"]
@@ -159,20 +148,13 @@ func workbuddyResolvePaths(native, sources map[string]string) error {
 		product = filepath.Join(nativeHome, "cache", "acc-product-config-v3.json")
 		productSource = "workbuddyConfigRoot"
 	}
-	for name, value := range map[string]string{
+	recordNativePaths(native, sources, map[string]string{
 		"workbuddyExecutable": resolveNativePath(path), "workbuddyHome": home,
 		"workbuddyConfigRoot": nativeHome, "workbuddyProductConfig": resolveNativePath(product),
-	} {
-		native[name] = value
-	}
-	for name, source := range map[string]string{
+	}, map[string]string{
 		"workbuddyExecutable": executableSource, "workbuddyHome": homeSource,
 		"workbuddyConfigRoot": rootSource, "workbuddyProductConfig": productSource,
-	} {
-		if sources[name] == "" || sources[name] == "default" {
-			sources[name] = source
-		}
-	}
+	})
 	return nil
 }
 
@@ -209,10 +191,7 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 func workbuddyProbe(executable, workspace string, environment map[string]string) (map[string]any, error) {
 	cmd := exec.Command(executable, "--help")
 	cmd.Dir = workspace
-	cmd.Env = os.Environ()
-	for key, value := range environment {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
+	cmd.Env = nativeChildEnvironment(environment)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err

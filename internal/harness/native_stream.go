@@ -1,10 +1,7 @@
 package harness
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,22 +31,15 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, err
 	}
-	binding := objectOrEmpty(getOf(request, "binding"))
-	if len(binding) == 0 {
-		var err error
-		binding, err = adapter.capture()
-		if err != nil {
-			return nil, err
-		}
+	binding, err := nativeExecutionBinding(request, adapter.capture)
+	if err != nil {
+		return nil, err
 	}
 	executable, _ := getOf(getOf(binding, "launch"), "executable").(string)
 	if executable == "" {
 		return nil, &bindingError{message: adapter.prefix + "_BINDING: missing executable"}
 	}
-	environment := map[string]string{}
-	for key, value := range objectOrEmpty(getOf(binding, "environment")) {
-		environment[key] = textOf(value)
-	}
+	environment := nativeBindingEnvironment(binding)
 	workspace, _ := getOf(request, "workspace").(string)
 	if probe {
 		if getOf(request, "selection_options") == true && adapter.selectionOptions != nil {
@@ -218,68 +208,53 @@ func streamObserve(adapter streamAdapter, directory string) (map[string]any, err
 	if !valuesEqual(getOf(process, "exit_code"), 0) || !valuesEqual(getOf(process, "error"), "") {
 		return nil, &blockedError{message: adapter.prefix + "_PROCESS: native process did not exit successfully: " + textOf(process)}
 	}
-	file, err := os.Open(filepath.Join(directory, "native-events.jsonl"))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	reader := bufio.NewReaderSize(file, 64*1024)
 	var terminal map[string]any
 	var selection map[string]any
 	var initialization map[string]any
 	assistantIDs := []string{}
-	for {
-		line, readErr := readNativeLine(reader)
-		if line != "" || readErr == nil {
-			value, err := decodeNativeJSON([]byte(line))
-			if err != nil {
-				return nil, err
+	err = forEachNativeEvent(directory, func(value any) error {
+		event, ok := value.(map[string]any)
+		if !ok {
+			return &blockedError{message: adapter.prefix + "_NATIVE: native message is not an object"}
+		}
+		if !streamSubagent(event) {
+			if terminal != nil {
+				if adapter.repeatedInit != nil && adapter.repeatedInit(initialization, event) {
+					return nil
+				}
+				return &blockedError{message: adapter.prefix + "_RESULT: root message after terminal result"}
 			}
-			event, ok := value.(map[string]any)
-			if !ok {
-				return nil, &blockedError{message: adapter.prefix + "_NATIVE: native message is not an object"}
+			if session, _ := event["session_id"].(string); session != "" && session != identity {
+				return &blockedError{message: adapter.prefix + "_BINDING: mixed native session identities"}
 			}
-			if !streamSubagent(event) {
-				if terminal != nil {
-					if adapter.repeatedInit != nil && adapter.repeatedInit(initialization, event) {
-						continue
-					}
-					return nil, &blockedError{message: adapter.prefix + "_RESULT: root message after terminal result"}
+			if valuesEqual(event["type"], "system") && valuesEqual(event["subtype"], "init") {
+				if !valuesEqual(event["session_id"], identity) || !valuesEqual(resolveNativePath(textOf(event["cwd"])), resolveNativePath(textOf(getOrOf(source, "nativeWorkspace", getOf(source, "workspace"))))) {
+					return &blockedError{message: adapter.prefix + "_BINDING: native init does not match the session workspace"}
 				}
-				if session, _ := event["session_id"].(string); session != "" && session != identity {
-					return nil, &blockedError{message: adapter.prefix + "_BINDING: mixed native session identities"}
+				selection = adapter.selection(event)
+				if initialization == nil {
+					initialization = event
 				}
-				if valuesEqual(event["type"], "system") && valuesEqual(event["subtype"], "init") {
-					if !valuesEqual(event["session_id"], identity) || !valuesEqual(resolveNativePath(textOf(event["cwd"])), resolveNativePath(textOf(getOrOf(source, "nativeWorkspace", getOf(source, "workspace"))))) {
-						return nil, &blockedError{message: adapter.prefix + "_BINDING: native init does not match the session workspace"}
-					}
-					selection = adapter.selection(event)
-					if initialization == nil {
-						initialization = event
+			}
+			if adapter.usageTranscript != nil && valuesEqual(event["type"], "assistant") {
+				assistantIDs = append(assistantIDs, textOf(event["uuid"]))
+			}
+			if valuesEqual(event["type"], "result") {
+				if !valuesEqual(event["session_id"], identity) || !valuesEqual(event["is_error"], false) {
+					return &blockedError{message: adapter.prefix + "_RESULT: native result failed: " + textOf(event)}
+				}
+				if adapter.checkResult != nil {
+					if err := adapter.checkResult(event); err != nil {
+						return err
 					}
 				}
-				if adapter.usageTranscript != nil && valuesEqual(event["type"], "assistant") {
-					assistantIDs = append(assistantIDs, textOf(event["uuid"]))
-				}
-				if valuesEqual(event["type"], "result") {
-					if !valuesEqual(event["session_id"], identity) || !valuesEqual(event["is_error"], false) {
-						return nil, &blockedError{message: adapter.prefix + "_RESULT: native result failed: " + textOf(event)}
-					}
-					if adapter.checkResult != nil {
-						if err := adapter.checkResult(event); err != nil {
-							return nil, err
-						}
-					}
-					terminal = event
-				}
+				terminal = event
 			}
 		}
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				return nil, readErr
-			}
-			break
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if terminal == nil {
 		return nil, &blockedError{message: adapter.prefix + "_RESULT: native terminal result is missing"}
