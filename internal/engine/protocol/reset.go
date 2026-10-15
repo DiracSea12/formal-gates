@@ -211,7 +211,14 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		if exists {
 			continue
 		}
-		intent, err := e.agentHostIntent(s, HostActionTerminateAgent, id, receipt.agentIdentity(), reason+request, "", revision)
+		terminationReason := reason + request
+		if abort, accepted := s.AbortDecision(); accepted {
+			terminationReason = "User aborted the run"
+			if abort.Validation != nil {
+				terminationReason = abort.Validation.Reason
+			}
+		}
+		intent, err := e.agentHostIntent(s, HostActionTerminateAgent, id, receipt.agentIdentity(), terminationReason, "", revision)
 		if err != nil {
 			return changed, err
 		}

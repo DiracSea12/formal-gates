@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -87,51 +86,11 @@ func (e *Engine) advanceAbort(s *State, nextRevision uint64) (bool, error) {
 	} else if made {
 		return true, nil
 	}
-	actions := map[string]bool{}
-	for id := range s.PendingActions {
-		actions[id] = true
+	stopped, err := e.stopControlledWorkers(s, d.RequestID, "run aborted by ", nextRevision, true)
+	if err != nil {
+		return changed, err
 	}
-	for _, attempt := range s.EndedAttempts {
-		if attempt.AwaitingResult {
-			actions[attempt.ActionID] = true
-		}
-	}
-	ids := make([]string, 0, len(actions))
-	for id := range actions {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	for _, id := range ids {
-		receipt, known := s.SpawnReceipts[id]
-		if !known || receipt.Status == SpawnStatusUnknown {
-			continue
-		}
-		if receipt.Status == SpawnStatusFailed || s.hasLifecycleEvent(receipt.agentIdentity(), LifecycleStop) {
-			pending, retired := s.retireAction(id, "", "run aborted by "+d.RequestID)
-			delete(s.EndedAttempts, pending.Task)
-			changed = retired || changed
-			continue
-		}
-		exists := false
-		for _, intent := range s.PendingHostActions {
-			if intent.Terminate != nil && intent.Terminate.WorkerActionID == id {
-				exists = true
-			}
-		}
-		if exists {
-			continue
-		}
-		reason := "User aborted the run"
-		if d.Validation != nil {
-			reason = d.Validation.Reason
-		}
-		intent, err := e.agentHostIntent(s, HostActionTerminateAgent, id, receipt.agentIdentity(), reason, "", nextRevision)
-		if err != nil {
-			return changed, err
-		}
-		s.PendingHostActions[intent.ActionID] = intent
-		return true, nil
-	}
+	changed = stopped || changed
 	waiting := len(s.PendingActions) > 0 || len(s.PendingHostActions) > 0
 	for _, attempt := range s.EndedAttempts {
 		waiting = waiting || attempt.AwaitingResult

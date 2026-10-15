@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -332,6 +333,21 @@ func TestAbortWaitsForSignedEffectsAndPreservesTerminalEvidence(t *testing.T) {
 				if in.Handler == "engine.development.batch.v6" {
 					staged = protocol.Event{ID: d.eventID(), Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: id, Provider: DefaultProvider, Outcome: protocol.OutcomePass, PayloadDigest: "delivered-development", Validation: &protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Completion: commandCompletion(), Paths: []string{"app.go"}, Summary: "completed development"}}}}
 				}
+			}
+			if delivery == "result-first" {
+				// The workers have started; their engine receipts arrive after
+				// abort. Observation must expose those original execution facts.
+				engine, err := protocol.New(d.f.store, protocol.Config{NativeRoot: d.f.root, Definition: d.f.definition, Registry: definition.Registry(), Capacity: d.f.capacity, WorkerExecution: func(p protocol.PendingAction, a protocol.Attempt) (*protocol.SpawnReceiptPayload, error) {
+					input, issued := actions[p.ActionID]
+					if !issued || p.Task != input.Binding.Task || a.ID != p.AttemptID || a.Task != p.Task {
+						t.Fatalf("result-first execution differs from original worker: %+v %+v", p, a)
+					}
+					return &protocol.SpawnReceiptPayload{ActionID: p.ActionID, Provider: DefaultProvider, Correlation: p.ActionID, Status: protocol.SpawnStatusSpawned}, nil
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.f.engine = engine
 			}
 			req, err := protocol.NewRequestEvent(d.eventID(), protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Stop run"})
 			if err != nil {
