@@ -23,8 +23,8 @@ func TestCanarySubprocessSettlesPrivateDescendants(t *testing.T) {
 			pidfile := filepath.Join(root, "child.pid")
 			script := `sleep 30 &
 child=$!
-printf '%s\n' "$child" > "$1"
 trap 'kill "$child" 2>/dev/null; wait "$child"; exit 0' TERM
+printf '%s\n' "$child" > "$1"
 case "$2" in
 normal) kill "$child"; wait "$child"; exit 0;;
 inherited-pipe) exit 0;;
