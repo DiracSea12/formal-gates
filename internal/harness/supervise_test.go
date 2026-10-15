@@ -133,6 +133,7 @@ func waitForFile(t *testing.T, path string) {
 // TestSuperviseOwnerExists proves a second supervisor for the same job backs off
 // with exit 2, writes no receipt, no process.json, and never launches the child.
 func TestSuperviseOwnerExists(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	workDir := t.TempDir()
 	jobDir := t.TempDir()
@@ -169,6 +170,7 @@ func TestSuperviseOwnerExists(t *testing.T) {
 // streams map exactly the two keys, and that request_digest equals the canonical
 // digest of the request (reusing CanonicalDigest, no second hasher).
 func TestSuperviseReceiptShape(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	req := map[string]any{
 		"kind": "check", "argv": []string{bin, "--version"}, "stdin": "x",
@@ -217,6 +219,7 @@ func TestSuperviseReceiptShape(t *testing.T) {
 // field that legitimately differs is request_digest, which digests the whole
 // request including kind).
 func TestSuperviseIgnoresKind(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	build := func(kind string) (string, map[string]string) {
 		jobDir := t.TempDir()

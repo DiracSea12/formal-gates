@@ -18,6 +18,7 @@ import (
 )
 
 func TestSuperviseRecordsOperatingSystemCreationTime(t *testing.T) {
+	t.Parallel()
 	created, ok := processCreationTime(os.Getpid())
 	if !ok {
 		t.Fatal("cannot inspect current process creation time")
@@ -43,6 +44,7 @@ func TestSuperviseRecordsOperatingSystemCreationTime(t *testing.T) {
 // TestSuperviseCancel pins SIGTERM cancellation: the receipt carries exit_code
 // 130 and the exact cancellation error, and the child is stopped.
 func TestSuperviseCancel(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	jobDir := t.TempDir()
 	workDir := t.TempDir()
@@ -95,6 +97,7 @@ func TestSuperviseCancel(t *testing.T) {
 // 130 / "owned job was cancelled" every single time, never the child's own
 // signal death (-15) even though the group signal killed the child too.
 func TestSuperviseCancelGroup(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	const rounds = 20
 	for round := 0; round < rounds; round++ {
@@ -150,6 +153,7 @@ func TestSuperviseCancelGroup(t *testing.T) {
 }
 
 func TestSuperviseExitCodes(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	cases := []struct {
 		name string
@@ -182,6 +186,7 @@ func TestSuperviseExitCodes(t *testing.T) {
 }
 
 func TestSuperviseExplicit130IsNotCancellation(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	jobDir, _, env := newJob(t, bin, map[string]any{
 		"kind": "check", "argv": []string{"/bin/sh", "-c", "exit 130"}, "stdin": "",
@@ -197,6 +202,7 @@ func TestSuperviseExplicit130IsNotCancellation(t *testing.T) {
 }
 
 func TestSuperviseStreamBytes(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	cases := []struct {
 		name string
@@ -230,6 +236,7 @@ func TestSuperviseStreamBytes(t *testing.T) {
 }
 
 func TestSuperviseStdin(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	payloads := []string{"", "hello\nworld", "日本語\nmulti-byte", strings.Repeat("Z", 70000)}
 	for _, p := range payloads {
@@ -249,6 +256,7 @@ func TestSuperviseStdin(t *testing.T) {
 }
 
 func TestSuperviseEnvironmentMerge(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	script := []string{"/bin/sh", "-c", "printf '%s' \"$MYVAR\""}
 	// The approved purposes retain the same successful executable and merged environment facts.
@@ -314,6 +322,7 @@ func TestSuperviseEnvironmentMerge(t *testing.T) {
 }
 
 func TestSuperviseCwd(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	jobDir, workDir, env := newJob(t, bin, map[string]any{
 		"kind": "check", "argv": []string{"/bin/sh", "-c", "pwd"}, "stdin": "",
@@ -332,6 +341,7 @@ func TestSuperviseCwd(t *testing.T) {
 }
 
 func TestSuperviseSpawnErrors(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	work := t.TempDir()
 
@@ -389,6 +399,7 @@ func TestSuperviseSpawnErrors(t *testing.T) {
 // a bare argv[0] present only in the request's PATH must resolve against the
 // MERGED environment, not the parent process's PATH.
 func TestSuperviseBareArgv0ResolvesMergedPath(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	tools := t.TempDir()
 	script := filepath.Join(tools, "mytool")
@@ -415,6 +426,7 @@ func TestSuperviseBareArgv0ResolvesMergedPath(t *testing.T) {
 // TestSuperviseBareArgv0FallsBackToDefpath pins the missing-PATH fallback to
 // /bin:/usr/bin (os.defpath), so a bare name resolvable only there still runs.
 func TestSuperviseBareArgv0FallsBackToDefpath(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	env := baseEnv(bin)
 	delete(env, "PATH") // merged environment has no PATH at all

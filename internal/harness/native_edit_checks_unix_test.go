@@ -16,6 +16,7 @@ import (
 )
 
 func TestNativeEditCheckAllowsSiblingResultsAndControl(t *testing.T) {
+	t.Parallel()
 	f, _, scenario, _ := engineNativeFixture(t)
 	command := `printf started > "$FORMAL_GATES_WORKSPACE/.gates/tmp/started"; while test ! -e "$FORMAL_GATES_WORKSPACE/.gates/tmp/release"; do sleep 0.02; done; printf original-check`
 	stageNativeReviewsWithEdit(t, f, scenario, command, false, "left", "right")

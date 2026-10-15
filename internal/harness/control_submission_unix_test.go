@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -86,6 +85,7 @@ func splitControlWorkflow(t *testing.T) (*facade.Facade, *codexScenario, string)
 }
 
 func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
+	t.Parallel()
 	master, scenario, binary := splitControlWorkflow(t)
 	run, err := master.Show()
 	if err != nil {
@@ -131,7 +131,7 @@ func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
 		return all
 	}
 	invoke := func(input string, args ...string) ([]byte, error) {
-		command := exec.Command(binary, append([]string{"workflow"}, args...)...)
+		command := scenario.command(binary, append([]string{"workflow"}, args...)...)
 		command.Stdin = strings.NewReader(input)
 		return command.CombinedOutput()
 	}
@@ -210,7 +210,7 @@ func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
 	if !reflect.DeepEqual(before, files()) {
 		t.Fatal("candidate preparation wrote workflow state")
 	}
-	body, err := confirmInstalledFixtureControl(t, binary, scenario.workspace, scenario.runID, candidate)
+	body, err := confirmInstalledFixtureControl(t, scenario.command(binary, "workflow", "serve"), scenario.workspace, scenario.runID, candidate)
 	if err != nil {
 		t.Fatalf("original confirmation rejected: %v %s", err, body)
 	}
@@ -218,7 +218,7 @@ func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
 	if _, err := facade.Open(scenario.workspace, target.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if body, err := confirmInstalledFixtureControl(t, binary, scenario.workspace, scenario.runID, candidate); err != nil || !reflect.DeepEqual(accepted, files()) {
+	if body, err := confirmInstalledFixtureControl(t, scenario.command(binary, "workflow", "serve"), scenario.workspace, scenario.runID, candidate); err != nil || !reflect.DeepEqual(accepted, files()) {
 		t.Fatalf("reopened confirmation replay changed original state: %v %s", err, body)
 	}
 	remaining, err := master.PrepareCurrentControl(facade.ControlInput{Ask: len(current[0].PendingAsks) + 1, Choice: "approve"})
@@ -242,7 +242,7 @@ func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
 	}
 	_ = fixtureControlPosition(t, scenario.workspace, scenario.runID, remaining)
 	prior := files()
-	if body, err := confirmInstalledFixtureControl(t, binary, scenario.workspace, scenario.runID, remaining); err == nil || !strings.Contains(string(body), "freshness") || !reflect.DeepEqual(prior, files()) {
+	if body, err := confirmInstalledFixtureControl(t, scenario.command(binary, "workflow", "serve"), scenario.workspace, scenario.runID, remaining); err == nil || !strings.Contains(string(body), "freshness") || !reflect.DeepEqual(prior, files()) {
 		t.Fatalf("stale original candidate changed state: %v %s", err, body)
 	}
 	if turns := nativePeerTurns(t, scenario); turns != 0 {
@@ -251,6 +251,7 @@ func TestWorkflowAskSelectionBindsActualChild(t *testing.T) {
 }
 
 func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
+	t.Parallel()
 	master, scenario, binary := splitControlWorkflow(t)
 	run, err := master.Show()
 	if err != nil {
@@ -272,7 +273,7 @@ func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
 	}
 	invoke := func(t *testing.T, input string, args ...string) []byte {
 		t.Helper()
-		command := exec.Command(binary, append([]string{"workflow"}, args...)...)
+		command := scenario.command(binary, append([]string{"workflow"}, args...)...)
 		command.Stdin = bytes.NewBufferString(input)
 		body, err := command.CombinedOutput()
 		if err != nil {
@@ -305,7 +306,7 @@ func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
 				if err != nil || json.Unmarshal(body, &candidate) != nil || candidate.Root != scenario.workspace || candidate.Run.RunID != current.RunID {
 					t.Fatal("public preparation lost the original target", err)
 				}
-				if body, err := confirmInstalledFixtureControl(t, binary, scenario.workspace, scenario.runID, candidate); err != nil {
+				if body, err := confirmInstalledFixtureControl(t, scenario.command(binary, "workflow", "serve"), scenario.workspace, scenario.runID, candidate); err != nil {
 					t.Fatalf("original saved candidate: %v %s", err, body)
 				}
 				path := filepath.Join(scenario.workspace, facade.EngineNamespace, current.RunID, "state.json")
@@ -326,7 +327,7 @@ func TestSavedControlSubmissionTargetsParentAndChild(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if body, err := confirmInstalledFixtureControl(t, binary, scenario.workspace, scenario.runID, candidate); err != nil {
+				if body, err := confirmInstalledFixtureControl(t, scenario.command(binary, "workflow", "serve"), scenario.workspace, scenario.runID, candidate); err != nil {
 					t.Fatalf("original saved candidate: %v %s", err, body)
 				}
 				replayed, err := os.ReadFile(path)

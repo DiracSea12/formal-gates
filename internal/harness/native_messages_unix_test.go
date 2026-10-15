@@ -6,7 +6,6 @@ package harness
 // leaves the original payload and acknowledgement available to recovery.
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -57,8 +56,10 @@ func supplementaryServices(t *testing.T, directory string, identity string, rece
 }
 
 func TestNativeSupplementaryInputAcknowledgementPrecedesResult(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"dsh", "zcode", "zcode-unacknowledged"} {
 		t.Run(provider, func(t *testing.T) {
+			t.Parallel()
 			var request map[string]any
 			var directory, echo string
 			var execute func(any, string, bool, ...ExecutionServices) (map[string]any, error)
@@ -132,10 +133,11 @@ func TestNativeSupplementaryInputAcknowledgementPrecedesResult(t *testing.T) {
 }
 
 func TestCodexSupplementaryReceiptRecoversOriginalAcknowledgement(t *testing.T) {
+	t.Parallel()
 	f, ref, scenario, binary := engineNativeFixture(t, true)
 	scenario.peer.Mode = "bad_json"
 	scenario.save(t)
-	command := exec.Command(binary, "workflow", "drive", "--root", scenario.workspace, "--run-id", scenario.runID, "--machine")
+	command := scenario.command(binary, "workflow", "drive", "--root", scenario.workspace, "--run-id", scenario.runID, "--machine")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("original native failure: %v %s", err, output)
 	}

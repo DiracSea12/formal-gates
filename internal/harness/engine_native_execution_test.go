@@ -30,6 +30,7 @@ import (
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/requirement"
+	"formal-gates/internal/settings"
 	"formal-gates/internal/validate"
 )
 
@@ -101,10 +102,6 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("candidate build: %v %s", err, out)
 	}
-	t.Setenv("HOME", s.home)
-	t.Setenv("USERPROFILE", s.home)
-	t.Setenv("CODEX_HOME", s.config)
-	t.Setenv("PATH", filepath.Dir(s.home)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
 	if len(installed) > 0 && installed[0] {
 		candidate := t.TempDir()
@@ -136,7 +133,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 			t.Fatal(err)
 		}
 		binary = filepath.Join(s.home, ".local", "bin", "formal-gates")
-		options := validate.InstallOptions{Source: candidate, Host: "codex", Scope: "project", Project: project, BinaryTarget: binary, Force: true, SkipHooks: true}
+		options := validate.InstallOptions{Source: candidate, Host: "codex", Scope: "project", Project: project, BinaryTarget: binary, RegistryPath: filepath.Join(s.home, ".formal-gates", "registry.json"), Force: true, SkipHooks: true}
 		if _, err := validate.Install(options); err != nil {
 			t.Fatal(err)
 		}
@@ -158,14 +155,19 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	c := engineCanary{t: t, doc: []byte(document)}
 	var f *facade.Facade
 	if len(installed) > 0 && installed[0] {
-		started, startErr := confirmInstalledFixtureStart(t, exec.Command(binary, "workflow", "serve"), project, document)
+		started, startErr := confirmInstalledFixtureStart(t, s.command(binary, "workflow", "serve"), project, document)
 		if startErr != nil {
 			t.Fatalf("original installed start through the simulated MCP host: %v", startErr)
 		}
 		s.runID = started.RunID
 		f, err = facade.Open(project, s.runID)
 	} else {
-		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Capacity: 2})
+		effective, loadErr := settings.Load(project, s.home)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		effective.Values.Native = s.nativeSettings().Native
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +193,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		t.Fatal(err)
 	}
 	// Native capture resolves this real peer executable and its isolated config.
-	binding, err := NativeBinding("codex")
+	binding, err := NativeBinding("codex", s.nativeSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +230,7 @@ func nativePeerTurns(t *testing.T, s *codexScenario) int {
 }
 
 func TestEngineNativeRejectsChangedInputsBeforeTurn(t *testing.T) {
+	t.Parallel()
 	_, _, s, binary := engineNativeFixture(t)
 	statePath := filepath.Join(s.workspace, facade.EngineNamespace, s.runID, "state.json")
 	before, err := os.ReadFile(statePath)
@@ -262,7 +265,7 @@ func TestEngineNativeRejectsChangedInputsBeforeTurn(t *testing.T) {
 			if err := writeAtomicJSON(filepath.Join(s.directory, "native-request.json"), request); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(binary, "harness", "native", s.directory)
+			cmd := s.command(binary, "harness", "native", s.directory)
 			if out, err := cmd.CombinedOutput(); err == nil {
 				t.Fatalf("changed input accepted: %s", out)
 			}
@@ -281,13 +284,14 @@ func TestEngineNativeRejectsChangedInputsBeforeTurn(t *testing.T) {
 }
 
 func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
+	t.Parallel()
 	_, _, s, binary := engineNativeFixture(t, true)
 	call := func(args ...string) []byte {
 		t.Helper()
 		if args[0] == "workflow" {
 			args = append(args, "--machine")
 		}
-		cmd := exec.Command(binary, args...)
+		cmd := s.command(binary, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("installed %v: %v %s", args, err, out)
@@ -327,11 +331,12 @@ func TestWorkflowDefaultConsumesNativeAndSingleStepDoesNot(t *testing.T) {
 }
 
 func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) {
+	t.Parallel()
 	f, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "bad_json"
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
+		out, err := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("failed native observation: %v %s", err, out)
 		}
@@ -409,7 +414,7 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 	}
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
+		out, err := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("resumed original failed native observation: %v %s", err, out)
 		}
@@ -452,12 +457,13 @@ func TestWorkflowFailedNativeReachesRecoveryAndKeepsOriginalProof(t *testing.T) 
 }
 
 func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
+	t.Parallel()
 	_, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "workflow-invalid-review"
 	s.peer.Answer = nil
 	s.save(t)
 	for range 2 {
-		out, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
+		out, err := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil {
 			t.Fatalf("invalid semantic routing: %v %s", err, out)
 		}
@@ -509,6 +515,7 @@ func TestWorkflowInvalidSemanticResultUsesOriginalFiniteAttempt(t *testing.T) {
 }
 
 func TestEngineNativeOriginalJobOwnsConcurrentTurns(t *testing.T) {
+	t.Parallel()
 	_, _, s, binary := engineNativeFixture(t)
 	var wg sync.WaitGroup
 	errors := make(chan error, 2)
@@ -516,7 +523,7 @@ func TestEngineNativeOriginalJobOwnsConcurrentTurns(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput()
+			_, err := s.command(binary, "harness", "native", s.directory).CombinedOutput()
 			errors <- err
 		}()
 	}
@@ -529,7 +536,7 @@ func TestEngineNativeOriginalJobOwnsConcurrentTurns(t *testing.T) {
 	if !succeeded || nativePeerTurns(t, s) != 1 {
 		t.Fatal("original job did not own exactly one concurrent native turn")
 	}
-	if out, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput(); err != nil {
+	if out, err := s.command(binary, "harness", "native", s.directory).CombinedOutput(); err != nil {
 		t.Fatalf("completed source observation: %v %s", err, out)
 	}
 	if nativePeerTurns(t, s) != 1 {
@@ -538,11 +545,12 @@ func TestEngineNativeOriginalJobOwnsConcurrentTurns(t *testing.T) {
 }
 
 func TestEngineNativeUnknownOwnerNeverStartsTurn(t *testing.T) {
+	t.Parallel()
 	_, _, s, binary := engineNativeFixture(t)
 	if err := os.WriteFile(filepath.Join(s.directory, "owner"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(binary, "harness", "native", s.directory).CombinedOutput(); err == nil || !bytes.Contains(out, []byte("UNKNOWN")) {
+	if out, err := s.command(binary, "harness", "native", s.directory).CombinedOutput(); err == nil || !bytes.Contains(out, []byte("UNKNOWN")) {
 		t.Fatalf("unknown original owner: %v %s", err, out)
 	}
 	if nativePeerTurns(t, s) != 0 {
@@ -551,6 +559,7 @@ func TestEngineNativeUnknownOwnerNeverStartsTurn(t *testing.T) {
 }
 
 func TestNativeIdentityInheritanceUsesOnlyClaimedInvocations(t *testing.T) {
+	t.Parallel()
 	for _, claimed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("claimed=%t", claimed), func(t *testing.T) {
 			root := t.TempDir()
@@ -591,6 +600,7 @@ func TestNativeIdentityInheritanceUsesOnlyClaimedInvocations(t *testing.T) {
 }
 
 func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
+	t.Parallel()
 	f, ref, s, binary := engineNativeFixture(t, true)
 	_, request, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
@@ -600,7 +610,7 @@ func TestWorkflowReportsRejectedSupervisorBeforeNativeTurn(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), request); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
+	cmd := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("blocked native response: %v %s", err, out)
@@ -886,7 +896,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	}
 	s.request, s.directory = request, directory
 	s.workspace = request["workspace"].(string)
-	binding, err := NativeBinding("codex")
+	binding, err := NativeBinding("codex", s.nativeSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +910,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 	if err := writeAtomicJSON(filepath.Join(directory, "request.json"), supervised); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, "harness", "supervise", directory)
+	cmd := s.command(binary, "harness", "supervise", directory)
 	DetachSupervisor(cmd)
 	log, err := os.Create(filepath.Join(directory, "supervisor.log"))
 	if err != nil {
@@ -1092,6 +1102,7 @@ func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
 }
 
 func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
+	t.Parallel()
 	f, _, s, binary := engineNativeFixture(t, true)
 	ref, input := stageNativeDevelopment(t, f, s)
 	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
@@ -1104,7 +1115,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	s.request = request
 	s.directory = directory
 	s.workspace = input.Validation.Workspace.Path
-	binding, err := NativeBinding("codex")
+	binding, err := NativeBinding("codex", s.nativeSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1115,7 +1126,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
+	cmd := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	out, err := cmd.CombinedOutput()
 	if err := os.WriteFile(filepath.Join(s.config, "consumer.json"), out, 0600); err != nil {
 		t.Fatal(err)
@@ -1200,6 +1211,7 @@ func TestWorkflowContinuesOriginalNativeTaskUntilComplete(t *testing.T) {
 }
 
 func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
+	t.Parallel()
 	f, _, s, binary := engineNativeFixture(t, true)
 	ref, input := stageNativeDevelopment(t, f, s)
 	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
@@ -1210,14 +1222,14 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.request, s.directory, s.workspace = request, directory, input.Validation.Workspace.Path
-	s.request["binding"], err = NativeBinding("codex")
+	s.request["binding"], err = NativeBinding("codex", s.nativeSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
+	cmd := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -1339,7 +1351,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	}
 	// The requirement Ask returns foreground control while the original job
 	// runs. Its confirmed carry is collected by the same public consumer.
-	collected, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
+	collected, err := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
 	if err != nil {
 		t.Fatalf("collect original carried job: %v %s", err, collected)
 	}
@@ -1377,7 +1389,7 @@ func TestWorkflowCarriesOriginalLiveNativeTask(t *testing.T) {
 	if nativePeerTurns(t, s) != 2 {
 		t.Fatalf("original developer plus independent gate turns=%d", nativePeerTurns(t, s))
 	}
-	if _, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput(); err != nil {
+	if _, err := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput(); err != nil {
 		t.Fatal(err)
 	}
 	if nativePeerTurns(t, s) != 2 {
@@ -1391,6 +1403,7 @@ func fRoot(ref facade.WorkerMaterial) string {
 }
 
 func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name, choice string
 		failed       bool
@@ -1407,7 +1420,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				if args[0] == "workflow" {
 					args = append(args, "--machine")
 				}
-				cmd := exec.Command(binary, args...)
+				cmd := s.command(binary, args...)
 				cmd.Stdin = bytes.NewReader(input)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
@@ -1441,7 +1454,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 			if err := json.Unmarshal(body, &original); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := confirmInstalledFixtureControl(t, binary, s.workspace, s.runID, original); err != nil {
+			if _, err := confirmInstalledFixtureControl(t, s.command(binary, "workflow", "serve"), s.workspace, s.runID, original); err != nil {
 				t.Fatal(err)
 			}
 			run, err = f.Show()
@@ -1466,7 +1479,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 				if err := os.MkdirAll(directory, 0700); err != nil {
 					t.Fatal(err)
 				}
-				request["binding"], err = NativeBinding("codex")
+				request["binding"], err = NativeBinding("codex", s.nativeSettings())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1510,10 +1523,11 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 }
 
 func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
+	t.Parallel()
 	f, ref, s, binary := engineNativeFixture(t, true)
 	s.peer.Mode = "wait"
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
+	cmd := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1571,10 +1585,10 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := confirmInstalledFixtureControl(t, binary, s.workspace, s.runID, candidate); err != nil {
+	if _, err := confirmInstalledFixtureControl(t, s.command(binary, "workflow", "serve"), s.workspace, s.runID, candidate); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
+	completed, err := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine").CombinedOutput()
 	if err != nil {
 		t.Fatalf("original native cancellation: %v %s", err, completed)
 	}
@@ -1607,6 +1621,7 @@ func TestWorkflowCancelsOriginalAcknowledgedNativeTurn(t *testing.T) {
 }
 
 func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
+	t.Parallel()
 	scenarios := map[string]func(*testing.T) string{
 		"codex": func(t *testing.T) string {
 			s := newCodexScenario(t)
@@ -1675,6 +1690,7 @@ func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
 }
 
 func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
+	t.Parallel()
 	f, _, s, binary := engineNativeFixture(t, true)
 	plan := stageNativeReviews(t, f, s, "core", "tooling", "master-merge")
 	run, err := f.Show()
@@ -1723,7 +1739,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request["binding"], err = NativeBinding("codex")
+		request["binding"], err = NativeBinding("codex", s.nativeSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1732,7 +1748,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 		if err := writeAtomicJSON(filepath.Join(directory, "request.json"), supervised); err != nil {
 			t.Fatal(err)
 		}
-		command := exec.Command(binary, "harness", "supervise", directory)
+		command := s.command(binary, "harness", "supervise", directory)
 		DetachSupervisor(command)
 		journal, err := os.Create(filepath.Join(directory, "supervisor.log"))
 		if err != nil {
@@ -1779,7 +1795,7 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	call := func() map[string]any {
 		t.Helper()
-		cmd := exec.Command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
+		cmd := s.command(binary, "workflow", "drive", "--root", s.workspace, "--run-id", s.runID, "--machine")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("automatic released children: %v %s", err, out)
@@ -1971,10 +1987,11 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 }
 
 func TestWorkflowSupplementaryDeliveryRetainsAcknowledgementAfterResultFailure(t *testing.T) {
+	t.Parallel()
 	f, ref, s, binary := engineNativeFixture(t, true)
 	call := func(args ...string) []byte {
 		t.Helper()
-		cmd := exec.Command(binary, args...)
+		cmd := s.command(binary, args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()

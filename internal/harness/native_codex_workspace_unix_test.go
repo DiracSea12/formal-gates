@@ -24,6 +24,7 @@ import (
 )
 
 func TestCodexDevelopmentContinuationRetainsWorkspaceContract(t *testing.T) {
+	t.Parallel()
 	for _, sample := range []struct {
 		name string
 		exit int
@@ -200,6 +201,7 @@ func TestCodexDevelopmentContinuationRetainsWorkspaceContract(t *testing.T) {
 }
 
 func TestCodexReviewerKeepsReadOnlyWorkspaceContract(t *testing.T) {
+	t.Parallel()
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Provider: "codex", Handler: "engine.review.worker.v3", Pending: protocol.PendingAction{ActionID: "review", AttemptID: "review-attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "Review the confirmed requirement"}, Review: &protocol.WorkerReviewInput{Action: review.ProductReview}}
 	material, err := worker.Render(input, prompts.PromptCatalog{Base: "Independent responsibility", Actions: []prompts.PromptDefinition{{ID: "product-review"}}})
 	if err != nil || !material.ReadOnly {

@@ -19,6 +19,7 @@ import (
 )
 
 func TestCodexNativeObservationPreservesSemanticContract(t *testing.T) {
+	t.Parallel()
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Provider: "codex", Handler: "engine.validation.observation.v2", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, RequirementDocument: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}, Validation: &protocol.ValidationInput{Observation: &protocol.ObservationInput{WaveID: "wave", Findings: []protocol.ObservationFinding{{Finding: protocol.ValidationFinding{ID: "finding"}}}, Scopes: []protocol.ObservationScope{{Mode: coverage.ReviewBlackbox, ApprovedCases: []string{"case"}}}, GateImpacts: []protocol.ObservationGateImpact{{Gate: "quality"}}}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
@@ -65,6 +66,7 @@ func TestCodexNativeObservationPreservesSemanticContract(t *testing.T) {
 }
 
 func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
+	t.Parallel()
 	plan := nativeWorkerGranularityFixture()
 	plan.Batches[0].Checks = []worker.Check{{Purpose: protocol.CheckFullBuild, Goal: "complete project build"}, {Purpose: protocol.CheckFullTests, Goal: "complete project tests"}}
 	completedPlan := nativeWorkerGranularityFixture()
@@ -179,6 +181,7 @@ func TestCodexNativeSemanticSubmissionsAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
+	t.Parallel()
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.repair.v7", Provider: "codex", Pending: protocol.PendingAction{ActionID: "repair"}, ApprovedChecks: []protocol.DevelopmentCheck{{ID: "approved-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "approved-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 ./..."}, {ID: "approved-local", Command: "original-local-oracle"}}, Validation: &protocol.ValidationInput{Repair: &protocol.RepairInput{}}}
 	schema, err := worker.ResultSchema(input)
 	if err != nil {
@@ -250,6 +253,7 @@ func TestCodexNativeRepairCompletionAlternatives(t *testing.T) {
 }
 
 func TestCodexQAContinuationUsesCurrentSemanticsWithPersistentToolDeclaration(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	s.request["read_only"] = true
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.qa.execution.v4", Provider: "codex", Pending: protocol.PendingAction{ActionID: "qa-action", AttemptID: "qa-attempt"}, Validation: &protocol.ValidationInput{CommandCases: []string{"normal"}, Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "normal", Steps: "Print accepted", Oracle: "stdout is accepted"}}}}}

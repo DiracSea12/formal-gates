@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -19,6 +18,7 @@ import (
 // Foreground Ask delivery leaves the original native job available to the same
 // consumer's subsequent receipt and result admission.
 func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
+	t.Parallel()
 	f, _, s, binary := engineNativeFixture(t, true)
 	ref, input := stageNativeDevelopment(t, f, s)
 	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
@@ -29,14 +29,14 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.request, s.directory, s.workspace = request, directory, input.Validation.Workspace.Path
-	s.request["binding"], err = NativeBinding("codex")
+	s.request["binding"], err = NativeBinding("codex", s.nativeSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.peer.Mode, s.peer.WorkerAction, s.peer.WorkerAttempt, s.peer.Answer = "workflow-held", ref.ActionID, ref.AttemptID, nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
 	s.save(t)
-	cmd := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
+	cmd := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -96,7 +96,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	if got, err := NativeStartEvidence("codex", directory); err != nil || got != identity {
 		t.Fatal("foreground return changed original acknowledgement", got, err)
 	}
-	body, err := confirmInstalledFixtureControl(t, binary, fRoot(ref), s.runID, candidate)
+	body, err := confirmInstalledFixtureControl(t, s.command(binary, "workflow", "serve"), fRoot(ref), s.runID, candidate)
 	var confirmed struct {
 		Run struct {
 			Next struct {
@@ -135,7 +135,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 		t.Fatal("unconsumed original result changed identity or turn count")
 	}
 	for range 2 {
-		body, err := exec.Command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
+		body, err := s.command(binary, "workflow", "drive", "--root", fRoot(ref), "--run-id", s.runID, "--machine").CombinedOutput()
 		if err != nil || json.Unmarshal(body, &response) != nil || response.Boundary != "ASK" || len(response.Blocked) != 0 {
 			t.Fatalf("original source collection: %v %s", err, body)
 		}

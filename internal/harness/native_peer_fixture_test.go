@@ -295,7 +295,7 @@ func TestCanaryNativePeersValidateLaunchInputs(t *testing.T) {
 						expected.Args = []string{textOf(launch["script"]), "--cwd", workspace, "app-server"}
 						binding["environment"] = map[string]any{"HOME": home}
 					}
-					scriptPath := os.Getenv("FORMAL_GATES_NATIVE_PEER_SCRIPT")
+					scriptPath := filepath.Join(filepath.Dir(echo), "peer.json")
 					body := readTestFileBytes(t, scriptPath)
 					var script peerScript
 					if err := json.Unmarshal(body, &script); err != nil {

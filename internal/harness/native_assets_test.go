@@ -20,6 +20,7 @@ import (
 )
 
 func TestInstalledNativeHostScripts(t *testing.T) {
+	t.Parallel()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the source package")
@@ -79,6 +80,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 	for _, host := range []string{"dsh", "zcode"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(host+"/"+scope, func(t *testing.T) {
+				t.Parallel()
 				home, project := t.TempDir(), t.TempDir()
 				launcher := filepath.Join(home, ".local", "bin", name)
 				if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {

@@ -118,10 +118,10 @@ func fixtureControlPosition(t *testing.T, root, owner string, candidate facade.C
 	return position
 }
 
-func confirmInstalledFixtureControl(t *testing.T, binary, root, owner string, candidate facade.ControlCandidate) ([]byte, error) {
+func confirmInstalledFixtureControl(t *testing.T, command *exec.Cmd, root, owner string, candidate facade.ControlCandidate) ([]byte, error) {
 	t.Helper()
 	position := fixtureControlPosition(t, root, owner, candidate)
-	return installedConfirmationFixture(t, exec.Command(binary, "workflow", "serve"), "confirm_control", map[string]any{"root": root, "candidate": position}, func(original map[string]any) {
+	return installedConfirmationFixture(t, command, "confirm_control", map[string]any{"root": root, "candidate": position}, func(original map[string]any) {
 		input, _ := json.Marshal(candidate.Input)
 		var expectedInput any
 		_ = json.Unmarshal(input, &expectedInput)

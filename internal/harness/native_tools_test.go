@@ -51,6 +51,7 @@ func callWorkspace(t *testing.T, tools *nativeWorkspaceTools, args string) map[s
 }
 
 func TestNativeWorkspaceTransfersOriginalFileBytes(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	body := []byte{0xff, 0, '\n', 0xfe}
 	if err := os.WriteFile(filepath.Join(workspace, "original.bin"), body, 0640); err != nil {
@@ -118,6 +119,7 @@ func nativeToolAdmission(directory string, request map[string]any) (func(), erro
 }
 
 func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	if err := os.WriteFile(filepath.Join(workspace, "file.txt"), []byte("first\nsecond\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -171,6 +173,7 @@ func TestNativeWorkspacePublishedFactsSurviveContinuation(t *testing.T) {
 }
 
 func TestNativeWorkspaceFactsRejectDifferentWorkspace(t *testing.T) {
+	t.Parallel()
 	directory, _ := nativeToolFixture(t)
 	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
 	if err != nil {
@@ -196,6 +199,7 @@ func TestNativeWorkspaceFactsRejectDifferentWorkspace(t *testing.T) {
 }
 
 func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	if err := os.WriteFile(filepath.Join(workspace, "input.txt"), []byte("original\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -294,6 +298,7 @@ func TestNativeWorkspaceMCPUsesOriginalAuthority(t *testing.T) {
 }
 
 func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
@@ -377,6 +382,7 @@ func TestNativeWorkspaceSourceRemainsValidAfterContinuationPublishesFacts(t *tes
 }
 
 func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
+	t.Parallel()
 	workspace, _ := nativePathsFixture(t)
 	provider := vcs.New(workspace, nil)
 	base, err := provider.Resolve()
@@ -430,6 +436,7 @@ func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
 }
 
 func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(t *testing.T) {
+	t.Parallel()
 	directory, _ := nativeToolFixture(t)
 	var window sync.Mutex
 	admit := func(directory string, request map[string]any) (func(), error) {
@@ -511,6 +518,7 @@ func workspaceMCP(t *testing.T, directory string, args map[string]any) (map[stri
 }
 
 func TestNativeWorkspaceRemovePreservesSymlinkTargets(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"file", "directory", "dangling"} {
 		t.Run(kind, func(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
@@ -571,6 +579,7 @@ func TestNativeWorkspaceRemovePreservesSymlinkTargets(t *testing.T) {
 }
 
 func TestNativeWorkspaceSymlinkReadAndReplaceUseOriginalTarget(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	if err := os.WriteFile(filepath.Join(workspace, "target"), []byte("before\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -606,6 +615,7 @@ func TestNativeWorkspaceSymlinkReadAndReplaceUseOriginalTarget(t *testing.T) {
 }
 
 func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
+	t.Parallel()
 	workspace, _ := nativePathsFixture(t)
 	owned := "checks/recipe.md"
 	files := map[string]string{owned: "QA case body before\n", "developer_test.txt": "ordinary developer test before\n"}
@@ -799,6 +809,7 @@ func TestNativeGateToolsExcludeOwnedContentAcrossResume(t *testing.T) {
 }
 
 func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	body := "package sample\nimport (\"testing\"; \"os\")\nfunc helper() {}\nfunc TestWrong(t *testing.T) { t.Fatal(\"wrong test executed\") }\nfunc TestChosen(t *testing.T) { if err := os.WriteFile(\"selected.txt\", []byte(\"chosen\"), 0600); err != nil { t.Fatal(err) } }\n"
 	for name, value := range map[string]string{"sample_test.go": body, "go.mod": "module sample\ngo 1.22\n"} {
@@ -876,6 +887,7 @@ func TestNativeWorkspaceTestSymbolsBindOriginalReadAndRealExecution(t *testing.T
 }
 
 func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
@@ -925,6 +937,7 @@ func TestNativeRequirementReaderReturnsBoundOriginalLinesAfterWorkspaceChanges(t
 }
 
 func TestNativeWorkspaceCopiesOriginalLineRangesAndBasenames(t *testing.T) {
+	t.Parallel()
 	directory, workspace := nativeToolFixture(t)
 	original := "first\r\n中文 \"existing\"\r\nlast\r\n"
 	if err := os.WriteFile(filepath.Join(workspace, "source.go"), []byte(original), 0600); err != nil {

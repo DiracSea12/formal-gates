@@ -26,6 +26,7 @@ import (
 )
 
 func TestCursorManagedToolsUseOriginalWorkspaceAndPolicy(t *testing.T) {
+	t.Parallel()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate the source package")
@@ -520,6 +521,7 @@ func TestCursorCaptureProbeAndClosure(t *testing.T) {
 	}
 }
 func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
+	t.Parallel()
 	for i, uuid := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
 		t.Run(uuid, func(t *testing.T) {
 			model := fmt.Sprintf("model-%d", i)
@@ -581,6 +583,7 @@ func TestCursorNewResumeAndOriginalObservation(t *testing.T) {
 }
 
 func TestCursorDefaultSelectionAndFreshIdentity(t *testing.T) {
+	t.Parallel()
 	first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "native-default", "", true)
 	first.request["model"] = ""
 	first.save(t)
@@ -620,6 +623,7 @@ func TestCursorDefaultSelectionAndFreshIdentity(t *testing.T) {
 }
 
 func TestCursorDirectEntryCarriesEveryCommand(t *testing.T) {
+	t.Parallel()
 	s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "model-direct", "low", false)
 	entry := filepath.Join(filepath.Dir(s.script), "index.js")
 	if err := os.WriteFile(entry, []byte("native entry"), 0o644); err != nil {
@@ -653,6 +657,7 @@ func TestCursorDirectEntryCarriesEveryCommand(t *testing.T) {
 	}
 }
 func TestCursorMissingStoreBeforePrompt(t *testing.T) {
+	t.Parallel()
 	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
 	if _, err := runNativeJob(s.directory); err != nil {
 		t.Fatal(err)
@@ -681,6 +686,7 @@ func TestCursorMissingStoreBeforePrompt(t *testing.T) {
 	}
 }
 func TestCursorNativeRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, want string
 		change     func(*cursorScenario)
@@ -770,6 +776,7 @@ func TestCursorNativeRefusals(t *testing.T) {
 	}
 }
 func TestCursorBracketParametersAndAlias(t *testing.T) {
+	t.Parallel()
 	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", false)
 	s.request["model"] = "model-a[context=1m]"
 	selected := getOf(s.peer.Config, "selectedModel").(map[string]any)
@@ -789,6 +796,7 @@ func TestCursorBracketParametersAndAlias(t *testing.T) {
 	}
 }
 func TestCursorReconcileDoesNotReplayPrompt(t *testing.T) {
+	t.Parallel()
 	s := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", true)
 	original, err := runNativeJob(s.directory)
 	if err != nil {
@@ -820,6 +828,7 @@ func TestCursorReconcileDoesNotReplayPrompt(t *testing.T) {
 }
 
 func TestCursorParallelSourcesRemainIndependent(t *testing.T) {
+	t.Parallel()
 	first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", false)
 	second := newCursorScenario(t, "22222222-2222-4222-8222-222222222222", "model-b", "low", true)
 	done := make(chan error, 2)
@@ -842,6 +851,7 @@ func TestCursorParallelSourcesRemainIndependent(t *testing.T) {
 // Both peers use the same bound config. The first native selection is held
 // before init; its terminal waits for the second selection to prove overlap.
 func TestCursorSharedConfigSelectionAndConcurrentTurns(t *testing.T) {
+	t.Parallel()
 	for _, secondModel := range []string{"model-a", "model-b"} {
 		t.Run(secondModel, func(t *testing.T) {
 			first := newCursorScenario(t, "11111111-1111-4111-8111-111111111111", "model-a", "high", false)
@@ -892,6 +902,7 @@ func TestCursorSharedConfigSelectionAndConcurrentTurns(t *testing.T) {
 	}
 }
 func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	for _, cancel := range []string{"completed", "initializing", "initialized"} {
 		t.Run(cancel, func(t *testing.T) {
@@ -985,6 +996,7 @@ func TestCursorOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 
 // Absent overrides retain the CLI's native selection and saved context.
 func TestCursorAbsentModelOptionsUseNativeSelection(t *testing.T) {
+	t.Parallel()
 	s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "native-default", "", true)
 	delete(s.request, "model")
 	delete(s.request, "reasoning_effort")
@@ -1004,6 +1016,7 @@ func TestCursorAbsentModelOptionsUseNativeSelection(t *testing.T) {
 }
 
 func TestCursorOriginalInvocationCarriesSavedStore(t *testing.T) {
+	t.Parallel()
 	for _, completed := range []bool{true, false} {
 		t.Run(fmt.Sprintf("completed=%t", completed), func(t *testing.T) {
 			s := newCursorScenario(t, "33333333-3333-4333-8333-333333333333", "native-default", "", true)

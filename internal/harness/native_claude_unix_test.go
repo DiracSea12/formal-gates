@@ -234,6 +234,7 @@ func TestClaudeCaptureAndProbe(t *testing.T) {
 }
 
 func TestClaudeNativeCompletionAndObservation(t *testing.T) {
+	t.Parallel()
 	for _, identity := range []string{"session-a", "session-b"} {
 		t.Run(identity, func(t *testing.T) {
 			s := newClaudeScenario(t, identity, identity == "session-a")
@@ -276,6 +277,7 @@ func TestClaudeNativeCompletionAndObservation(t *testing.T) {
 }
 
 func TestClaudeNativeRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, want string
 		change     func(*claudeScenario)
@@ -325,6 +327,7 @@ func TestClaudeNativeRefusals(t *testing.T) {
 }
 
 func TestClaudeResumeAndMissingSession(t *testing.T) {
+	t.Parallel()
 	s := newClaudeScenario(t, "retained-session", false)
 	s.peer.History = filepath.Join(filepath.Dir(s.script), "native-history")
 	s.save(t)
@@ -369,6 +372,7 @@ func TestClaudeResumeAndMissingSession(t *testing.T) {
 }
 
 func TestClaudeOriginalSupervisorReceiptAndCancellation(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	for _, cancel := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancel), func(t *testing.T) {
@@ -428,6 +432,7 @@ func TestClaudeOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 }
 
 func TestClaudeSemanticSubmissionUsageUnavailableAndRoleValidation(t *testing.T) {
+	t.Parallel()
 	for _, invalidRole := range []bool{false, true} {
 		s := newClaudeScenario(t, "text-session", true)
 		terminal := objectOrEmpty(s.peer.Events[1])
@@ -452,6 +457,7 @@ func TestClaudeSemanticSubmissionUsageUnavailableAndRoleValidation(t *testing.T)
 }
 
 func TestClaudeReconcileOriginalEvidence(t *testing.T) {
+	t.Parallel()
 	s := newClaudeScenario(t, "recovered-session", true)
 	peerSubmitSemantics(s.directory, s.peer.Semantics)
 	nativeSource := map[string]any{"sessionId": "recovered-session", "workspace": s.workspace,
@@ -499,6 +505,7 @@ func TestClaudeReconcileOriginalEvidence(t *testing.T) {
 }
 
 func TestClaudeConcurrentSessionsDrainTheirOwnStream(t *testing.T) {
+	t.Parallel()
 	first := newClaudeScenario(t, "parallel-first", false)
 	second := newClaudeScenario(t, "parallel-second", true)
 	first.peer.Events = append(first.peer.Events[:1], map[string]any{"type": "assistant", "session_id": "parallel-first", "message": map[string]any{"content": strings.Repeat("native chunk", 12000)}}, first.peer.Events[1])
@@ -533,6 +540,7 @@ func TestClaudeConcurrentSessionsDrainTheirOwnStream(t *testing.T) {
 }
 
 func TestNativeCloseReturnsTheOriginalExit(t *testing.T) {
+	t.Parallel()
 	client, err := newNativeClient(nativeHooks{}, []string{"/bin/sh", "-c", "exit 7"}, t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -545,6 +553,7 @@ func TestNativeCloseReturnsTheOriginalExit(t *testing.T) {
 }
 
 func TestClaudeNativeStreamProvidesMeteredSourceBinding(t *testing.T) {
+	t.Parallel()
 	s := newClaudeScenario(t, "metered-session", true)
 	usage := map[string]any{"type": "assistant", "uuid": "native-usage-id", "session_id": "metered-session", "message": map[string]any{"usage": map[string]any{"input_tokens": 13, "cache_read_input_tokens": 4, "output_tokens": 3}}}
 	s.peer.Events = append(s.peer.Events[:1], append([]any{usage}, s.peer.Events[1:]...)...)

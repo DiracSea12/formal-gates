@@ -16,6 +16,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/settings"
 	"io"
 	"os"
 	"os/exec"
@@ -508,6 +509,24 @@ type codexScenario struct {
 	runtime, runID                     string
 }
 
+func (s *codexScenario) environment() []string {
+	return append(os.Environ(), "HOME="+s.home, "USERPROFILE="+s.home, "CODEX_HOME="+s.config,
+		"PATH="+filepath.Dir(s.home)+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func (s *codexScenario) command(binary string, args ...string) *exec.Cmd {
+	command := exec.Command(binary, args...)
+	command.Env = s.environment()
+	return command
+}
+
+func (s *codexScenario) nativeSettings() settings.Values {
+	return settings.Values{Native: map[string]string{
+		"codexExecutable": filepath.Join(filepath.Dir(s.home), "codex"),
+		"codexHome":       s.home, "codexConfigRoot": s.config,
+	}}
+}
+
 func newCodexScenario(t *testing.T) *codexScenario {
 	t.Helper()
 	root := resolveNativePath(t.TempDir())
@@ -639,6 +658,7 @@ func (s *codexScenario) execute(t *testing.T) (map[string]any, error) {
 }
 
 func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	s.request["prompt"] = "Read the complete native execution evidence:\n" + strings.Repeat("command output: \"value\" ✓\n", 4096)
 	schema, err := worker.ResultSchema(protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Validation: &protocol.ValidationInput{}})
@@ -704,6 +724,7 @@ func TestCodexNativeLargeFramePreservesExactParameters(t *testing.T) {
 }
 
 func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: "engine.gate.v3", Provider: "codex", Pending: protocol.PendingAction{ActionID: "issued", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{}}
 	schema, err := worker.ResultSchema(input)
@@ -767,6 +788,7 @@ func TestCodexFormalFindingLocationsUseVerifiedSourceAcrossRecovery(t *testing.T
 }
 
 func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
+	t.Parallel()
 	f, ref, s, binary := engineNativeFixture(t, true)
 	entries, err := os.ReadDir(s.workspace)
 	if err != nil {
@@ -786,7 +808,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 	s.save(t)
 	call := func(args ...string) []byte {
 		t.Helper()
-		cmd := exec.Command(binary, args...)
+		cmd := s.command(binary, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("original installed CLI %v: %v\n%s", args, err, out)
@@ -827,7 +849,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 			t.Fatal(err)
 		}
 		input, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "workspace", "cwd": s.workspace})
-		cmd := exec.Command(binary, "harness", "codex-tool-permission", directory)
+		cmd := s.command(binary, "harness", "codex-tool-permission", directory)
 		cmd.Stdin = bytes.NewReader(input)
 		if output, err := cmd.CombinedOutput(); err == nil || len(output) == 0 {
 			t.Fatalf("closed execution admitted an old hook: %v %s", err, output)
@@ -931,6 +953,7 @@ func TestCodexManagedToolAdmissionAndSignedResume(t *testing.T) {
 }
 
 func TestCodexNativeContinuationAndRecovery(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	source, err := s.execute(t)
 	if err != nil {
@@ -994,6 +1017,7 @@ func TestCodexNativeContinuationAndRecovery(t *testing.T) {
 }
 
 func TestCodexNativePermissionAndDefaultSelection(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []struct {
 		sandbox, approval, reviewer string
 	}{{"readOnly", "never", "user"}, {"workspaceWrite", "on-failure", "guardian"}} {
@@ -1064,6 +1088,7 @@ func TestCodexNativePermissionAndDefaultSelection(t *testing.T) {
 }
 
 func TestCodexNativeReadOnlyConstraintMustApply(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	s.request["read_only"] = true
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
@@ -1074,6 +1099,7 @@ func TestCodexNativeReadOnlyConstraintMustApply(t *testing.T) {
 }
 
 func TestCodexNativeTerminalBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"drop", "wrong_thread", "wrong_turn", "failed", "interrupted", "commentary", "bad_json", "selection", "resume_identity", "nonzero", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			s := newCodexScenario(t)
@@ -1114,6 +1140,7 @@ func TestCodexNativeTerminalBoundaries(t *testing.T) {
 }
 
 func TestCodexNativeProbeAndNativeErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("probe", func(t *testing.T) {
 		s := newCodexScenario(t)
 		s.peer.Mode = "probe"
@@ -1142,6 +1169,7 @@ func TestCodexNativeProbeAndNativeErrors(t *testing.T) {
 }
 
 func TestCodexNativeParallelIsolation(t *testing.T) {
+	t.Parallel()
 	scenarios := []*codexScenario{newCodexScenario(t), newCodexScenario(t)}
 	scenarios[1].request["prompt"] = "independent input"
 	scenarios[1].request["read_only"] = true
@@ -1198,6 +1226,7 @@ func waitCodexPending(t *testing.T, directory, id string) map[string]any {
 }
 
 func TestCodexNativeInteractionReplies(t *testing.T) {
+	t.Parallel()
 	s := newCodexScenario(t)
 	s.peer.Reverse = []any{
 		map[string]any{"method": "item/commandExecution/requestApproval", "params": map[string]any{"itemId": "command", "startedAtMs": 1, "command": "echo value", "cwd": s.workspace, "reason": "native reason", "proposedExecpolicyAmendment": []any{"echo"}}},
@@ -1240,6 +1269,7 @@ func TestCodexNativeInteractionReplies(t *testing.T) {
 }
 
 func TestCodexNativeSupervisorAndInterrupt(t *testing.T) {
+	t.Parallel()
 	bin := supervisorBinary(t)
 	for _, mode := range []string{"complete", "interrupt", "supervisor_cancel"} {
 		t.Run(mode, func(t *testing.T) {
@@ -1385,6 +1415,7 @@ func TestCodexNativeCaptureAndEvidence(t *testing.T) {
 // Native launch checks reject each changed input before successful RPC replies.
 // A valid explicit script and rebuilt wrapper proof isolate process validation.
 func TestCodexNativePeerRejectsWrongLaunchInputs(t *testing.T) {
+	t.Parallel()
 	binary := supervisorBinary(t)
 	for _, dimension := range []string{"valid", "argv", "config", "home", "cwd"} {
 		t.Run(dimension, func(t *testing.T) {
@@ -1467,6 +1498,7 @@ func TestCodexNativePeerRejectsWrongLaunchInputs(t *testing.T) {
 }
 
 func TestCodexSupplementaryMessageSteersOriginalTurnAndRetainsUnacknowledgedOutcome(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"steer", "steer-unacknowledged"} {
 		t.Run(mode, func(t *testing.T) {
 			scenario := newCodexScenario(t)

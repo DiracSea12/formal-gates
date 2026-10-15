@@ -355,7 +355,7 @@ func TestZCodeSelectionOptionsKeepNativeProviderPairAcrossLaunches(t *testing.T)
 			}
 			objectOrEmpty(getOf(s.request["binding"], "launch"))["script"] = script
 			binding := zcodeTestNodePeer(t, s, data, filepath.Join(runtimeTarget, "internal", "harness", zcodeCredentialHelper))
-			peerPath := os.Getenv("FORMAL_GATES_NATIVE_PEER_SCRIPT")
+			peerPath := filepath.Join(filepath.Dir(s.echoPath), "peer.json")
 			peerBody, err := os.ReadFile(peerPath)
 			if err != nil {
 				t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"claude", "codex", "cursor", "dsh", "zcode"} {
 		t.Run(provider, func(t *testing.T) {
 			root := resolveNativePath(t.TempDir())

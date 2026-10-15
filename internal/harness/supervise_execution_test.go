@@ -13,6 +13,7 @@ import (
 )
 
 func TestSuperviseCheckRunsUntilCompletion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	command := "printf 'before completion'; sleep 60 & child=$!; printf '%s' \"$child\" > child.pid; sleep 0.25; printf ' after completion'"
 	writeRequest(t, dir, map[string]any{"kind": "approved-development-check", "argv": []string{"/bin/sh", "-c", command}, "cwd": dir, "timeout_nanos": int64(120 * time.Millisecond)})

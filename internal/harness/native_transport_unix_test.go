@@ -205,14 +205,8 @@ func startPeer(t *testing.T, script peerScript) (executable, echoPath string) {
 	if err := os.WriteFile(scriptPath, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	testBinary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("FORMAL_GATES_NATIVE_PEER_SCRIPT", scriptPath)
-	t.Setenv("PEER_BIN", testBinary)
 	wrapper := filepath.Join(dir, "dsh")
-	wrapperBody := "#!/bin/sh\nexec \"$PEER_BIN\" -test.run='^TestScriptedPeer$' -- \"$@\"\n"
+	wrapperBody := canaryPeerWrapper("TestScriptedPeer", "FORMAL_GATES_NATIVE_PEER_SCRIPT", scriptPath)
 	if err := os.WriteFile(wrapper, []byte(wrapperBody), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -278,6 +272,7 @@ func blockedText(t *testing.T, err error) string {
 // envelope, the id counter starting at 1, the session params key set, and the
 // canonical compact form.
 func TestTransportOutgoingFrameBytes(t *testing.T) {
+	t.Parallel()
 	client, _, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: `"method":"session/new"`, Send: `{"id": 1, "result": {"sessionId": "s-1"}}`},
 	}}, nil)
@@ -297,6 +292,7 @@ func TestTransportOutgoingFrameBytes(t *testing.T) {
 // and never a payload. The trace is inbound-only (collect writes it; the
 // outbound side never does), so our own initialize never appears.
 func TestTransportTraceIsRoutingOnly(t *testing.T) {
+	t.Parallel()
 	client, directory, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{Send: `{"method": "session/event", "params": {"Authorization": "TEST_SECRET"}}`},
 		{Send: `{"id": null, "method": "session/ping"}`},
@@ -333,6 +329,7 @@ func TestTransportTraceIsRoutingOnly(t *testing.T) {
 // TestTransportNonJSONLineClosesTransport pins the non-JSON boundary: the
 // invalid-output closure is injected immediately and reading stops.
 func TestTransportNonJSONLineClosesTransport(t *testing.T) {
+	t.Parallel()
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "initialize", Garbage: "not json at all"},
 	}}, nil)
@@ -345,6 +342,7 @@ func TestTransportNonJSONLineClosesTransport(t *testing.T) {
 
 // TestTransportEOFClosesOutput pins the stdout-EOF boundary text.
 func TestTransportEOFClosesOutput(t *testing.T) {
+	t.Parallel()
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "initialize", Close: true},
 	}}, nil)
@@ -358,6 +356,7 @@ func TestTransportEOFClosesOutput(t *testing.T) {
 // TestTransportTimeoutText pins the timeout text (per-message timeout and the
 // bounded total deadline share it).
 func TestTransportTimeoutText(t *testing.T) {
+	t.Parallel()
 	client, _, _ := spawnClient(t, peerScript{}, func(h *nativeHooks) {
 		h.defaultTimeout = 200 * time.Millisecond
 	})
@@ -380,6 +379,7 @@ func TestTransportTimeoutText(t *testing.T) {
 //
 // The peer's startup notification is consumed before the request budget begins.
 func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
+	t.Parallel()
 	notifications := func() []peerStep {
 		steps := []peerStep{{Send: `{"method": "peer/ready"}`}}
 		for i := 0; i < 12; i++ {
@@ -428,6 +428,7 @@ func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
 // TestTransportUnboundedWaitsForTheHostsOwnTurn pins UNBOUNDED: a response
 // arriving long after any nominal budget is still accepted.
 func TestTransportUnboundedWaitsForTheHostsOwnTurn(t *testing.T) {
+	t.Parallel()
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "session/prompt", SleepSecs: 1.0, Send: `{"id": 1, "result": {"stopReason": "end_turn"}}`},
 	}}, func(h *nativeHooks) {
@@ -445,6 +446,7 @@ func TestTransportUnboundedWaitsForTheHostsOwnTurn(t *testing.T) {
 // jsonrpc envelope, and interaction-status.json records the status
 // canonically.
 func TestTransportReverseRequestDefaultReply(t *testing.T) {
+	t.Parallel()
 	client, directory, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{Send: `{"id": "r1", "method": "session/ping", "params": {}}`},
 		{Send: `{"id": 7, "method": "session/ping2", "params": {}}`},
@@ -476,6 +478,7 @@ func TestTransportReverseRequestDefaultReply(t *testing.T) {
 // (same logical id, fresh frame id) re-aims the held reply frame without a
 // second record.
 func TestTransportRequestPermissionIsHeld(t *testing.T) {
+	t.Parallel()
 	client, directory, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{Send: `{"jsonrpc": "2.0", "id": 3, "method": "session/request_permission", "params": {"sessionId": "s", "toolCall": {"toolCallId": "call-1"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]}}`},
 		{On: "initialize", Send: `{"id": 1, "result": {}}`},
@@ -538,6 +541,7 @@ func TestTransportRequestPermissionIsHeld(t *testing.T) {
 // (transport_error), in ANY inbound message; the value must be a non-empty
 // reason string.
 func TestTransportClosureKeysInAnyMessage(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		line string
 		want string
@@ -574,6 +578,7 @@ func TestTransportClosureKeysInAnyMessage(t *testing.T) {
 // is value equality, so the literal 1.0 matches our int ident 1, and a wrong
 // id is skipped.
 func TestTransportResponseMatching(t *testing.T) {
+	t.Parallel()
 	client, _, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{On: "initialize", Send: `{"id": 1, "method": "notify", "params": {}}`},
 		{On: "initialize", Send: `{"id": 2, "result": {"wrong": true}}`},
@@ -612,6 +617,7 @@ func TestTransportResponseMatching(t *testing.T) {
 // member is success (the result defaults to {}), any other error body is a
 // refusal whose text embeds the body as canonical JSON.
 func TestTransportErrorEmbedding(t *testing.T) {
+	t.Parallel()
 	for _, line := range []string{
 		`{"id": 1, "result": {"ok": true}}`,
 		`{"id": 1, "error": null, "result": {"ok": true}}`,
@@ -641,6 +647,7 @@ func TestTransportErrorEmbedding(t *testing.T) {
 // present, pgid the spawn group on unix, null on Windows) and host.stderr
 // appending the child's stderr.
 func TestTransportProcessRecordAndStderr(t *testing.T) {
+	t.Parallel()
 	client, directory, _ := spawnClient(t, peerScript{Steps: []peerStep{
 		{Stderr: "peer-started\n"},
 		{On: "initialize", Send: `{"id": 1, "result": {}}`},
@@ -680,6 +687,7 @@ func TestTransportProcessRecordAndStderr(t *testing.T) {
 // that ignores stdin EOF is SIGTERMed after the 8s grace window and the close
 // returns (the kill escalation itself is exercised by the timeout).
 func TestTransportCloseTerminatesPeerSurvivingEOF(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("signals are a POSIX concern; the windows build only compiles this suite")
 	}
@@ -708,6 +716,7 @@ func TestTransportCloseTerminatesPeerSurvivingEOF(t *testing.T) {
 // TestTransportSpawnFailures pins the failure texts of a host that cannot be
 // spawned at all (missing executable / missing workspace), in Go style.
 func TestTransportSpawnFailures(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	workspace := t.TempDir()
 	absent := filepath.Join(directory, "absent-dsh")
