@@ -577,8 +577,9 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 		}
 	}
 	s.projectRetryTasks(&view, compiled)
-	s.projectValidationBoundary(&view, compiled)
-	s.projectResourceBoundary(&view, compiled, validationTasks)
+	executable := s.ExecutableHostActions(compiled)
+	s.projectValidationBoundary(&view, compiled, executable)
+	s.projectResourceBoundary(&view, compiled, validationTasks, executable)
 	// Replacement waits for its original execution, independently of capacity.
 	for id, obsolete := range s.ObsoleteActions {
 		if _, _, live := s.workerActionTarget(id); !live {

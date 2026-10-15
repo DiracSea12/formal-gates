@@ -379,7 +379,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 					if check.Command != "" {
 						continue
 					}
-					if evidence, done := s.checkReceipt(record.ActionID, check.ID); done && evidence.ExitCode == 0 && evidence.Error == "" && (ordinal >= len(p.Development.Commands) || ordinal >= len(prior.Validation.Development.Commands) || prior.Validation.Development.Commands[ordinal] != p.Development.Commands[ordinal]) {
+					if evidence, done := s.checkReceipt(record.ActionID, check.ID, nil); done && evidence.ExitCode == 0 && evidence.Error == "" && (ordinal >= len(p.Development.Commands) || ordinal >= len(prior.Validation.Development.Commands) || prior.Validation.Development.Commands[ordinal] != p.Development.Commands[ordinal]) {
 						return validationError("continued development retains passed verification calls")
 					}
 					ordinal++

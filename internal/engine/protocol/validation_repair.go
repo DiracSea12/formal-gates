@@ -45,12 +45,11 @@ func (s *State) repairWork() []repairWork {
 			if current.result != nil && current.result.Validation.Binding.Generation != s.Validation.Generation && !s.validationWorkCarryAuthorized(current.result.ActionID, task) {
 				current.result = nil
 			}
-			owed := slices.Contains(required, task) || s.validationRepairPending(w)
-			if current.result == nil && s.developmentEditResult(task) == nil && s.repairTaskFinished(task) {
-				owed = false
-			}
-			if current.result == nil && !owed {
-				continue
+			if current.result == nil {
+				owed := slices.Contains(required, task) || s.validationRepairPending(w)
+				if !owed || s.developmentEditResult(task) == nil && s.repairTaskFinished(task) {
+					continue
+				}
 			}
 			if prior := slices.IndexFunc(work, func(previous repairWork) bool { return previous.task == task }); prior >= 0 {
 				work[prior] = current
@@ -191,7 +190,7 @@ func (s *State) repairInput(task runtime.TaskKey) *RepairInput {
 		if result := s.developmentEditResult(task); result != nil && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(*result)) {
 			input.Result = result
 			for _, check := range s.editChecks(*result) {
-				if evidence, ok := s.checkReceipt(result.ActionID, check.ID); ok {
+				if evidence, ok := s.checkReceipt(result.ActionID, check.ID, nil); ok {
 					input.Checks = append(input.Checks, *evidence)
 				}
 			}
@@ -300,7 +299,10 @@ func (s *State) candidateRepairChanges(prior, current *ValidationWave) ([]repair
 			added = append(added, task)
 		}
 	}
-	allRepairs := len(added) > 0
+	if len(added) == 0 {
+		return nil, false
+	}
+	allRepairs := true
 	var repairs []repairWork
 	work := s.repairWork()
 	for _, task := range added {

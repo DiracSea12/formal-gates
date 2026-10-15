@@ -500,16 +500,18 @@ func (s *State) candidateFailureFact(cd *compiler.CompiledDefinition) *decision.
 	slices.Sort(ids)
 	for _, id := range ids {
 		intent := s.PendingHostActions[id]
-		if intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation) || !s.NativeActionCurrent(intent, cd) || s.latestNativeIntent(intent.Correlation).ActionID != id {
+		if intent.Adapter == nil || !nativeOperation(intent.Adapter.Operation) || s.latestNativeIntent(intent.Correlation).ActionID != id {
 			continue
 		}
-		if receipt, ok := s.HostActionReceipts[id]; ok && receipt.Status == HostActionStatusUnknown {
+		unknown := s.HostActionReceipts[id].Status == HostActionStatusUnknown
+		route, used, max := s.candidateFailureRoute(intent)
+		if !unknown && route.Class == "" || !s.NativeActionCurrent(intent, cd) {
+			continue
+		}
+		if unknown {
 			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: "native effect is UNKNOWN; observe and submit its typed completion evidence"}
 		}
-		route, used, max := s.candidateFailureRoute(intent)
-		if route.Class != "" {
-			return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: fmt.Sprintf("%s; native attempts %d/%d", route.ActionDetail(), used, max)}
-		}
+		return &decision.Fact{Source: decision.SourceReceipt, Key: id, Value: fmt.Sprintf("%s; native attempts %d/%d", route.ActionDetail(), used, max)}
 	}
 	return nil
 }

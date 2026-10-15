@@ -14,7 +14,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 )
 
-func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.CompiledDefinition) {
+func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.CompiledDefinition, executable map[string]HostActionIntent) {
 	if !pipelineEnabled(s, cd) {
 		return
 	}
@@ -28,7 +28,7 @@ func (s *State) projectValidationBoundary(view *decision.State, cd *compiler.Com
 		for _, intent := range s.PendingHostActions {
 			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation {
 				task := decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}}
-				if _, executable := s.ExecutableHostActions(cd)[intent.ActionID]; !executable || !s.NativeActionCurrent(intent, cd) {
+				if _, ready := executable[intent.ActionID]; !ready || !s.NativeActionCurrent(intent, cd) {
 					task.BlockedBy = decision.WaitDependencies
 				}
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], task)

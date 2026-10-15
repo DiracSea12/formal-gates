@@ -265,7 +265,12 @@ func validateCheckReceipt(intent HostActionIntent, p CheckParameters, e CheckEvi
 	return nil
 }
 
-func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
+func (s *State) checkReceipt(action, check string, source *CandidateEvidence) (*CheckEvidence, bool) {
+	if source == nil {
+		if proof, frozen := s.editSourceProof(action); frozen {
+			source = &proof
+		}
+	}
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
 			continue
@@ -286,7 +291,7 @@ func (s *State) checkReceipt(action, check string) (*CheckEvidence, bool) {
 		if !slices.ContainsFunc(s.editChecks(result), func(current DevelopmentCheck) bool { return current == p.Check }) {
 			continue
 		}
-		if source, ok := s.editSourceProof(action); ok && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
+		if source != nil && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
 			continue
 		}
 		return &evidence, true
@@ -307,7 +312,7 @@ func (s *State) developmentChecksPassed(r WorkerResult) bool {
 		return false
 	}
 	for _, check := range checks {
-		e, done := s.checkReceipt(r.ActionID, check.ID)
+		e, done := s.checkReceipt(r.ActionID, check.ID, &source)
 		if !done || e.ExitCode != 0 || e.Error != "" || e.SourceIdentity != source.Identity || e.SourceDigest != source.Digest {
 			return false
 		}
@@ -316,11 +321,12 @@ func (s *State) developmentChecksPassed(r WorkerResult) bool {
 }
 
 func (s *State) developmentChecksFailed(r WorkerResult) bool {
-	if _, frozen := s.editSourceProof(r.ActionID); !frozen {
+	source, frozen := s.editSourceProof(r.ActionID)
+	if !frozen {
 		return false
 	}
 	for _, check := range s.editChecks(r) {
-		if evidence, done := s.checkReceipt(r.ActionID, check.ID); done && (evidence.ExitCode != 0 || evidence.Error != "") {
+		if evidence, done := s.checkReceipt(r.ActionID, check.ID, &source); done && (evidence.ExitCode != 0 || evidence.Error != "") {
 			return true
 		}
 	}
@@ -354,7 +360,7 @@ func (s *State) nextCheckParameters(action string) (CheckParameters, bool) {
 		return CheckParameters{}, false
 	}
 	for _, check := range checks {
-		if e, done := s.checkReceipt(action, check.ID); done {
+		if e, done := s.checkReceipt(action, check.ID, &source); done {
 			if e.ExitCode != 0 || e.Error != "" {
 				return CheckParameters{}, false
 			}
@@ -450,20 +456,21 @@ func (s *State) developmentCheckFailure(definitions ...*compiler.CompiledDefinit
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok || !s.checkInputsCurrent(intent, definitions...) {
+		if !ok {
 			continue
 		}
 		p, err := checkParameters(intent)
 		if err != nil || p.QA != nil || p.Repair != nil {
 			continue
 		}
+		var e CheckEvidence
+		if decodeAdapterValues(receipt, &e) != nil || e.ExitCode == 0 && e.Error == "" || !s.checkInputsCurrent(intent, definitions...) {
+			continue
+		}
 		if len(definitions) > 0 && s.developmentContinuation(p.SourceActionID, definitions[0]) {
 			continue
 		}
-		var e CheckEvidence
-		if decodeAdapterValues(receipt, &e) == nil && (e.ExitCode != 0 || e.Error != "") {
-			return &decision.Fact{Source: decision.SourceReceipt, Key: receipt.ActionID, Value: "approved development check failed: " + strings.TrimSpace(e.Error)}
-		}
+		return &decision.Fact{Source: decision.SourceReceipt, Key: receipt.ActionID, Value: "approved development check failed: " + strings.TrimSpace(e.Error)}
 	}
 	return nil
 }

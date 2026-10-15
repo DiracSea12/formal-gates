@@ -33,13 +33,13 @@ func TestAbortRetiresOrdinaryValidationBoundary(t *testing.T) {
 			s.ReviewSeries.StartReadiness.Effective.Status = "PASS"
 			s.ReviewSeries.StartReadiness.Effective.RequirementRevision = "confirmed"
 			view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
-			s.projectValidationBoundary(&view, cd)
+			s.projectValidationBoundary(&view, cd, s.ExecutableHostActions(cd))
 			if len(view.OperatorFacts) != 1 || !strings.Contains(view.OperatorFacts[0].Value, scenario.waiting) {
 				t.Fatalf("ordinary obligation absent: %+v", view.OperatorFacts)
 			}
 			s.Decisions = map[string]RecordedDecision{"stop": {Control: ControlAbort, Choice: "abort", Revision: 2}}
 			view = decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
-			s.projectValidationBoundary(&view, cd)
+			s.projectValidationBoundary(&view, cd, s.ExecutableHostActions(cd))
 			if len(view.OperatorFacts) != 0 {
 				t.Fatalf("abort retained delivery obligation: %+v", view.OperatorFacts)
 			}
@@ -66,7 +66,7 @@ func TestAbortKeepsNativeCleanupDispositionBoundary(t *testing.T) {
 				t.Fatal("fixture is not an eligible cleanup action")
 			}
 			view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
-			s.projectValidationBoundary(&view, cd)
+			s.projectValidationBoundary(&view, cd, s.ExecutableHostActions(cd))
 			if len(view.OperatorFacts) != 1 || view.OperatorFacts[0].Key != intent.ActionID {
 				t.Fatalf("native disposition disappeared: %+v", view.OperatorFacts)
 			}

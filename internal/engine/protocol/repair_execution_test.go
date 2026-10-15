@@ -201,7 +201,7 @@ func TestInvalidatedRepairDutyUsesConfirmedMemberAuthority(t *testing.T) {
 				entry.WorkDecisions = append(entry.WorkDecisions, RequirementWorkDecision{Work: RequirementWork{Task: member.task}, Disposition: disposition})
 			}
 			s.RequirementRevisions = []ConfirmedRevision{entry}
-			initialResource := s.repairAssemblyResource(&s.Validation.Waves[0])
+			initialResource := s.repairAssemblyResource(&s.Validation.Waves[0], nil)
 			if boundary == "retired-task" {
 				s.Tasks[members[0].task] = runtime.TaskTerminal
 			}

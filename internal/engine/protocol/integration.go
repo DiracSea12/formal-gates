@@ -244,7 +244,7 @@ func (s *State) integratedSources() ([]runtime.TaskKey, []string, string, bool) 
 			return nil, nil, "", false
 		}
 		if s.NativeRoot != "" {
-			_, proof, ok := s.repairFinalSource(work)
+			_, proof, ok := s.repairFinalSource(work, nil)
 			if !ok {
 				return nil, nil, "", false
 			}

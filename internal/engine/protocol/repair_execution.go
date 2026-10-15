@@ -59,13 +59,13 @@ func (s *State) repairExecutions(w *ValidationWave) []repairWork {
 		}
 		member := repairWork{wave: w, task: s.replacementFold(key), plan: p, batch: &p.Batches[i], planAction: proposal.ActionID, businessRepairs: s.repairBusinessRounds(w, p.Batches[i].ID)}
 		for {
-			completion := s.developmentResultRecord(member.task)
 			executions = append(executions, member)
-			if completion == nil {
-				break
-			}
 			failed, pureP2 := s.repairGateCorrection(member)
 			if failed == "" {
+				break
+			}
+			completion := s.developmentResultRecord(member.task)
+			if completion == nil {
 				break
 			}
 			member.previous = completion
@@ -297,16 +297,19 @@ func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 		return false
 	}
 	var work *repairWork
+	var members []repairWork
 	if s.Validation != nil {
 		for index := range s.Validation.Waves {
 			w := &s.Validation.Waves[index]
 			if w.Repair == nil {
 				continue
 			}
-			for _, member := range s.repairMembers(w) {
+			current := s.repairMembers(w)
+			for _, member := range current {
 				if member.task == *i.RepairTask {
 					member.result = s.developmentResultRecord(member.task)
 					work = &member
+					members = current
 					break
 				}
 			}
@@ -321,7 +324,7 @@ func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 	}
 	if i.TargetTask != nil {
 		var target *repairWork
-		for _, member := range s.repairMembers(work.wave) {
+		for _, member := range members {
 			if member.task == *i.TargetTask {
 				target = &member
 				break
@@ -329,15 +332,18 @@ func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 		}
 		return target != nil && target.wave.ID == work.wave.ID && target.batch != nil && slices.Contains(target.batch.DependsOn, work.batch.ID)
 	}
-	return p.WorkspaceID == s.repairAssemblyResource(work.wave).ID
+	return p.WorkspaceID == s.repairAssemblyResource(work.wave, members).ID
 }
 
-func (s *State) repairAssemblyResource(w *ValidationWave) NativeResource {
-	var members []runtime.TaskKey
-	for _, member := range s.repairMembers(w) {
-		members = append(members, member.task)
+func (s *State) repairAssemblyResource(w *ValidationWave, members []repairWork) NativeResource {
+	if members == nil {
+		members = s.repairMembers(w)
 	}
-	r := s.resource("repair-integration", w.Candidate.Identity, w.ID+":"+digestOfCanonical(members))
+	var tasks []runtime.TaskKey
+	for _, member := range members {
+		tasks = append(tasks, member.task)
+	}
+	r := s.resource("repair-integration", w.Candidate.Identity, w.ID+":"+digestOfCanonical(tasks))
 	if existing, ok := s.NativeResources[r.ID]; ok {
 		return existing
 	}
@@ -400,12 +406,16 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 	}
 	for i := range s.Validation.Waves {
 		w := &s.Validation.Waves[i]
-		if !s.repairDutyCurrent(w) || len(s.repairMembers(w)) == 1 {
+		if !s.repairDutyCurrent(w) {
 			continue
 		}
-		r := s.repairAssemblyResource(w)
+		members := s.repairMembers(w)
+		if len(members) == 1 {
+			continue
+		}
+		r := s.repairAssemblyResource(w, members)
 		prefix := s.ResourceStartIdentity(r)
-		for _, member := range s.repairMembers(w) {
+		for _, member := range members {
 			if _, proof, ok := s.repairIntegrationReceipt("MERGE_FINISH", member.task, nil); ok {
 				prefix = proof.Identity
 				continue
@@ -421,14 +431,15 @@ func (s *State) repairCompleted(w *ValidationWave, cd *compiler.CompiledDefiniti
 		return false
 	}
 	hasComparisonCases := false
-	for _, member := range s.repairMembers(w) {
+	members := s.repairMembers(w)
+	for _, member := range members {
 		result := s.developmentResultRecord(member.task)
 		if result == nil {
 			return false
 		}
 		hasComparisonCases = hasComparisonCases || len(result.Validation.Development.AffectedCases) > 0
 		if s.NativeRoot != "" {
-			if _, _, integrated := s.repairFinalSource(member); !integrated {
+			if _, _, integrated := s.repairFinalSource(member, members); !integrated {
 				return false
 			}
 		}
@@ -612,8 +623,10 @@ func (s *State) repairGateInput(b WorkBinding) *GateInput {
 	return nil
 }
 
-func (s *State) repairFinalSource(work repairWork) (HostActionIntent, CandidateEvidence, bool) {
-	members := s.repairMembers(work.wave)
+func (s *State) repairFinalSource(work repairWork, members []repairWork) (HostActionIntent, CandidateEvidence, bool) {
+	if members == nil {
+		members = s.repairMembers(work.wave)
+	}
 	if work.verification {
 		work = members[len(members)-1]
 	}
@@ -643,7 +656,7 @@ func (s *State) repairVerificationWork(w *ValidationWave, cd *compiler.CompiledD
 			return nil
 		}
 		if s.NativeRoot != "" {
-			_, proof, ok := s.repairFinalSource(member)
+			_, proof, ok := s.repairFinalSource(member, members)
 			if !ok {
 				return nil
 			}

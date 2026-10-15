@@ -807,7 +807,7 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 	if result := s.developmentEditResult(task); result != nil && (result.Validation.Status == "CONTINUE" || s.developmentChecksFailed(*result)) {
 		input.Result = result
 		for _, check := range s.editChecks(*result) {
-			if evidence, ok := s.checkReceipt(result.ActionID, check.ID); ok {
+			if evidence, ok := s.checkReceipt(result.ActionID, check.ID, nil); ok {
 				input.Checks = append(input.Checks, *evidence)
 			}
 		}
@@ -1044,7 +1044,7 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 			return nil, nil, "", false
 		}
 		if s.NativeRoot != "" {
-			_, proof, ok := s.repairFinalSource(work)
+			_, proof, ok := s.repairFinalSource(work, nil)
 			if !ok {
 				return nil, nil, "", false
 			}

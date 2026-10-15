@@ -287,7 +287,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 				return s.taskResource(*p.Integration.TargetTask, cd)
 			}
 			if member := s.repairMember(*p.Integration.RepairTask); member != nil {
-				return s.repairAssemblyResource(member.wave)
+				return s.repairAssemblyResource(member.wave, nil)
 			}
 		}
 		return s.integrationResource()
@@ -303,7 +303,7 @@ func (s *State) candidateResource(p CandidateParameters, cd *compiler.CompiledDe
 				if len(s.repairMembers(work.wave)) == 1 {
 					return s.taskResource(work.task, cd)
 				}
-				return s.repairAssemblyResource(work.wave)
+				return s.repairAssemblyResource(work.wave, nil)
 			}
 		}
 		if s.mergeMaster() && len(p.SourceTasks) == 0 {
@@ -915,14 +915,14 @@ func (e *Engine) BeginCleanup(input Observation, related ...*State) error {
 	return err
 }
 
-func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition, validationTasks map[authoring.StepID][]decision.RequiredTask) {
+func (s *State) projectResourceBoundary(view *decision.State, cd *compiler.CompiledDefinition, validationTasks map[authoring.StepID][]decision.RequiredTask, executable map[string]HostActionIntent) {
 	for _, step := range cd.Steps {
 		p, ok := step.Payload.(compiler.CompiledHostActionStep)
 		if !ok || (p.Operation != "op.workspace" && p.Operation != "op.cleanup" && p.Operation != "op.check") {
 			continue
 		}
 		view.RequiredTasks[step.Header.ID] = nil
-		for _, intent := range s.ExecutableHostActions(cd) {
+		for _, intent := range executable {
 			if intent.Adapter != nil && intent.Adapter.Operation == p.Operation && intent.Step == step.Header.ID && s.nativeActionCurrent(intent, cd, validationTasks) {
 				view.RequiredTasks[step.Header.ID] = append(view.RequiredTasks[step.Header.ID], decision.RequiredTask{Task: runtime.TaskKey{Node: step.Header.NodeID, Step: step.Header.ID, Scope: intent.ActionID}})
 			}

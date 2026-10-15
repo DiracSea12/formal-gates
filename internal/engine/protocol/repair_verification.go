@@ -39,13 +39,13 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 		return contexts
 	}
 	for _, work := range s.repairWork() {
-		r := s.developmentEditResult(work.task)
-		if r == nil || !s.editResultCurrent(*r) || !r.Validation.Binding.PureP2 || !s.developmentChecksPassed(*r) || len(r.Validation.Development.AffectedCases) == 0 {
+		r := work.result
+		if r == nil || !s.editResultCurrent(*r) || !r.Validation.Binding.PureP2 || len(r.Validation.Development.AffectedCases) == 0 {
 			continue
 		}
 		proof, ready := s.editSourceProof(r.ActionID)
 		if ready {
-			contexts = append(contexts, s.newRepairComparison(work.wave, []WorkerResult{*r}, proof, nil, cd))
+			contexts = append(contexts, s.newRepairComparison(work.wave, []WorkerResult{*r}, proof, r.ActionID, nil, cd))
 		}
 	}
 	for i := range s.Validation.Waves {
@@ -53,7 +53,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 		if work == nil {
 			continue
 		}
-		_, proof, ready := s.repairFinalSource(*work)
+		source, proof, ready := s.repairFinalSource(*work, nil)
 		if !ready {
 			continue
 		}
@@ -63,7 +63,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 				originals = append(originals, *r)
 			}
 		}
-		contexts = append(contexts, s.newRepairComparison(work.wave, originals, proof, work, cd))
+		contexts = append(contexts, s.newRepairComparison(work.wave, originals, proof, source.ActionID, work, cd))
 	}
 
 	for action, binding := range s.DispatchBindings {
@@ -121,7 +121,7 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 	return contexts
 }
 
-func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult, source CandidateEvidence, verification *repairWork, cd *compiler.CompiledDefinition) repairComparison {
+func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult, source CandidateEvidence, sourceAction string, verification *repairWork, cd *compiler.CompiledDefinition) repairComparison {
 	final := verification != nil
 	context := repairComparison{originals: originals, source: source, wave: w, final: final}
 	var actions []string
@@ -148,13 +148,7 @@ func (s *State) newRepairComparison(w *ValidationWave, originals []WorkerResult,
 	if registered, ok := s.NativeResources[context.resource.ID]; ok {
 		context.resource = registered
 	}
-	context.binding = WorkBinding{Task: task, WaveID: w.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest(), WorkspaceID: context.resource.ID, Candidate: source.Identity, PureP2: true}
-	if !final {
-		context.binding.VerificationSource = originals[0].ActionID
-	} else {
-		intent, _, _ := s.repairFinalSource(*verification)
-		context.binding.VerificationSource = intent.ActionID
-	}
+	context.binding = WorkBinding{Task: task, WaveID: w.ID, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest(), WorkspaceID: context.resource.ID, Candidate: source.Identity, PureP2: true, VerificationSource: sourceAction}
 	for action, binding := range s.DispatchBindings {
 		if binding.Task == task && s.validationWorkCarryAuthorized(action, task) && binding.Candidate == source.Identity {
 			context.binding = binding

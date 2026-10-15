@@ -206,7 +206,7 @@ func TestRepairAskHistoryRetainsOriginalEvidence(t *testing.T) {
 	if !reflect.DeepEqual(history.Results, []WorkerResult{result, gateResult, carried}) {
 		t.Fatalf("original result identities, bindings, or outcomes changed: %+v", history.Results)
 	}
-	evidence, exists := s.checkReceipt(result.ActionID, parameters.Check.ID)
+	evidence, exists := s.checkReceipt(result.ActionID, parameters.Check.ID, nil)
 	if !exists || len(history.Checks) != 1 || !reflect.DeepEqual(history.Checks[0], *evidence) || history.Checks[0].ExitCode != 7 || history.Checks[0].SourceIdentity != parameters.SourceIdentity || history.Checks[0].Stdout.SHA256 != "out" || history.Checks[0].Stderr.SHA256 != "err" {
 		t.Fatalf("actual failed check source/exit/streams changed: %+v", history.Checks)
 	}
@@ -301,7 +301,7 @@ func TestRepairAskHistoryRetainsChecksAfterPlanChange(t *testing.T) {
 	if len(s.fullProjectChecks()) != 1 || s.fullProjectChecks()[0].Command != "build changed project" {
 		t.Fatal("current confirmed plan did not change its checks")
 	}
-	if _, found := s.checkReceipt(result.ActionID, checks[1].ID); found {
+	if _, found := s.checkReceipt(result.ActionID, checks[1].ID, nil); found {
 		t.Fatal("fixture did not reach the current-plan check eligibility seam")
 	}
 	before := digestOfCanonical(s)

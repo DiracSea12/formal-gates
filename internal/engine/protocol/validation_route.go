@@ -13,15 +13,15 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if w == nil || w.Repair == nil {
 		return false
 	}
+	if w.Status != "REPAIR" && w.Status != "INVALIDATED" {
+		return false
+	}
 	members := s.repairMembers(w)
 	if len(members) == 1 && members[0].task == w.Repair.Task && s.repairTaskFinished(w.Repair.Task) && s.developmentEditResult(w.Repair.Task) == nil {
 		return false
 	}
 	if w.Status == "REPAIR" {
 		return true
-	}
-	if w.Status != "INVALIDATED" {
-		return false
 	}
 	_, issued := s.repairIssue(w.Repair.Task)
 	for id, decision := range s.Decisions {
@@ -33,7 +33,7 @@ func (s *State) validationRepairPending(w *ValidationWave) bool {
 	if s.Validation.Candidate != nil && *s.Validation.Candidate == w.Candidate && w.RouteDigest != s.validationRouteDigest() {
 		return true
 	}
-	for _, member := range s.repairMembers(w) {
+	for _, member := range members {
 		if s.repairTaskFinished(member.task) && s.developmentEditResult(member.task) == nil {
 			return false
 		}

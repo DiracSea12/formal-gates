@@ -164,7 +164,7 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 			continue
 		}
 		item := repairAskMember{Binding: WorkBinding{Task: member.task, WaveID: member.wave.ID, PlanRequest: member.planAction}, Input: s.repairInput(member.task), Completion: member.result}
-		if _, source, frozen := s.repairFinalSource(member); frozen {
+		if _, source, frozen := s.repairFinalSource(member, nil); frozen {
 			item.Source = &source
 		}
 		face.Members = append(face.Members, item)
