@@ -635,13 +635,18 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 	}
 	gates := slices.Clone(state.SelectedGates)
 	slices.Sort(gates)
+	disabled := []string{}
+	if state.FlowSelection != nil {
+		disabled = append(disabled, state.FlowSelection.Disabled...)
+	}
+	slices.Sort(disabled)
 	topologyDigest := canonicalDigest(state.Topology)
 	routeDigest := canonicalDigest(struct {
 		Confirmed bool
 		Gates     []string
 		Topology  *protocol.TopologyBinding
-		Flow      *protocol.FlowSelection
-	}{state.RouteConfirmed, gates, state.Topology, state.FlowSelection})
+		Disabled  []string
+	}{state.RouteConfirmed, gates, state.Topology, disabled})
 	confirmed := func(id, revision string) guard.ConfirmedIdentity {
 		return guard.ConfirmedIdentity{Identity: guard.Identity{ID: id, Revision: revision}, ConfirmedRevision: revision}
 	}
@@ -649,7 +654,7 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 		SchemaVersion: 1,
 		Requirement:   confirmed(state.IntakeConfirmationReceipt.RequirementSource, state.RequirementRevision()),
 		Batch:         confirmed("merge-topology", topologyDigest),
-		Route:         confirmed("merge", routeDigest),
+		Route:         confirmed("validation-route", routeDigest),
 		Topology:      confirmed("split", topologyDigest),
 		Definition:    guard.Definition{Identity: guard.Identity{ID: definition.WorkflowDefinitionDigest, Revision: string(master.f.definition.Version)}, ExternalSteps: []runtime.TaskKey{}},
 		ApprovedQA:    []guard.Identity{}, SelectedGates: []guard.Identity{}, EstablishedObligations: []guard.Identity{}, EstablishedRepairs: []guard.Identity{}, ExternalTasks: []guard.ExternalTask{},

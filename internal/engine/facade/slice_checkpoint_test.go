@@ -97,11 +97,40 @@ func TestSliceDisabledQualityRoleKeepsRealRouteAndEmptyGateEvidence(t *testing.T
 		t.Fatal("child lost its inherited quality selection or real route", state.Phase, state.FlowSelection, state.SelectedGates)
 	}
 	receipt := readSliceReceipt(t, child).Receipt
+	if !reflect.DeepEqual(receipt.FlowSelection, selection) {
+		t.Fatal("receipt lost the child's frozen workflow selection", receipt.FlowSelection)
+	}
 	if len(receipt.SelectedGates) != 2 || len(receipt.Validation.Results) != 0 || receipt.Validation.Status != "COMPLETE" {
 		t.Fatal("child demanded or fabricated disabled gate results", receipt.Validation)
 	}
 	if targets := state.Validation.Waves[len(state.Validation.Waves)-1].Targets; len(targets) != 0 {
 		t.Fatal("disabled child gate retained targets", targets)
+	}
+	master.reopen()
+	master.drive()
+	accepted := driverState(t, master).SliceReceipts[child.f.runID]
+	if !reflect.DeepEqual(accepted.Receipt, receipt) {
+		t.Fatal("master recovery changed the child's frozen workflow selection")
+	}
+	child.drive()
+	master.reopen()
+	if repeated := driverState(t, master).SliceReceipts[child.f.runID]; !reflect.DeepEqual(repeated, accepted) {
+		t.Fatal("repeated checkpoint handoff changed the accepted receipt")
+	}
+	abortRun(t, child)
+	child.drive()
+	child.reopen()
+	if child.run.Termination == nil || child.run.Termination.SliceReceipt == nil {
+		t.Fatal("aborted child lost its frozen receipt")
+	}
+	aborted := *child.run.Termination.SliceReceipt
+	if aborted.Receipt.Status != "ABORTED" || !reflect.DeepEqual(aborted.Receipt.FlowSelection, selection) {
+		t.Fatal("aborted receipt lost the child's frozen workflow selection", aborted.Receipt.FlowSelection)
+	}
+	master.reopen()
+	master.drive()
+	if current := driverState(t, master).SliceReceipts[child.f.runID]; !reflect.DeepEqual(current, aborted) {
+		t.Fatal("master recovery changed the aborted receipt")
 	}
 }
 

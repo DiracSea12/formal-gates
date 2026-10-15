@@ -106,6 +106,7 @@ type SliceTerminalReceipt struct {
 	Topology                  TopologyBinding                                     `json:"topology"`
 	RouteConfirmed            bool                                                `json:"routeConfirmed"`
 	SelectedGates             []string                                            `json:"selectedGates"`
+	FlowSelection             *FlowSelection                                      `json:"flowSelection,omitempty"`
 	Validation                SliceValidationReceipt                              `json:"validation"`
 	SelectedQA                []coverage.ReviewKind                               `json:"selectedQA"`
 	ApprovedCases             map[coverage.ReviewKind]coverage.AcceptanceManifest `json:"approvedCases"`
@@ -222,6 +223,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 		Topology:            copyTopology(*state.Topology),
 		RouteConfirmed:      state.RouteConfirmed,
 		SelectedGates:       slices.Clone(state.SelectedGates),
+		FlowSelection:       state.FlowSelection,
 		Validation: SliceValidationReceipt{
 			WaveID:              wave.ID,
 			Status:              wave.Status,
@@ -317,7 +319,7 @@ func (s *State) verifySliceReceipt() error {
 // the child loader and checkpoint own whether the final obligations concluded.
 func (r SliceReceipt) verify() error {
 	v := r.Receipt
-	route := State{RouteConfirmed: v.RouteConfirmed, SelectedGates: v.SelectedGates, Topology: &v.Topology}
+	route := State{RouteConfirmed: v.RouteConfirmed, SelectedGates: v.SelectedGates, Topology: &v.Topology, FlowSelection: v.FlowSelection}
 	if r.Digest != v.CanonicalDigest() || (v.Status != runtime.PhaseSliceReady && v.Status != "ABORTED") || v.ChildRunID == "" || v.MasterRunID == "" || v.SliceID == "" ||
 		v.Status == runtime.PhaseSliceReady && (v.Snapshot == "" || v.Tree == "" || v.Digest != v.Tree || v.Validation.Status != "COMPLETE" || v.Validation.Candidate.Digest != v.Tree) ||
 		v.RequirementRevision == "" || v.Status == runtime.PhaseSliceReady && (v.Validation.RequirementRevision != v.RequirementRevision || v.Validation.RouteDigest != route.validationRouteDigest()) || v.Status == "ABORTED" && (v.Abort == nil || v.Abort.Event.Digest == "" || v.Abort.Decision.RequestID == "") {
@@ -550,7 +552,7 @@ func (e *Engine) FreezeAbortedSlice(endedAt string, input Observation) error {
 	if s.SliceReceipt != nil && s.SliceReceipt.Receipt.Status == "ABORTED" {
 		return nil
 	}
-	r := SliceTerminalReceipt{OriginRequirementRevision: s.SliceChild.RequirementRevision, ParentRequirement: s.SliceChild.ParentChange, ParentReset: s.SliceChild.ParentReset, Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteConfirmed: s.RouteConfirmed, SelectedGates: slices.Clone(s.SelectedGates), Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
+	r := SliceTerminalReceipt{OriginRequirementRevision: s.SliceChild.RequirementRevision, ParentRequirement: s.SliceChild.ParentChange, ParentReset: s.SliceChild.ParentReset, Status: "ABORTED", ChildRunID: s.RunID, SliceID: s.SliceChild.SliceID, MasterRunID: s.SliceChild.MasterRunID, Envelope: e.store.Envelope(), Snapshot: s.AcceptedNativeSnapshot(), Tree: s.PromotedDigest, Digest: s.PromotedDigest, RequirementRevision: s.RequirementRevision(), Topology: copyTopology(*s.Topology), RouteConfirmed: s.RouteConfirmed, SelectedGates: slices.Clone(s.SelectedGates), FlowSelection: s.FlowSelection, Cost: s.Cost, Abort: &AbortAuthority{Decision: d, Event: record}, ResetRequestID: s.resetRequestID(), OwnerTranscript: s.OwnerTranscript, OwnerStartedAt: s.OwnerStartedAt, OwnerEndedAt: endedAt, LastEvent: &SliceEventIdentity{EventID: d.EventID, RequestID: d.RequestID, Digest: record.Digest, Revision: record.Acceptance.Revision}, LastRequest: &SliceRequestIdentity{RequestID: d.RequestID, EventID: d.EventID, RequestDigest: s.requestDigest(d.RequestID), DecisionDigest: record.Digest, Revision: d.Revision}}
 	if s.SliceChild.ParentAbort != nil {
 		r.Abort = s.SliceChild.ParentAbort
 		r.LastRequest.RequestDigest = r.Abort.RequestDigest
