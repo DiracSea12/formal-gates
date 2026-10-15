@@ -689,10 +689,6 @@ func ValidateFinalRepairEvidence(members []DevelopmentEvidence, e DevelopmentEvi
 // Gate findings retain their source target; an accepted repair disposition
 // projects the next member Task without rewriting its completed source result.
 func (s *State) repairGateCorrection(work repairWork) (string, bool) {
-	result := s.developmentResultRecord(work.task)
-	if result == nil {
-		return "", false
-	}
 	for _, gate := range s.repairGates(work) {
 		_, target := s.memberGateTarget(work, gate)
 		if target == nil || target.Status != "PASS" && target.Status != "FAIL" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" {
