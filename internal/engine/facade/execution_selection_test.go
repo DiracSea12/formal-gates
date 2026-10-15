@@ -316,6 +316,7 @@ func TestQAExecutionGroupsSelectAndRetainTheirWholePipeline(t *testing.T) {
 	d := newValidationDriver(t, "blackbox", "whitebox", "quality")
 	blackPlatform := selectionPlatformFixture(t, "black", true)
 	whitePlatform := selectionPlatformFixture(t, "white", true)
+	t.Parallel()
 	selectExecution(t, d.f, ExecutionSelectionInput{Node: "4", Platform: blackPlatform.descriptor.ID, Model: "Careful", Effort: "high"})
 	selectExecution(t, d.f, ExecutionSelectionInput{Node: "白盒 QA 的设计、独立审查与执行", Platform: whitePlatform.descriptor.ID, Model: "Fast", Effort: "low"})
 	selectExecution(t, d.f, ExecutionSelectionInput{Node: "qa-blackbox", Effort: "medium"})
