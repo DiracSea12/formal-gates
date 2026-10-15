@@ -3,7 +3,6 @@ package facade
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,12 +24,6 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 			base := snapshotRepoCommits(t, root)[0]
 			plan := commandPlan()
 			d := nativeMasterAt(t, root, base, nil)
-			binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-			build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-			build.Dir = "../../.."
-			if out, err := build.CombinedOutput(); err != nil {
-				t.Fatalf("runtime %v %s", err, out)
-			}
 			passPreDevelopmentReviews(t, d, plan)
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command"}})
 			d.confirmRoute(routeDecisionForGates([]string{"blackbox", "quality"}))

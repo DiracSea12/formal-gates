@@ -226,12 +226,6 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	plan := commandPlan()
 	plan.Batches[0].Checks[0].Command = "printf checked"
 	d := nativeMasterAt(t, root, base, nil)
-	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved command case"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
@@ -381,12 +375,6 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	plan := commandPlan()
 	plan.Batches[0].Checks[0].Command = "printf checked"
 	d := nativeMasterAt(t, root, base, nil)
-	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Frozen precise Go cases"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))

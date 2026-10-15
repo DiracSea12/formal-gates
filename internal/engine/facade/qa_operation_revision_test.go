@@ -2,7 +2,6 @@ package facade
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -17,11 +16,6 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
-	build := exec.Command("go", "build", "-o", filepath.Join(d.f.admission.Target, "bin", "formal-gates"), "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	plan := commandPlan()
 	plan.Batches[0].Checks[0].Command = "printf checked"
 	d.reviewPass(plan)

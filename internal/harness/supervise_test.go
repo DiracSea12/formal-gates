@@ -8,28 +8,50 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
 
-// supervisorBinary builds the current source as an independent driver. Process
-// ownership and SIGTERM cancellation require a separate process.
+// supervisorBinary writes the current source build to a private executable.
+// Process ownership and SIGTERM cancellation require a separate process.
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file))) // internal/harness -> repo root
+	body, err := supervisorRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
 	name := "formal-gates"
 	if runtime.GOOS == "windows" {
-		name = "formal-gates.exe"
+		name += ".exe"
 	}
 	out := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", out, "./cmd/formal-gates")
-	build.Dir = root
-	if b, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build supervisor: %v\n%s", err, b)
+	if err := os.WriteFile(out, body, 0700); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
+
+var supervisorRuntime = sync.OnceValues(func() ([]byte, error) {
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Dir(filepath.Dir(filepath.Dir(file))) // internal/harness -> repo root
+	directory, err := os.MkdirTemp("", "formal-gates-supervisor-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(directory)
+	name := "formal-gates"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	out := filepath.Join(directory, name)
+	build := exec.Command("go", "build", "-o", out, "./cmd/formal-gates")
+	build.Dir = root
+	if b, err := build.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("build supervisor: %w\n%s", err, b)
+	}
+	return os.ReadFile(out)
+})
 
 func envSlice(m map[string]string) []string {
 	out := make([]string, 0, len(m))

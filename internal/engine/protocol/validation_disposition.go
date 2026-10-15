@@ -167,7 +167,7 @@ func (s *State) validationObligationWaived(w *ValidationWave, target *Validation
 				return true
 			}
 			for _, finding := range s.Validation.Findings {
-				if s.validationFindingResponsibility(source, finding) == original && len(finding.History) > 0 && finding.History[len(finding.History)-1].ProblemID == id {
+				if len(finding.History) > 0 && finding.History[len(finding.History)-1].ProblemID == id && s.validationFindingResponsibility(source, finding) == original {
 					return true
 				}
 			}

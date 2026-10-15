@@ -41,12 +41,6 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 	}
 	base := strings.TrimSpace(string(out))
 	d := nativeMasterAt(t, root, base, nil)
-	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build check runtime %v %s", err, out)
-	}
 	plan := commandPlan()
 	if len(checks) > 0 {
 		plan.Batches[0].Checks = checks
@@ -343,12 +337,6 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 			consumer.Artifacts = []string{"consumer.go"}
 			plan.Batches = append(plan.Batches, consumer)
 			d := nativeMasterAt(t, root, base, nil)
-			binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-			build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-			build.Dir = "../../.."
-			if out, err := build.CombinedOutput(); err != nil {
-				t.Fatalf("build runtime %v %s", err, out)
-			}
 			d.reviewPass(plan)
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command with a verified dependent"}})
 			d.confirmRoute(routeDecisionForGates([]string{"quality"}))
@@ -457,12 +445,6 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
-	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	plan := commandPlan()
 	batch := &plan.Batches[0]
 	batch.Checks[0].Command, batch.Checks[0].Goal = "", "Build the complete project"
@@ -568,12 +550,6 @@ func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
-	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	plan := commandPlan()
 	for i := range plan.Batches[0].Checks {
 		plan.Batches[0].Checks[i].Command, plan.Batches[0].Checks[i].Goal = "", "Verify the existing complete project"

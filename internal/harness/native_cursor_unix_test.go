@@ -27,16 +27,7 @@ import (
 
 func TestCursorManagedToolsUseOriginalWorkspaceAndPolicy(t *testing.T) {
 	t.Parallel()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the source package")
-	}
-	binary := filepath.Join(t.TempDir(), "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build current CLI: %v\n%s", err, output)
-	}
+	binary := supervisorBinary(t)
 	for _, readOnly := range []bool{false, true} {
 		t.Run(fmt.Sprintf("readOnly=%t", readOnly), func(t *testing.T) {
 			scenario := newCursorScenario(t, "88888888-8888-4888-8888-888888888888", "model-a", "high", readOnly)

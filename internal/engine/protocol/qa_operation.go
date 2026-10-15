@@ -143,6 +143,7 @@ func (s *State) qaOperationPlans(target *ValidationTarget, binding WorkBinding) 
 }
 
 func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool) {
+	parametersDigest := digestOfCanonical(p)
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.AdapterOperation != "op.check" || receipt.Status != HostActionStatusExecuted {
 			continue
@@ -151,15 +152,15 @@ func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool)
 		if !ok {
 			continue
 		}
+		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {
+			continue
+		}
 		issued, err := checkParameters(intent)
-		if err != nil || issued.QA == nil || digestOfCanonical(issued) != digestOfCanonical(p) {
+		if err != nil || issued.QA == nil || digestOfCanonical(issued) != parametersDigest {
 			continue
 		}
 		evidence, err := s.validateNativeCheckReceipt(intent, issued, receipt)
 		if err != nil {
-			continue
-		}
-		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {
 			continue
 		}
 		if evidence.PreparationSourceAction != "" {

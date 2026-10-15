@@ -22,11 +22,6 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
-	build := exec.Command("go", "build", "-o", filepath.Join(d.f.admission.Target, "bin", "formal-gates"), "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, out)
-	}
 	plan := commandPlan()
 	plan.Batches[0].Checks[0].Command = "printf checked"
 	d.reviewPass(plan)
@@ -615,11 +610,6 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
-	build := exec.Command("go", "build", "-o", filepath.Join(d.f.admission.Target, "bin", "formal-gates"), "./cmd/formal-gates")
-	build.Dir = "../../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build runtime: %v %s", err, output)
-	}
 	d.reviewPass(commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One command behavior"}})
 	d.confirmRoute(routeDecisionForGates([]string{"whitebox"}))

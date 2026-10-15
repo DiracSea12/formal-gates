@@ -29,16 +29,7 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &validationDriver{t: t, f: f, run: run, revision: receipt.RequirementRevision, provider: DefaultProvider, git: vcs.New(root, nil), mockNative: true}
-	binary := filepath.Join(t.TempDir(), "formal-gates")
-	source, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = source
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build hook consumer: %v %s", err, output)
-	}
+	binary := filepath.Join(f.admission.Target, "bin", "formal-gates")
 	decision := func(session, role, path string) struct {
 		Decision   string `json:"decision"`
 		Permission string `json:"permission"`
@@ -141,12 +132,7 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 func TestCarriedDevelopmentKeepsPublicWriteScope(t *testing.T) {
 	t.Parallel()
 	d := newValidationDriver(t, "quality")
-	binary := filepath.Join(t.TempDir(), "formal-gates")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
-	build.Dir = filepath.Clean("../../..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build hook: %v %s", err, output)
-	}
+	binary := filepath.Join(d.f.admission.Target, "bin", "formal-gates")
 	observe := func(role, want string) {
 		t.Helper()
 		body, err := json.Marshal(map[string]any{"tool_name": "Write", "tool_input": map[string]any{"file_path": filepath.Join(d.f.root, "app.go")}, "cwd": d.f.root, "agent_type": role})

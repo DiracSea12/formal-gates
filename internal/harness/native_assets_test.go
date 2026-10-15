@@ -1,7 +1,7 @@
 package harness
 
 // Native transports consume the exact script bytes admitted by the public
-// installer. These tests run a freshly built CLI and the installed credential
+// installer. These tests run the current source CLI and the installed credential
 // helper with an isolated store; they do not start a host or a model.
 
 import (
@@ -30,12 +30,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	candidate := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", candidate, "./cmd/formal-gates")
-	build.Dir = repository
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build candidate: %v\n%s", err, output)
-	}
+	candidate := supervisorBinary(t)
 	receipt, err := validate.PackageReceipt(repository)
 	if err != nil {
 		t.Fatal(err)

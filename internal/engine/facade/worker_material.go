@@ -635,20 +635,28 @@ func jsonValuesEqual(a, b any) bool {
 }
 
 func readWorkerMaterial(material WorkerMaterial) (worker.Material, error) {
-	body, err := os.ReadFile(material.Path)
+	value, err := readWorkerMaterialFile(material.Path, material.Digest)
+	if err != nil {
+		return value, err
+	}
+	if value.Input.Pending.ActionID != material.ActionID || value.Input.Pending.AttemptID != material.AttemptID || value.ReadOnly != material.ReadOnly {
+		return value, fmt.Errorf("worker material identity differs from its issued reference")
+	}
+	return value, nil
+}
+
+func readWorkerMaterialFile(path, digest string) (worker.Material, error) {
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return worker.Material{}, err
 	}
 	sum := sha256.Sum256(body)
-	if material.Digest != "sha256:"+hex.EncodeToString(sum[:]) {
+	if digest != "sha256:"+hex.EncodeToString(sum[:]) {
 		return worker.Material{}, fmt.Errorf("worker material proof differs")
 	}
 	var value worker.Material
 	if err := json.Unmarshal(body, &value); err != nil {
 		return value, err
-	}
-	if value.Input.Pending.ActionID != material.ActionID || value.Input.Pending.AttemptID != material.AttemptID || value.ReadOnly != material.ReadOnly {
-		return value, fmt.Errorf("worker material identity differs from its issued reference")
 	}
 	return value, nil
 }
@@ -994,19 +1002,12 @@ func (f *Facade) originalWorkerMaterials() (map[WorkerMaterial]worker.Material, 
 			continue
 		}
 		path := filepath.Join(f.stateDir, "materials", entry.Name())
-		body, err := os.ReadFile(path)
+		digest := "sha256:" + strings.TrimSuffix(entry.Name(), ".json")
+		value, err := readWorkerMaterialFile(path, digest)
 		if err != nil {
 			return nil, err
 		}
-		var value worker.Material
-		if err := json.Unmarshal(body, &value); err != nil {
-			return nil, err
-		}
-		ref := WorkerMaterial{ActionID: value.Input.Pending.ActionID, AttemptID: value.Input.Pending.AttemptID, Path: path, Digest: "sha256:" + strings.TrimSuffix(entry.Name(), ".json"), ReadOnly: value.ReadOnly}
-		value, err = readWorkerMaterial(ref)
-		if err != nil {
-			return nil, err
-		}
+		ref := WorkerMaterial{ActionID: value.Input.Pending.ActionID, AttemptID: value.Input.Pending.AttemptID, Path: path, Digest: digest, ReadOnly: value.ReadOnly}
 		materials[ref] = value
 	}
 	return materials, nil

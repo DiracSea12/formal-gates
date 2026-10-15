@@ -28,7 +28,6 @@ func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
 	}
 	build := exec.Command("go", "build", "-o", candidate, "./cmd/formal-gates")
 	build.Dir = repoRoot
-	build.Env = environmentWithOverrides(os.Environ(), map[string]string{"GOCACHE": t.TempDir()})
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("candidate build failed: %v\n%s", err, output)
 	}

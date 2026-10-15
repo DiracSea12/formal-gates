@@ -921,10 +921,10 @@ func newNativeClientWithEnv(hooks nativeHooks, argv []string, workspace, directo
 
 	var pgid any
 	if runtime.GOOS != "windows" {
-		group, groupErr := nativeProcessGroupID(c.cmd.Process.Pid)
+		group, groupErr := nativeProcessGroupID(os.Getpid())
 		if groupErr != nil {
-			// A started child must be terminated and reaped when its process
-			// group cannot be observed.
+			// The child inherits the caller's process group. If that group
+			// cannot be observed, terminate and reap the started child.
 			c.stdin.Close()
 			stdoutRead.Close()
 			_ = c.cmd.Process.Kill()

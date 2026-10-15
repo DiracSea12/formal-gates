@@ -116,6 +116,10 @@ func (s *State) editBatch(r WorkerResult) (DevelopmentBatch, bool) {
 }
 
 func (s *State) editSourceProof(action string) (CandidateEvidence, bool) {
+	r, exists := s.Results[action]
+	if !exists || r.Validation == nil {
+		return CandidateEvidence{}, false
+	}
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.Status != HostActionStatusExecuted || receipt.AdapterOperation != "op.candidate" {
 			continue
@@ -125,8 +129,7 @@ func (s *State) editSourceProof(action string) (CandidateEvidence, bool) {
 			continue
 		}
 		p, err := candidateParameters(intent)
-		r, exists := s.Results[action]
-		if err != nil || !exists || r.Validation == nil || p.Stage != "CHECK_SOURCE" || !slices.Contains(p.SourceTasks, r.Validation.Binding.Task) {
+		if err != nil || p.Stage != "CHECK_SOURCE" || !slices.Contains(p.SourceTasks, r.Validation.Binding.Task) {
 			continue
 		}
 		if p.SourceResults[action] != r.Digest {
@@ -277,6 +280,9 @@ func (s *State) checkReceipt(action, check string, source *CandidateEvidence) (*
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
 		if !ok {
+			continue
+		}
+		if sourceAction, known := intent.Adapter.Params["sourceActionId"].(string); known && sourceAction != action {
 			continue
 		}
 		p, err := checkParameters(intent)
