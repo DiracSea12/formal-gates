@@ -60,8 +60,10 @@ func nativeCandidateIntent(t *testing.T, stage, base string, paths ...string) pr
 }
 
 func TestNativeCandidateFreezeKeepsAcceptedSourcePrefix(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f, state, native, runner := nativeCandidateWorkspace(t, name)
 			resource := state.NativeResources["editing"]
 			start := resource.Identity
@@ -104,8 +106,10 @@ func TestNativeCandidateFreezeKeepsAcceptedSourcePrefix(t *testing.T) {
 }
 
 func TestNativeCandidateFreezeMapsCopiedSourceAndRejectsForeignCommits(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f, state, native, runner := nativeCandidateWorkspace(t, name)
 			resource := state.NativeResources["editing"]
 			intent := nativeCandidateIntent(t, "AUTHORING", resource.Source, "app_test.go")
@@ -131,6 +135,7 @@ func TestNativeCandidateFreezeMapsCopiedSourceAndRejectsForeignCommits(t *testin
 				t.Fatalf("artifact commit reobservation differs: %+v %t %v", observed, complete, err)
 			}
 			t.Run("review-ready", func(t *testing.T) {
+				t.Parallel()
 				reviewer, reviewing, reviewNative, _ := nativeCandidateWorkspace(t, name)
 				copy := reviewing.NativeResources["editing"]
 				copy.Role = "candidate"
@@ -179,8 +184,10 @@ func TestNativeCandidateFreezeMapsCopiedSourceAndRejectsForeignCommits(t *testin
 }
 
 func TestNativeWhiteboxArtifactRetainsMaterialsAcrossSemanticAndFileRevisions(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f, state, native, runner := nativeCandidateWorkspace(t, name)
 			resource := state.NativeResources["editing"]
 			base := resource.Source

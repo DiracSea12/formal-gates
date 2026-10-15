@@ -34,6 +34,7 @@ func nativeFixtureDirectory(t *testing.T) string {
 }
 
 type nativeProviderRunner struct {
+	port, user, client  string
 	log                 *os.File
 	lost                bool
 	interruptDelivery   bool
@@ -47,6 +48,23 @@ func (r *nativeProviderRunner) Run(dir, command string, args ...string) (string,
 	return strings.TrimSpace(string(b)), e
 }
 func (r *nativeProviderRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	if command == "p4" {
+		prefix := []string{"-p", r.port, "-u", r.user}
+		hasClient := false
+		for i := 0; i < len(args) && strings.HasPrefix(args[i], "-"); i++ {
+			if args[i] == "-c" {
+				hasClient = true
+				break
+			}
+			if args[i] == "-p" || args[i] == "-u" || args[i] == "-C" {
+				i++
+			}
+		}
+		if !hasClient && r.client != "" {
+			prefix = append(prefix, "-c", r.client)
+		}
+		args = append(prefix, args...)
+	}
 	start := time.Now()
 	body, err := (vcs.ExecRunner{}).RunRaw(dir, command, input, args...)
 	fmt.Fprintf(r.log, "%s %q dir=%q stdin=%q elapsed=%s error=%v\nstdout=%q\n", command, args, dir, input, time.Since(start), err, body)
@@ -111,9 +129,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { server.Process.Kill(); server.Wait() })
-		t.Setenv("P4PORT", port)
-		t.Setenv("P4USER", "fixture")
-		t.Setenv("P4CLIENT", "main")
+		runner.port, runner.user, runner.client = port, "fixture", "main"
 		ready := false
 		for i := 0; i < 50; i++ {
 			if _, err := runner.Run("", "p4", "info"); err == nil {
@@ -190,7 +206,14 @@ func TestRegularStartPersistsSelectedVCS(t *testing.T) {
 				base = snapshotRepoCommits(t, root)[0]
 				requirement = "requirements.md"
 			} else {
-				root, base, runner = nativeProviderFixture(t, name)
+				var nativeRunner *nativeProviderRunner
+				root, base, nativeRunner = nativeProviderFixture(t, name)
+				runner = nativeRunner
+				if name == "p4" {
+					t.Setenv("P4PORT", nativeRunner.port)
+					t.Setenv("P4USER", nativeRunner.user)
+					t.Setenv("P4CLIENT", nativeRunner.client)
+				}
 				requirement = ".gates/requirements.md"
 			}
 			preview, err := PrepareIntake(root, requirement, "", nil, true)
@@ -383,9 +406,11 @@ func nativeWhiteboxReady(t *testing.T, d *validationDriver) {
 	}
 }
 func TestNativeProviderPublicCandidatePromotionAndCleanup(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		for _, lost := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
+				t.Parallel()
 				d, runner := startNativeProviderDriver(t, name)
 				passPreDevelopmentReviews(t, d, commandPlan())
 				d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one native command"}})
@@ -588,8 +613,10 @@ func TestSVNCandidateDirectoryPermissions(t *testing.T) {
 
 // The public workflow must validate and deliver the same complete deletion snapshot.
 func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
+	t.Parallel()
 	for _, lost := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lost=%t", lost), func(t *testing.T) {
+			t.Parallel()
 			root, _, runner := nativeProviderFixture(t, "p4")
 			path := filepath.Join(root, "unused.txt")
 			if err := os.WriteFile(path, []byte("retired command notes\n"), 0644); err != nil {
@@ -713,9 +740,11 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 // Native child admission and delivery preserve each registered scope, original
 // workspace proof and complete slice content through the common final candidate.
 func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		for _, lost := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
+				t.Parallel()
 				master, runner := startNativeProviderDriver(t, name)
 				passPreDevelopmentReviews(t, master, splitCommandPlan("core", "tooling"))
 
