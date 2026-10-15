@@ -220,6 +220,7 @@ func TestRepairNativeDependenciesAndFinalSelfRun(t *testing.T) {
 	for _, severity := range []string{"P1", "P2"} {
 		for _, tier := range []string{"FINAL", "CHECKPOINT"} {
 			t.Run(fmt.Sprintf("%s/%s", severity, tier), func(t *testing.T) {
+				t.Parallel()
 				d, initial, id := nativeRepairReady(t, severity)
 				original := driverState(t, d)
 				candidate := original.Validation.Waves[0].Candidate
