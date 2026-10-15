@@ -123,6 +123,7 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	return NewNative(wc, "svn", runner), runner
 }
 func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
+	t.Parallel()
 	p, _ := svnFixture(t)
 	base, err := p.Resolve()
 	if err != nil {
@@ -218,6 +219,7 @@ func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
 	}
 }
 func TestNativeRawRunnerPreservesBytesAndStdin(t *testing.T) {
+	t.Parallel()
 	input := []byte(" leading\n\n")
 	body, err := (ExecRunner{}).RunRaw(nativeFixtureDirectory(t), "cat", input)
 	if err != nil || !bytes.Equal(body, input) {
@@ -277,6 +279,7 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	return NewNative(wc, "p4", runner).At(wc, WorkspaceHandle{Client: "main"}), runner
 }
 func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
+	t.Parallel()
 	p, runner := p4Fixture(t)
 	base, err := p.Resolve()
 	if err != nil {
@@ -362,6 +365,7 @@ func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 // A successful root-property commit moves the root while untouched WC nodes
 // retain their base revisions until the exact submitted operation is updated.
 func TestSVNObservedCommitRequiresWorkingCopySynchronization(t *testing.T) {
+	t.Parallel()
 	p, runner := svnFixture(t)
 	base, err := p.Resolve()
 	if err != nil {

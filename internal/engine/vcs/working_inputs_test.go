@@ -10,6 +10,7 @@ import (
 )
 
 func TestWorkingTreeDigestBindsCleanConvertedBytes(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	path := filepath.Join(p.root, "material.txt")
 	original := []byte("first line\nsecond line\n")
@@ -54,6 +55,7 @@ func TestWorkingTreeDigestBindsCleanConvertedBytes(t *testing.T) {
 }
 
 func TestWorkingTreeDigestBindsSymlinkAndCleanExecutableMode(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	for _, path := range []string{"first.txt", "second.txt"} {
 		writeRuntimeStatusFile(t, p.root, path, "input\n")
@@ -100,6 +102,7 @@ func TestWorkingTreeDigestBindsSymlinkAndCleanExecutableMode(t *testing.T) {
 }
 
 func TestWorkingTreeDigestBindsAllContentAndNativeModes(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	for _, path := range []string{"first.txt", "second.txt", ".gates/tmp/tracked.txt"} {
 		writeRuntimeStatusFile(t, p.root, path, "original\n")
@@ -157,6 +160,7 @@ func TestWorkingTreeDigestBindsAllContentAndNativeModes(t *testing.T) {
 }
 
 func TestWorkingTreeDigestUsesExactRuntimeInventory(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	base, err := p.Resolve()
 	if err != nil {
@@ -188,6 +192,7 @@ func TestWorkingTreeDigestUsesExactRuntimeInventory(t *testing.T) {
 }
 
 func TestWorkingTreeDigestPreservesNativeProviderInputs(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			p, runner := nativeFixture(t, name)

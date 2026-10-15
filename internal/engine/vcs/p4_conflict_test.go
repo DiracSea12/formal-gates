@@ -14,6 +14,7 @@ import (
 )
 
 func TestP4DeleteModifyConflictCarriesNativeResolution(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []struct {
 		direction, choice string
 		lost              bool

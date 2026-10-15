@@ -12,6 +12,7 @@ import (
 // Native path lists and staging preserve filename bytes independently of Git's
 // display quoting, and reads leave the index unchanged.
 func TestChangedPathsPreserveFilenameBytes(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{" artifact.txt", "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`, "说明.txt"} {
 		t.Run(path, func(t *testing.T) {
 			p := realRepo(t)
@@ -75,6 +76,7 @@ func TestChangedPathsPreserveFilenameBytes(t *testing.T) {
 }
 
 func TestTrackPreservesFilenameBytes(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{" artifact.txt", "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`, "说明.txt"} {
 		t.Run(path, func(t *testing.T) {
 			p := realRepo(t)
@@ -132,6 +134,7 @@ func TestTrackPreservesFilenameBytes(t *testing.T) {
 }
 
 func TestChangesPreserveOriginalPathsWithDefaultGitQuoting(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	if _, err := p.runner.Run(p.Root(), "git", "config", "core.quotePath", "true"); err != nil {
 		t.Fatal(err)
@@ -188,6 +191,7 @@ func TestChangesPreserveOriginalPathsWithDefaultGitQuoting(t *testing.T) {
 // Artifact application resumes an observed staged prefix through the same
 // native operation while preserving additions, edits and removals.
 func TestApplyArtifactPreservesOriginalPathsAcrossStagedPrefix(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	removed, modified, added := " removed.txt", "\tmodified.txt", "说明\n.txt "
 	for _, path := range []string{removed, modified} {

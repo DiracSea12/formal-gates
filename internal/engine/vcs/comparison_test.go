@@ -12,6 +12,7 @@ import (
 )
 
 func TestSnapshotComparisonPreservesNativeBytesWithoutWorkspaceWrites(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"git", "svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			var p *Provider
@@ -120,6 +121,7 @@ func TestSnapshotComparisonPreservesNativeBytesWithoutWorkspaceWrites(t *testing
 
 // Only native read operations can obtain a working comparison; errors remain errors.
 func TestWorkingTreeComparisonUsesReadOnlyNativeCommands(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	p := New(root, nil)
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}} {

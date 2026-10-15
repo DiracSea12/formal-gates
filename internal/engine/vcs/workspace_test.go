@@ -15,6 +15,7 @@ import (
 // The native package graph must map files back to their own workspace even
 // when the runtime reports a canonical spelling of the temporary directory.
 func TestNativeTestOwnershipUsesWorkspaceDirectoryIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	files := map[string]string{
 		"go.mod":      "module workspace\n\ngo 1.22\n",
@@ -46,6 +47,7 @@ func TestNativeTestOwnershipUsesWorkspaceDirectoryIdentity(t *testing.T) {
 
 // Assembly preserves an already staged removal from an immutable artifact.
 func TestNativeArtifactRemovalRemainsStageable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -131,6 +133,7 @@ func TestChangedPathsIncludesIndexAndWorkingBoundaries(t *testing.T) {
 }
 
 func TestProductionEmbedOverridesTestOwnership(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for path, body := range map[string]string{
 		"go.mod":      "module embedded\n\ngo 1.22\n",
@@ -154,6 +157,7 @@ func TestProductionEmbedOverridesTestOwnership(t *testing.T) {
 // Compiler-resolved package and external-test embed inputs stay test-owned;
 // an input also embedded by production must remain in the production view.
 func TestInputOwnershipIncludesEmbeddedTestInputs(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	files := map[string]string{
 		"go.mod":                "module embedded\n\ngo 1.22\n",
@@ -196,6 +200,7 @@ func TestInputOwnershipIncludesEmbeddedTestInputs(t *testing.T) {
 }
 
 func TestDirectoryIdentityPersistsAfterLeafRemoval(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(root, alias); err != nil {
@@ -222,6 +227,7 @@ func TestDirectoryIdentityPersistsAfterLeafRemoval(t *testing.T) {
 // Native configuration distinguishes a missing resolver capability from a
 // successful empty graph and an actual process or decoding failure.
 func TestOwnershipCapabilityAndQueryFailuresRemainDistinct(t *testing.T) {
+	t.Parallel()
 	failure := errors.New("ownership query failed")
 	for _, scenario := range []struct {
 		name, configuration, graph      string
@@ -286,6 +292,7 @@ func (r ownershipRunner) RunRaw(dir, command string, input []byte, args ...strin
 // Only a new property-free directory containing declared descendants can be
 // implicit; directory metadata, deletion and independent directories stay declared.
 func TestDeclaredDirectoryContainerRequiresExactNativeChange(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name    string
 		change  Change
@@ -308,6 +315,7 @@ func TestDeclaredDirectoryContainerRequiresExactNativeChange(t *testing.T) {
 }
 
 func TestInputOwnershipWithoutGoConfigurationDoesNotCallGo(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("def valid(value): return bool(value)\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -352,6 +360,7 @@ func TestGoOwnershipUsesAncestorConfigurationAndExplicitReference(t *testing.T) 
 }
 
 func TestSVNChangedPathsFromPreservesNativeValuesAndReversions(t *testing.T) {
+	t.Parallel()
 	p, runner := svnFixture(t)
 	base := nativeIdentityAt(t, p)
 	paths, err := p.ChangedPathsFrom(base)

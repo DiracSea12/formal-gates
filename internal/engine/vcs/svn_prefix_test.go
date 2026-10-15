@@ -8,6 +8,7 @@ import (
 )
 
 func TestSVNDirectoryPropertyApplyPrefixesRemainResumable(t *testing.T) {
+	t.Parallel()
 	for _, directory := range []string{".", "empty"} {
 		t.Run(directory, func(t *testing.T) {
 			p, runner := svnFixture(t)

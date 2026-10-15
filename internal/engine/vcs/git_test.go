@@ -43,6 +43,7 @@ func newStub(responses, failures map[string]string) (*Provider, *stubRunner) {
 }
 
 func TestResolveValidatesIdentityShape(t *testing.T) {
+	t.Parallel()
 	px := map[string]string{
 		"valid 40 hex":  headIdentity,
 		"valid 64 hex":  headIdentity + "0123456789abcdef01234567",
@@ -75,6 +76,7 @@ func TestResolveValidatesIdentityShape(t *testing.T) {
 }
 
 func TestVerifyRejectsInvalidAndUnreproducibleIdentities(t *testing.T) {
+	t.Parallel()
 	t.Run("invalid identity shape", func(t *testing.T) {
 		p, _ := newStub(nil, nil)
 		if err := p.Verify("abc"); err == nil || !strings.Contains(err.Error(), "invalid git snapshot identity") {
@@ -109,6 +111,7 @@ func TestVerifyRejectsInvalidAndUnreproducibleIdentities(t *testing.T) {
 }
 
 func TestVerifyRootRejectsForeignRepositoryRoot(t *testing.T) {
+	t.Parallel()
 	p, _ := newStub(map[string]string{"git rev-parse --show-toplevel": "/elsewhere"}, nil)
 	if _, err := p.Resolve(); err == nil || !strings.Contains(err.Error(), "does not match repository root") {
 		t.Fatalf("resolve error = %v", err)
@@ -120,6 +123,7 @@ func TestVerifyRootRejectsForeignRepositoryRoot(t *testing.T) {
 }
 
 func TestIsAncestorOrEqualComparesMergeBaseResult(t *testing.T) {
+	t.Parallel()
 	t.Run("ancestor resolves to itself", func(t *testing.T) {
 		p, _ := newStub(map[string]string{"git merge-base": headIdentity}, nil)
 		if err := p.IsAncestorOrEqual(headIdentity, "head"); err != nil {
@@ -141,6 +145,7 @@ func TestIsAncestorOrEqualComparesMergeBaseResult(t *testing.T) {
 }
 
 func TestCommitCountParsesRevListOutput(t *testing.T) {
+	t.Parallel()
 	p, _ := newStub(map[string]string{"git rev-list --count": "2"}, nil)
 	if n, err := p.CommitCount("base", "head"); err != nil || n != 2 {
 		t.Fatalf("count = %d, %v", n, err)
@@ -152,6 +157,7 @@ func TestCommitCountParsesRevListOutput(t *testing.T) {
 }
 
 func TestStatusExcludesOnlyRuntimeUntrackedEntries(t *testing.T) {
+	t.Parallel()
 	p, _ := newStub(map[string]string{"git status": strings.Join([]string{
 		" M tracked.go",
 		"?? .gates/engine/run-1/state.json",
@@ -182,6 +188,7 @@ func TestStatusExcludesOnlyRuntimeUntrackedEntries(t *testing.T) {
 }
 
 func TestStagedTreeDigestResolvesWriteTree(t *testing.T) {
+	t.Parallel()
 	t.Run("resolves and normalizes the staged identity", func(t *testing.T) {
 		p, runner := newStub(map[string]string{
 			"git rev-parse --show-toplevel": "/repo",
@@ -217,6 +224,7 @@ func TestStagedTreeDigestResolvesWriteTree(t *testing.T) {
 // 且每行都是已暂存差（index 侧非空、工作区侧为空）；未暂存（含居首行）、未
 // 跟踪、混合与空主体（含仅剩运行期未跟踪豁免行）都不是。
 func TestStagedOnlyClassifiesPorcelainLines(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		status string
 		want   bool
@@ -267,6 +275,7 @@ func realRepo(t *testing.T) *Provider {
 }
 
 func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {
+	t.Parallel()
 	p := realRepo(t)
 	base, err := p.Resolve()
 	if err != nil {

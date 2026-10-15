@@ -9,6 +9,7 @@ import (
 )
 
 func TestRegisteredRuntimeFilesPreserveUserAndTrackedChanges(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"git", "svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			var p *Provider

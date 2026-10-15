@@ -46,6 +46,7 @@ func nativeWorkspaceAt(t *testing.T, p *Provider, base, id string) (*Provider, W
 	return p.At(path, h), h
 }
 func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			p, runner := nativeFixture(t, name)
@@ -143,6 +144,7 @@ func TestNativeWorkspaceRecoversCompletedSideEffects(t *testing.T) {
 	}
 }
 func TestNativeIndependentWorkspacesIntegrateFixedInputs(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			p, _ := nativeFixture(t, name)
@@ -213,6 +215,7 @@ func TestNativeIndependentWorkspacesIntegrateFixedInputs(t *testing.T) {
 	}
 }
 func TestNativeConflictResolutionPreservesObservedInputs(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"svn", "p4"} {
 		for _, lost := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/lost=%t", name, lost), func(t *testing.T) {
@@ -316,6 +319,7 @@ func TestNativeConflictResolutionPreservesObservedInputs(t *testing.T) {
 	}
 }
 func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"ordered-view", "stream"} {
 		t.Run(mode, func(t *testing.T) {
 			p, r := p4Fixture(t)
@@ -418,6 +422,7 @@ func TestP4OrderedViewAndStreamIdentity(t *testing.T) {
 
 // A synced snapshot includes submitted removals, even when no project file remains.
 func TestP4WorkspaceSnapshotPreservesMovesAndDeletions(t *testing.T) {
+	t.Parallel()
 	p, _ := p4Fixture(t)
 	base := nativeIdentityAt(t, p)
 	isolated, handle := nativeWorkspaceAt(t, p, base, "isolated")
@@ -491,6 +496,7 @@ func TestP4WorkspaceSnapshotPreservesMovesAndDeletions(t *testing.T) {
 }
 
 func TestP4DeletionObservationRetainsSubmittedIdentity(t *testing.T) {
+	t.Parallel()
 	p, runner := p4Fixture(t)
 	base := nativeIdentityAt(t, p)
 	master, handle := nativeWorkspaceAt(t, p, base, "mainline")
@@ -545,6 +551,7 @@ func TestP4DeletionObservationRetainsSubmittedIdentity(t *testing.T) {
 }
 
 func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
+	t.Parallel()
 	p, _ := p4Fixture(t)
 	base := nativeIdentityAt(t, p)
 	path := filepath.Join(p.root, "temporary.txt")
@@ -600,6 +607,7 @@ func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 }
 
 func TestSVNMissingTreeConflictPreservesChosenMaterialAndLineage(t *testing.T) {
+	t.Parallel()
 	for _, restore := range []bool{false, true} {
 		for _, lost := range []bool{false, true} {
 			t.Run(fmt.Sprintf("restore=%t/lost=%t", restore, lost), func(t *testing.T) {
@@ -715,6 +723,7 @@ func TestSVNMissingTreeConflictPreservesChosenMaterialAndLineage(t *testing.T) {
 }
 
 func TestSVNLiteralTargetsPreserveEncodedNativePaths(t *testing.T) {
+	t.Parallel()
 	p, runner := svnFixture(t)
 	renamed := filepath.Join(filepath.Dir(p.root), "main @% names")
 	if err := os.Rename(p.root, renamed); err != nil {
@@ -804,6 +813,7 @@ func TestSVNLiteralTargetsPreserveEncodedNativePaths(t *testing.T) {
 }
 
 func TestSVNNodeKindReplacementPreservesDeclaredMaterial(t *testing.T) {
+	t.Parallel()
 	for _, change := range []struct{ name, path, kind string }{
 		{"file-directory", "body.txt", "dir"}, {"directory-file", "empty", "file"},
 		{"file-link", "body.txt", "link"}, {"link-file", "link", "file"},
