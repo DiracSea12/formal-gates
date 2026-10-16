@@ -327,9 +327,8 @@ func (s *State) developmentChecksPassed(r WorkerResult) bool {
 	if !frozen {
 		return false
 	}
-	approvedChecks := s.editChecks(s.Results[r.ActionID])
 	for _, check := range checks {
-		e, done := s.checkReceipt(r.ActionID, check.ID, &source, approvedChecks...)
+		e, done := s.checkReceipt(r.ActionID, check.ID, &source, checks...)
 		if !done || e.ExitCode != 0 || e.Error != "" || e.SourceIdentity != source.Identity || e.SourceDigest != source.Digest {
 			return false
 		}
@@ -342,8 +341,9 @@ func (s *State) developmentChecksFailed(r WorkerResult) bool {
 	if !frozen {
 		return false
 	}
-	for _, check := range s.editChecks(r) {
-		if evidence, done := s.checkReceipt(r.ActionID, check.ID, &source); done && (evidence.ExitCode != 0 || evidence.Error != "") {
+	checks := s.editChecks(r)
+	for _, check := range checks {
+		if evidence, done := s.checkReceipt(r.ActionID, check.ID, &source, checks...); done && (evidence.ExitCode != 0 || evidence.Error != "") {
 			return true
 		}
 	}
@@ -377,7 +377,7 @@ func (s *State) nextCheckParameters(action string) (CheckParameters, bool) {
 		return CheckParameters{}, false
 	}
 	for _, check := range checks {
-		if e, done := s.checkReceipt(action, check.ID, &source); done {
+		if e, done := s.checkReceipt(action, check.ID, &source, checks...); done {
 			if e.ExitCode != 0 || e.Error != "" {
 				return CheckParameters{}, false
 			}
