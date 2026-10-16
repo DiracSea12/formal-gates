@@ -49,6 +49,8 @@ func main() {
 		switch os.Getenv("CANDIDATE_NATIVE_STAGE") + ":" + operation[0] {
 		case "workspace:worktree":
 			match = operation[1] == "add"
+		case "checkout:reset":
+			match = operation[1] == "--hard"
 		case "cleanup:worktree":
 			match = operation[1] == "remove"
 		case "promotion:merge":

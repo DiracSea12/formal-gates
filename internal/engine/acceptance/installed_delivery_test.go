@@ -526,7 +526,7 @@ func TestInstalledAbortWithdrawsIncompleteUnknownWorkspace(t *testing.T) {
 	d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
 	d.pauseOnInterrupt = true
 	d.unknownReceipt = true
-	d.breakNative("workspace")
+	d.breakNative("checkout")
 	d.reviews()
 	_, state := d.p.bindings(t, d.runID, "codex")
 	intent, pending := state.PendingHostActions[d.unknownAction]
@@ -570,7 +570,7 @@ func TestInstalledAbortWithdrawsIncompleteUnknownWorkspace(t *testing.T) {
 		t.Fatal("Abort summary changed the original accepted DECIDE")
 	}
 	after := string(readInstalledFile(t, d.breakLog))
-	for _, command := range []string{"\tworktree\tadd\t", "\tadd\t--all\t", "\tcommit\t-m\t", "\tupdate-ref\trefs/"} {
+	for _, command := range []string{"\tworktree\tadd\t", "\treset\t--hard\t", "\tadd\t--all\t", "\tcommit\t-m\t", "\tupdate-ref\trefs/"} {
 		if strings.Count(before, command) != strings.Count(after, command) {
 			t.Fatalf("withdrawn UNKNOWN continued native work %q", command)
 		}

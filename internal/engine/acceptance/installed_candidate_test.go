@@ -915,7 +915,7 @@ printf '\t%s' "$@" >> "$CANDIDATE_NATIVE_LOG"
 printf '\n' >> "$CANDIDATE_NATIVE_LOG"
 match=false
 case "$CANDIDATE_NATIVE_STAGE:$1:$2" in
- workspace:worktree:add|cleanup:worktree:remove|promotion:merge:--ff-only|squash:reset:--soft|track:add:--all|pin:update-ref:*|artifact:restore:--source=*) match=true ;;
+ workspace:worktree:add|checkout:reset:--hard|cleanup:worktree:remove|promotion:merge:--ff-only|squash:reset:--soft|track:add:--all|pin:update-ref:*|artifact:restore:--source=*) match=true ;;
  freeze:commit:-m) case "$3" in "formal-gates candidate "*) match=true ;; esac ;;
  delivery:commit:-m) case "$3" in "formal-gates delivery "*) match=true ;; esac ;;
 esac
@@ -954,6 +954,13 @@ func TestNativeGitInterceptionParent(t *testing.T) {
 
 func TestNativeGitInterceptionPreservesNativeEffects(t *testing.T) {
 	t.Parallel()
+	for _, stage := range []string{"workspace", "checkout"} {
+		t.Run(stage, func(t *testing.T) { assertNativeGitInterception(t, stage) })
+	}
+}
+
+func assertNativeGitInterception(t *testing.T, stage string) {
+	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -991,31 +998,39 @@ func TestNativeGitInterceptionPreservesNativeEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	var expectedLog strings.Builder
-	invoke := func(arguments ...string) ([]byte, error) {
+	invoke := func(cwd string, arguments ...string) ([]byte, error) {
 		t.Helper()
 		body, err := json.Marshal(arguments)
 		if err != nil {
 			t.Fatal(err)
 		}
 		command := exec.Command(parent, "-test.run=^TestNativeGitInterceptionParent$")
-		command.Dir = directory
-		command.Env = append(os.Environ(), "FORMAL_GATES_GIT_INTERCEPTION_PARENT=1", "FORMAL_GATES_GIT_INTERCEPTION_ARGS="+string(body), "FORMAL_GATES_GIT_INTERCEPTION_PEER="+peer, "CANDIDATE_NATIVE_GIT="+realGit, "CANDIDATE_NATIVE_LOG="+log, "CANDIDATE_NATIVE_MARKER="+marker, "CANDIDATE_NATIVE_STAGE=workspace", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=candidate.environment", "GIT_CONFIG_VALUE_0=native environment")
+		command.Dir = cwd
+		command.Env = append(os.Environ(), "FORMAL_GATES_GIT_INTERCEPTION_PARENT=1", "FORMAL_GATES_GIT_INTERCEPTION_ARGS="+string(body), "FORMAL_GATES_GIT_INTERCEPTION_PEER="+peer, "CANDIDATE_NATIVE_GIT="+realGit, "CANDIDATE_NATIVE_LOG="+log, "CANDIDATE_NATIVE_MARKER="+marker, "CANDIDATE_NATIVE_STAGE="+stage, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=candidate.environment", "GIT_CONFIG_VALUE_0=native environment")
 		output, callErr := command.CombinedOutput()
-		expectedLog.WriteString(directory + "\t" + strings.Join(arguments, "\t") + "\n")
+		expectedLog.WriteString(cwd + "\t" + strings.Join(arguments, "\t") + "\n")
 		if actual := string(readInstalledFile(t, log)); actual != expectedLog.String() {
 			t.Fatalf("native cwd or full arguments changed:\n%s\nwant:\n%s", actual, &expectedLog)
 		}
 		return output, callErr
 	}
-	if output, err := invoke("-c", "core.longpaths=true", "config", "--get", "candidate.environment"); err != nil || string(output) != "native environment\n" {
+	if output, err := invoke(directory, "-c", "core.longpaths=true", "config", "--get", "candidate.environment"); err != nil || string(output) != "native environment\n" {
 		t.Fatalf("nonmatching native command changed its environment or result: %q %v", output, err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("nonmatching command interrupted its parent: %v", err)
 	}
 	for index := range 2 {
-		workspace := filepath.Join(t.TempDir(), "workspace")
-		output, err := invoke("-c", "core.longpaths=true", "-c", "candidate.argument=two words", "--git-dir="+filepath.Join(directory, ".git"), "--work-tree=.", "worktree", "add", "--detach", workspace, base)
+		workspace := filepath.Join(directory, fmt.Sprintf("workspace-%d", index))
+		cwd, gitdir := directory, filepath.Join(directory, ".git")
+		operation := []string{"worktree", "add", "--detach", workspace, base}
+		if stage == "checkout" {
+			runGit("worktree", "add", "--no-checkout", "--detach", "--", workspace, base)
+			cwd, gitdir = workspace, runGit("-C", workspace, "rev-parse", "--absolute-git-dir")
+			operation = []string{"reset", "--hard", "--no-recurse-submodules", base}
+		}
+		arguments := append([]string{"-c", "core.longpaths=true", "-c", "candidate.argument=two words", "--git-dir=" + gitdir, "--work-tree=."}, operation...)
+		output, err := invoke(cwd, arguments...)
 		if (err != nil) != (index == 0) {
 			t.Fatalf("native prefix must interrupt only its first successful execution: call=%d output=%q err=%v", index, output, err)
 		}
