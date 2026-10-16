@@ -47,8 +47,12 @@ func TestSuperviseWindowsPreservesQuotedShellTextAndNativeArguments(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	peer := filepath.Join(t.TempDir(), "原文 quoted peer.exe")
-	if err := os.Link(executable, peer); err != nil {
+	if err := os.WriteFile(peer, payload, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	input := "first \"原文\"\r\nsecond\t  "
@@ -122,8 +126,12 @@ func TestSuperviseWindowsUsesRequestPathAndExecutableExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bin := t.TempDir()
-	if err := os.Link(executable, filepath.Join(bin, "peer.exe")); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "peer.exe"), payload, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATHEXT", ".missing")

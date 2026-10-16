@@ -291,9 +291,17 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if err != nil {
 		return InstallReport{}, err
 	}
-	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
+	journaled := false
+	defer func() {
+		if !journaled {
+			_ = os.RemoveAll(transactionRoot)
+		}
+	}()
 	outer := outerInstallJournal{Operation: "install", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	if err := inheritOuterCleanup(outerPath, &outer); err != nil {
+		return InstallReport{}, err
+	}
 	outer.VCSIdentity = vcsIdentity
 	outer.PackageDigest = sourcePackage.Digest
 	if len(targets) > 0 {
@@ -362,6 +370,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, err
 	}
+	journaled = true
 	createdResourceRoots := []string{}
 	rollbackAll := func(cause error) error {
 		markOuterCopyEvidence(&outer)
@@ -493,7 +502,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 		return InstallReport{}, rollbackAll(err)
 	}
 	if !samePath(launcherSource, targets[0].launcherPath) {
-		if err := atomicCopyFile(launcherSource, targets[0].launcherPath); err != nil {
+		if err := publishOuterBinary(outerPath, &outer, launcherSource); err != nil {
 			return InstallReport{}, rollbackAll(err)
 		}
 	}
@@ -628,9 +637,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, rollbackAll(err)
 	}
-	_ = os.RemoveAll(outer.TransactionRoot)
-	_ = os.Remove(outerPath)
-	return report, nil
+	return report, cleanupOuterJournal(outerPath, outer)
 }
 
 func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
@@ -713,9 +720,17 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 	if err != nil {
 		return UninstallReport{}, err
 	}
-	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
+	journaled := false
+	defer func() {
+		if !journaled {
+			_ = os.RemoveAll(transactionRoot)
+		}
+	}()
 	outer := outerInstallJournal{Operation: "uninstall", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	if err := inheritOuterCleanup(outerPath, &outer); err != nil {
+		return UninstallReport{}, err
+	}
 	if len(targets) > 0 {
 		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
 	}
@@ -837,6 +852,7 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, err
 	}
+	journaled = true
 	rollback := func(cause error) error {
 		if restoreErr := restoreOuterJournal(outerPath, outer, false); restoreErr != nil {
 			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
@@ -890,7 +906,7 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 		}
 	}
 	if outer.Binary.Path != "" {
-		if err := os.Remove(outer.Binary.Path); err != nil && !os.IsNotExist(err) {
+		if err := retireOuterBinary(outerPath, &outer); err != nil {
 			return UninstallReport{}, rollback(err)
 		}
 	}
@@ -932,8 +948,9 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, rollback(err)
 	}
-	_ = os.RemoveAll(outer.TransactionRoot)
-	_ = os.Remove(outerPath)
+	if err := cleanupOuterJournal(outerPath, outer); err != nil {
+		return report, err
+	}
 	retireLocks = len(remaining) == 0
 	return report, nil
 }
@@ -1208,9 +1225,17 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	if err != nil {
 		return InstallReport{}, err
 	}
-	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
+	journaled := false
+	defer func() {
+		if !journaled {
+			_ = os.RemoveAll(transactionRoot)
+		}
+	}()
 	outer := outerInstallJournal{Operation: "bootstrap", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	if err := inheritOuterCleanup(outerPath, &outer); err != nil {
+		return InstallReport{}, err
+	}
 	outer.VCSIdentity = sourceVCSIdentity(source.Root, source.Digest)
 	outer.PackageDigest = source.Digest
 	existingRegistry, existingRegistryErr := LoadRegistry(registryPath)
@@ -1264,8 +1289,11 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, err
 	}
+	journaled = true
 	rollback := func(cause error) error {
-		_ = restoreOuterJournal(outerPath, outer, false)
+		if restoreErr := restoreOuterJournal(outerPath, outer, false); restoreErr != nil {
+			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
+		}
 		return outerJournalFailure(outerPath, outer, cause)
 	}
 	if registryWasPresent && len(existingRegistry.Records) == 0 {
@@ -1470,9 +1498,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, rollback(err)
 	}
-	_ = os.RemoveAll(outer.TransactionRoot)
-	_ = os.Remove(outerPath)
-	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), RegistryEpoch: committedRegistry.Epoch, ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath), VCSIdentity: outer.VCSIdentity, PackageDigest: source.Digest}, nil
+	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), RegistryEpoch: committedRegistry.Epoch, ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath), VCSIdentity: outer.VCSIdentity, PackageDigest: source.Digest}, cleanupOuterJournal(outerPath, outer)
 }
 
 func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryRecord, packageDigest string) bool {

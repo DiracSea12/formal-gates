@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/coordination"
 )
 
@@ -330,7 +329,8 @@ func validateBinaryFormat(path string) error {
 	return fmt.Errorf("native binary has an unrecognized executable format: %s", path)
 }
 
-func atomicCopyFile(source, target string) error {
+func publishOuterBinary(journalPath string, journal *outerInstallJournal, source string) error {
+	target := journal.Binary.Path
 	info, err := os.Stat(source)
 	if err != nil {
 		return err
@@ -342,12 +342,16 @@ func atomicCopyFile(source, target string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".formal-gates-binary-*")
+	tmpPath := filepath.Join(filepath.Dir(target), fmt.Sprintf(".formal-gates-binary-%d", time.Now().UnixNano()))
+	retired := tmpPath + ".retired"
+	journal.Staged = append(journal.Staged, tmpPath, retired)
+	if err := persistOuterJournal(journalPath, *journal); err != nil {
+		return err
+	}
+	tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		tmp.Close()
 		return err
@@ -363,7 +367,7 @@ func atomicCopyFile(source, target string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return atomicfile.Replace(tmpPath, target)
+	return replaceInstallBinary(tmpPath, target, retired)
 }
 
 type installRecoveryReceipt struct {
@@ -524,6 +528,51 @@ func restoreOuterFile(snapshot outerFileSnapshot) error {
 	return writeAtomic(snapshot.Path, data, mode)
 }
 
+func restoreOuterBinary(path string, journal *outerInstallJournal) error {
+	snapshot := journal.Binary
+	if snapshot.Path == "" {
+		return nil
+	}
+	if !snapshot.Existed {
+		return retireOuterBinary(path, journal)
+	}
+	if snapshot.Kind == "symlink" {
+		if err := removeInstallBinary(snapshot.Path); err != nil {
+			return err
+		}
+		return os.Symlink(snapshot.LinkTarget, snapshot.Path)
+	}
+	return publishOuterBinary(path, journal, snapshot.Backup)
+}
+
+func retireOuterBinary(path string, journal *outerInstallJournal) error {
+	retired := filepath.Join(filepath.Dir(journal.Binary.Path), fmt.Sprintf(".formal-gates-binary-%d.retired", time.Now().UnixNano()))
+	journal.Staged = append(journal.Staged, retired)
+	if err := persistOuterJournal(path, *journal); err != nil {
+		return err
+	}
+	return retireInstallBinary(journal.Binary.Path, retired)
+}
+
+func inheritOuterCleanup(path string, journal *outerInstallJournal) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var previous outerInstallJournal
+	if err := json.Unmarshal(data, &previous); err != nil {
+		return err
+	}
+	journal.Staged = append(journal.Staged, previous.Staged...)
+	if previous.TransactionRoot != "" {
+		journal.Staged = append(journal.Staged, previous.TransactionRoot)
+	}
+	return nil
+}
+
 func outerTreeFromBackup(tree installTreeBackup) outerTreeSnapshot {
 	return outerTreeSnapshot{Path: tree.path, Backup: tree.backup, Existed: tree.existed}
 }
@@ -637,15 +686,8 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 	if err := restoreOuterTree(journal.Release); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := restoreOuterFile(journal.Binary); err != nil && firstErr == nil {
+	if err := restoreOuterBinary(path, &journal); err != nil && firstErr == nil {
 		firstErr = err
-	}
-	if journal.Binary.Path != "" {
-		if matches, err := filepath.Glob(filepath.Join(filepath.Dir(journal.Binary.Path), ".formal-gates-binary-*")); err == nil {
-			for _, match := range matches {
-				_ = os.Remove(match)
-			}
-		}
 	}
 	cleanupAtomicTemps(filepath.Dir(journal.RegistryPath))
 	if err := restoreOuterFile(journal.Registry); err != nil && firstErr == nil {
@@ -659,8 +701,8 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 			firstErr = err
 		}
 	}
-	for _, path := range journal.Staged {
-		_ = os.RemoveAll(path)
+	if firstErr != nil {
+		return firstErr
 	}
 	if recovered {
 		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", ObservedFact: fmt.Sprintf("recovery journal observed at interrupted phase %s", journal.Phase), Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Prepared: journal.Phase == "prepared", PartialCopy: partialCopy, CopiedComponents: copiedComponents, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
@@ -668,13 +710,47 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 			sum := sha256.Sum256(data)
 			receipt.StableDigest = hex.EncodeToString(sum[:])
 		}
-		if err := writeJSONAtomically(path+".receipt.json", receipt); err != nil && firstErr == nil {
-			firstErr = err
+		if err := writeJSONAtomically(path+".receipt.json", receipt); err != nil {
+			return err
 		}
 	}
-	_ = os.RemoveAll(journal.TransactionRoot)
-	_ = os.Remove(path)
-	return firstErr
+	journal.Phase = "committed"
+	if err := persistOuterJournal(path, journal); err != nil {
+		return err
+	}
+	return cleanupOuterJournal(path, journal)
+}
+
+func cleanupOuterJournal(path string, journal outerInstallJournal) error {
+	deferred := false
+	for _, staged := range journal.Staged {
+		info, err := os.Lstat(staged)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			err = os.RemoveAll(staged)
+		} else {
+			err = removeInstallBinary(staged)
+		}
+		if err != nil {
+			if info.Mode().IsRegular() && installBinaryInUse(err) && validateBinaryFormat(staged) == nil {
+				deferred = true
+				continue
+			}
+			return err
+		}
+	}
+	if deferred {
+		return deferOuterCleanup(path, journal)
+	}
+	if err := os.RemoveAll(journal.TransactionRoot); err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func markOuterCopyEvidence(journal *outerInstallJournal) {
@@ -684,6 +760,9 @@ func markOuterCopyEvidence(journal *outerInstallJournal) {
 
 func stagedCopyObserved(paths []string) bool {
 	for _, path := range paths {
+		if !strings.HasPrefix(filepath.Base(path), ".formal-gates-stage-") {
+			continue
+		}
 		entries, err := os.ReadDir(path)
 		if err == nil && len(entries) > 0 {
 			return true
@@ -695,6 +774,9 @@ func stagedCopyObserved(paths []string) bool {
 func stagedCopyComponents(paths []string) []string {
 	seen := map[string]bool{}
 	for _, root := range paths {
+		if !strings.HasPrefix(filepath.Base(root), ".formal-gates-stage-") {
+			continue
+		}
 		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || path == root || entry.IsDir() {
 				return nil
@@ -746,18 +828,7 @@ func reconcileOuterInstallJournal(registryPath string) (bool, error) {
 	if journal.Phase == "committed" {
 		// The committed state is authoritative; only sweep transaction-owned
 		// staging/atomic temporary paths, never restore old snapshots.
-		for _, staged := range journal.Staged {
-			_ = os.RemoveAll(staged)
-		}
-		if journal.Binary.Path != "" {
-			if matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(journal.Binary.Path), ".formal-gates-binary-*")); globErr == nil {
-				for _, match := range matches {
-					_ = os.Remove(match)
-				}
-			}
-		}
-		_ = os.RemoveAll(journal.TransactionRoot)
-		return journal.Operation == "uninstall", os.Remove(path)
+		return journal.Operation == "uninstall", cleanupOuterJournal(path, journal)
 	}
 	return false, restoreOuterJournal(path, journal, true)
 }
@@ -765,6 +836,11 @@ func reconcileOuterInstallJournal(registryPath string) (bool, error) {
 // retireUnusedInstallLocks is the maintenance caller's final protected action.
 // Registry records remain the sole source of whether the namespace is used.
 func retireUnusedInstallLocks(registryPath string) error {
+	if _, err := os.Stat(installOuterJournalPath(registryPath)); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	doc, err := LoadRegistry(registryPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err

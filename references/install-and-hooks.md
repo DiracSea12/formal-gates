@@ -255,7 +255,7 @@ candidate-binary package validation against its own source package
   -> copy manifest-selected native subset + Lstat/realpath/digest validation
   -> switch release/installed target (journal=switched; old registry remains authoritative)
   -> actual installed-binary package validation + --version smoke
-  -> hook/managed-rule writes + atomic stable-launcher publication
+  -> hook/managed-rule writes + stable-launcher publication
   -> actual stable-launcher --version smoke
   -> registry record commit
   -> journal committed + install receipt
@@ -264,8 +264,15 @@ candidate-binary package validation against its own source package
 这里的 post-switch 指 release/installed target 已切换但公共 pointer/config 和 registry 尚未
 提交；候选自身 CLI 核其包合同，native owner 按同一 manifest 核复制集合与字节。
 source 与 target 分别由各自包内 binary 执行 package validation；实际 installed binary
-执行 `--version` smoke。hook/规则写入后原子发布固定 launcher，并从其实际路径执行
-`--version` smoke，通过后提交 registry。
+执行 `--version` smoke。hook/规则写入后发布固定 launcher，并从其实际路径执行
+`--version` smoke，通过后提交 registry。Unix 原子替换 launcher；Windows 先把完整新
+exe 准备到同目录并记入同一 journal，再移走旧 exe、将新 exe 改名为固定入口。这两次
+改名之间入口可能暂缺，没有下载或编译；运行中的旧进程继续使用原映像。中断后重新运行
+Windows 安装脚本，脚本在空入口暂置已校验的 exe，由 native owner 读取原 journal 恢复。
+Windows 仍被进程映射的旧 exe 由一次性系统 PowerShell 进程在原调用者退出后删除；它
+沿用同一 journal 和安装锁，核对事务身份，只删除 journal 列出的专属路径。直接 CLI
+安装、回滚和卸载共用这条清理路径；未清理完时保留 journal，清理错误写入 journal
+事务目录内的 `cleanup.error.log`。清理进程不持有调用者的输出管道。
 任一 runtime、pointer/config 或 registry 提交失败，都由同一 owner
 observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery receipt。receipt 至少
 包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
