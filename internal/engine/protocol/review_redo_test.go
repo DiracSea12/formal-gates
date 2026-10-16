@@ -14,6 +14,7 @@ import (
 // A requirement redo creates the same obligation regardless of whether task
 // termination was observed first or the superseded task used transient retries.
 func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
+	t.Parallel()
 	type facts struct {
 		task        runtime.TaskKey
 		issued      int
@@ -93,6 +94,7 @@ func TestReviewRedoHasIndependentTaskAndRetryBudget(t *testing.T) {
 }
 
 func TestRequirementRedoRetiresExhaustedReviewDuty(t *testing.T) {
+	t.Parallel()
 	cd, reg := agentStepsDefinition(t, func(string) authoring.AgentSpec {
 		return authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesProductReview, Timeout: time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}}
 	}, "product.review")

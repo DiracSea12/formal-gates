@@ -123,6 +123,7 @@ func TestExecutionSelectionPartialChoicesAndReplay(t *testing.T) {
 	defaultOutsideList.options = func(root, runtimeTarget string, native map[string]string, model string) (host.SelectionCatalogue, error) {
 		return host.SelectionCatalogue{Default: host.ModelSelection{Model: "native-default-outside-list", Effort: "native-default-effort"}, Models: []host.ModelOption{{Value: "listed-model", Label: "Listed"}}}, nil
 	}
+	t.Parallel()
 	_, run = selectExecution(t, reopened, ExecutionSelectionInput{Node: "product-review", Platform: defaultOutsideList.descriptor.ID})
 	if run.ExecutionNodes[0].Execution != (protocol.ExecutionChoice{Provider: defaultOutsideList.descriptor.ID}) {
 		t.Fatal("native default outside the choice list was materialized or replaced", run.ExecutionNodes[0].Execution)
@@ -135,6 +136,7 @@ func TestExecutionSelectionPartialChoicesAndReplay(t *testing.T) {
 func TestExecutionSelectionResumesItsOriginalTypedRequest(t *testing.T) {
 	f, root := workerMaterialFacade(t)
 	platform := selectionPlatformFixture(t, "pending", true)
+	t.Parallel()
 	input := ExecutionSelectionInput{Node: "development", Platform: platform.descriptor.ID}
 	candidate, err := f.PrepareControl(ControlInput{Execution: &input})
 	if err != nil {
@@ -169,6 +171,7 @@ func TestExecutionSelectionResumesItsOriginalTypedRequest(t *testing.T) {
 func TestExecutionSelectionRejectsUnavailableChoicesBeforeWrite(t *testing.T) {
 	f, _ := workerMaterialFacade(t)
 	platform := selectionPlatformFixture(t, "available", true)
+	t.Parallel()
 	statePath := filepath.Join(f.stateDir, "state.json")
 	original := readWorkerFile(t, statePath)
 	for _, input := range []ExecutionSelectionInput{
@@ -261,6 +264,7 @@ func TestExecutionSelectionRefreshesReadyAndPreservesClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := selectionPlatformFixture(t, "future", true)
+	t.Parallel()
 	selectExecution(t, f, ExecutionSelectionInput{Node: "product-review", Platform: next.descriptor.ID})
 	reopened, err := Open(root, f.runID)
 	if err != nil {
@@ -283,6 +287,7 @@ func TestExecutionSelectionRefreshesReadyAndPreservesClaim(t *testing.T) {
 func TestExecutionSelectionChildInheritanceIsCreationSnapshot(t *testing.T) {
 	master := nativeMasterDriver(t)
 	platform := selectionPlatformFixture(t, "inherited", true)
+	t.Parallel()
 	selectExecution(t, master.f, ExecutionSelectionInput{Node: "development", Platform: platform.descriptor.ID, Model: "Careful"})
 	selectExecution(t, master.f, ExecutionSelectionInput{Node: "qa-blackbox", Platform: platform.descriptor.ID, Model: "Careful", Effort: "medium"})
 	selectExecution(t, master.f, ExecutionSelectionInput{Node: "qa-whitebox", Platform: platform.descriptor.ID, Model: "Fast", Effort: "low"})

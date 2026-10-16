@@ -13,6 +13,7 @@ import (
 )
 
 func TestReviewIssuanceRespectsZeroCapacity(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 	plan, _, err := engine.Plan(Observation{})
 	if err != nil {
@@ -29,6 +30,7 @@ func TestReviewIssuanceRespectsZeroCapacity(t *testing.T) {
 }
 
 func TestReviewPlanWaitsForItsWorkerDependency(t *testing.T) {
+	t.Parallel()
 	cd, reg := agentStepsDefinition(t, func(name string) authoring.AgentSpec {
 		spec := authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute}
 		if name == "product.review" {
@@ -59,6 +61,7 @@ func TestReviewPlanWaitsForItsWorkerDependency(t *testing.T) {
 }
 
 func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
@@ -87,6 +90,7 @@ func TestReviewRedoRemainsInPlanUntilAccepted(t *testing.T) {
 }
 
 func TestReviewInvalidationOrderPreservesEvidenceAndNewWork(t *testing.T) {
+	t.Parallel()
 	for _, order := range [][]int{{0, 1}, {1, 0}, {0, 2, 1}} {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
 			cd, reg := singleCarrierFixture(t)
@@ -134,6 +138,7 @@ func TestReviewInvalidationOrderPreservesEvidenceAndNewWork(t *testing.T) {
 }
 
 func TestReviewUsesEligibleSiblingCarrier(t *testing.T) {
+	t.Parallel()
 	cd, reg := productReviewDAGFixture(t,
 		dagStep{name: "prepare.document", deps: []string{"prep.parse"}},
 		dagStep{name: "review.a", deps: []string{"prepare.document"}},
@@ -214,6 +219,7 @@ func reviewDependencyDefinition(t *testing.T, steps ...dagStep) (*compiler.Compi
 }
 
 func TestSharedReviewObligationHoldsSiblingDependents(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewDependencyDefinition(t,
 		dagStep{name: "review.a", deps: []string{"prep.parse"}},
 		dagStep{name: "review.b", deps: []string{"prep.parse"}},

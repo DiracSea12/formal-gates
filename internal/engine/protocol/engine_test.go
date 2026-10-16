@@ -105,6 +105,7 @@ func reviewTaskKey() runtime.TaskKey {
 // TestInitLoadLifecycle：初始化落盘 revision 1；重复初始化与未初始化
 // 读取可区分拒绝；重复初始化零状态变化。
 func TestInitLoadLifecycle(t *testing.T) {
+	t.Parallel()
 	engine, dir := newTestEngine(t)
 	if _, err := engine.Load(); err == nil {
 		t.Fatal("load before init accepted")
@@ -145,6 +146,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 // TestIssueFromPlanRecordsModel：签发落账 expected 清单、当前 Attempt
 // （确定性 ID）与 pendingActions，任务视图推进 ISSUED，且重启后仍在档。
 func TestIssueFromPlanRecordsModel(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	issued, revision, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
@@ -209,6 +211,7 @@ func TestIssueFromPlanRecordsModel(t *testing.T) {
 // TestIssueRejectsForgedPlanComponents：definition/state/observation 中任一
 // canonical binding 被改写，都在签发落账前拒绝。
 func TestIssueRejectsForgedPlanComponents(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	before := stateBytesOf(t, dir)
@@ -239,6 +242,7 @@ func TestIssueRejectsForgedPlanComponents(t *testing.T) {
 // TestIssueStalePlanRejected：首次签发改变 state identity 后，原计划不能
 // 再次签发，且拒绝保持零状态变化。
 func TestIssueStalePlanRejected(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -269,6 +273,7 @@ func TestIssueStalePlanRejected(t *testing.T) {
 
 // TestIssueNegativePaths：未初始化签发拒绝；非 Ready 计划签发拒绝。
 func TestIssueNegativePaths(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	_, _, err := engine.IssueFromPlan(nil, decision.Admission{Capacity: 1}, Observation{})
 	if err == nil {
@@ -309,6 +314,7 @@ func TestIssueNegativePaths(t *testing.T) {
 // TERMINAL 后 expected/pendingAction/当前 Attempt 收回、任务视图留在
 // TERMINAL，全部持久。
 func TestTaskProgressLifecycle(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -347,6 +353,7 @@ func TestTaskProgressLifecycle(t *testing.T) {
 // TestTaskProgressNotCurrent：从未签发的任务、已终态的任务都判非当前
 // 节点（EVENT_NOT_CURRENT），零状态变化。
 func TestTaskProgressNotCurrent(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -394,6 +401,7 @@ func TestTaskProgressNotCurrent(t *testing.T) {
 // TestTaskProgressStaleAttempt：事件携带的 attempt 不是当前 Attempt 时
 // 可区分拒绝（STALE_ATTEMPT），零状态变化。
 func TestTaskProgressStaleAttempt(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -417,6 +425,7 @@ func TestTaskProgressStaleAttempt(t *testing.T) {
 // TestTaskProgressIllegalTransition：跳过 RUNNING 直报 VALIDATING、自环
 // 重复 RUNNING 都违反 runtime 任务状态机（复用迁移表）。
 func TestTaskProgressIllegalTransition(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -454,6 +463,7 @@ func TestTaskProgressIllegalTransition(t *testing.T) {
 // TestSubmitFingerprintIntegration：期望指纹与实际不符时由持久层拒绝
 // （写前拒绝、零状态变化）——协议层不绕过指纹纪律。
 func TestSubmitFingerprintIntegration(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {

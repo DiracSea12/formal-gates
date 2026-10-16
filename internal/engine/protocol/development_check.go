@@ -271,7 +271,7 @@ func validateCheckReceipt(intent HostActionIntent, p CheckParameters, e CheckEvi
 	return nil
 }
 
-func (s *State) checkReceipt(action, check string, source *CandidateEvidence) (*CheckEvidence, bool) {
+func (s *State) checkReceipt(action, check string, source *CandidateEvidence, approvedChecks ...DevelopmentCheck) (*CheckEvidence, bool) {
 	if source == nil {
 		if proof, frozen := s.editSourceProof(action); frozen {
 			source = &proof
@@ -288,19 +288,26 @@ func (s *State) checkReceipt(action, check string, source *CandidateEvidence) (*
 		if sourceAction, known := intent.Adapter.Params["sourceActionId"].(string); known && sourceAction != action {
 			continue
 		}
+		if rawCheck, known := intent.Adapter.Params["check"].(map[string]any); known {
+			if id, known := rawCheck["id"].(string); known && id != check {
+				continue
+			}
+		}
 		p, err := checkParameters(intent)
 		if err != nil || p.SourceActionID != action || p.Check.ID != check {
+			continue
+		}
+		if source != nil && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
 			continue
 		}
 		evidence, err := s.validateNativeCheckReceipt(intent, p, receipt)
 		if err != nil {
 			continue
 		}
-		result := s.Results[action]
-		if !slices.ContainsFunc(s.editChecks(result), func(current DevelopmentCheck) bool { return current == p.Check }) {
-			continue
+		if approvedChecks == nil {
+			approvedChecks = s.editChecks(s.Results[action])
 		}
-		if source != nil && (p.SourceIdentity != source.Identity || p.SourceDigest != source.Digest) {
+		if !slices.ContainsFunc(approvedChecks, func(current DevelopmentCheck) bool { return current == p.Check }) {
 			continue
 		}
 		return &evidence, true
@@ -320,8 +327,9 @@ func (s *State) developmentChecksPassed(r WorkerResult) bool {
 	if !frozen {
 		return false
 	}
+	approvedChecks := s.editChecks(s.Results[r.ActionID])
 	for _, check := range checks {
-		e, done := s.checkReceipt(r.ActionID, check.ID, &source)
+		e, done := s.checkReceipt(r.ActionID, check.ID, &source, approvedChecks...)
 		if !done || e.ExitCode != 0 || e.Error != "" || e.SourceIdentity != source.Identity || e.SourceDigest != source.Digest {
 			return false
 		}

@@ -23,6 +23,7 @@ import (
 // TOPOLOGY_AND_ROUTE；拓扑确认与路线选择 Ask 相继可达，路线绑定后进入
 // DEVELOPMENT_PARALLEL。
 func TestCanonicalDualReviewThroughTopologyAndRoute(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 
 	// 产品审：entry 注册事实完成后 Ready 前沿只含 review.worker。
@@ -119,6 +120,7 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 // A failed round awaits disposition. Dismissing its only blocker concludes
 // the same round and opens readiness without consuming another review round.
 func TestCanonicalProductFailAwaitsDisposition(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
 	submitVerifiedReviewResult(t, engine, "canonical-fail", product,
@@ -167,6 +169,7 @@ func redoProductReview(t *testing.T, engine *Engine, requestID string) {
 }
 
 func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 	product := issueReady(t, engine)[0]
 	submitVerifiedReviewResult(t, engine, "canonical-confirm-fail", product,
@@ -199,6 +202,7 @@ func TestCanonicalConfirmedBlockerRequiresRevisedRequirement(t *testing.T) {
 // Three completed reviews consume the automatic allowance. Each subsequent
 // review requires a real redo decision; an extra grant only supplies capacity.
 func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 	action := issueReady(t, engine)[0]
 	for round := 1; round <= 3; round++ {
@@ -246,6 +250,7 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 // 新鲜轮由账本欠轮提案在容量内派发；两条新鲜轮 PASS 各自清偿义务后双审
 // 门重开，拓扑与路线重新确认可达开发阶段。
 func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 
 	product := issueReady(t, engine)[0]
@@ -321,6 +326,7 @@ func TestCanonicalFullRedoFreshRoundsKeepTheCarriersLatched(t *testing.T) {
 // 完成（一次性闩）、产品审新鲜轮由账本提案签出；重新 PASS 后上游失效解
 // 除、携结论重投影，技术审不被重新派发。
 func TestCanonicalInvalidateThenRepassReleasesUpstreamVoid(t *testing.T) {
+	t.Parallel()
 	engine, _ := canonicalReviewEngine(t)
 
 	product := issueReady(t, engine)[0]

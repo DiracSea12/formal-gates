@@ -58,6 +58,7 @@ func addCheckReceipt(t *testing.T, s *State, p CheckParameters, exit int) HostAc
 }
 
 func TestDevelopmentCheckCompletionOwnsDependency(t *testing.T) {
+	t.Parallel()
 	s, batch, task := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)
 	if s.developmentResult(task) != nil {
@@ -98,6 +99,7 @@ func TestDevelopmentCheckCompletionOwnsDependency(t *testing.T) {
 }
 
 func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
+	t.Parallel()
 	s, _, task := developmentCheckState(t)
 	_ = compiledCanonicalWorkflow(t)
 	addDevelopmentSource(t, s)
@@ -128,6 +130,7 @@ func TestDevelopmentCheckFailureCannotBeTextPass(t *testing.T) {
 }
 
 func TestFailedDeveloperKeepsSharedEditingFrontierOpen(t *testing.T) {
+	t.Parallel()
 	s, _, task := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)
 	addDevelopmentSource(t, s)
@@ -157,6 +160,7 @@ func TestFailedDeveloperKeepsSharedEditingFrontierOpen(t *testing.T) {
 }
 
 func TestDevelopmentCheckSharedFrontierFreezesAfterWriters(t *testing.T) {
+	t.Parallel()
 	s, batch, firstTask := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)
 	plan := s.Results["readiness"].Review.GranularityReview
@@ -238,6 +242,7 @@ func TestDevelopmentCheckSharedFrontierFreezesAfterWriters(t *testing.T) {
 }
 
 func TestMissingVerificationCallsRequireBoundActualReceipts(t *testing.T) {
+	t.Parallel()
 	s, batch, _ := developmentCheckState(t)
 	cd := compiledCanonicalWorkflow(t)
 	for i := range batch.Checks {

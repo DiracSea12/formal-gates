@@ -10,9 +10,13 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, status := range []string{"ABORTED", "COMPLETE"} {
 		t.Run(status, func(t *testing.T) {
 			fixture := t.TempDir()

@@ -9,6 +9,7 @@ import (
 )
 
 func TestProjectionMatchesReadOnlyViewsAcrossRestart(t *testing.T) {
+	t.Parallel()
 	engine, dir := workEngine(t, "develop", "verify")
 	action := issueReady(t, engine)[0]
 	submitPlainResult(t, engine, "develop-completed", action)
@@ -46,6 +47,7 @@ func TestProjectionMatchesReadOnlyViewsAcrossRestart(t *testing.T) {
 }
 
 func TestProjectionKeepsOneRevisionDuringConcurrentProgress(t *testing.T) {
+	t.Parallel()
 	engine, _ := workEngine(t, "develop", "verify")
 	action := issueReady(t, engine)[0]
 	if _, err := engine.Submit(spawnReceipt(t, "develop-spawned", action, "developer"), Observation{}); err != nil {

@@ -103,7 +103,7 @@ func (e *Engine) load() (uint64, *State, error) {
 		return 0, nil, err
 	}
 	var state State
-	if err := json.Unmarshal(snap.Content, &state); err != nil {
+	if err := state.UnmarshalJSON(snap.Content); err != nil {
 		return 0, nil, fmt.Errorf("protocol: decode engine state: %w", err)
 	}
 	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的

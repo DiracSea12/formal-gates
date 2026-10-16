@@ -41,6 +41,7 @@ func requirementPackageOf(payload *RequirementDecisionPayload) RequirementDecisi
 }
 
 func TestUnchangedRequirementConfirmationKeepsPlanScope(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		payload  RequirementDecisionPayload
@@ -254,6 +255,7 @@ func walkToDevelopment(t *testing.T, engine *Engine) {
 // TestRequirementLedgerSeedsFromIntakeReceipt：账本为空而受理回执已落账
 // 时，加载即回填单条 INTAKE 初始账目；权威 revision 读取与受理值一致。
 func TestRequirementLedgerSeedsFromIntakeReceipt(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
 	snap := engine.LoadMustSucceed(t)
@@ -275,6 +277,7 @@ func TestRequirementLedgerSeedsFromIntakeReceipt(t *testing.T) {
 // 次）、拓扑路线不动；未勾重走即续用，绑已确认旧 revision 的证据按
 // carry 接纳，新 revision 的新鲜轮也被纳且无强制重审要求。
 func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -385,6 +388,7 @@ func TestP2DrivenPreservedRevisionKeepsReviews(t *testing.T) {
 // 级联 PENDING 但账本不动、拓扑路线保持绑定）；全勾时完整重走路径可用
 // （重新双审→重新拓扑→重新路线）。
 func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
+	t.Parallel()
 	newRun := func(t *testing.T) (*Engine, string) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again", "readiness.again")
 		engine, dir := reviewEngine(t, cd, reg)
@@ -477,6 +481,7 @@ func TestUserInitiatedChangedRedoScopeCombinations(t *testing.T) {
 // 不可声明 PRESERVED、重走范围必须包含 finding 所在 series；正确载荷登记
 // 后，已确认阻塞门槛在新 revision 下放行新一轮。
 func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "review.p1.one", "review.p1.two", "review.p1.three")
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -557,6 +562,7 @@ func TestP1DrivenChangeForcesChangedAndOwningSeriesRedo(t *testing.T) {
 // A confirmed blocker forbids a fresh round on unchanged input. A correction
 // dismissing it concludes that same review without consuming another round.
 func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "round.one", "round.two")
 	engine, _ := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
@@ -595,6 +601,7 @@ func TestConfirmedBlockingGateHoldsFreshRounds(t *testing.T) {
 // （可区分错误），回执/结果/既有 Ask 不受阻（refill 静默扣发），Ask 决定
 // 后解冻；放弃决定不登记任何 revision；其它控制不触发屏障。
 func TestRequirementChangeBarrierPhaseA(t *testing.T) {
+	t.Parallel()
 	t.Run("issuance frozen while the ask is pending", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
@@ -880,6 +887,7 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 // TestRequirementDecisionValidationAndCAS：CAS 基线、载荷配对与 freshness
 // 的负控——每例可区分错误码、零状态变化。
 func TestRequirementDecisionValidationAndCAS(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -1032,6 +1040,7 @@ func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requ
 // 伪造 P1 源的分类、越集 scope、抹掉 INTAKE 首条、伪造 state 代数）在
 // 加载边界可区分拒绝；还原后可正常加载。
 func TestRequirementLedgerTamperingRejectedAtLoad(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	askAndDecideRequirement(t, engine, "req-change-tamper", "proceed", &RequirementDecisionPayload{
@@ -1122,6 +1131,7 @@ func TestRequirementLedgerTamperingRejectedAtLoad(t *testing.T) {
 // TestRequirementVariantsParticipateInCanonicalDigest：需求决定载荷进入
 // canonical 编码——内容变化必变 digest，事件身份覆盖变体字节。
 func TestRequirementVariantsParticipateInCanonicalDigest(t *testing.T) {
+	t.Parallel()
 	payload := RequirementDecisionPayload{
 		BaseRevision: "rev-1", CandidateRevision: "rev-2", DeltaDigest: "sha256:delta",
 		ImpactDigest: "sha256:impact",
@@ -1181,6 +1191,7 @@ func walkToTopologyAndRoute(t *testing.T, engine *Engine) string {
 // rev-1 时，rev-2 的新一轮 readiness 证据必须被顺序守卫放行，readiness
 // 重新 PASS 后开发门重开（路线选择重新可接纳并推进 DEVELOPMENT_PARALLEL）。
 func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
+	t.Parallel()
 	t.Run("gate stays closed until the redone readiness series repasses", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 		engine, dir := reviewEngine(t, cd, reg)
@@ -1254,6 +1265,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 // 直接满足双审门，路线接纳并推进 DEVELOPMENT_PARALLEL。若新产品审阻塞，
 // 门自然关门（由 FAIL 态承担，无需级联失效）。
 func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
 	engine, dir := reviewEngine(t, cd, reg)
 	walkToTopologyAndRoute(t, engine)
@@ -1290,6 +1302,7 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 // 成员判定——账本外 revision 字符串上的 effective PASS 不开门（正控制：
 // 账本内 revision 的 PASS 有效且顺序守卫放行）。
 func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
+	t.Parallel()
 	build := func(revision string) *State {
 		view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
 		if err != nil {
@@ -1336,6 +1349,7 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 // TestForgedCarriedPassRejectedAtLoad：在账本内 revision 上伪造 effective
 // PASS（实际投影为 FAIL）——证据链断裂由加载边界的既有重投影校验拦截。
 func TestForgedCarriedPassRejectedAtLoad(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -1366,6 +1380,7 @@ func TestForgedCarriedPassRejectedAtLoad(t *testing.T) {
 // REVIEW_ROUND_GRANT 的 grant/decline 同理的固定项锚定）；被拒决定不解
 // 决 Ask。
 func TestRequirementChangeChoiceAnchoring(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	valid := RequirementDecisionPayload{
@@ -1418,6 +1433,7 @@ func TestRequirementChangeChoiceAnchoring(t *testing.T) {
 // （绑旧 revision）上的 finding 处置纠正仍可行——纠正的 stale 门按 series
 // 当前结论绑定的 revision 判定，不按当前权威；CAS 与精确绑定照旧。
 func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "start.readiness.two")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -1484,6 +1500,7 @@ func TestCarriedConclusionFindingsRemainCorrectable(t *testing.T) {
 // P0/P1）只能走 REVIEW_FINDING_P1，非阻塞 finding 只能走 REVIEW_FINDING_P2；
 // 不符零状态拒绝（升级权经真实标签保留）。
 func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
+	t.Parallel()
 	newEngineWithFinding := func(t *testing.T, severity string) (*Engine, string, string) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
@@ -1543,6 +1560,7 @@ func TestFindingDrivenSourceMustMatchTheEffectiveDecision(t *testing.T) {
 // 顺序守卫按前提状态判定），PRESERVED 的旧 revision 暂存携原 revision
 // carry 完成。
 func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
+	t.Parallel()
 	t.Run("redone series staging is terminated and the replacement completes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, _ := reviewEngine(t, cd, reg)
@@ -1706,6 +1724,7 @@ func TestRequirementChangeDisposesInFlightEvidenceByScope(t *testing.T) {
 // 荷必须与之逐字段相等——同一 Ask 不可登记单字段之差的另一个包（冲突拒
 // 绝零状态）；未准备包的请求只建立屏障。
 func TestRequirementPackageBindsTheAsk(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -1779,6 +1798,7 @@ func TestRequirementPackageBindsTheAsk(t *testing.T) {
 // 勾选的 series 真实重走（stale→PENDING），未勾选的续用；加载边界对
 // PRESERVED 带 scope 的账目不拒。
 func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	walkToTopologyAndRoute(t, engine)
@@ -1821,6 +1841,7 @@ func TestPreservedScopeIsRecordedAndExecuted(t *testing.T) {
 // TestUnadjudicatedFindingCannotDriveAnySource：未裁决（raw）的 finding 不
 // 能驱动任何修订来源——P1/P2 源都拒绝，先处置再发起修订。
 func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -1851,6 +1872,7 @@ func TestUnadjudicatedFindingCannotDriveAnySource(t *testing.T) {
 // （重走范围派发在决定事务内按标记终止并由替换派发完成新鲜轮，见
 // TestMarkedReviewDispatchWaitsForExactStopAfterRedo）。
 func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
+	t.Parallel()
 	cd, reg := declaredSeriesStepsFixture(t, "review.floor.one", "review.floor.two", "review.floor.three")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -1896,6 +1918,7 @@ func TestRedoneSeriesFreshRoundRequiresAPostDecisionDispatch(t *testing.T) {
 // 期隔离结果按 carry 恢复——携原 revision、原证据字节接纳完成（completed
 // +1），留 carry 留痕，不作废。
 func TestUnredoneSeriesQuarantinedResultIsCarried(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	readiness := func() string {
@@ -1956,6 +1979,7 @@ func TestUnredoneSeriesQuarantinedResultIsCarried(t *testing.T) {
 // 屏障只随最后一个未决 Ask 的解决解除——此前隔离账继续持有（留痕），任
 // 何单个决定都不提前重放。
 func TestQuarantineHeldUntilTheLastPendingAskResolves(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2013,6 +2037,7 @@ func TestQuarantineHeldUntilTheLastPendingAskResolves(t *testing.T) {
 
 // FreshOwed keeps a redo pending through overlapping requirement-change asks.
 func TestDualAskRedoIssuesFreshWorkOnlyAfterTheBarrierLifts(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2082,6 +2107,7 @@ func TestDualAskRedoIssuesFreshWorkOnlyAfterTheBarrierLifts(t *testing.T) {
 // 绑定权威基线；后续确认使基线前移后，旧 Ask 的决定（即使把载荷基线改
 // 成新权威）以可区分错误拒绝且零状态——必须在新基线上重建 Ask。
 func TestRequirementAskExpiresWhenItsBaseRevisionIsSuperseded(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, dir := reviewEngine(t, cd, reg)
 	issueReady(t, engine)
@@ -2148,6 +2174,7 @@ func TestRequirementAskExpiresWhenItsBaseRevisionIsSuperseded(t *testing.T) {
 // 派发真实在途过，结果入 Results＋审查证据记账＋携决定 requestID 的对账
 // 留痕；不产生 obsolete 条目，账本一致，state 照常加载。
 func TestTerminalTaskQuarantinedResultReconcilesOnReplay(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2213,6 +2240,7 @@ func TestTerminalTaskQuarantinedResultReconcilesOnReplay(t *testing.T) {
 // 都按结果级摘要（不含事件 ID）记身份——同一载荷换事件 ID 重发判
 // DUPLICATE，不误报 RECEIPT_CONFLICT。
 func TestQuarantinedResultIdentityIgnoresTheEventID(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "readiness.again")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2257,6 +2285,7 @@ func TestQuarantinedResultIdentityIgnoresTheEventID(t *testing.T) {
 // （覆盖该 series 的最后一次决定的 state 代数）——手改 floor 在加载边界
 // 可区分拒绝，恢复原状即照常加载。
 func TestForgedFreshFloorRejectedAtLoad(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	issueReady(t, engine)
@@ -2290,6 +2319,7 @@ func TestForgedFreshFloorRejectedAtLoad(t *testing.T) {
 // import review——review 经 encoder 依赖 authoring），两包词汇相等由本
 // 测试锁死；非开发前系列标记没有内核对应物（它永不进入审查账本）。
 func TestReviewSeriesVocabularyMatchesTheReviewKernel(t *testing.T) {
+	t.Parallel()
 	if authoring.ReviewSeriesProductReview != authoring.ReviewSeriesAction(review.ProductReview) ||
 		authoring.ReviewSeriesStartReadiness != authoring.ReviewSeriesAction(review.StartReadiness) {
 		t.Fatalf("authoring marks %q/%q must equal the review kernel actions %q/%q",
@@ -2301,6 +2331,7 @@ func TestReviewSeriesVocabularyMatchesTheReviewKernel(t *testing.T) {
 // 审查系列身份的派发，重走决定登记终止义务，原执行精确停定后替换派发
 // （携标记、签发代数＝停定事务）完成新鲜轮；未勾选系列的派发保持在途。
 func TestMarkedReviewDispatchWaitsForExactStopAfterRedo(t *testing.T) {
+	t.Parallel()
 	t.Run("marked dispatch of the redone series", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review")
 		engine, _ := reviewEngine(t, cd, reg)
@@ -2386,6 +2417,7 @@ func TestMarkedReviewDispatchWaitsForExactStopAfterRedo(t *testing.T) {
 // 明同一系列——签发标记是权威事实，声明他系列即可区分拒绝、零状态；同
 // action 的相符证据随后照常接纳。
 func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2429,6 +2461,7 @@ func TestMarkedDispatchRejectsMismatchedEvidence(t *testing.T) {
 // 标记不一致可区分拒绝、零状态；开发前系列的重走决定也不终止它（不属
 // 于重走范围）。
 func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
+	t.Parallel()
 	cd, reg := agentStepsDefinition(t, func(string) authoring.AgentSpec {
 		return authoring.AgentSpec{
 			Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview,
@@ -2492,6 +2525,7 @@ func TestUnaffiliatedDispatchRejectsPredevelopmentEvidence(t *testing.T) {
 // 另一派发完成产品审新鲜轮（effective PASS@rev-2）的同一事务内，挂起配
 // 对自动保存原结果，独立接纳后计轮；同回执重发判 DUPLICATE、不双计。
 func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -2581,6 +2615,7 @@ func TestLateReceiptPairsWhenTheProductGateReopens(t *testing.T) {
 // 配对同享惰性语义——产品审重走期隔离的就绪结果，屏障解除的重放在顺序
 // 门未开时回暂存挂起（不作废、不计轮），留挂起留痕。
 func TestQuarantinedReadinessUnderProductRedoStaysSuspended(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -2643,6 +2678,7 @@ func TestQuarantinedReadinessUnderProductRedoStaysSuspended(t *testing.T) {
 // 保持关闭；满足 floor 的新鲜轮完成后义务清偿、门重开。手改 FreshOwed
 // 在加载边界可区分拒绝，恢复原状即照常加载。
 func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -2735,6 +2771,7 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 // Redo supersedes a terminal task and sets a persistent evidence floor. Its
 // native execution stops before replacement; obsolete evidence remains evidence only.
 func TestCarriedEvidenceBelowTheRedoFloorIsRejected(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	old := issueReady(t, engine)[0]
@@ -2813,6 +2850,7 @@ func TestCarriedEvidenceBelowTheRedoFloorIsRejected(t *testing.T) {
 // A review at the floor clears the redo obligation. A subsequent replacement
 // for an invalid result may carry that confirmed revision after discharge.
 func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
 	old := issueReady(t, engine)[0]
@@ -2847,6 +2885,7 @@ func TestCarriedEvidenceAtTheRedoFloorIsAdmitted(t *testing.T) {
 // 回执——回执是观察事实照常 ACCEPTED 落账，暂存保留、配对挂起（留痕），
 // 计轮为零；决定解除屏障补配对，独立接纳才计语义轮。
 func TestBarrierHoldsTheReceiptPairingUntilTheDecision(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2926,6 +2965,7 @@ func TestBarrierHoldsTheReceiptPairingUntilTheDecision(t *testing.T) {
 // 果——terminal 对账以持久签发事实过 floor 校验（真实代数 ≥floor），新鲜
 // 轮照常完成。
 func TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -2988,6 +3028,7 @@ func TestTerminalFreshDispatchResultAdmitsAtItsRealIssueRevision(t *testing.T) {
 // 独立接纳后的终态完全相同——两种路径都保存完整原结果、补齐挂起技术审
 // 配对，并由各自的独立接纳完成计轮、结论和暂存/隔离清空。
 func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.T) {
+	t.Parallel()
 	type completionFacts struct {
 		productCompleted   int
 		productEffective   string
@@ -3104,6 +3145,7 @@ func TestProductFreshRoundCompletionOrderReachesTheSameTerminalState(t *testing.
 // 同一事务内解除失效：技术审按自身账本重投影（rev-1 carry 续用），无技
 // 术审槽也不卡死，路线门开放推进 DEVELOPMENT_PARALLEL。
 func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness", "product.again")
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -3171,6 +3213,7 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 // A granted slot stays available while a fresh obligation waits for the barrier.
 // Normal issuance binds it exactly once when the final ask resolves.
 func TestBarrierLiftBindsTheFreshReviewAuthorizationOnce(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 

@@ -35,6 +35,7 @@ func selectConfiguration(t *testing.T, e *Engine, id string, selected Configurat
 }
 
 func TestConfigurationStopsClosedReviewAndReopensThroughOriginalContinuation(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, nil)
 	original := issueReady(t, e)[0]
 	for _, event := range []Event{spawnReceipt(t, "claimed-review", original, "original-review-owner"), lifecycleEvent(t, "review-start", "original-review-owner", LifecycleStart)} {
@@ -129,6 +130,7 @@ func TestConfigurationStopsClosedReviewAndReopensThroughOriginalContinuation(t *
 }
 
 func TestConfigurationTupleUsesRevisionWithoutStoppingClaimedWork(t *testing.T) {
+	t.Parallel()
 	e, _ := selectedReviewEngine(t, nil)
 	snapshot := e.LoadMustSucceed(t)
 	snapshot.State.RunProvider = host.Codex
@@ -171,6 +173,7 @@ func TestConfigurationTupleUsesRevisionWithoutStoppingClaimedWork(t *testing.T) 
 }
 
 func TestConfigurationPreviewKeepsCompletedDevelopmentAndReplacesOnlyOpenWork(t *testing.T) {
+	t.Parallel()
 	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
 	selected.Configuration.FlowSelection = &FlowSelection{Disabled: []string{"development"}}
@@ -211,6 +214,7 @@ func TestConfigurationPreviewKeepsCompletedDevelopmentAndReplacesOnlyOpenWork(t 
 }
 
 func TestConfigurationKeepsTemporaryNativeOmissionsThroughUnrelatedEdits(t *testing.T) {
+	t.Parallel()
 	state := State{RunProvider: host.Codex, Settings: &settings.Effective{Values: settings.Values{Model: "configured-model", ReasoningEffort: "high"}}, Decisions: map[string]RecordedDecision{"native": {Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "development", Choice: ExecutionChoice{Provider: host.Codex}}}}}
 	selected := state.EffectiveConfiguration()
 	selected.Configuration.FlowSelection = &FlowSelection{Disabled: []string{"repair"}}
@@ -229,6 +233,7 @@ func TestConfigurationKeepsTemporaryNativeOmissionsThroughUnrelatedEdits(t *test
 }
 
 func TestConfirmedRouteChangesRequirePinnedConfiguration(t *testing.T) {
+	t.Parallel()
 	e, dir := sliceChildEngine(t)
 	gates := []string{"quality", "security"}
 	askAndDecide(t, e, ControlSelectRoute, "initial-selection", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: []string{"quality"}}})
@@ -246,6 +251,7 @@ func TestConfirmedRouteChangesRequirePinnedConfiguration(t *testing.T) {
 }
 
 func TestNewlySelectedQAUsesPreparationBeforeFreezingValidation(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	e := &Engine{cfg: Config{Definition: cd}}
 	candidate := coverage.ValidationCandidate{Identity: "native-source", Digest: "tree"}
@@ -262,6 +268,7 @@ func TestNewlySelectedQAUsesPreparationBeforeFreezingValidation(t *testing.T) {
 }
 
 func TestEquivalentFlowSelectionsRetainTheValidationRoute(t *testing.T) {
+	t.Parallel()
 	state := State{RouteConfirmed: true, SelectedGates: []string{"quality"}}
 	original := state.validationRouteDigest()
 	state.FlowSelection = &FlowSelection{}

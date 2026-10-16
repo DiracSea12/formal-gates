@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // These tests cover install-fault recovery receipts and the installed
@@ -152,6 +154,9 @@ func faultAssertNoInstallResidue(t *testing.T, registry, target string) {
 }
 
 func TestInstallFaultMatrixRecoveryReceiptIdentity(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	faults := []struct {
 		name  string
 		phase string
@@ -232,6 +237,7 @@ func TestInstallFaultMatrixRecoveryReceiptIdentity(t *testing.T) {
 }
 
 func TestInstalledPackageInventoryAndHelp(t *testing.T) {
+	t.Parallel()
 	root := faultRepoRoot(t)
 	packageRoot := t.TempDir()
 	faultCopyPackage(t, root, packageRoot)

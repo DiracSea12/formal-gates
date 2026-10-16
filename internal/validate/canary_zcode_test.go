@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/host"
 	"formal-gates/internal/prompts"
 )
@@ -15,6 +16,9 @@ import (
 // Local synthetic worker evidence drives the installed provider; QA operations
 // execute the real committed fixture artifacts without a native model session.
 func TestPortableZCodeInstalledWorkflowCompletes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	project := t.TempDir()
 	options := InstallOptions{Source: portablePackageFixture(t), Host: host.ZCode, Scope: "project", Project: project, RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "bin", nativeBinaryName()), Force: true, SkipHooks: true}
 	report, err := Install(options)

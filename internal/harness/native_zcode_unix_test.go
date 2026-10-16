@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 const zcodeTestPrompt = "Review the requirement."
@@ -916,7 +918,7 @@ func TestZcodeExecuteRuntimeHeadersCredential(t *testing.T) {
 			{On: `"method":"session/close"`, Send: `{"id": "@ID@", "result": {}}`},
 		}
 	}
-	if runNativePackageTest(t) {
+	if testkit.RunNativePackageTest(t) {
 		return
 	}
 	scenario := newZcodeScenario(t, steps, func(request map[string]any) { request["probe"] = true })
@@ -1031,6 +1033,9 @@ func TestZcodeTurnWaitsForItsTerminalEvent(t *testing.T) {
 }
 
 func TestZcodeIncompleteTurnPreservesTransportFailure(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	scenario := newZcodeScenario(t, func(inputID string) []peerStep {
 		steps := zcodeSuccessSteps(inputID)
 		steps[5] = peerStep{On: `"method":"session/send"`, SleepSecs: 0.1, Close: true}

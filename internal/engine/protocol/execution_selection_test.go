@@ -34,6 +34,7 @@ func selectExecution(t *testing.T, e *Engine, id string, selection ExecutionSele
 }
 
 func TestExecutionSelectionChangesReadyOnlyBeforeNativeClaim(t *testing.T) {
+	t.Parallel()
 	for _, claimed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unclaimed", true: "claimed"}[claimed], func(t *testing.T) {
 			e, dir := selectedReviewEngine(t, nil)
@@ -94,6 +95,7 @@ func TestExecutionSelectionChangesReadyOnlyBeforeNativeClaim(t *testing.T) {
 }
 
 func TestExecutionBindingsPreserveFieldPresence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, fields string
 		want         ExecutionChoice
@@ -142,6 +144,7 @@ func TestExecutionBindingsPreserveFieldPresence(t *testing.T) {
 }
 
 func TestPlatformSelectionPreservesNativeOmissionAfterRestart(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, nil)
 	snapshot := e.LoadMustSucceed(t)
 	snapshot.State.Settings = &settings.Effective{Values: settings.Values{Model: "gpt-6.1-sol", ReasoningEffort: "high"}}
@@ -166,6 +169,7 @@ func TestPlatformSelectionPreservesNativeOmissionAfterRestart(t *testing.T) {
 }
 
 func TestExecutionSelectionPreservesParallelAndAuxiliaryResponsibilities(t *testing.T) {
+	t.Parallel()
 	e, before, issued := parallelValidationInputState(t)
 	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model", ReasoningEffort: "off"}}
 	selectExecution(t, e, "choose-qa", selection)
@@ -197,6 +201,7 @@ func TestExecutionSelectionPreservesParallelAndAuxiliaryResponsibilities(t *test
 }
 
 func TestExecutionSelectionRejectsWrongDecisionWithoutChangingChoice(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, nil)
 	selection := ExecutionSelection{Node: "development", Choice: ExecutionChoice{Provider: host.Codex, Model: "native-model"}}
 	request := Event{ID: "execution-offer", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
@@ -216,6 +221,7 @@ func TestExecutionSelectionRejectsWrongDecisionWithoutChangingChoice(t *testing.
 }
 
 func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
+	t.Parallel()
 	e, _, issued := parallelValidationInputState(t)
 	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model"}}
 	selectExecution(t, e, "qa-provider", selection)
@@ -279,6 +285,7 @@ func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
 }
 
 func TestChildExecutionChoiceIsCreationSnapshot(t *testing.T) {
+	t.Parallel()
 	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"chosen": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "parent-model"}}}}}
 	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
 	start := parent.ChildStart(ChildPreparation{SliceID: "core"})
@@ -310,6 +317,7 @@ func TestChildExecutionChoiceIsCreationSnapshot(t *testing.T) {
 }
 
 func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	s.ReconciledEffects = map[string]ReconciledEffect{}
 	choice := ExecutionChoice{Provider: host.Claude, Model: "original-model", ReasoningEffort: "high"}
@@ -365,6 +373,7 @@ func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
 }
 
 func TestQAExecutionSelectionsUseLatestApplicableDecision(t *testing.T) {
+	t.Parallel()
 	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-model", ReasoningEffort: "high"}
 	black := ExecutionChoice{Provider: host.Codex, Model: "black-model", ReasoningEffort: "medium"}
 	white := ExecutionChoice{Provider: host.Claude, Model: "white-model"}
@@ -403,6 +412,7 @@ func TestQAExecutionSelectionsUseLatestApplicableDecision(t *testing.T) {
 }
 
 func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
+	t.Parallel()
 	e, before, issued := parallelValidationInputState(t)
 	var claimed string
 	for _, action := range issued {
@@ -451,6 +461,7 @@ func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
 }
 
 func TestSharedQARequestReplaysAndCompletesOriginalAsk(t *testing.T) {
+	t.Parallel()
 	e, before, issued := parallelValidationInputState(t)
 	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "shared-native-model"}}
 	request := Event{ID: "saved-shared-request", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
@@ -505,6 +516,7 @@ func TestSharedQARequestReplaysAndCompletesOriginalAsk(t *testing.T) {
 }
 
 func TestSharedQACreationSnapshotPreservesMergeExecution(t *testing.T) {
+	t.Parallel()
 	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-qa-model", ReasoningEffort: "high"}
 	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"shared": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa", Choice: shared}}}}
 	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
@@ -527,6 +539,7 @@ func TestSharedQACreationSnapshotPreservesMergeExecution(t *testing.T) {
 }
 
 func TestConfigurationExecutionInheritsOnlyTheSelectedPlatformDefaults(t *testing.T) {
+	t.Parallel()
 	for _, sample := range []struct {
 		name       string
 		configured ExecutionChoice

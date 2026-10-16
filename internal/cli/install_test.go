@@ -11,12 +11,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // A plain candidate may not select its own explicit transaction path as a
 // stable launcher in a fresh namespace. The subprocess supplies its actual
 // invocation; positive CLI fixtures supply the normal registered launcher.
 func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
+	t.Parallel()
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate CLI test source")
@@ -85,6 +88,9 @@ func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 }
 
 func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		host      string
 		targetRel string
@@ -117,6 +123,9 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 }
 
 func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name      string
 		host      string
@@ -198,6 +207,9 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 }
 
 func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -695,6 +707,9 @@ func TestRunInstallRequiresBuiltNativeBinary(t *testing.T) {
 }
 
 func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, host := range []string{"claude", "codex", "cursor", "dsh"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(host+"/"+scope, func(t *testing.T) {
@@ -738,6 +753,9 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 }
 
 func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, host := range []string{"claude", "codex", "cursor"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(host+"/"+scope, func(t *testing.T) {

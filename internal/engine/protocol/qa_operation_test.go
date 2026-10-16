@@ -66,6 +66,7 @@ func addQAOperationReceipt(t *testing.T, s *State, p CheckParameters, stdout str
 }
 
 func TestCommonPreparationWaitsForCompleteConsumerCase(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull
 	manifest := &s.currentValidationWave().Coverage.Manifests[0]
@@ -173,6 +174,7 @@ func TestCommonPreparationWaitsForCompleteConsumerCase(t *testing.T) {
 }
 
 func TestPreparationDependenciesKeepIndependentCasesExecutable(t *testing.T) {
+	t.Parallel()
 	for _, relation := range []string{"no-preparation", "independent", "different-preparation", "same-content", "private-prefix"} {
 		t.Run(relation, func(t *testing.T) {
 			s, cd, target := qaOperationState(t)
@@ -230,6 +232,7 @@ func TestPreparationDependenciesKeepIndependentCasesExecutable(t *testing.T) {
 }
 
 func TestCommonPreparationWaitsForUnknownAndReleasesExecutionError(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull
 	s.currentValidationWave().Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
@@ -272,6 +275,7 @@ func TestCommonPreparationWaitsForUnknownAndReleasesExecutionError(t *testing.T)
 }
 
 func TestQAOperationsPreservePartitionOrderAndReceipts(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	if s.qaComparisonReady(target, cd) {
 		t.Fatal("comparison ready before any approved operation ran")
@@ -327,6 +331,7 @@ func TestQAOperationsPreservePartitionOrderAndReceipts(t *testing.T) {
 }
 
 func TestSharedPreparationReceiptsRetainOriginalExecutionFacts(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull
 	s.currentValidationWave().Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
@@ -388,6 +393,7 @@ func TestSharedPreparationReceiptsRetainOriginalExecutionFacts(t *testing.T) {
 }
 
 func TestQACoreRejectsTextOnlyAndChangedNativeFacts(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull
 	// The second case belongs to the same approved full obligation.
@@ -435,6 +441,7 @@ func TestQACoreRejectsTextOnlyAndChangedNativeFacts(t *testing.T) {
 }
 
 func TestQACheckPlansNeverReadGoSource(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	manifest := &s.currentValidationWave().Coverage.Manifests[0]
 	manifest.Cases[0].Operations = nil
@@ -466,6 +473,7 @@ func TestQACheckPlansNeverReadGoSource(t *testing.T) {
 }
 
 func TestQACarriedDutyPreservesNativeRecipesAndReceipts(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	plans, err := s.qaCheckPlans(target, cd)
 	if err != nil {
@@ -560,6 +568,7 @@ func TestQACarriedDutyPreservesNativeRecipesAndReceipts(t *testing.T) {
 }
 
 func TestRequirementBarrierPreservesQAReceiptsAndFreezesExecution(t *testing.T) {
+	t.Parallel()
 	for _, executed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "awaiting-operation", true: "completed-operation"}[executed], func(t *testing.T) {
 			s, cd, target := qaOperationState(t)

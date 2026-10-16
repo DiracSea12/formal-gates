@@ -3,10 +3,7 @@ package harness
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -71,41 +68,4 @@ func TestRunCommandRejectsUnsupportedCommands(t *testing.T) {
 			t.Fatalf("%v: %d %q %q", args, code, out.String(), errout.String())
 		}
 	}
-}
-
-// Credential fixtures execute from their own native package, including its helper.
-func runNativePackageTest(t *testing.T) bool {
-	t.Helper()
-	const marker = "FORMAL_GATES_NATIVE_TEST_CHILD"
-	if os.Getenv(marker) == t.Name() {
-		return false
-	}
-	root := t.TempDir()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	name := "native.test"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	target := filepath.Join(root, "bin", name)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(target, body, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(target, "-test.timeout=0", "-test.v", "-test.run=^"+t.Name()+"$")
-	cmd.Env = append(os.Environ(), marker+"="+t.Name())
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("native package fixture: %v\n%s", err, output)
-	}
-	t.Logf("%s", output)
-	return true
 }

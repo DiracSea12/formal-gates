@@ -14,6 +14,7 @@ import (
 )
 
 func TestWorkerInputBindsDefinitionCodecs(t *testing.T) {
+	t.Parallel()
 	e, s, issued := parallelValidationInputState(t)
 	var pending PendingAction
 	for _, action := range issued {
@@ -54,6 +55,7 @@ func TestWorkerInputBindsDefinitionCodecs(t *testing.T) {
 }
 
 func TestWorkerInputKeepsIssuedParallelValidationFrontier(t *testing.T) {
+	t.Parallel()
 	e, current, issued := parallelValidationInputState(t)
 	body, err := json.Marshal(current)
 	if err != nil {
@@ -121,6 +123,7 @@ func parallelValidationInputState(t *testing.T) (*Engine, *State, decision.Issue
 }
 
 func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7", "engine.validation.observation.v2"} {
 		t.Run(role, func(t *testing.T) {
 			e, state, pending := unfinishedDevelopmentState(t, role)
@@ -174,6 +177,7 @@ func TestWorkerInputPreservesIssuedExecutionContext(t *testing.T) {
 }
 
 func TestReadinessInputReusesPreparedCallsFromConfirmedBatch(t *testing.T) {
+	t.Parallel()
 	engine, s, _ := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	cd := engine.cfg.Definition
 	plan := s.Results["readiness"].Review.GranularityReview
@@ -224,6 +228,7 @@ func TestReadinessInputReusesPreparedCallsFromConfirmedBatch(t *testing.T) {
 }
 
 func TestWorkerResumeUsesOriginalObservedDispatchIdentity(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{SpawnStatusSpawned, SpawnStatusAttached} {
 		t.Run(status, func(t *testing.T) {
 			cd := compiledCanonicalWorkflow(t)

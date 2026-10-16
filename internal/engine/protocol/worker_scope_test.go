@@ -9,6 +9,7 @@ import (
 )
 
 func TestChildWorkerScopePreservesConfirmedResponsibilitiesOnRecovery(t *testing.T) {
+	t.Parallel()
 	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	state.SliceChild = &SliceChildBinding{SliceID: "slice-2"}
 	state.Topology = &TopologyBinding{Decision: "split", ACOwners: map[string]string{"AC-001": "slice-1", "AC-002": "slice-2", "AC-003": "master-merge", "AC-004": "master-merge"}}
@@ -39,6 +40,7 @@ func TestChildWorkerScopePreservesConfirmedResponsibilitiesOnRecovery(t *testing
 }
 
 func TestRepairWorkerChecksUseTheConfirmedProjectOrSlicePlan(t *testing.T) {
+	t.Parallel()
 	for _, child := range []bool{false, true} {
 		e, state, pending := unfinishedDevelopmentState(t, "engine.repair.v7")
 		plan := plannedReviewEvidence(review.StartReadiness, "readiness", "", "PASS", "Approved project plan", nil).GranularityReview

@@ -8,9 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestDshBootstrapChecksInstalledHookPayload(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name      string
 		scope     string
@@ -118,6 +123,7 @@ func TestDshBootstrapChecksInstalledHookPayload(t *testing.T) {
 }
 
 func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("dsh_plugin.mjs")
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +151,7 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 
 // DSH anchors inserted plugin names beside the patch, not beside the profile.
 func TestDshPluginResolvesBesideHomePatch(t *testing.T) {
+	t.Parallel()
 	home := filepath.Join(t.TempDir(), "custom dsh home")
 	target := installTarget{
 		targetPath: filepath.Join(home, "skills", "formal-gates"),
@@ -169,6 +176,7 @@ func TestDshPluginResolvesBesideHomePatch(t *testing.T) {
 }
 
 func TestDshHookReinstallPreservesUnchangedPatch(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	target := installTarget{host: "dsh", targetPath: filepath.Join(home, "skills", "formal-gates"), hookConfig: filepath.Join(home, dshPatchFileName)}
 	if changed, err := configureInstallHook(target); err != nil || !changed {

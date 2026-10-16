@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestUninstallRemovesOwnedPayloadsAfterLastSharedInstallation(t *testing.T) {
@@ -80,6 +82,9 @@ func TestUninstallRemovesOwnedPayloadsAfterLastSharedInstallation(t *testing.T) 
 }
 
 func TestCommittedUninstallRecoveryRetiresLocksAtMaintenanceExit(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, operation := range []string{"install", "install-failure", "bootstrap", "bootstrap-failure", "uninstall"} {
 		t.Run(operation, func(t *testing.T) {
 			source := installFixtureSource(t)

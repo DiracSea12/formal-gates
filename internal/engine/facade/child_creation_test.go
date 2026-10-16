@@ -26,6 +26,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -643,10 +644,14 @@ func (r *childWorkspaceInterruption) Run(dir, command string, args ...string) (s
 }
 
 func TestChildWorkspaceReopenPreservesExecutedPrefixes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	gc := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(gc)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
 	for _, point := range []string{"worktree", "update-ref"} {
 		t.Run(point, func(t *testing.T) {
+			t.Parallel()
 			d := splitMaster(t)
 			before := prepareChildFrontier(t, d)
 			r := &childWorkspaceInterruption{Runner: vcs.ExecRunner{}, point: point}

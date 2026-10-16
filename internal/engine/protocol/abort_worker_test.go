@@ -11,6 +11,7 @@ import (
 // Abort observes the issued worker's native owner before retiring unstarted work
 // or requesting termination. Unknown execution remains an unresolved effect.
 func TestAbortUsesOriginalWorkerExecutionObservation(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"UNCLAIMED", SpawnStatusUnknown, SpawnStatusSpawned} {
 		t.Run(status, func(t *testing.T) {
 			e, directory := developmentPreparationEngine(t)

@@ -15,6 +15,7 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
@@ -238,6 +239,9 @@ func (a *intakePathAdapter) ResolveNativePaths(native, sources map[string]string
 }
 
 func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	usage, err := host.Lookup("claude")
 	if err != nil {
 		t.Fatal(err)

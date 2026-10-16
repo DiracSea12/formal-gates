@@ -9,6 +9,7 @@ import (
 )
 
 func TestQARevisionProjectionUsesCurrentOriginalDecision(t *testing.T) {
+	t.Parallel()
 	mode := coverage.ReviewBlackbox
 	history := CaseReviewEvidence{Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "case"}}}}
 	set := &CaseSet{AffectedCases: []string{"case"}, ReviewHistory: []CaseReviewEvidence{history}}

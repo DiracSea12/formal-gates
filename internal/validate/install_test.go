@@ -6,12 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // Native script bytes participate in the same copy, switch, and rollback
 // transaction as every installed runtime file. The package fixture uses a
 // smoke stub; the public binary and real script execution are tested by harness.
 func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, fault := range []string{
 		"copy-component:internal/harness/native_dsh.mjs",
 		"copy-component:internal/harness/zcode_credential.mjs",
@@ -73,6 +78,7 @@ func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.
 }
 
 func TestInstallAllowsActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
+	t.Parallel()
 	source := copyPackageFixture(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -210,6 +216,7 @@ func TestInstallIgnoresActiveRunFromRelatedRegistryRecord(t *testing.T) {
 }
 
 func TestLoadManagedRuleRequiresSingleCurrentRule(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	skillPath := filepath.Join(root, filepath.FromSlash(managedRuleSourceRelativePath))
 
@@ -254,6 +261,7 @@ func TestLoadManagedRuleRequiresSingleCurrentRule(t *testing.T) {
 }
 
 func TestManagedRuleMarkersCollapseDuplicatesAndPreserveNewlineStyle(t *testing.T) {
+	t.Parallel()
 	original := "before\r\n" +
 		hostInstructionsStartMarker + "\r\nOLD\r\n" + hostInstructionsEndMarker + "\r\n" +
 		"keep\r\n" +
@@ -277,6 +285,7 @@ func TestManagedRuleMarkersCollapseDuplicatesAndPreserveNewlineStyle(t *testing.
 }
 
 func TestManagedRuleMarkersMigrateExactUnmarkedCurrentRule(t *testing.T) {
+	t.Parallel()
 	original := "before\nCURRENT\nkeep CURRENT embedded\nafter\n"
 	updated, err := replaceManagedRuleBlock(original, "CURRENT")
 	if err != nil {
@@ -291,6 +300,7 @@ func TestManagedRuleMarkersMigrateExactUnmarkedCurrentRule(t *testing.T) {
 }
 
 func TestRemoveManagedRuleMarkersPreservesUnrelatedContent(t *testing.T) {
+	t.Parallel()
 	original := "unrelated\n" +
 		hostInstructionsStartMarker + "\nCURRENT\n" + hostInstructionsEndMarker + "\n" +
 		"end\n"
@@ -307,6 +317,7 @@ func TestRemoveManagedRuleMarkersPreservesUnrelatedContent(t *testing.T) {
 }
 
 func TestManagedRuleMarkersRejectMalformedBlocks(t *testing.T) {
+	t.Parallel()
 	for name, input := range map[string]string{
 		"missing-end":   hostInstructionsStartMarker + "\nCURRENT\n",
 		"missing-start": hostInstructionsEndMarker + "\n",
@@ -321,6 +332,7 @@ func TestManagedRuleMarkersRejectMalformedBlocks(t *testing.T) {
 }
 
 func TestRemoveManagedRuleFileCanRemoveEmptyCursorRuleFile(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "formal-gates.mdc")
 	text := hostInstructionsStartMarker + "\nCURRENT\n" + hostInstructionsEndMarker + "\n"
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -335,6 +347,7 @@ func TestRemoveManagedRuleFileCanRemoveEmptyCursorRuleFile(t *testing.T) {
 }
 
 func TestOuterFileSnapshotRestoresStableLauncherSymlink(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	oldRelease := filepath.Join(root, "release-v1", "bin", nativeBinaryName())
 	launcher := filepath.Join(root, "bin", nativeBinaryName())

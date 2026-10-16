@@ -50,6 +50,7 @@ func developmentPreparationEngine(t *testing.T) (*Engine, string) {
 }
 
 func TestDevelopmentPreparationBindsOriginalResultAndConfirmationAfterReload(t *testing.T) {
+	t.Parallel()
 	e, dir := developmentPreparationEngine(t)
 	if _, _, err := e.Drive(Observation{}); err != nil {
 		t.Fatal(err)
@@ -134,6 +135,7 @@ func TestDevelopmentPreparationBindsOriginalResultAndConfirmationAfterReload(t *
 }
 
 func TestDisabledDevelopmentUsesCurrentNativeInputAndExistingGuard(t *testing.T) {
+	t.Parallel()
 	e, s, _ := guardPipelineFixture(t)
 	s.FlowSelection = &FlowSelection{Disabled: []string{"development"}}
 	s.InitialSnapshot = "verified-initial-native-head"

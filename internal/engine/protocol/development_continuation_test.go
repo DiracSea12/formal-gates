@@ -48,6 +48,7 @@ func unfinishedDevelopmentState(t *testing.T, role string) (*Engine, *State, Pen
 }
 
 func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
+	t.Parallel()
 	for _, role := range []string{"engine.development.batch.v6", "engine.repair.v7"} {
 		t.Run(role, func(t *testing.T) {
 			e, s, pending := unfinishedDevelopmentState(t, role)
@@ -162,6 +163,7 @@ func TestDevelopmentContinuationUsesOriginalAdmissionAndReceipts(t *testing.T) {
 }
 
 func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	partial := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "CONTINUE", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Actual progress", RemainingWork: "Remaining behavior"}}}
 	claimed := *partial.Validation.Development
@@ -188,6 +190,7 @@ func TestDevelopmentContinuationCannotClaimCompletionOrOtherRoles(t *testing.T) 
 }
 
 func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
+	t.Parallel()
 	_, s, pending := unfinishedDevelopmentState(t, "engine.repair.v7")
 	original := RequirementWork{Task: pending.Task}
 	entry := ConfirmedRevision{Revision: "req", StateRevision: 1, WorkDecisions: []RequirementWorkDecision{{Work: original, Disposition: RequirementWorkRedo}}}
@@ -208,6 +211,7 @@ func TestDevelopmentContinuationRetainsConfirmedRedoAndResetDuty(t *testing.T) {
 }
 
 func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.repair.v7")
 	plan := plannedReviewEvidence(review.StartReadiness, "plan", "", "PASS", "approved member", nil).GranularityReview
 	origin := pending.Task
@@ -250,6 +254,7 @@ func TestDevelopmentContinuationPreservesFrozenRepairPlan(t *testing.T) {
 }
 
 func TestDevelopmentCompletionRequiresChangesOrNewCalls(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	record := WorkerResult{ActionID: pending.ActionID, Outcome: OutcomePass, Validation: &ValidationResult{Binding: s.DispatchBindings[pending.ActionID], Status: "PASS", Development: &DevelopmentEvidence{Paths: []string{}, Summary: "Claimed completion", Completion: &DevelopmentCompletion{DoD: map[string]string{}, Handoff: "Ready"}}}}
 	if err := e.acceptValidationResult(s, record, 2); err == nil {
@@ -281,6 +286,7 @@ func TestDevelopmentCompletionRequiresChangesOrNewCalls(t *testing.T) {
 }
 
 func TestDevelopmentContinuationRetainsPreparedEditCalls(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	s.normalizeCollections()
 	plan := s.Results["readiness"].Review.GranularityReview

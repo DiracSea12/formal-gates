@@ -6,6 +6,7 @@ import (
 )
 
 func TestDevelopmentCompletionRequiresExactIssuedEvidence(t *testing.T) {
+	t.Parallel()
 	batch := DevelopmentBatch{ID: "owned", DoD: []DevelopmentCriterion{{ID: "behavior", Description: "declared behavior"}}, Checks: []DevelopmentCheck{{ID: "build", Command: "go build ./..."}}}
 	for _, name := range []string{"exact", "extra-dod", "missing-dod", "blank-dod", "blank-handoff"} {
 		t.Run(name, func(t *testing.T) {

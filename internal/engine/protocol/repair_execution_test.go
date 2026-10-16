@@ -12,6 +12,7 @@ import (
 )
 
 func TestValidationTargetControlsPreserveFrozenExpectedSet(t *testing.T) {
+	t.Parallel()
 	gate := runtime.TaskKey{Node: "validation", Step: "gate", Scope: "member-source"}
 	ordinary := runtime.TaskKey{Node: "validation", Step: "gate", Scope: "candidate"}
 	target := &ValidationTarget{Task: gate, Kind: "GATE", Gate: "quality", Status: "PENDING"}
@@ -35,6 +36,7 @@ func TestValidationTargetControlsPreserveFrozenExpectedSet(t *testing.T) {
 }
 
 func TestRepairMembersUseTheSelectedQualityRole(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	for _, enabled := range []bool{true, false} {
 		s := &State{RunID: "run", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}}
@@ -71,6 +73,7 @@ func TestRepairMembersUseTheSelectedQualityRole(t *testing.T) {
 }
 
 func TestCandidateChildViewsUseFinalIssuedOwner(t *testing.T) {
+	t.Parallel()
 	s := &State{Validation: &Validation{Generation: 1, RequirementRevision: "req", Candidate: &coverage.ValidationCandidate{Identity: "candidate", Digest: "tree"}}, PendingHostActions: map[string]HostActionIntent{}, HostActionReceipts: map[string]HostActionReceipt{}}
 	for i, stage := range []string{"REVIEW_READY", "DEVELOPMENT"} {
 		action := stage
@@ -104,6 +107,7 @@ func TestCandidateChildViewsUseFinalIssuedOwner(t *testing.T) {
 }
 
 func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"complete", "missing-member", "missing-self-run", "final-fail", "late-resolution", "same-problem-fail"} {
 		t.Run(boundary, func(t *testing.T) {
 			cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
@@ -184,6 +188,7 @@ func TestCorrectedSourceProblemsCloseOnlyAfterCompleteValidation(t *testing.T) {
 }
 
 func TestInvalidatedRepairDutyUsesConfirmedMemberAuthority(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"carry", "member-redo", "all-redo", "retired-task", "thaw", "artifact-disposition", "unconfirmed"} {
 		t.Run(boundary, func(t *testing.T) {
 			root := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
@@ -234,6 +239,7 @@ func TestInvalidatedRepairDutyUsesConfirmedMemberAuthority(t *testing.T) {
 // A single planned completion discharges the original task through the same
 // batch-completion contract as isolated members.
 func TestSingleRepairPlanCompletionKeepsOriginalTask(t *testing.T) {
+	t.Parallel()
 	task := runtime.TaskKey{Node: "validation", Step: "repair", Scope: "candidate"}
 	batch := DevelopmentBatch{ID: "command", Subtasks: []DevelopmentSubtask{{ID: "input", Description: "implement input contract"}}, Deliverable: "command", PublicEntry: "app", Artifacts: []string{"app.go"}, Interfaces: "arguments", StateBoundary: "no state", Risk: "normal input", DoD: []DevelopmentCriterion{{ID: "normal", Description: "normal command"}}, Checks: []DevelopmentCheck{{ID: "build", Command: "go build ./..."}}, Rollback: "revert", Recovery: "retry", Handoff: "command", ContextCost: "one file"}
 	plan := &GranularityReview{Reason: "one coherent command", VerificationTier: "FINAL", Batches: []DevelopmentBatch{batch}}
@@ -265,6 +271,7 @@ func TestSingleRepairPlanCompletionKeepsOriginalTask(t *testing.T) {
 }
 
 func TestRepairMembersRetainOneObligation(t *testing.T) {
+	t.Parallel()
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
 	w := &ValidationWave{ID: "wave", Status: "REPAIR", Repair: &ValidationRepair{Task: task, Problems: []string{"problem"}}}
 	s := &State{Results: map[string]WorkerResult{}}
@@ -288,6 +295,7 @@ func TestRepairMembersRetainOneObligation(t *testing.T) {
 }
 
 func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
+	t.Parallel()
 	for _, severity := range []string{"P1", "P2"} {
 		t.Run(severity, func(t *testing.T) {
 			cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
@@ -399,6 +407,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 
 // State acceptance and native consumption share the same case evidence owner.
 func TestRepairEvidenceUsesSelectedManifests(t *testing.T) {
+	t.Parallel()
 	manifests := []coverage.AcceptanceManifest{{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewMerge}, Cases: []coverage.AcceptanceCase{{CaseID: "changed"}, {CaseID: "unchanged"}}}}
 	s := &State{SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{coverage.ReviewMerge: {Manifest: manifests[0]}}}}
 	row := RepairCaseEvidence{Mode: coverage.ReviewMerge, CaseID: "changed", Result: coverage.ExecutedPass, Procedure: "ran exact changed-case command", Observation: "exit=0 output matched changed-case bytes", Comparison: "matched exact declared changed-case oracle"}
@@ -467,6 +476,7 @@ func TestRepairEvidenceUsesSelectedManifests(t *testing.T) {
 }
 
 func TestFinalRepairEvidenceUsesMemberUnion(t *testing.T) {
+	t.Parallel()
 	task := runtime.TaskKey{Node: "development", Step: "repair", Scope: "candidate"}
 	wave := &ValidationWave{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Repair: &ValidationRepair{Task: task}}
 	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "first", Checks: []DevelopmentCheck{{ID: "first-check", Command: "test -n first"}}}, {ID: "second", Checks: []DevelopmentCheck{{ID: "second-check", Command: "test -n second"}}}}}

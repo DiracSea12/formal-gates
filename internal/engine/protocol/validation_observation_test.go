@@ -51,6 +51,7 @@ func adjudicationWorkerState(t *testing.T) (*Engine, *State, PendingAction, Work
 }
 
 func TestSemanticObservationUsesOriginalAdmissionAndRecovery(t *testing.T) {
+	t.Parallel()
 	e, s, pending, payload := adjudicationWorkerState(t)
 	input := s.WorkerInputs(e.cfg.Definition)[pending.ActionID]
 	if input.Validation == nil || input.Validation.Observation == nil || input.Validation.Observation.Findings[0].Evidence.PayloadDigest != "actual-gate-output" {
@@ -83,6 +84,7 @@ func TestSemanticObservationUsesOriginalAdmissionAndRecovery(t *testing.T) {
 }
 
 func TestSemanticObservationProjectsExistingProblemOriginalHistoryAndSource(t *testing.T) {
+	t.Parallel()
 	e, s, _, payload := adjudicationWorkerState(t)
 	current := s.Validation.Findings["finding"]
 	original := *current
@@ -131,6 +133,7 @@ func TestSemanticObservationProjectsExistingProblemOriginalHistoryAndSource(t *t
 }
 
 func TestSemanticObservationRejectsStaleAndInvalidOriginalJudgments(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"changed-subject", "missing-reproduction", "illegal-kind", "missing-duty", "later-finding"} {
 		t.Run(scenario, func(t *testing.T) {
 			e, s, pending, payload := adjudicationWorkerState(t)
@@ -173,6 +176,7 @@ func TestSemanticObservationRejectsStaleAndInvalidOriginalJudgments(t *testing.T
 }
 
 func TestSemanticObservationBudgetUsesFrozenDuties(t *testing.T) {
+	t.Parallel()
 	e, s, pending, _ := adjudicationWorkerState(t)
 	basis, err := e.guardBasis(s)
 	if err != nil {
@@ -217,6 +221,7 @@ func TestSemanticObservationBudgetUsesFrozenDuties(t *testing.T) {
 }
 
 func TestSemanticObservationProjectsReadyAndOriginalCandidateWorkspace(t *testing.T) {
+	t.Parallel()
 	e, s, pending, _ := adjudicationWorkerState(t)
 	view := decision.State{RequiredTasks: map[authoring.StepID][]decision.RequiredTask{}}
 	s.projectValidationTasks(&view, e.cfg.Definition)
@@ -232,6 +237,7 @@ func TestSemanticObservationProjectsReadyAndOriginalCandidateWorkspace(t *testin
 }
 
 func TestNextWorkflowChoiceRetainsOriginalUserConfirmation(t *testing.T) {
+	t.Parallel()
 	e, s, _ := guardPipelineFixture(t)
 	if s.NextWorkflowChoice(e.cfg.Definition) != "" {
 		t.Fatal("user choice was exposed before both reviews passed")

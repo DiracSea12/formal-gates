@@ -10,6 +10,7 @@ import (
 )
 
 func TestPendingGateImpactCannotInheritBeforeItsJudgment(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	s := pointResponsibilityState()
 	oldTask := pipelineTask(cd, "engine.gate.v3", "original:quality")
@@ -33,6 +34,7 @@ func TestPendingGateImpactCannotInheritBeforeItsJudgment(t *testing.T) {
 }
 
 func TestRerunGateResponsibilityUsesTheAcceptedResult(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	e := &Engine{cfg: Config{Definition: cd}}
 	s := pointResponsibilityState()
@@ -63,6 +65,7 @@ func TestRerunGateResponsibilityUsesTheAcceptedResult(t *testing.T) {
 }
 
 func TestCompletedRepairMemberRetainsTheWholeGateResponsibility(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	s := pointResponsibilityState()
 	s.Validation.Generation, s.Validation.RequirementRevision = 1, "confirmed"

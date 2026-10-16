@@ -283,6 +283,9 @@ func (p workflowSelectionPlatform) SelectionOptions(string, string, map[string]s
 }
 
 func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, provider := range []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy"} {
 		for _, invocation := range []string{"cross-platform", "unavailable", "controller"} {
 			t.Run(provider+"/"+invocation, func(t *testing.T) {
@@ -446,6 +449,9 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 }
 
 func TestWorkflowWorkerStartHonorsActualCancellationAndRequirementBarrier(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, cause := range []string{"cancel", "requirement-barrier", "authorized-abort"} {
 		t.Run(cause, func(t *testing.T) {
 			f, root, ref, directory := workflowStartFixture(t)
@@ -657,6 +663,9 @@ func cleanupWorkflowSupervisor(t *testing.T, directory string) {
 }
 
 func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, root, _, _ := workflowStartFixture(t)
 	workflowSplitFixture(t, f, root)
 	run, err := f.Show()
@@ -897,6 +906,9 @@ func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) 
 // Original claimed supervisor facts survive a cancelled collector and remain
 // independent of whether the native invocation supplied a semantic result.
 func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, execution := range []string{"unclaimed", "running", "exited"} {
 		t.Run(execution, func(t *testing.T) {
 			f, root, ref, resume, originalDirectory := workflowResumeFixture(t)

@@ -37,6 +37,7 @@ func issuedRunWithReceipt(t *testing.T, correlation string) (*Engine, Observatio
 // TestLifecyclePairRetainsOriginalEvents：已认领 identity 的 start/stop
 // 保留原 provider/correlation 与接纳事实；workflow 投影不动。
 func TestLifecyclePairRetainsOriginalEvents(t *testing.T) {
+	t.Parallel()
 	engine, observedInput := issuedRunWithReceipt(t, "agent-review-1")
 	before := engine.LoadMustSucceed(t)
 
@@ -81,6 +82,7 @@ func TestLifecyclePairRetainsOriginalEvents(t *testing.T) {
 // TestLifecyclePairBeforeReceiptPreservesOriginalClaim：start/stop 先于
 // SpawnReceipt 到达时，receipt 认领原配对，不改写缓冲事件与接纳事实。
 func TestLifecyclePairBeforeReceiptPreservesOriginalClaim(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -122,6 +124,7 @@ func TestLifecyclePairBeforeReceiptPreservesOriginalClaim(t *testing.T) {
 // TestLifecycleDuplicateReplayIdempotent：逐字节重发不重复 lifecycle
 // buffer；换事件 ID 重发时只占用新的事件台账键。
 func TestLifecycleDuplicateReplayIdempotent(t *testing.T) {
+	t.Parallel()
 	engine, observedInput := issuedRunWithReceipt(t, "agent-review-1")
 	if _, err := engine.Submit(lifecycleEvent(t, "evt-lc-1", "agent-review-1", LifecycleStart), observedInput); err != nil {
 		t.Fatalf("start: %v", err)
@@ -148,6 +151,7 @@ func TestLifecycleDuplicateReplayIdempotent(t *testing.T) {
 // TestLifecycleUnclaimedPairIsBufferedAndLoneStopRejected：未认领的原配对
 // 只缓冲；已认领 identity 的孤立 stop 拒绝且零写入。
 func TestLifecycleUnclaimedPairIsBufferedAndLoneStopRejected(t *testing.T) {
+	t.Parallel()
 	engine, observedInput := issuedRunWithReceipt(t, "agent-review-1")
 	if _, err := engine.Submit(lifecycleEvent(t, "evt-lc-a", "agent-stranger", LifecycleStart), observedInput); err != nil {
 		t.Fatalf("stranger start: %v", err)
@@ -187,6 +191,7 @@ func TestLifecycleUnclaimedPairIsBufferedAndLoneStopRejected(t *testing.T) {
 
 // TestLifecycleNegatives：provider mismatch、非法事件名。
 func TestLifecycleNegatives(t *testing.T) {
+	t.Parallel()
 	engine, observedInput := issuedRunWithReceipt(t, "agent-review-1")
 	before := engine.LoadMustSucceed(t)
 	mismatch, err := NewLifecycleEventEvent("evt-lc-m", "another-host", "agent-review-1", LifecycleStart)
@@ -212,6 +217,7 @@ func TestLifecycleNegatives(t *testing.T) {
 // not accept caller-supplied identities and can represent the multiple-match
 // branch when two paired identities share one transport correlation.
 func TestUnknownReceiptUsesDurableLifecycleCardinality(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -264,6 +270,7 @@ func TestUnknownReceiptUsesDurableLifecycleCardinality(t *testing.T) {
 }
 
 func TestUnknownReceiptAutomaticAttachmentConvergesAcrossArrivalOrders(t *testing.T) {
+	t.Parallel()
 	for _, lifecycleFirst := range []bool{false, true} {
 		for _, resultFirst := range []bool{false, true} {
 			for _, taskEnded := range []bool{false, true} {
@@ -341,6 +348,7 @@ func TestUnknownReceiptAutomaticAttachmentConvergesAcrossArrivalOrders(t *testin
 }
 
 func TestUnknownReceiptWithoutPairedIdentityPresentsOriginalOperatorBoundary(t *testing.T) {
+	t.Parallel()
 	for _, matches := range []int{0, 2} {
 		t.Run(fmt.Sprintf("paired-identities=%d", matches), func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review")
@@ -379,6 +387,7 @@ func TestUnknownReceiptWithoutPairedIdentityPresentsOriginalOperatorBoundary(t *
 }
 
 func TestUnknownReceiptOperatorProjectionPreservesOriginalFacts(t *testing.T) {
+	t.Parallel()
 	engine, _, action := refillEngine(t)
 	submitUnknownReceipt(t, engine, "unknown-original-facts", action, "transport-key")
 	state := engine.LoadMustSucceed(t).State

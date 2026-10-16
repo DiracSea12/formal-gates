@@ -149,7 +149,7 @@ func (s *State) qaCheckReceipt(p CheckParameters) (ExecutionOperationFact, bool)
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok {
+		if !ok || intent.Correlation != "check:"+parametersDigest {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[intent.ActionID]; obsolete {

@@ -29,6 +29,7 @@ func installedScriptRuntimeFixture(t *testing.T) string {
 }
 
 func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
+	t.Parallel()
 	root := installedScriptRuntimeFixture(t)
 	entries, err := installPackageFiles(root, true)
 	if err != nil {
@@ -57,6 +58,7 @@ func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
 }
 
 func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
+	t.Parallel()
 	paths := []string{
 		"native_dsh.mjs",
 		"runtime/native_dsh.mjs",
@@ -68,6 +70,7 @@ func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
 	}
 	for _, rel := range paths {
 		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
 			root := installedScriptRuntimeFixture(t)
 			path := filepath.Join(root, filepath.FromSlash(rel))
 			if rel == "internal/harness/Native_dsh.mjs" {
@@ -90,8 +93,10 @@ func TestInstalledScriptRuntimeRejectsUndeclaredScripts(t *testing.T) {
 }
 
 func TestInstalledScriptRuntimeRejectsScriptHookCommands(t *testing.T) {
+	t.Parallel()
 	for _, marker := range []string{".ps1", "powershell", "pwsh", "python", "node", "bash"} {
 		t.Run(marker, func(t *testing.T) {
+			t.Parallel()
 			root := installedScriptRuntimeFixture(t)
 			hook := filepath.Join(t.TempDir(), "hooks.json")
 			if err := os.WriteFile(hook, []byte(`{"command":"`+strings.ToUpper(marker)+` helper"}`), 0o600); err != nil {
@@ -106,6 +111,7 @@ func TestInstalledScriptRuntimeRejectsScriptHookCommands(t *testing.T) {
 }
 
 func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	root := t.TempDir()
 	payload := []byte(fmt.Sprintf(` {"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":%q},"session_id":"owner","transcript_path":"/owner.jsonl"}`+"\n", "formal-gates workflow start --root "+fmt.Sprintf("%q", root)+" --run-id hook-probe"))
@@ -134,6 +140,7 @@ func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 }
 
 func TestPortableComparisonUsesIssuedNativeCaseEvidence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		item       coverage.AcceptanceCase
 		evidence   protocol.CheckEvidence
@@ -152,6 +159,7 @@ func TestPortableComparisonUsesIssuedNativeCaseEvidence(t *testing.T) {
 }
 
 func TestPortableComparisonRetainsActualExecutionFailures(t *testing.T) {
+	t.Parallel()
 	for _, item := range []struct {
 		name   string
 		c      coverage.AcceptanceCase
@@ -176,6 +184,7 @@ func TestPortableComparisonRetainsActualExecutionFailures(t *testing.T) {
 }
 
 func TestPortableWhiteboxCasesObserveArtifacts(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	input := protocol.WorkerInput{Validation: &protocol.ValidationInput{Handler: "engine.qa.design.v6", Workspace: &protocol.NativeResource{Path: workspace}}}
 	input.Validation.Manifest.Binding.ReviewKind = coverage.ReviewWhitebox

@@ -7,6 +7,7 @@ import (
 )
 
 func TestCurrentMaterialBindingsReachCoverage(t *testing.T) {
+	t.Parallel()
 	initial := &IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "initial-requirement", SolutionSource: "design.md", SolutionRevision: "initial-solution", Artifacts: []IntakeArtifact{{Path: "design.md", Revision: "initial-solution"}}}
 	current := &IntakeConfirmationReceipt{RequirementSource: "requirements.md", RequirementRevision: "current-requirement", SolutionSource: "design.md", SolutionRevision: "current-solution", Artifacts: []IntakeArtifact{{Path: "design.md", Revision: "current-solution"}, {Path: "reference.md", Revision: "reference"}}}
 	s := &State{RunID: "material", IntakeConfirmationReceipt: initial, Validation: &Validation{RequirementRevision: current.RequirementRevision}, RequirementRevisions: []ConfirmedRevision{{Revision: initial.RequirementRevision}, {Revision: current.RequirementRevision, Intake: current}, {Revision: "later-low-level-confirmation"}}}

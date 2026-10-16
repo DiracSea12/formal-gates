@@ -68,6 +68,7 @@ func driftToCapacityDip(t *testing.T, engine *Engine, tag string) (string, strin
 }
 
 func TestCapacityDipPreservesDispatchAuthorization(t *testing.T) {
+	t.Parallel()
 	for _, useAuthorization := range []bool{false, true} {
 		name := "automatic"
 		if useAuthorization {
@@ -121,6 +122,7 @@ func TestCapacityDipPreservesDispatchAuthorization(t *testing.T) {
 }
 
 func TestAutomaticReviewAfterCapacityDipSparesAuthorization(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	action, _ := driftToCapacityDip(t, engine, "spared")
@@ -153,6 +155,7 @@ func TestAutomaticReviewAfterCapacityDipSparesAuthorization(t *testing.T) {
 // 故障重试继承原派发的授权，不抢占其它空闲授权；自动容量内的重试保持
 // 未绑定。需求变更产生新任务，不走此故障重试路径。
 func TestReplacementInheritsItsBoundSlot(t *testing.T) {
+	t.Parallel()
 	t.Run("rebinds the original slot beside another free slot", func(t *testing.T) {
 		cd, reg := singleCarrierFixture(t)
 		engine, _ := reviewEngine(t, cd, reg)
@@ -228,6 +231,7 @@ func TestReplacementInheritsItsBoundSlot(t *testing.T) {
 // A review waiting on its upstream conclusion is not a Ready task.
 // IssueFromPlan accepts only Ready plans and rejects this input without writes.
 func TestBlockedReviewPlanRejectsIssuanceWithoutWriting(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	base := engine.LoadMustSucceed(t)
@@ -256,6 +260,7 @@ func TestBlockedReviewPlanRejectsIssuanceWithoutWriting(t *testing.T) {
 // 授权即可在入账时择槽消费，属结构破坏——加载边界的完整性校验必须可区分
 // 拒绝（手改 state 后 ContentDigest 同步重算以穿过持久层）。
 func TestLoadRejectsDispatchBoundToTwoAuthorizationSlots(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -305,6 +310,7 @@ func TestLoadRejectsDispatchBoundToTwoAuthorizationSlots(t *testing.T) {
 // Freed authorizations can be reused by later obligations; invalidating another
 // result while one review is live cannot preissue a second review.
 func TestInvalidationRecoveryReusesAuthorizationWithoutConcurrentReviews(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	exhaustProductReviewCapacity(t, engine)

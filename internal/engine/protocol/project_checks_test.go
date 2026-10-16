@@ -26,6 +26,7 @@ func ownedDevelopmentPlan() *GranularityReview {
 }
 
 func TestSplitPlansPreserveExplicitOwnersAndCompleteChecks(t *testing.T) {
+	t.Parallel()
 	plan := ownedDevelopmentPlan()
 	state := State{RouteConfirmed: true, Topology: &TopologyBinding{Decision: topologySplit, Slices: []string{"core", "tooling"}}, Results: map[string]WorkerResult{"accepted": {Review: &ReviewResultEvidence{GranularityReview: plan}}, "unconfirmed": {Review: &ReviewResultEvidence{GranularityReview: ownedDevelopmentPlan()}}}, Decisions: map[string]RecordedDecision{"split": {Control: ControlConfirmTopology, Review: &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: topologySplit, DevelopmentPlan: &DevelopmentPlanConfirmation{ReviewActionID: "accepted"}}}}}}
 	state.Results["unconfirmed"].Review.GranularityReview.Batches[0].Checks[1].Command = "unconfirmed command"
@@ -47,6 +48,7 @@ func TestSplitPlansPreserveExplicitOwnersAndCompleteChecks(t *testing.T) {
 }
 
 func TestSplitPlansRejectMissingOrCrossOwnerContracts(t *testing.T) {
+	t.Parallel()
 	for _, input := range []struct {
 		name   string
 		change func(*GranularityReview)
@@ -81,6 +83,7 @@ func TestSplitPlansRejectMissingOrCrossOwnerContracts(t *testing.T) {
 }
 
 func TestProjectVerificationPurposesRequireApprovedMeaning(t *testing.T) {
+	t.Parallel()
 	base := plannedReviewEvidence(review.StartReadiness, "readiness", "", "PASS", "complete verification", nil).GranularityReview
 	for _, item := range []struct {
 		name     string
@@ -124,6 +127,7 @@ func TestProjectVerificationPurposesRequireApprovedMeaning(t *testing.T) {
 }
 
 func TestProjectChecksReuseExactApprovedPurposes(t *testing.T) {
+	t.Parallel()
 	p := plannedReviewEvidence(review.StartReadiness, "ready", "", "PASS", "complete", nil).GranularityReview
 	first := p.Batches[0]
 	second := first
@@ -144,6 +148,7 @@ func TestProjectChecksReuseExactApprovedPurposes(t *testing.T) {
 }
 
 func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
+	t.Parallel()
 	p := plannedReviewEvidence(review.StartReadiness, "ready", "", "PASS", "complete", nil).GranularityReview
 	first := p.Batches[0]
 	second := first
@@ -174,6 +179,7 @@ func TestSplitMasterHasNoChildCheckpointTasks(t *testing.T) {
 }
 
 func TestSliceCheckpointTierFollowsItsFilteredGroups(t *testing.T) {
+	t.Parallel()
 	for _, multiple := range []bool{false, true} {
 		t.Run(map[bool]string{false: "single-group", true: "multiple-groups"}[multiple], func(t *testing.T) {
 			plan := ownedDevelopmentPlan()
@@ -231,6 +237,7 @@ func TestSliceCheckpointTierFollowsItsFilteredGroups(t *testing.T) {
 }
 
 func TestSplitMasterMissingCallsUseConfirmedTaskIdentity(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	plan := ownedDevelopmentPlan()
 	existing := plan.Batches[2]
@@ -254,6 +261,7 @@ func TestSplitMasterMissingCallsUseConfirmedTaskIdentity(t *testing.T) {
 }
 
 func TestEveryBatchDeclaresCompleteProjectChecks(t *testing.T) {
+	t.Parallel()
 	plan := ownedDevelopmentPlan()
 	plan.Batches[0].Checks = []DevelopmentCheck{{ID: "local", Command: "verify core"}}
 	if err := ValidateProjectChecks(plan); err == nil || !strings.Contains(err.Error(), "core") || !strings.Contains(err.Error(), CheckFullBuild) {

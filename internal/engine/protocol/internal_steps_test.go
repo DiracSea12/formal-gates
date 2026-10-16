@@ -74,6 +74,7 @@ func extensionHandlers() map[authoring.HandlerID]InternalStep {
 }
 
 func TestInternalStepBindingRequired(t *testing.T) {
+	t.Parallel()
 	compiled, registry := extensionDefinition(t)
 	store := mustStore(t, t.TempDir())
 	for _, bindings := range []map[authoring.HandlerID]InternalStep{nil, {"engine.message.prepare": {Runner: authoring.RunnerEngineLocal}}} {
@@ -89,6 +90,7 @@ func TestInternalStepBindingRequired(t *testing.T) {
 }
 
 func TestInternalStepExecutionPersistsOnceAcrossRecovery(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []persistence.FaultPoint{persistence.FaultIntentBefore, persistence.FaultReplaceAfter, persistence.FaultCommitResponseLost} {
 		t.Run(string(fault), func(t *testing.T) {
 			compiled, registry := extensionDefinition(t)
@@ -154,6 +156,7 @@ func TestInternalStepExecutionPersistsOnceAcrossRecovery(t *testing.T) {
 }
 
 func TestInternalStepWaitAndErrorDoNotComplete(t *testing.T) {
+	t.Parallel()
 	for _, wantError := range []bool{false, true} {
 		t.Run(map[bool]string{false: "wait", true: "error"}[wantError], func(t *testing.T) {
 			compiled, registry := extensionDefinition(t)
@@ -192,6 +195,7 @@ func TestInternalStepWaitAndErrorDoNotComplete(t *testing.T) {
 }
 
 func TestInternalStepErrorRollsBackUpstreamTransformation(t *testing.T) {
+	t.Parallel()
 	compiled, registry := extensionDefinition(t)
 	bindings := extensionHandlers()
 	bindings["engine.message.publish"] = InternalStep{Runner: authoring.RunnerDurableActivity, Run: func(s *State, step compiler.CompiledStep) (bool, error) {
@@ -222,6 +226,7 @@ func TestInternalStepErrorRollsBackUpstreamTransformation(t *testing.T) {
 }
 
 func TestInternalDependencyViewRefreshesAfterHandlerAndCompletion(t *testing.T) {
+	t.Parallel()
 	for _, waiting := range []bool{false, true} {
 		t.Run(map[bool]string{false: "complete", true: "waiting-state-change"}[waiting], func(t *testing.T) {
 			registry := compiler.NewRegistry()
@@ -295,6 +300,7 @@ func TestInternalDependencyViewRefreshesAfterHandlerAndCompletion(t *testing.T) 
 }
 
 func TestResultPredicateImplementationBinding(t *testing.T) {
+	t.Parallel()
 	for _, condition := range []string{"supported", "unknown", "negated", "precondition", "local", "host"} {
 		t.Run(condition, func(t *testing.T) {
 			source, registry := definition.Workflow(), definition.Registry()
@@ -353,6 +359,7 @@ func TestResultPredicateImplementationBinding(t *testing.T) {
 }
 
 func TestRepeatedResultPredicateKeepsSemanticFailureAndEvidence(t *testing.T) {
+	t.Parallel()
 	cd, registry := reviewStepsFixture(t, "product.review", "start.readiness")
 	for i := range cd.Steps {
 		if _, agent := cd.Steps[i].Payload.(compiler.CompiledAgentStep); agent {
@@ -393,6 +400,7 @@ func TestRepeatedResultPredicateKeepsSemanticFailureAndEvidence(t *testing.T) {
 }
 
 func TestResultPredicateRejectsChangedValidationBindingWithOriginalRetry(t *testing.T) {
+	t.Parallel()
 	engine, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	state.RejectedResults = map[string]RejectedResult{}
 	state.EndedAttempts = map[runtime.TaskKey]Attempt{}

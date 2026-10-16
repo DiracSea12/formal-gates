@@ -12,6 +12,7 @@ import (
 // An unchanged obligation retains one offer while its current revision advances.
 // Changed decision content supersedes the offer without consuming authorization.
 func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"RETRY", "QA_REVIEW", "REPAIR", "QA_RETRY", "VALIDATION_DETAIL_DISPOSITION", "THAW", "QA_ARTIFACT_REPAIR", "DISPOSE", KindDispatchBudgetDisposition} {
 		t.Run(kind, func(t *testing.T) {
 			s := &State{PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}, Validation: &Validation{Sets: map[coverage.ReviewKind]*CaseSet{}}}
@@ -82,6 +83,7 @@ func TestValidationOffersRemainAvailableUntilUserDecision(t *testing.T) {
 }
 
 func TestRepairChoicesRefreshAtBothCommitSeams(t *testing.T) {
+	t.Parallel()
 	for _, seam := range []string{"advance", "rebind"} {
 		t.Run(seam, func(t *testing.T) {
 			_, state := guardRepairFixture(t)
@@ -141,6 +143,7 @@ func TestRepairChoicesRefreshAtBothCommitSeams(t *testing.T) {
 }
 
 func TestValidationDecisionCreatesRequirementRequestEvidence(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	state.ensureValidationAsk(ValidationRequest{Kind: "QA_REVIEW", Mode: coverage.ReviewBlackbox, Target: state.qaReviewTarget(coverage.ReviewBlackbox)}, 7)
 	var ask PendingAsk
@@ -167,6 +170,7 @@ func TestValidationDecisionCreatesRequirementRequestEvidence(t *testing.T) {
 }
 
 func TestRepairAskHistoryRetainsOriginalEvidence(t *testing.T) {
+	t.Parallel()
 	s, _, task := developmentCheckState(t)
 	result := s.Results["edit-action"]
 	result.Validation.Binding.WaveID = "historical-wave"
@@ -220,6 +224,7 @@ func TestRepairAskHistoryRetainsOriginalEvidence(t *testing.T) {
 }
 
 func TestRepairAskHistoryBindsAuthorizationDigest(t *testing.T) {
+	t.Parallel()
 	engine, s := guardRepairFixture(t)
 	current := s.Validation.Waves[0]
 	prior := ValidationWave{ID: "older-wave", RequirementRevision: "older-requirement", Generation: 0, Status: "INVALIDATED", Candidate: coverage.ValidationCandidate{Identity: "older-candidate", Digest: "older-content"}}
@@ -258,6 +263,7 @@ func TestRepairAskHistoryBindsAuthorizationDigest(t *testing.T) {
 }
 
 func TestRepairAskHistoryRetainsChecksAfterPlanChange(t *testing.T) {
+	t.Parallel()
 	_, s := guardRepairFixture(t)
 	wave := &s.Validation.Waves[0]
 	plan := s.Results["act:readiness-plan"].Review.GranularityReview

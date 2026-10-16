@@ -21,6 +21,7 @@ func rejectionCode(t *testing.T, err error) string {
 // TestEventConstructors：三类事件的合法构造通过校验，digest 稳定且随
 // payload 变化。
 func TestEventConstructors(t *testing.T) {
+	t.Parallel()
 	request, err := NewRequestEvent("evt-req-1", ControlReset,
 		AskOption{ID: "proceed", Label: "确认重置"}, AskOption{ID: "cancel", Label: "取消"})
 	if err != nil {
@@ -68,6 +69,7 @@ func TestEventConstructors(t *testing.T) {
 // TestEventZeroValueAndUnknownKind：零值事件与未知 kind（含一切自由
 // USER_* 直写形态）可区分拒绝——封闭 kind 集合里不存在用户自由写入。
 func TestEventZeroValueAndUnknownKind(t *testing.T) {
+	t.Parallel()
 	if err := (Event{}).Validate(); err == nil {
 		t.Fatal("zero event accepted")
 	} else if code := rejectionCode(t, err); code != CodeUnknownEventKind {
@@ -89,6 +91,7 @@ func TestEventZeroValueAndUnknownKind(t *testing.T) {
 // TestEventUnionInvariant：kind 与 payload 不配对（缺 payload 或多挂
 // payload）按 schema 拒绝。
 func TestEventUnionInvariant(t *testing.T) {
+	t.Parallel()
 	missing := Event{ID: "evt-x", Kind: KindRequestControl}
 	if err := missing.Validate(); err == nil {
 		t.Fatal("missing payload accepted")
@@ -113,6 +116,7 @@ func TestEventUnionInvariant(t *testing.T) {
 
 // TestRequestEventSchemaNegatives：REQUEST payload 的 schema 负向全集。
 func TestRequestEventSchemaNegatives(t *testing.T) {
+	t.Parallel()
 	options := []AskOption{{ID: "proceed", Label: "确认"}, {ID: "cancel", Label: "取消"}}
 	cases := []struct {
 		name    string
@@ -140,6 +144,7 @@ func TestRequestEventSchemaNegatives(t *testing.T) {
 
 // TestDecideEventSchemaNegatives：DECIDE payload 的 schema 负向全集。
 func TestDecideEventSchemaNegatives(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		id      string
@@ -166,6 +171,7 @@ func TestDecideEventSchemaNegatives(t *testing.T) {
 // TestTaskEventSchemaNegatives：TASK_PROGRESS payload 的 schema 负向
 // 全集（非法键、空 attempt、不可报告状态）。
 func TestTaskEventSchemaNegatives(t *testing.T) {
+	t.Parallel()
 	key := runtime.TaskKey{Node: "review", Step: "review.worker"}
 	cases := []struct {
 		name   string
@@ -196,6 +202,7 @@ func TestTaskEventSchemaNegatives(t *testing.T) {
 // TestFreshnessTokenDeterministic：token 是 (revision, requestID) 的确定
 // 函数——同输入同值、任一输入变化即变化。
 func TestFreshnessTokenDeterministic(t *testing.T) {
+	t.Parallel()
 	a := freshnessToken(2, "req-1")
 	b := freshnessToken(2, "req-1")
 	if a != b || a == "" {
@@ -213,6 +220,7 @@ func TestFreshnessTokenDeterministic(t *testing.T) {
 // RECOVER_ATTEMPT 与四个审查类业务控制（业务控制经扩展点扩充枚举，
 // 此处钉死现状防漂移）。
 func TestControlKindClosedSet(t *testing.T) {
+	t.Parallel()
 	valid := []ControlKind{
 		ControlReset, ControlAbort, ControlRecovery,
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
@@ -237,6 +245,7 @@ func TestControlKindClosedSet(t *testing.T) {
 }
 
 func TestDevelopmentHandoffRequestSchemaAndDigest(t *testing.T) {
+	t.Parallel()
 	event := Event{ID: "handoff-request", Kind: KindRequestControl, Request: &RequestPayload{
 		Control: ControlRecovery, Handoff: &DevelopmentHandoffRequest{ActionID: "current-developer", Reason: "transfer unfinished work"},
 	}}
@@ -279,6 +288,7 @@ func TestDevelopmentHandoffRequestSchemaAndDigest(t *testing.T) {
 }
 
 func TestPublicRecoveryWithoutHandoffRemainsRejected(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	before := engine.LoadMustSucceed(t)
 	event, err := NewRequestEvent("free-recovery", ControlRecovery, AskOption{ID: "fresh", Label: "Start fresh"})

@@ -23,6 +23,8 @@ import (
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func writeCanaryHostFixture(t *testing.T, root, provider string) {
@@ -180,6 +182,9 @@ func TestCanaryPreparedHomeSeparatesSourceAndProfile(t *testing.T) {
 }
 
 func TestCanaryPreparationPreservesNativeSelection(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	stable := t.TempDir()
@@ -255,6 +260,9 @@ func TestCanaryPreparationPreservesNativeSelection(t *testing.T) {
 }
 
 func TestCanaryRuntimeIdentitySurvivesPrivateHome(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not available")
 	}
@@ -318,6 +326,9 @@ func TestCanaryRuntimeIdentitySurvivesPrivateHome(t *testing.T) {
 
 // The public app-server initializes the database at the canary's private path.
 func TestCanaryNativeDatabaseStaysPrivate(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	binding := canaryNativePublicBinding(t)
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
@@ -368,6 +379,9 @@ func TestCanaryNativeDatabaseStaysPrivate(t *testing.T) {
 }
 
 func TestCanaryAccountOverlayFollowsCatalogueReadiness(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	public := canaryNativePublicBinding(t)
 	zcodeTestCredentialHelper(t)
 	_, file, _, _ := runtime.Caller(0)
@@ -580,6 +594,9 @@ func TestCanaryNativeStartupPeer(t *testing.T) {
 // Binding capture names the private active catalogue without initializing it.
 // The SDK checks use prepared active data; settlement belongs to the local peer.
 func TestCanaryProviderCatalogueBindingKeepsActiveAndBundle(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	public := canaryNativePublicBinding(t)
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
@@ -750,6 +767,9 @@ func canaryNativePublicSession(t *testing.T, binding map[string]any, environment
 }
 
 func TestCanaryInstalledHostUsesPrivateRoot(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	_, file, _, _ := runtime.Caller(0)
 	sourceRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	if _, err := exec.LookPath("node"); err != nil {
@@ -993,6 +1013,9 @@ func TestCanaryNativeBootstrapPreservesConfiguredCachePaths(t *testing.T) {
 // The installed CLI must keep the immutable source build identity while native
 // fixture builds consume their own stamping flag and private host environment.
 func TestCanaryCandidateBuildPreservesSourceInputs(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	_, file, _, _ := runtime.Caller(0)
 	source := filepath.Join(t.TempDir(), "source")
 	clone := exec.Command("git", "clone", "--local", "--no-hardlinks", filepath.Dir(filepath.Dir(filepath.Dir(file))), source)

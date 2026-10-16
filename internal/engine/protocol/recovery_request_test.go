@@ -11,6 +11,7 @@ import (
 // The persisted failure is a normal admission fact, independent of when Drive
 // first binds its recovery request. Multiple observations retain one duty.
 func TestRecoveryAskBindsPersistedWorkerFailure(t *testing.T) {
+	t.Parallel()
 	for _, terminal := range []bool{false, true} {
 		t.Run(map[bool]string{false: "current", true: "terminal"}[terminal], func(t *testing.T) {
 			task := runtime.TaskKey{Node: "review", Step: "review.worker"}

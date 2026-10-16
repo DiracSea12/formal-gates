@@ -12,6 +12,7 @@ import (
 )
 
 func TestOperationObservationSharesSamplesAndRechecksOriginalReaders(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	refs := []CostSourceRef{{RunID: "run", ActionID: "one", Provider: testProvider, Correlation: "first"}, {RunID: "run", ActionID: "two", Provider: testProvider, Correlation: "second"}}
 	costs := []ResolvedCostSource{{State: CostSourceReady, Usage: cost.Usage{OutputTokens: 3}}, {State: CostSourcePending, Reason: "second execution has no stop"}}
@@ -87,6 +88,7 @@ func TestOperationObservationSharesSamplesAndRechecksOriginalReaders(t *testing.
 }
 
 func TestCostObservationBeforeSaveRejectsChangeWithoutStateEffects(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unchanged", true: "changed"}[changed], func(t *testing.T) {
 			engine, dir := newTestEngine(t)
@@ -178,6 +180,7 @@ func TestCostObservationBeforeSaveRejectsChangeWithoutStateEffects(t *testing.T)
 }
 
 func TestWorkerExecutionChangeBeforeSaveRejectsResetWithoutStateEffects(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 1}, Observation{})
 	if err != nil || len(issued) != 1 {

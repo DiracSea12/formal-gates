@@ -150,6 +150,7 @@ func targetSeriesOf(t *testing.T, engine *Engine, mark authoring.ReviewSeriesAct
 // 标记。重走本系列→决定事务内退位旧任务并签发新任务；重走他系列、
 // 续用、放弃→派发原样在途，其结果按原绑定接纳。
 func TestPendingDispatchDispositionAcrossChangesAndMarks(t *testing.T) {
+	t.Parallel()
 	redone := intersectionChange{name: "redo own series", redoProduct: true, deltaDigest: "sha256:ix-redo-product", decisionReason: "the product walk is redone"}
 	rows := []struct {
 		mark    authoring.ReviewSeriesAction
@@ -262,6 +263,7 @@ func submitPlainResult(t *testing.T, engine *Engine, event, actionID string) {
 // × 变化。重走本系列→暂存被声明处置作废，新鲜轮在新任务上完成；
 // 他系列重走、续用、放弃→暂存保留，迟到回执配对完成。
 func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
+	t.Parallel()
 	rows := []struct {
 		name   string
 		mark   authoring.ReviewSeriesAction
@@ -351,6 +353,7 @@ func TestStagedDispatchDispositionAcrossChanges(t *testing.T) {
 // revision 与用户理由重放完成；放弃→解除时原样接纳；双 Ask 期隔离持有到
 // 最后一个决定，持有期无重放也无新派发身份。
 func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
+	t.Parallel()
 	quarantine := func(t *testing.T, engine *Engine, target string) {
 		t.Helper()
 		observedInput := Observation{}
@@ -505,6 +508,7 @@ func TestQuarantinedDispatchDispositionAcrossChanges(t *testing.T) {
 // 派发在途过：入 Results＋记账＋对账留痕）；重走本系列→隔离记录按声明
 // 作废，不进对账。
 func TestTerminalTaskDispatchDispositionAcrossChanges(t *testing.T) {
+	t.Parallel()
 	driveTerminal := func(t *testing.T, engine *Engine, target string) {
 		t.Helper()
 		observedInput := Observation{}

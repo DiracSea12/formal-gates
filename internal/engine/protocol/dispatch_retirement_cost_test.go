@@ -32,6 +32,7 @@ func startedCostDispatch(t *testing.T, probe *costSourceProbe) (*Engine, *State,
 }
 
 func TestRetiredDispatchCostSettlesOriginalSourceOnce(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name, source string
 		known, final cost.Usage
@@ -106,6 +107,7 @@ func TestRetiredDispatchCostSettlesOriginalSourceOnce(t *testing.T) {
 }
 
 func TestRetirementWithoutSourceOrDispatchDoesNotReadStore(t *testing.T) {
+	t.Parallel()
 	e := &Engine{}
 	state := &State{}
 	if err := e.recordRetiredDispatchCosts(state, 1); err != nil {
@@ -126,6 +128,7 @@ func TestRetirementWithoutSourceOrDispatchDoesNotReadStore(t *testing.T) {
 }
 
 func TestFreshExecutionUsesFinalOriginalCostBeforeBudget(t *testing.T) {
+	t.Parallel()
 	for _, handoff := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fresh", true: "handoff"}[handoff], func(t *testing.T) {
 			e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
@@ -156,6 +159,7 @@ func TestFreshExecutionUsesFinalOriginalCostBeforeBudget(t *testing.T) {
 }
 
 func TestHandoffRetainsOriginalCostAndMetersReplacementSeparately(t *testing.T) {
+	t.Parallel()
 	e, state, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	state.Topology = nil
 	state.PendingAsks = map[string]PendingAsk{}

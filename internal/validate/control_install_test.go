@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestControlServerConfigurationOwnership(t *testing.T) {
@@ -77,6 +79,7 @@ func TestControlServerConfigurationOwnership(t *testing.T) {
 }
 
 func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
+	t.Parallel()
 	for _, platform := range []string{"codex", "zcode"} {
 		t.Run(platform, func(t *testing.T) {
 			root := t.TempDir()
@@ -140,6 +143,9 @@ func TestControlServerSkipHooksPreservesHostConfig(t *testing.T) {
 }
 
 func TestControlServerInstallRollbackAndUninstall(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	for _, platform := range []string{"codex", "zcode"} {
 		t.Run(platform, func(t *testing.T) {

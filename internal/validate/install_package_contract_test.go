@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // The fixture is an executable package owner with a distinct file contract.
@@ -49,6 +51,9 @@ type installPackageInvocation struct {
 }
 
 func TestInstallUsesCandidatePackageContract(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	programRoot := t.TempDir()
 	program := filepath.Join(programRoot, "main.go")
 	if err := os.WriteFile(program, []byte(installPackageContractProgram), 0o600); err != nil {
@@ -177,6 +182,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		}
 	})
 	t.Run("future_contract", func(t *testing.T) {
+		t.Parallel()
 		root := source(t, true)
 		options := InstallOptions{Source: root, Host: "claude", Scope: "project", Project: t.TempDir(), RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "launcher", nativeBinaryName()), Force: true, SkipHooks: true}
 		report, err := Install(options)
@@ -363,6 +369,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		}
 	})
 	t.Run("bootstrap_rejects_another_version", func(t *testing.T) {
+		t.Parallel()
 		prior, future := source(t, false), source(t, true)
 		options := InstallOptions{Source: future, Host: "claude", Scope: "project", Project: t.TempDir(), RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "launcher", nativeBinaryName()), Force: true, SkipHooks: true}
 		report, err := Install(options)
@@ -392,6 +399,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		}
 	})
 	t.Run("checkout_ignored_binary_is_source_identity", func(t *testing.T) {
+		t.Parallel()
 		root := source(t, true)
 		command := exec.Command("git", "-C", root, "init")
 		if output, err := command.CombinedOutput(); err != nil {
@@ -436,6 +444,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		}
 	})
 	t.Run("candidate_success_does_not_admit_unknown_host", func(t *testing.T) {
+		t.Parallel()
 		root := source(t, true)
 		options := InstallOptions{Source: root, Host: "unknown", Scope: "project", Project: t.TempDir(), RegistryPath: filepath.Join(t.TempDir(), "registry.json")}
 		if _, err := Install(options); err == nil || !strings.Contains(err.Error(), "unsupported --host") {

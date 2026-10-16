@@ -81,12 +81,14 @@ esac`
 }
 
 func TestCanaryPrivateP4PIDFileOwnsBackendCleanup(t *testing.T) {
+	t.Parallel()
 	binary, err := exec.LookPath("p4d")
 	if err != nil {
 		t.Skip("p4d is not installed")
 	}
 	for _, mode := range []string{"normal", "interrupted-owner"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			pidFile := filepath.Join(root, "p4d.pid")
 			server := exec.Command(binary, "--pid-file="+pidFile, "-r", root, "-p", "127.0.0.1:0")

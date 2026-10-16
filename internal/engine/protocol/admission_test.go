@@ -36,6 +36,7 @@ func unknownSpawnReceipt(t *testing.T, id EventID, actionID, correlation string)
 }
 
 func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store, err := persistence.NewStore(root, persistence.Config{PackageDigest: "sha256:test-package"})
 	if err != nil {
@@ -131,6 +132,7 @@ func workerResult(t *testing.T, id EventID, actionID, digest string) Event {
 // TestSpawnReceiptAdmitsAndRecords：回执接纳后落账（声明签发态），
 // 任务台账不动（进度观察是独立事件），持久可重读。
 func TestSpawnReceiptAdmitsAndRecords(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -160,6 +162,7 @@ func TestSpawnReceiptAdmitsAndRecords(t *testing.T) {
 // TestSpawnReceiptByteIdenticalReplayIdempotent：同回执逐字节重发不重复
 // receipt 效果；换新事件 ID 时只占用新的事件台账键。
 func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -212,6 +215,7 @@ func TestSpawnReceiptByteIdenticalReplayIdempotent(t *testing.T) {
 
 // TestSpawnReceiptNegatives：未知 action、provider mismatch（不同与空）。
 func TestSpawnReceiptNegatives(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -246,6 +250,7 @@ func TestSpawnReceiptNegatives(t *testing.T) {
 // TestUnknownSpawnReceiptRecoveryIsDurable：UNKNOWN 回执的恢复记录没有任务
 // 键也必须可编码；对账完成后重复调用只返回已提交的 ATTACHED 事实。
 func TestUnknownSpawnReceiptRecoveryIsDurable(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -377,6 +382,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 // 完成（任务 TERMINAL、step 完成、frontier 推进）并按容量补位签发
 // beta（复用 SelectIssued 语义）；回执在先是正常路径。
 func TestWorkerResultCompletesAndRefills(t *testing.T) {
+	t.Parallel()
 	engine, dir, alphaAction := refillEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), observedInput); err != nil {
@@ -427,6 +433,7 @@ func containsStep(steps []authoring.StepID, id string) bool {
 // TestWorkerResultStagesBeforeReceipt：result 先于 SpawnReceipt 到达时
 // 暂存（不丢弃、不推进、STAGED 状态），回执到达后配对接纳并补位签发。
 func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
+	t.Parallel()
 	engine, _, alphaAction := refillEngine(t)
 	observedInput := Observation{}
 
@@ -468,6 +475,7 @@ func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
 }
 
 func TestSpawnReceiptAfterTerminalPairsStagedResultAndRefills(t *testing.T) {
+	t.Parallel()
 	engine, dir, action := refillEngine(t)
 	claims := 0
 	engine.cfg.ClaimDispatch = func(_, dispatch, identity, provider string) error {
@@ -526,6 +534,7 @@ func TestSpawnReceiptAfterTerminalPairsStagedResultAndRefills(t *testing.T) {
 }
 
 func TestUnknownSpawnReceiptAfterTerminalPreservesReviewPairing(t *testing.T) {
+	t.Parallel()
 	cd, reg := productReviewDAGFixture(t, dagStep{name: "review.primary", deps: []string{"prep.parse"}})
 	engine, _ := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]
@@ -565,6 +574,7 @@ func TestUnknownSpawnReceiptAfterTerminalPreservesReviewPairing(t *testing.T) {
 }
 
 func TestFailedSpawnReceiptAfterTerminalRecordsOnlyFailureObservation(t *testing.T) {
+	t.Parallel()
 	engine, _, action := refillEngine(t)
 	engine.cfg.ClaimDispatch = func(_, _, _, _ string) error {
 		t.Fatal("FAILED receipt must not claim a worker identity")
@@ -589,6 +599,7 @@ func TestFailedSpawnReceiptAfterTerminalRecordsOnlyFailureObservation(t *testing
 // TestWorkerResultNegatives：未知 action、provider mismatch、同 action
 // 异字节结果冲突、FAIL 结果只终结当前任务而不推进完成 frontier。
 func TestWorkerResultNegatives(t *testing.T) {
+	t.Parallel()
 	engine, _, alphaAction := refillEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(spawnReceipt(t, "evt-r-alpha", alphaAction, "agent-alpha"), observedInput); err != nil {
@@ -668,6 +679,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 // TestDefinitionFailureResultsAreTerminalAndDiagnosable：定义/引擎缺陷结果
 // 必须显式失败并回收当前 Attempt，不得进入 Operator 或 agent 恢复路径。
 func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
+	t.Parallel()
 	for _, class := range []authoring.FailureClass{
 		authoring.FailureInvariantViolation,
 		authoring.FailureBlockedBug,
@@ -740,6 +752,7 @@ func TestDefinitionFailureResultsAreTerminalAndDiagnosable(t *testing.T) {
 // A business runtime error closes its execution while the logical obligation
 // and semantic review round remain unchanged.
 func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]
@@ -771,6 +784,7 @@ func TestTransientResultReplacesExecutionOfSameTask(t *testing.T) {
 // retained as failure history without blocking a later SPAWNED receipt for the
 // same durable Attempt.
 func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -803,6 +817,7 @@ func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
 }
 
 func TestFailedSpawnReceiptClearsResultStagedBeforeReceipt(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -832,6 +847,7 @@ func TestFailedSpawnReceiptClearsResultStagedBeforeReceipt(t *testing.T) {
 }
 
 func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -866,6 +882,7 @@ func TestRecoverableResultBecomesObsoleteAfterAttemptReplacement(t *testing.T) {
 }
 
 func TestFailedUnknownSpawnReceiptIsReconcileable(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -890,6 +907,7 @@ func TestFailedUnknownSpawnReceiptIsReconcileable(t *testing.T) {
 }
 
 func TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -960,6 +978,7 @@ func mustLifecycleEvent(t *testing.T, id, correlation, identity, event string) E
 // 伪造 subject（无 UNKNOWN receipt / 未清账 intent）拒绝且零写入；Ask
 // 决定（1b 两阶段）在统一接纳面上照常关账生效。
 func TestOperatorObservationAdmits(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -1055,6 +1074,7 @@ func TestOperatorObservationAdmits(t *testing.T) {
 // TestFreeUserEventRejectedThroughSubmit：越权自由 USER_* 事件在统一
 // 接纳面上拒绝且零状态变化（衔接 1b 封闭 kind）。
 func TestFreeUserEventRejectedThroughSubmit(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -1136,6 +1156,7 @@ func parallelTailsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler
 // 2——一支 FAILED 回执经 RecoveryFail 终态化释放容量的同一提交内，事务
 // 收尾立即补签第三支（§8.2.3 释放即补位，无需 Drive）。
 func TestFailedBranchRefillsTheFreedCapacityImmediately(t *testing.T) {
+	t.Parallel()
 	cd, reg := parallelTailsFixture(t)
 	engine, _ := reviewEngineCapacity(t, cd, reg, 2)
 	observedInput := Observation{}

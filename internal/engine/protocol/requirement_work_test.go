@@ -94,6 +94,7 @@ func stopSupersededDispatch(t *testing.T, engine *Engine, actionID string) uint6
 }
 
 func TestRequirementWorkRequiresEveryDispositionBeforeOpeningBarrier(t *testing.T) {
+	t.Parallel()
 	engine, dir := workEngine(t, "develop", "verify")
 	action := issueReady(t, engine)[0]
 	submitPlainResult(t, engine, "develop-original", action)
@@ -115,6 +116,7 @@ func TestRequirementWorkRequiresEveryDispositionBeforeOpeningBarrier(t *testing.
 }
 
 func TestRequirementWorkRedoFailureKeepsDependentBlockedAcrossRestart(t *testing.T) {
+	t.Parallel()
 	engine, dir := workEngine(t, "develop", "verify", "publish")
 	original := issueReady(t, engine)[0]
 	submitPlainResult(t, engine, "develop-initial", original)
@@ -171,6 +173,7 @@ func TestRequirementWorkRedoFailureKeepsDependentBlockedAcrossRestart(t *testing
 }
 
 func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"pending", "staged", "quarantined", "terminal", "completed"} {
 		t.Run(boundary, func(t *testing.T) {
 			engine, _ := workEngine(t, "develop", "verify")
@@ -258,6 +261,7 @@ func TestRequirementWorkRedoPreservesEvidenceAtEveryArrivalBoundary(t *testing.T
 }
 
 func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T) {
+	t.Parallel()
 	engine, dir := workEngine(t, "develop")
 	old := issueReady(t, engine)[0]
 	if _, err := engine.Submit(spawnReceipt(t, "original-spawn", old, "original-worker"), Observation{}); err != nil {
@@ -331,6 +335,7 @@ func TestRequirementWorkQueuedRedoCanBeSupersededWhileBarrierIsHeld(t *testing.T
 }
 
 func TestRequirementWorkIncludesIndependentGateReview(t *testing.T) {
+	t.Parallel()
 	cd, reg := agentStepsDefinition(t, func(string) authoring.AgentSpec {
 		return authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonIndependentReview, ReviewSeries: authoring.ReviewSeriesUnaffiliated, Timeout: time.Minute}
 	}, "gate.check")
@@ -353,6 +358,7 @@ func TestRequirementWorkIncludesIndependentGateReview(t *testing.T) {
 }
 
 func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testing.T) {
+	t.Parallel()
 	var archived []string
 	for _, reverse := range []bool{false, true} {
 		engine, dir := workEngine(t, "develop")
@@ -430,6 +436,7 @@ func TestRequirementWorkArchivesAllQuarantinedResultsDeterministically(t *testin
 }
 
 func TestObsoleteResultHistoryUsesCurrentArrayEncoding(t *testing.T) {
+	t.Parallel()
 	record := WorkerResult{ActionID: "dispatch", Provider: testProvider, Outcome: OutcomePass, PayloadDigest: "payload", Digest: "result-digest"}
 	encoded, err := json.Marshal([]WorkerResult{record})
 	if err != nil {

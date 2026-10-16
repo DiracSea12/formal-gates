@@ -43,6 +43,7 @@ func submitIndependentObservation(t *testing.T, engine *Engine, event Event) Acc
 }
 
 func TestReviewCompletionWaitsForIndependentAdmissionAcrossArrivalOrders(t *testing.T) {
+	t.Parallel()
 	for _, order := range []string{"receipt-first", "result-first", "terminal-first"} {
 		t.Run(order, func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
@@ -92,6 +93,7 @@ func TestReviewCompletionWaitsForIndependentAdmissionAcrossArrivalOrders(t *test
 }
 
 func TestIndependentReviewFindingsRequireIndividualDisposition(t *testing.T) {
+	t.Parallel()
 	for _, severity := range []string{"P1", "P2"} {
 		t.Run(severity, func(t *testing.T) {
 			cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
@@ -136,6 +138,7 @@ func TestIndependentReviewFindingsRequireIndividualDisposition(t *testing.T) {
 }
 
 func TestIndependentDiscardPreservesOriginalAndCreatesNoUserObligation(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]
@@ -150,6 +153,7 @@ func TestIndependentDiscardPreservesOriginalAndCreatesNoUserObligation(t *testin
 }
 
 func TestIndependentInvalidResultUsesItsOriginalFiniteRetry(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]
@@ -175,6 +179,7 @@ func TestIndependentInvalidResultUsesItsOriginalFiniteRetry(t *testing.T) {
 }
 
 func TestIncompleteIndependentVerificationLeavesTheOriginalDutyUnchanged(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]
@@ -199,6 +204,7 @@ func TestIncompleteIndependentVerificationLeavesTheOriginalDutyUnchanged(t *test
 }
 
 func TestReviewCostHeldResultReopensWithTheSameIndependentDuty(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	action := issueReady(t, engine)[0]

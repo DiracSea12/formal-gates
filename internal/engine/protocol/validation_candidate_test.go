@@ -12,6 +12,7 @@ import (
 )
 
 func TestEmptyCandidatePathsPreserveIdentityAndAllowanceAfterReload(t *testing.T) {
+	t.Parallel()
 	set := CaseSet{Paths: []string{}}
 	data, err := json.Marshal(set)
 	if err != nil {
@@ -70,6 +71,7 @@ func TestEmptyCandidatePathsPreserveIdentityAndAllowanceAfterReload(t *testing.T
 }
 
 func TestCandidateSourcePathsRetainsTheFormalInput(t *testing.T) {
+	t.Parallel()
 	state := &State{NativeRoot: t.TempDir(), IntakeConfirmationReceipt: &IntakeConfirmationReceipt{RequirementSource: "docs/contract.md", Artifacts: []IntakeArtifact{{Path: "docs/contract.md"}}}}
 	manifest := []string{"app.go"}
 	want := []string{"app.go", "docs/contract.md"}
@@ -88,6 +90,7 @@ func TestCandidateSourcePathsRetainsTheFormalInput(t *testing.T) {
 // A carried artifact needs a complete original version witness and unchanged
 // source-to-case content. Independent QA progress does not change its inputs.
 func TestCarriedCandidateReceiptVerifiesFullManifest(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"route", "requirement", "source", "point", "edge", "test-reference", "missing-witness"} {
 		t.Run(change, func(t *testing.T) {
 			original := coverage.AcceptanceManifest{
@@ -178,6 +181,7 @@ func TestCarriedCandidateReceiptVerifiesFullManifest(t *testing.T) {
 // A completed artifact can project across route context changes; superseded
 // case inputs settle without promoting the old artifact.
 func TestCandidateReceiptRequiresIssuedCaseContent(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		name := "route context only"
 		if changed {
@@ -218,6 +222,7 @@ func TestCandidateReceiptRequiresIssuedCaseContent(t *testing.T) {
 // View validation binds proof to the signed target without guessing dependency
 // completeness from names or the number of inputs.
 func TestCandidateReviewViewsRequireSignedTargets(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"single-input", "unknown-case", "wrong-test", "empty-view", "empty-path", "empty-content"} {
 		t.Run(variant, func(t *testing.T) {
 			params := CandidateParameters{Stage: "QA_ARTIFACT", Paths: []string{"test.js"}, ReviewCases: map[string]string{"negative": "test.js#reject"}}
@@ -256,6 +261,7 @@ func TestCandidateReviewViewsRequireSignedTargets(t *testing.T) {
 }
 
 func TestCandidateFilesRequireOriginalManifestRelations(t *testing.T) {
+	t.Parallel()
 	design := runtime.TaskKey{Node: "validation", Step: "qa.design", Scope: "1:WHITEBOX"}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewWhitebox}, Cases: []coverage.AcceptanceCase{{CaseID: "case", TestRef: "test_app.py::valid", Files: []string{"assertion.data"}, SharedSteps: []string{"setup"}}}, SharedSteps: []coverage.SharedStep{{ID: "setup", Files: []string{"shared.data"}}, {ID: "unreferenced", Files: []string{"unrelated.data"}}}}
 	set := &CaseSet{DesignTask: design, Manifest: manifest}

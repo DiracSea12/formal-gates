@@ -12,12 +12,16 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
 )
 
 func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := portablePackageFixture(t)
 	project := t.TempDir()
 	options := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: project, RegistryPath: filepath.Join(t.TempDir(), "registry.json"), BinaryTarget: filepath.Join(t.TempDir(), "bin", nativeBinaryName()), Force: true, SkipHooks: true}
@@ -99,12 +103,14 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 }
 
 func TestPortableWorkflowRequiresInstalledAdmission(t *testing.T) {
+	t.Parallel()
 	if err := runQuickE2ECanaryAt(t.TempDir(), prompts.PromptCatalog{}, "", "", ""); err == nil {
 		t.Fatal("uninstalled source was accepted")
 	}
 }
 
 func TestPortableWriteBlockUsesCurrentEngineEnvelope(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := runWriteBlockCanary(root); err != nil {
 		t.Fatal(err)
@@ -142,6 +148,7 @@ func portablePackageFixture(t *testing.T) string {
 }
 
 func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
+	t.Parallel()
 	input := protocol.WorkerInput{Handler: "engine.development.batch.v6", Validation: &protocol.ValidationInput{Handler: "engine.development.batch.v6", Workspace: &protocol.NativeResource{Path: t.TempDir()}, Development: &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "marker", Checks: []protocol.DevelopmentCheck{{Purpose: protocol.CheckFullTests, Goal: "Compare built-delivery.txt with delivery newline"}}}}}}
 	var facts []worker.LocationFact
 	payload, err := portableWorkerResult(input, map[string]bool{}, &facts)
@@ -166,6 +173,7 @@ func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
 }
 
 func TestPortableWorkerResultsCoverIssuedRequirementPoints(t *testing.T) {
+	t.Parallel()
 	points := []requirement.Point{{ID: "AC-001", Text: "Committed marker contains delivery newline", Oracle: "delivery.txt bytes"}, {ID: "AC-002", Text: "Missing committed marker is rejected", Oracle: "git show exits nonzero"}}
 	for _, handler := range []string{"engine.readiness.plan.v6", "engine.development.batch.v6", "engine.gate.v3"} {
 		t.Run(handler, func(t *testing.T) {

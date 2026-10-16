@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"formal-gates/internal/cost"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 const dshTestPrompt = "Review the requirement."
@@ -275,6 +277,9 @@ func TestRunNativeProbePath(t *testing.T) {
 // TestDSHExecuteRefusals pins the refusal ladder of the sequence (合同错误文本
 // 逐字段).
 func TestDSHExecuteRefusals(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	capabilitySteps := []peerStep{
 		{On: `"method":"initialize"`, Send: `{"id": "@ID@", "result": {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}}}`},
 	}

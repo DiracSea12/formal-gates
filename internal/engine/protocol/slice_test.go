@@ -15,6 +15,7 @@ import (
 )
 
 func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
+	t.Parallel()
 	// 候选含内建 QA 的路线 Ask 在接纳处拒绝（普通 QA 不进 child 候选）。
 	engine, _ := sliceChildEngine(t)
 	observedInput := Observation{}
@@ -53,6 +54,7 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 // 二个路线 Ask，其决定在绑定后仍被各自接纳（候选表锚定各自 Ask），缩集
 // 重选落账新绑定。
 func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
+	t.Parallel()
 	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security"}
 	observedInput := Observation{}
@@ -100,6 +102,7 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 }
 
 func TestSliceChildCanSelectEveryDiscoveredGate(t *testing.T) {
+	t.Parallel()
 	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security", "gate.delivery"}
 	askAndDecide(t, engine, ControlSelectRoute, "req-child-route", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: gates}})

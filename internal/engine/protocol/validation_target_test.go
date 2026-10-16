@@ -9,6 +9,7 @@ import (
 // Projection preserves the original task; equality of candidate identity alone
 // cannot retain a replaced obligation or authorize a changed requirement.
 func TestProjectedTargetRequiresExactFrozenDuty(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unchanged", "selected-task-replaced", "candidate-digest", "scope", "case-version", "revision-without-carry", "current-revision-without-carry", "generation-without-carry", "confirmed-carry", "confirmed-redo"} {
 		t.Run(name, func(t *testing.T) {
 			task := runtime.TaskKey{Node: "validation", Step: "qa.execution", Scope: "original:whitebox"}

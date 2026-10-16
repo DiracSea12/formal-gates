@@ -254,9 +254,15 @@ func (s *State) repairSource(task runtime.TaskKey) (HostActionIntent, CandidateE
 	var found HostActionIntent
 	var proof CandidateEvidence
 	for action, receipt := range s.HostActionReceipts {
+		if receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+			continue
+		}
 		intent, exists := s.hostIntent(action)
+		if !exists || intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" || intent.Adapter.Params["repairTask"] == nil {
+			continue
+		}
 		p, err := candidateParameters(intent)
-		if !exists || err != nil || p.RepairTask == nil || *p.RepairTask != task || p.Integration != nil || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+		if err != nil || p.RepairTask == nil || *p.RepairTask != task || p.Integration != nil || !s.candidateContextCurrent(p) {
 			continue
 		}
 		v, err := decodeCandidateEvidence(receipt)

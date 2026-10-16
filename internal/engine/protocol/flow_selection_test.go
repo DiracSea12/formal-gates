@@ -13,6 +13,7 @@ import (
 )
 
 func TestQualityRoleOwnsOrdinaryAndMergeGateTargets(t *testing.T) {
+	t.Parallel()
 	cd := compiledCanonicalWorkflow(t)
 	e := &Engine{cfg: Config{Definition: cd}}
 	gateTask := pipelineTask(cd, "engine.gate.v3", "candidate:quality")
@@ -85,6 +86,7 @@ func selectedReviewEngine(t *testing.T, selection *FlowSelection) (*Engine, stri
 }
 
 func TestDisabledProductReviewKeepsTechnicalReviewAndPersistentChoice(t *testing.T) {
+	t.Parallel()
 	selection := &FlowSelection{Disabled: []string{"product-review"}}
 	e, dir := selectedReviewEngine(t, selection)
 	selection.Disabled[0] = "start-readiness"
@@ -124,6 +126,7 @@ func TestDisabledProductReviewKeepsTechnicalReviewAndPersistentChoice(t *testing
 }
 
 func TestDisabledTechnicalReviewWaitsForDevelopmentPreparation(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, &FlowSelection{Disabled: []string{"start-readiness"}})
 	actions := issueReady(t, e)
 	if len(actions) != 1 {
@@ -160,6 +163,7 @@ func TestDisabledTechnicalReviewWaitsForDevelopmentPreparation(t *testing.T) {
 }
 
 func TestFlowSelectionRejectsUnknownAndRepeatedNodes(t *testing.T) {
+	t.Parallel()
 	for _, disabled := range [][]string{{"unknown"}, {"product-review", "product-review"}, {"cleanup"}} {
 		if err := ValidateFlowSelection(&FlowSelection{Disabled: disabled}); err == nil {
 			t.Fatalf("invalid selection accepted: %v", disabled)
@@ -171,6 +175,7 @@ func TestFlowSelectionRejectsUnknownAndRepeatedNodes(t *testing.T) {
 }
 
 func TestQAGroupKeepsSelectedModesAndOwnsTheCompleteChain(t *testing.T) {
+	t.Parallel()
 	if err := ValidateFlowSelection(&FlowSelection{Disabled: []string{"qa"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +209,7 @@ func TestQAGroupKeepsSelectedModesAndOwnsTheCompleteChain(t *testing.T) {
 }
 
 func TestDisabledPreDevelopmentNodesOpenTopologyWithoutReviewEvidence(t *testing.T) {
+	t.Parallel()
 	e, _ := selectedReviewEngine(t, &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development", "repair"}})
 	if _, _, err := e.Drive(Observation{}); err != nil {
 		t.Fatal(err)

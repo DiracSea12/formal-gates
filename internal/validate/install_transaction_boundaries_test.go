@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -196,6 +197,7 @@ func installAssertNoTransactionArtifacts(t *testing.T, registry, target string) 
 }
 
 func TestPackageReceiptBindsStableAndInstalledIdentities(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	installed := installFixtureSource(t)
 	installWriteFile(t, filepath.Join(installed, "README.md"), []byte("installed runtime only\n"), 0o600)
@@ -259,6 +261,7 @@ func TestPackageReceiptBindsStableAndInstalledIdentities(t *testing.T) {
 }
 
 func TestBaselineReceiptValidatesManifestPathsAndIdentityBoundaries(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	installed := installFixtureSource(t)
 	stateRoot := t.TempDir()
@@ -437,6 +440,7 @@ func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
 }
 
 func TestBootstrapReceiptBindsExactRegistryIdentity(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -659,6 +663,7 @@ func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
 }
 
 func TestUnsupportedRunHasNoCurrentWriterFallback(t *testing.T) {
+	t.Parallel()
 	root := installGitProject(t)
 	runID := "unsupported-run"
 	statePath := filepath.Join(root, ".gates", "tmp", runID, "state.json")
@@ -807,6 +812,7 @@ func TestInstallFaultsRestoreRegistryIdentityAndCleanup(t *testing.T) {
 }
 
 func TestMalformedHookRestoresRegistryAndRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -839,6 +845,12 @@ func TestMalformedHookRestoresRegistryAndRecoveryEvidence(t *testing.T) {
 }
 
 func TestUninstallFaultsReconcileAndPreserveExternalContent(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Run("install post-switch smoke recovery", func(t *testing.T) {
 		source := installFixtureSource(t)
 		project := t.TempDir()
@@ -1012,6 +1024,7 @@ func TestReleaseRollbackRestoresAllOuterIdentity(t *testing.T) {
 }
 
 func TestManifestRejectsBeforeAnyTargetOrReceiptWrite(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	installWriteFile(t, filepath.Join(source, "formal-gates.manifest.json"), []byte("{invalid manifest\n"), 0o600)
 	project := t.TempDir()
@@ -1106,6 +1119,7 @@ func installCreateSourceArchive(t *testing.T, path string) {
 }
 
 func TestBootstrapWrappersForwardOnlyToStableOwner(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("wrapper fixture is for supported Unix release platforms")
 	}
@@ -1232,6 +1246,7 @@ esac
 }
 
 func TestPackageInventoryAndCurrentHelp(t *testing.T) {
+	t.Parallel()
 	root := installRepoRoot(t)
 	binary := filepath.Join(t.TempDir(), nativeBinaryName())
 	installRun(t, root, "go", "build", "-o", binary, "./cmd/formal-gates")

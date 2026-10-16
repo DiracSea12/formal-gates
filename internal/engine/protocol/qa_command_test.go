@@ -10,6 +10,7 @@ import (
 )
 
 func TestQACommandBindingKeepsApprovalAndOriginalRecipe(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	manifest := &s.currentValidationWave().Coverage.Manifests[0]
 	manifest.Cases[0].Operations = nil
@@ -69,6 +70,7 @@ func TestQACommandBindingKeepsApprovalAndOriginalRecipe(t *testing.T) {
 }
 
 func TestQACommandBindingRejectsUnissuedOrChangedInvocations(t *testing.T) {
+	t.Parallel()
 	for _, invalid := range []string{"unknown-case", "empty", "declared", "changed-binding"} {
 		t.Run(invalid, func(t *testing.T) {
 			s, cd, target := qaOperationState(t)
@@ -102,6 +104,7 @@ func TestQACommandBindingRejectsUnissuedOrChangedInvocations(t *testing.T) {
 }
 
 func TestQAIndependentCasesAdvanceWhileOriginalCheckWaits(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	s.currentValidationWave().Scope = coverage.ScopeFull
 	s.currentValidationWave().Coverage.Manifests[0].Cases[1].SharedSteps = []string{"setup"}
@@ -137,6 +140,7 @@ func TestQAIndependentCasesAdvanceWhileOriginalCheckWaits(t *testing.T) {
 
 // Approved shared procedures retain their invocation duties and source identity.
 func TestSharedInvocationPlansKeepOrderedRecipesAcrossRecoveryAndRepair(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	wave := s.currentValidationWave()
 	wave.Scope = coverage.ScopeFull
@@ -289,6 +293,7 @@ func TestSharedInvocationPlansKeepOrderedRecipesAcrossRecoveryAndRepair(t *testi
 }
 
 func TestSharedMissingInvocationPreservesDeclaredCaseAndSharedOperations(t *testing.T) {
+	t.Parallel()
 	s, cd, target := qaOperationState(t)
 	manifest := &s.currentValidationWave().Coverage.Manifests[0]
 	manifest.SharedSteps[0].Operations = nil

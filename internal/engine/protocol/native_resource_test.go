@@ -18,6 +18,7 @@ import (
 // An unresolved requirement Ask freezes new writes while the original cleanup
 // intent and its exact resource receipt retain the native responsibility.
 func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +67,7 @@ func TestCleanupAuthoritySurvivesRequirementBarrier(t *testing.T) {
 // Resource selection follows confirmed business work, including explicit carry
 // and redo decisions. Native materialization is covered by installed tests.
 func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +156,7 @@ func TestDevelopmentResourcesFollowConfirmedWork(t *testing.T) {
 // Topology replacement retires only the previous membership's removed targets.
 // Worker and native bindings keep the particular resources they still use live.
 func TestTopologyCleanupFollowsRetiredResources(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +230,7 @@ func TestTopologyCleanupFollowsRetiredResources(t *testing.T) {
 // Queued workspace replacement uses the confirmed task and original resource
 // inputs even when no worker dispatch has supplied a workspace binding.
 func TestQueuedWorkspaceReplacementRequiresExactAuthorization(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -344,6 +348,7 @@ func recordDevelopmentChecksFixture(t *testing.T, s *State, action string, batch
 }
 
 func TestWhiteboxAuthoringReusesOnlyCurrentDevelopmentSource(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -365,6 +370,7 @@ func TestWhiteboxAuthoringReusesOnlyCurrentDevelopmentSource(t *testing.T) {
 // Workspace qualification uses the Controller's required task frontier and
 // exact resource/material inputs; route context does not create another effect.
 func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -493,6 +499,7 @@ func TestWorkspaceQualificationUsesCurrentPhysicalInputs(t *testing.T) {
 // Workspace receipts initialize creation facts without replacing a later
 // candidate identity or an already materialized exact manifest.
 func TestWorkspaceReceiptPreservesCurrentResourceFacts(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)

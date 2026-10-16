@@ -11,6 +11,7 @@ import (
 )
 
 func TestChildStartInheritsIndependentFlowSelection(t *testing.T) {
+	t.Parallel()
 	confirmation := reviewConfirmation()
 	child := ChildPreparation{SliceID: "core", RunID: "child", ResourceID: "workspace"}
 	parent := &State{RunID: "master", Route: "regular", FlowSelection: &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development"}}, IntakeConfirmationReceipt: confirmation,
@@ -49,6 +50,7 @@ func TestChildStartInheritsIndependentFlowSelection(t *testing.T) {
 }
 
 func TestNodeContinuationCannotEnableDisabledResponsibility(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development"}})
 	if _, _, err := e.Drive(Observation{}); err != nil {
 		t.Fatal(err)
@@ -80,6 +82,7 @@ func TestNodeContinuationCannotEnableDisabledResponsibility(t *testing.T) {
 }
 
 func TestRequirementRedoCannotEnableDisabledReview(t *testing.T) {
+	t.Parallel()
 	e, dir := selectedReviewEngine(t, &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development"}})
 	for _, product := range []bool{true, false} {
 		pkg := requirementPackageOf(nil)

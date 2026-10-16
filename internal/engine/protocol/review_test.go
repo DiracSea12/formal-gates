@@ -336,6 +336,7 @@ func routeOptions() []AskOption {
 }
 
 func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -466,6 +467,7 @@ func findingOption(t *testing.T, engine *Engine, action review.Action, index int
 // DECIDE（dismiss 解阻塞）→effective PASS 推进 phase→start-readiness
 // PASS→拓扑（no-split+note）→路线（明确门列表）→DEVELOPMENT_PARALLEL。
 func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -557,6 +559,7 @@ func TestReviewSequenceThroughTopologyAndRoute(t *testing.T) {
 // 零状态变化；分片名非标识形状在 schema 层拒绝（owner 引用与 child 认领
 // 键都以它进行）。
 func TestSplitTopologyRequiresTheConfirmedACUniverse(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -597,6 +600,7 @@ func TestSplitTopologyRequiresTheConfirmedACUniverse(t *testing.T) {
 }
 
 func TestGateSelectionBindsAnySubset(t *testing.T) {
+	t.Parallel()
 	for name, selection := range map[string]struct{ gates, selected []string }{
 		"single candidate": {[]string{"quality"}, []string{"quality"}},
 		"all candidates":   {[]string{"blackbox", "whitebox", "gate.quality"}, []string{"blackbox", "whitebox", "gate.quality"}},
@@ -630,6 +634,7 @@ func TestGateSelectionBindsAnySubset(t *testing.T) {
 // 在绑定后仍被各自接纳（候选表锚定各自 Ask），同集重选落账不变、缩集重
 // 选落账新绑定。
 func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -699,6 +704,7 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 // Ask 钉住的全集）可区分拒绝、零写且 Ask 存活，携带完整全集（顺序无关）
 // 的修正决定照常绑定。
 func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
+	t.Parallel()
 	t.Run("request without the gate list is rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
@@ -810,6 +816,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 
 // Confirming and downgrading a finding changes its conclusion without adding a review.
 func TestReviewFindingDowngradeConcludesTheSameRound(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "review.round")
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -864,6 +871,7 @@ func TestReviewFindingDowngradeConcludesTheSameRound(t *testing.T) {
 // ——自动容量未耗尽（completed < automatic limit）时 REVIEW_ROUND_GRANT
 // 可区分拒绝且零状态变化；容量耗尽后的授权正控见上文耗尽/授权测试。
 func TestGrantIsPrematureWhileAutomaticCapacityRemains(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "round.one", "round.two")
 	engine, dir := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]
@@ -892,6 +900,7 @@ func TestGrantIsPrematureWhileAutomaticCapacityRemains(t *testing.T) {
 // TestReviewGatingNegatives：逐类负控——每例断言可区分错误码与零状态
 // 变化。
 func TestReviewGatingNegatives(t *testing.T) {
+	t.Parallel()
 	t.Run("start-readiness evidence before product-review PASS", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
@@ -1385,6 +1394,7 @@ func TestReviewGatingNegatives(t *testing.T) {
 // 投影：窗口内升级的 P1 如实阻塞（不是回放失效前快照），驳回后路线门
 // 重新打开并推进 DEVELOVELOPMENT_PARALLEL（§7.3.3）。
 func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
 	engine, dir := reviewEngine(t, cd, reg)
 
@@ -1508,6 +1518,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 // 直接 DISMISS 对照：产品审建议项被驳回时技术审从未被失效，其结论与计轮
 // 原样（与往返恢复的路径区分）。
 func TestDirectDismissLeavesTheDownstreamConclusionUntouched(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness.one", "start.readiness.two")
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -1546,6 +1557,7 @@ func TestDirectDismissLeavesTheDownstreamConclusionUntouched(t *testing.T) {
 // 绝且零状态变化，正确 revision 的结果随后照常暂存并在回执到达后完成
 // 入账（暂存槽不被毒化）。
 func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -1598,6 +1610,7 @@ func TestStaleRevisionReviewResultIsRejectedBeforeStaging(t *testing.T) {
 // 提交结果的 actionID（派发身份唯一事实）——指向其它派发的证据可区分
 // 拒绝且零状态变化，正确绑定的结果随后照常暂存（暂存槽不被毒化）。
 func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -1632,6 +1645,7 @@ func TestReviewEvidenceMustBindItsDispatchingAction(t *testing.T) {
 
 // Invalid signed review evidence consumes its attempt only after receipt pairing.
 func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		corrupt func(evidence *ReviewResultEvidence)
@@ -1727,6 +1741,7 @@ func askAndDecideRejecting(t *testing.T, engine *Engine, dir string, control Con
 // TestReviewTamperedStateRejectedAtLoad：篡改 state.json 的账本投影或
 // phase 后，加载边界可区分拒绝。
 func TestReviewTamperedStateRejectedAtLoad(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	original := stateBytesOf(t, dir)
@@ -1806,6 +1821,7 @@ func tamperStateContent(t *testing.T, dir string, mutate func(map[string]any)) {
 // TestReviewVariantsParticipateInCanonicalDigest：审查证据与决定载荷进入
 // canonical 编码——内容变化必变 digest，事件身份覆盖变体字节。
 func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
+	t.Parallel()
 	evidence := reviewEvidence(review.ProductReview, "dispatch-1", "", "FAIL", "blocked", []review.Finding{
 		{Severity: "P1", Message: "core path broken"},
 	})
@@ -1858,6 +1874,7 @@ func TestReviewVariantsParticipateInCanonicalDigest(t *testing.T) {
 // TestReviewPhaseDialPastRejectedAtCommit：经公开 API 把 phase 直接初始化
 // 到账本无法证明的位置时，提交边界拒绝且零落盘。
 func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	dir := t.TempDir()
 	engine, err := New(mustStore(t, dir), Config{InternalSteps: fixtureInternalSteps(), Definition: cd, Registry: reg, Capacity: 4})
@@ -1902,6 +1919,7 @@ func exhaustProductReviewCapacity(t *testing.T, engine *Engine) {
 }
 
 func TestReleasedAuthorizationSlotIsConsumedByTheNextIssuance(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, dir := reviewEngine(t, cd, reg)
 	exhaustProductReviewCapacity(t, engine)
@@ -2017,6 +2035,7 @@ func parallelReviewLanesFixture(t *testing.T) (*compiler.CompiledDefinition, *co
 // Multiple declared carriers share one series obligation. Repeated issuance,
 // sibling readiness, and spare automatic capacity cannot duplicate that work.
 func TestReviewCarriersShareOneOutstandingObligation(t *testing.T) {
+	t.Parallel()
 	cd, reg := parallelReviewLanesFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	lanes := issueReady(t, engine)
@@ -2056,6 +2075,7 @@ func pendingActionByStep(t *testing.T, engine *Engine, step string) string {
 // 作用于带审查系列标记的派发——系列额度耗尽（façade 投影字段可见
 // Remaining=0 与"需要用户"）时，无系列标记的后续步骤照常补位签发。
 func TestUnmarkedDispatchesAreIssuedWhileReviewCapacityIsExhausted(t *testing.T) {
+	t.Parallel()
 	cd, reg := agentStepsDefinition(t, func(name string) authoring.AgentSpec {
 		if name == "plain.gate" || name == "plain.worker" {
 			return authoring.AgentSpec{Handler: "engine.test.reviewer", Reason: authoring.ReasonSemanticJudgment, Timeout: time.Minute}
@@ -2161,6 +2181,7 @@ func invalidateSeriesRoundOf(t *testing.T, engine *Engine, requestID string, act
 // Extra authorizations remain distinct across completed, invalidated, and
 // retried reviews. A new obligation may use only an unoccupied slot.
 func TestIssuedOverLimitDispatchesBindExclusiveAuthorizationSlots(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, dir := reviewEngine(t, cd, reg)
 	exhaustProductReviewCapacity(t, engine)
@@ -2240,6 +2261,7 @@ func settleFixtureFinding(t *testing.T, engine *Engine, action review.Action, re
 }
 
 func TestQuarantinedReviewReplaysAfterBarrierLift(t *testing.T) {
+	t.Parallel()
 	for _, authorized := range []bool{false, true} {
 		name := "automatic"
 		if authorized {
@@ -2391,6 +2413,7 @@ func relayChainFixture(t *testing.T, series authoring.ReviewSeriesAction, mid re
 // 欠轮提案在首载体上签出新鲜轮，重 PASS 恢复 effective PASS 且链保持完
 // 成。
 func TestReadinessHeadPassLatchesTheLocalRelayChain(t *testing.T) {
+	t.Parallel()
 	cd, reg := relayChainFixture(t, authoring.ReviewSeriesStartReadiness, relayLocal)
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -2440,6 +2463,7 @@ func TestReadinessHeadPassLatchesTheLocalRelayChain(t *testing.T) {
 // 游载体随闩完成、从不派发；整轮作废后链保持完成，新鲜轮重 PASS 后链保
 // 持完成。
 func TestReadinessHeadPassLatchesTheAskRelayChain(t *testing.T) {
+	t.Parallel()
 	cd, reg := relayChainFixture(t, authoring.ReviewSeriesStartReadiness, relayAsk)
 	engine, _ := reviewEngine(t, cd, reg)
 
@@ -2489,6 +2513,7 @@ func TestReadinessHeadPassLatchesTheAskRelayChain(t *testing.T) {
 // 不派发；重走决定（不置上游失效）后链保持完成，新鲜轮只欠在首载体上，
 // 携当前权威 revision 清偿后链保持完成。
 func TestProductRedoFreshRoundKeepsTheRelayChainLatched(t *testing.T) {
+	t.Parallel()
 	cd, reg := relayChainFixture(t, authoring.ReviewSeriesProductReview, relayLocal)
 	engine, dir := reviewEngine(t, cd, reg)
 

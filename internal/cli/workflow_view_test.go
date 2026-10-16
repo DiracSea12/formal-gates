@@ -17,6 +17,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
@@ -25,6 +26,7 @@ import (
 )
 
 func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
+	t.Parallel()
 	run := facade.Run{RunID: "run", Status: "ACTIVE", Next: decision.NextResult{Kind: decision.KindAsk}, PendingAsks: []facade.PendingAskFace{{RequestID: "opaque-request", Token: "opaque-token", Control: protocol.ControlReviewFindingDecision, Options: []protocol.AskOption{{ID: "confirm:opaque-finding", Label: "Confirm the finding"}}}}, WorkerMaterials: map[string]facade.WorkerMaterial{"opaque-action": {Path: "other-role-material"}}}
 	finding := review.Finding{ID: "opaque-finding", Digest: "opaque-digest", Severity: "P1", Message: "Normal command drops output", SeverityRationale: "Required output is unusable without a workaround", Requirement: "Required stdout", NormalPath: "app valid", ActualError: "Empty output", DeferralImpact: "No usable result", Locations: []string{"app.go:3"}, Verification: review.FindingVerification{Reproduction: "Observed actual stdout"}}
 	run.Review.Actions = []facade.ReviewActionFace{{Action: "product-review", Completed: 2, Candidates: []facade.ReviewCandidateFace{{Excluded: true}, {DispatchID: "opaque-dispatch", Findings: []facade.ReviewFindingFace{{ID: finding.ID, Digest: finding.Digest, Severity: finding.Severity, Message: finding.Message, Evidence: finding}}}}}}
@@ -52,6 +54,7 @@ func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
 }
 
 func TestWorkflowConfirmationShowsOnlyTheRequestedRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	f, root, _ := startEngineRunForWriterTest(t)
 	run, err := f.Drive()
 	if err != nil || len(run.WorkerMaterials) != 1 {
@@ -122,6 +125,7 @@ func TestWorkflowConfirmationShowsOnlyTheRequestedRecoveryEvidence(t *testing.T)
 }
 
 func TestWorkflowAbortConfirmationIncludesOnlyItsCurrentOperation(t *testing.T) {
+	t.Parallel()
 	f, root, _ := startEngineRunForWriterTest(t)
 	run, err := f.Drive()
 	if err != nil || len(run.WorkerMaterials) == 0 {
@@ -432,6 +436,7 @@ func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
 }
 
 func TestWorkflowOperatorViewLeavesInternalFactsToDrive(t *testing.T) {
+	t.Parallel()
 	run := facade.Run{RunID: "run", Revision: 12, Next: decision.NextResult{Kind: decision.KindOperator, Operator: &decision.OperatorPayload{Facts: []decision.Fact{{Value: "submit EXECUTION_SCOPE observation for original-wave"}, {Value: "native effect is UNKNOWN; observe and submit its typed completion evidence"}}}}}
 	original, _ := json.Marshal(run)
 	view := workflowRunView(run)
@@ -451,6 +456,9 @@ func TestWorkflowOperatorViewLeavesInternalFactsToDrive(t *testing.T) {
 // An actual install, Git baseline and ordinary split producer supply both run
 // identities. The CLI receives only the displayed node and Ask numbers.
 func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	runner := vcs.ExecRunner{}
 	mustWriteCLI(t, filepath.Join(root, "README.md"), "two independent command components\n")

@@ -65,6 +65,7 @@ func unknownHostReceipt(t *testing.T, id EventID, intent HostActionIntent) Event
 // TestHostActionIntentPersistedBeforeExecute：intent 先持久化（pending
 // 落账、含参数 digest），回执接纳后 intent 清账、回执留档。
 func TestHostActionIntentPersistedBeforeExecute(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	params := map[string]any{"stage": "fan.slice", "generation": float64(2)}
@@ -114,6 +115,7 @@ func TestHostActionIntentPersistedBeforeExecute(t *testing.T) {
 }
 
 func TestHostActionReconcileRequiresDurableUnknownReceipt(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "fan.slice"}, "", observedInput)
@@ -142,6 +144,7 @@ func TestHostActionReconcileRequiresDurableUnknownReceipt(t *testing.T) {
 // TestAdapterIntentRejectsUnknownOperationAndCommandParameters verifies that
 // unknown operations and command-shaped parameters cannot become durable intents.
 func TestAdapterIntentRejectsUnknownOperationAndCommandParameters(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	before := engine.LoadMustSucceed(t)
@@ -178,6 +181,7 @@ func TestAdapterIntentRejectsUnknownOperationAndCommandParameters(t *testing.T) 
 // TestHostActionReceiptNegatives：未知 intent、provider mismatch、
 // operation/参数 digest 与 intent 不一致、同 actionID 异字节回执。
 func TestHostActionReceiptNegatives(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "v"}, "", observedInput)
@@ -318,6 +322,7 @@ func TestHostActionReceiptNegatives(t *testing.T) {
 // TestHostActionReconciliationReplay：UNKNOWN side effect 完成对账后，即使
 // 调用方没有收到首次响应，重试也返回已提交事实，不重新要求不存在的 intent。
 func TestHostActionReconciliationReplay(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "v"}, "", observedInput)
@@ -343,6 +348,7 @@ func TestHostActionReconciliationReplay(t *testing.T) {
 // TestHostActionSchemaNegatives：回执 payload 的 schema 负向
 // （空 operation 即自由命令形态、空 provider、非法 status）。
 func TestHostActionSchemaNegatives(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		action string
@@ -368,6 +374,7 @@ func TestHostActionSchemaNegatives(t *testing.T) {
 // branch cannot persist arbitrary map fields in either intent parameters or
 // receipt evidence.
 func TestAdapterOperationSchemaRejectsUndeclaredData(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	before := engine.LoadMustSucceed(t)
@@ -410,6 +417,7 @@ func TestAdapterOperationSchemaRejectsUndeclaredData(t *testing.T) {
 // TestFailedHostActionReceiptRoutesAndAllowsRetry verifies that FAILED does not
 // masquerade as EXECUTED and clear a retryable pending intent.
 func TestFailedHostActionReceiptRoutesAndAllowsRetry(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	intent, _, err := prepareHostIntentForReceipt(t, engine, opTransport, map[string]any{"stage": "fan.slice"}, "", observedInput)
@@ -445,6 +453,7 @@ func TestFailedHostActionReceiptRoutesAndAllowsRetry(t *testing.T) {
 // TestAgentHostActionVariantsRequireDurableLifecycleEvidence exercises both
 // non-adapter branches of the closed union and verifies their typed payloads.
 func TestAgentHostActionVariantsRequireDurableLifecycleEvidence(t *testing.T) {
+	t.Parallel()
 	engine, _, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -532,6 +541,7 @@ func TestAgentHostActionVariantsRequireDurableLifecycleEvidence(t *testing.T) {
 }
 
 func TestAttachedWorkerLifecycleUsesOriginalTransportCorrelation(t *testing.T) {
+	t.Parallel()
 	for _, correlation := range []string{"native-worker", "original-transport"} {
 		t.Run(correlation, func(t *testing.T) {
 			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
@@ -565,6 +575,7 @@ func TestAttachedWorkerLifecycleUsesOriginalTransportCorrelation(t *testing.T) {
 // UNKNOWN observations retain the pending receipt until fulfillment; replay
 // returns the durable reconciliation without another transaction.
 func TestHostActionUnknownObservationRoutesAndReplay(t *testing.T) {
+	t.Parallel()
 	engine, dir := newTestEngine(t)
 
 	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
@@ -678,6 +689,7 @@ func TestHostActionUnknownObservationRoutesAndReplay(t *testing.T) {
 
 // Reconciliation completes its concrete frontier and refills the next worker.
 func TestReconciledHostActionSettlesFrontierAndRefills(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ stage, observation string }{
 		{"reconciled", "sha256:fulfilled"}, {"qa-reconciled", "sha256:qa-observation"},
 	} {
@@ -758,6 +770,7 @@ func TestReconciledHostActionSettlesFrontierAndRefills(t *testing.T) {
 
 // Identical operations settle only the Step carried by their pending intent.
 func TestHostActionRepeatedOperationSettlesBoundStep(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		node, parse, askOne, askTwo, hostOne, hostTwo string
 		requestOne, requestTwo, decideOne, decideTwo  EventID
@@ -888,6 +901,7 @@ func TestHostActionRepeatedOperationSettlesBoundStep(t *testing.T) {
 
 // Registered schemas preserve normalized parameters and complete receipt fields.
 func TestAdapterReceiptPreservesRegisteredSchemaFields(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		stage                                                 string
 		invalidID, validID                                    EventID

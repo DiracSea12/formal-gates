@@ -122,6 +122,7 @@ func dispatchPassResult(t *testing.T, engine *Engine, eventID string) (Acceptanc
 // 留回执边界：acceptance＝COST_PENDING、不完成步骤、不写用量；stop 证据落
 // 定的下一事务在同一配对路径补齐（READY 精确用量入账、结果完成）。
 func TestWorkerResultHeldAtCostPending(t *testing.T) {
+	t.Parallel()
 	probe := &costSourceProbe{state: CostSourcePending}
 	engine := costEngineFixture(t, probe.resolver())
 	observedInput := Observation{}
@@ -188,6 +189,7 @@ func TestWorkerResultHeldAtCostPending(t *testing.T) {
 // UNAVAILABLE 条目（零数字、不伪造）后照常完成，request/attempt guard 继续
 // 生效。
 func TestUnavailableSourceFallsBackToRequestGuard(t *testing.T) {
+	t.Parallel()
 	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "dispatch stop has no transcript path"}
 	engine := costEngineFixture(t, probe.resolver())
 	acceptance, err := dispatchPassResult(t, engine, "cost-result")
@@ -207,6 +209,7 @@ func TestUnavailableSourceFallsBackToRequestGuard(t *testing.T) {
 // TestNoCostSourceCompletesWithoutProjection：未装 bridge（nil）时不参与判定——结
 // 果照常完成、无 cost 投影。
 func TestNoCostSourceCompletesWithoutProjection(t *testing.T) {
+	t.Parallel()
 	engine := costEngineFixture(t, nil)
 	acceptance, err := dispatchPassResult(t, engine, "cost-result")
 	if err != nil || acceptance.Status != "ACCEPTED" {

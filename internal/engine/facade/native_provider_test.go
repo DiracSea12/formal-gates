@@ -17,6 +17,7 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -197,6 +198,9 @@ func reopenNativeProviderDriver(t *testing.T, d *validationDriver, name string, 
 // Startup metadata and persisted state carry the selected native provider into
 // reopened workspace planning and creation on real repositories.
 func TestRegularStartPersistsSelectedVCS(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, name := range []string{"git", "svn", "p4"} {
 		t.Run(name, func(t *testing.T) {
 			var root, base, requirement string

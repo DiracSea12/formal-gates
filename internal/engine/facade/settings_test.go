@@ -10,6 +10,7 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/settings"
 )
 
@@ -199,6 +200,9 @@ func TestNamedConfigurationsFreezeFlowExecutionAndGateSelections(t *testing.T) {
 }
 
 func TestChildKeepsItsParentsFrozenConfigurationAfterSavedDefaultChanges(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	_ = testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)

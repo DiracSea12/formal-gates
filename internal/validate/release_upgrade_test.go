@@ -20,6 +20,7 @@ import (
 // Release upgrades exercise the actual CLI and native transaction against an
 // isolated home. Download fixtures supply local release artifacts only.
 func TestReleaseUpgradeUsesNativeTransaction(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("Unix release wrapper execution")
 	}
@@ -64,6 +65,7 @@ cp "$INSTALL_RELEASE_ARTIFACTS/$input" "$output"
 				name += "/" + fault
 			}
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				home := t.TempDir()
 				project := t.TempDir()
 				launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
@@ -150,6 +152,7 @@ cp "$INSTALL_RELEASE_ARTIFACTS/$input" "$output"
 	// A release installer cannot gain bootstrap or arbitrary launcher rights.
 	for _, change := range []string{"no-force", "no-release", "bootstrap", "source-mismatch", "custom-launcher", "no-launcher"} {
 		t.Run(change, func(t *testing.T) {
+			t.Parallel()
 			home := t.TempDir()
 			launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
 			if change != "no-launcher" {

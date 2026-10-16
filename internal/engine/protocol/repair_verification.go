@@ -53,12 +53,13 @@ func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repa
 		if work == nil {
 			continue
 		}
-		source, proof, ready := s.repairFinalSource(*work, nil)
+		members := s.repairMembers(work.wave)
+		source, proof, ready := s.repairFinalSource(*work, members)
 		if !ready {
 			continue
 		}
 		var originals []WorkerResult
-		for _, member := range s.repairMembers(work.wave) {
+		for _, member := range members {
 			if r := s.developmentResultRecord(member.task); r != nil {
 				originals = append(originals, *r)
 			}
@@ -222,7 +223,7 @@ func (s *State) repairPlanReceipt(plan CheckParameters) (ExecutionOperationFact,
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok || intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
+		if !ok || intent.Correlation != "check:"+expectedDigest || intent.Adapter == nil || intent.Adapter.Operation != "op.check" {
 			continue
 		}
 		if _, obsolete := s.ObsoleteActions[receipt.ActionID]; obsolete {
@@ -475,7 +476,10 @@ func (s *State) frozenRepairEdit(action, wave string) (WorkerResult, bool) {
 				continue
 			}
 			intent, ok := s.hostIntent(receiptAction)
-			if !ok {
+			if !ok || intent.Adapter == nil || intent.Adapter.Operation != "op.candidate" {
+				continue
+			}
+			if stage, known := intent.Adapter.Params["stage"].(string); known && stage != "CHECK_SOURCE" {
 				continue
 			}
 			p, err := candidateParameters(intent)

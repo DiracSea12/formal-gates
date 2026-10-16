@@ -92,6 +92,7 @@ func richState(t *testing.T) *State {
 // TestStateJSONRoundTrip：全字段非空的状态经领域 JSON 往返不丢
 // 信息（TaskKey 结构键、四张台账 map、决策视图全部复原）。
 func TestStateJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	state := richState(t)
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -109,6 +110,7 @@ func TestStateJSONRoundTrip(t *testing.T) {
 // TestStateMarshalDeterministic：两次编码同字节；等价状态（构造路径不同）
 // 同字节——map 遍历序不得泄漏进权威投影。
 func TestStateMarshalDeterministic(t *testing.T) {
+	t.Parallel()
 	first := richState(t)
 	second := richState(t)
 	a, err := json.Marshal(first)
@@ -133,6 +135,7 @@ func TestStateMarshalDeterministic(t *testing.T) {
 
 // TestStateJSONEmptyCollections：空台账编码为稳定空集合而非 null，空状态可往返。
 func TestStateJSONEmptyCollections(t *testing.T) {
+	t.Parallel()
 	view, err := decision.NewState("2", runtime.PhaseIntakeRegistered)
 	if err != nil {
 		t.Fatalf("new view: %v", err)
@@ -162,6 +165,7 @@ func TestStateJSONEmptyCollections(t *testing.T) {
 
 // TestTaskKeyTextCodec：规范键形态两段/三段可解析，段数与空段拒绝。
 func TestTaskKeyTextCodec(t *testing.T) {
+	t.Parallel()
 	var key runtime.TaskKey
 	err := key.UnmarshalText([]byte("review/review.worker"))
 	if err != nil || key.Node != "review" || key.Step != "review.worker" || key.Scope != "" {
@@ -185,6 +189,7 @@ func TestTaskKeyTextCodec(t *testing.T) {
 // TestStateDecodeRejectsInvalidTaskIdentity：领域 codec 拒绝无法寻址的
 // TaskKey map key。
 func TestStateDecodeRejectsInvalidTaskIdentity(t *testing.T) {
+	t.Parallel()
 	invalid := `{
   "definitionVersion": "2",
   "phase": "INTAKE_REGISTERED",

@@ -178,6 +178,7 @@ func submitFailureResult(t *testing.T, engine *Engine, event, actionID string) (
 }
 
 func TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces(t *testing.T) {
+	t.Parallel()
 	submitTransientFailureReceipt := func(t *testing.T, engine *Engine, lane string) {
 		t.Helper()
 		ev, err := NewSpawnReceiptWithFailureClass(EventID("spawn-face-failed"), lane, testProvider, "agent-face", SpawnStatusFailed, authoring.FailureTransientEngine)
@@ -274,6 +275,7 @@ func TestDispatchPromiseMatchesResultRecordabilityAcrossReceiptFaces(t *testing.
 }
 
 func TestUndefinedReceiptStatusStaysOutOfPromiseAndExits(t *testing.T) {
+	t.Parallel()
 	if issuedWitnessReceipt("SOME_UNDEFINED_STATUS") {
 		t.Fatal("an undefined receipt status must not prove the dispatch was issued")
 	}
@@ -283,6 +285,7 @@ func TestUndefinedReceiptStatusStaysOutOfPromiseAndExits(t *testing.T) {
 }
 
 func TestTerminalReviewDispatchRemainsRecordableAcrossReceipts(t *testing.T) {
+	t.Parallel()
 	for _, receipt := range []string{"SPAWNED", "ATTACHED", "UNKNOWN"} {
 		for _, failure := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/failure=%t", receipt, failure), func(t *testing.T) {
@@ -368,6 +371,7 @@ func TestTerminalReviewDispatchRemainsRecordableAcrossReceipts(t *testing.T) {
 }
 
 func TestTerminalReviewAuthorizationRemainsExclusiveUntilSettlement(t *testing.T) {
+	t.Parallel()
 	for _, attached := range []bool{false, true} {
 		t.Run(fmt.Sprintf("attached=%t", attached), func(t *testing.T) {
 			cd, reg := singleCarrierFixture(t)
@@ -434,6 +438,7 @@ func TestTerminalReviewAuthorizationRemainsExclusiveUntilSettlement(t *testing.T
 }
 
 func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) {
+	t.Parallel()
 	for _, rejected := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rejected=%t", rejected), func(t *testing.T) {
 			cd, reg := productReviewDAGFixture(t,
@@ -505,6 +510,7 @@ func TestQuarantinedTerminalReviewKeepsItsObligationThroughReplay(t *testing.T) 
 }
 
 func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
+	t.Parallel()
 	cd, reg := productReviewDAGFixture(t,
 		dagStep{name: "review.primary", deps: []string{"prep.parse"}},
 		dagStep{name: "review.spare", deps: []string{"prep.parse"}},
@@ -542,6 +548,7 @@ func TestStagedResultOfAttachedTerminalDispatchPairsIntoResults(t *testing.T) {
 }
 
 func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
+	t.Parallel()
 	cd, reg := productReviewDAGFixture(t,
 		dagStep{name: "review.primary", deps: []string{"prep.parse"}},
 		dagStep{name: "review.spare", deps: []string{"prep.parse"}},
@@ -575,6 +582,7 @@ func TestFailRouteAfterAttachKeepsTheDispatchRecordable(t *testing.T) {
 }
 
 func TestSuspendedReadinessPairingRetainsEvidenceAndResumesAfterCorrection(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
 	product := issueReady(t, engine)[0]

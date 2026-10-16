@@ -12,6 +12,7 @@ import (
 // A normal gate consumes the REVIEW_READY range proof for its frozen source
 // tasks. A repair materialization can share the native identity with that proof.
 func TestGateInputUsesTheFrozenReviewRangeProof(t *testing.T) {
+	t.Parallel()
 	development := runtime.TaskKey{Node: "validation", Step: "development.worker", Scope: "command"}
 	gate := runtime.TaskKey{Node: "validation", Step: "validation.gate", Scope: "quality"}
 	candidate := coverage.ValidationCandidate{Identity: "candidate", Digest: "tree"}

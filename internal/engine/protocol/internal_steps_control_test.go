@@ -8,6 +8,7 @@ import (
 )
 
 func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
+	t.Parallel()
 	compiled, registry := extensionDefinition(t)
 	bindings := extensionHandlers()
 	dir := t.TempDir()
@@ -83,6 +84,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 }
 
 func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
+	t.Parallel()
 	compiled, registry := extensionDefinition(t)
 	dir := t.TempDir()
 	engine, err := New(mustStore(t, dir), Config{Definition: compiled, Registry: registry, InternalSteps: extensionHandlers()})

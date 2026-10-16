@@ -17,6 +17,7 @@ func pointResponsibilityState() *State {
 }
 
 func TestDevelopmentPlanCoversTheConfirmedPointUniverse(t *testing.T) {
+	t.Parallel()
 	s := pointResponsibilityState()
 	plan := &GranularityReview{Batches: []DevelopmentBatch{{RequirementPoints: []string{"AC-001", "solution"}}, {RequirementPoints: []string{"AC-001", "AC-002"}}}}
 	if err := s.validatePlanRequirementCoverage(plan, true); err != nil {
@@ -40,6 +41,7 @@ func TestDevelopmentPlanCoversTheConfirmedPointUniverse(t *testing.T) {
 }
 
 func TestWorkerPointResponsibilitiesSurviveRecovery(t *testing.T) {
+	t.Parallel()
 	s := pointResponsibilityState()
 	all := s.workerRequirementPoints(WorkerInput{})
 	if len(all) != 3 {
@@ -70,6 +72,7 @@ func TestWorkerPointResponsibilitiesSurviveRecovery(t *testing.T) {
 }
 
 func TestGatePointDecisionsRequireExistingFindingsWithoutSeverityPolicy(t *testing.T) {
+	t.Parallel()
 	points := []requirement.Point{{ID: "point"}}
 	decision := []RequirementDecision{{PointID: "point", Status: "FAIL", Evidence: "Observed mismatch", FindingIndexes: []int{0}}}
 	if err := ValidateRequirementDecisions(points, decision, 1); err != nil {
@@ -89,6 +92,7 @@ func TestGatePointDecisionsRequireExistingFindingsWithoutSeverityPolicy(t *testi
 }
 
 func TestCompletionRecordsOnlyItsAssignedPointContributions(t *testing.T) {
+	t.Parallel()
 	batch := DevelopmentBatch{RequirementPoints: []string{"shared"}, DoD: []DevelopmentCriterion{{ID: "delivery"}}}
 	evidence := &DevelopmentEvidence{Completion: &DevelopmentCompletion{Handoff: "the next batch consumes this interface", DoD: map[string]string{"delivery": "the interface is implemented"}, RequirementResults: []requirement.PointResult{{PointID: "shared", Status: "PASS", Evidence: "this batch implements the input half of the shared behavior"}}}}
 	if err := validateDevelopmentCompletion(batch, evidence); err != nil {
@@ -112,6 +116,7 @@ func TestCompletionRecordsOnlyItsAssignedPointContributions(t *testing.T) {
 }
 
 func TestCheckpointPointContextUsesTheFrozenCompletedPrefix(t *testing.T) {
+	t.Parallel()
 	s := pointResponsibilityState()
 	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "input", RequirementPoints: []string{"AC-001"}, Subtasks: []DevelopmentSubtask{{Description: "Implement accepted input"}}, DoD: []DevelopmentCriterion{{Description: "Accepted input responds"}}}, {ID: "rejection", RequirementPoints: []string{"AC-002", "solution"}}}}
 	s.Results = map[string]WorkerResult{"readiness": {Review: &ReviewResultEvidence{GranularityReview: plan}}}
@@ -132,6 +137,7 @@ func TestCheckpointPointContextUsesTheFrozenCompletedPrefix(t *testing.T) {
 }
 
 func TestRepairRequiredPointsUseTheOriginalFindingAssociations(t *testing.T) {
+	t.Parallel()
 	s := pointResponsibilityState()
 	raw := []review.Finding{{Message: "Actual input mismatch", Severity: "P1"}, {Message: "Independent readability issue", Severity: "P2"}}
 	gate := runtime.TaskKey{Scope: "gate"}
@@ -161,6 +167,7 @@ func TestRepairRequiredPointsUseTheOriginalFindingAssociations(t *testing.T) {
 }
 
 func TestGateInheritanceRequiresTheSameCompletedContribution(t *testing.T) {
+	t.Parallel()
 	s := pointResponsibilityState()
 	plan := &GranularityReview{Batches: []DevelopmentBatch{{ID: "input", RequirementPoints: []string{"AC-001"}, Subtasks: []DevelopmentSubtask{{Description: "Implement accepted input"}}}, {ID: "verification", RequirementPoints: []string{"AC-001"}, Subtasks: []DevelopmentSubtask{{Description: "Verify the complete input contract"}}}}}
 	s.Results = map[string]WorkerResult{"readiness": {Review: &ReviewResultEvidence{GranularityReview: plan}}, "gate-result": {Validation: &ValidationResult{RequirementResults: []RequirementDecision{{PointID: "AC-001", Status: "PASS", Evidence: "The implementation contribution is complete"}}}}}

@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 )
@@ -191,6 +192,9 @@ func TestShellPreparationExecutesEachCaseAndIsolatesCaseWork(t *testing.T) {
 }
 
 func TestSharedPreparationReusesOriginalARGVJobAndIsolatesCaseWork(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	tool := buildPreparationExecutable(t, t.TempDir(), `package main
 import "os"
 func main() {
@@ -408,14 +412,23 @@ func main() {
 }
 
 func TestPreparationToolFromEnvironmentExecutesAfterToolChanges(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	assertPreparationExecutesChangedExternalInput(t, "SHELL")
 }
 
 func TestPreparationInterpreterScriptExecutesAfterScriptChanges(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	assertPreparationExecutesChangedExternalInput(t, "SCRIPT_ARGUMENT")
 }
 
 func TestPreparationScriptExecutableExecutesAfterEnvironmentToolChanges(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	assertPreparationExecutesChangedExternalInput(t, "SCRIPT_EXECUTABLE")
 }
 

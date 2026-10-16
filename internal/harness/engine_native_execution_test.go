@@ -815,6 +815,9 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 }
 
 func TestTypedObservationReopensOriginalNativeAcknowledgement(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, _, s, binary := engineNativeFixture(t, true)
 	development, original := stageNativeDevelopment(t, f, s)
 	root := fRoot(development)

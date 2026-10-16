@@ -8,6 +8,7 @@ import (
 )
 
 func TestSliceReceiptVerifiesFrozenFlowSelection(t *testing.T) {
+	t.Parallel()
 	for _, selection := range []struct {
 		name string
 		flow *FlowSelection

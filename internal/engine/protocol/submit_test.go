@@ -23,6 +23,7 @@ func cancelAbortRequest(t *testing.T, id EventID) Event {
 // pending Ask（request ID、控制类型、选项集落账），回执携带当前
 // freshness token，与 Freshness() 求值一致。
 func TestRequestCreatesPendingAsk(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	acceptance, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput)
@@ -56,6 +57,7 @@ func TestRequestCreatesPendingAsk(t *testing.T) {
 // TestRequestIdempotentReplay：同 event ID 同 payload digest 重放返回
 // 原样 acceptance（含 token），不重复创建、revision 不再 +1。
 func TestRequestIdempotentReplay(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	first, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput)
@@ -81,6 +83,7 @@ func TestRequestIdempotentReplay(t *testing.T) {
 // TestSameIDDifferentDigestHardReject：同 event ID 不同 payload digest
 // 硬拒绝，零状态变化（台账、Ask、revision 均不动）。
 func TestSameIDDifferentDigestHardReject(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
@@ -108,6 +111,7 @@ func TestSameIDDifferentDigestHardReject(t *testing.T) {
 // 决定；Ask 保留并置 resolved、决定落账（控制类型、选项、事件与 revision）；
 // 重放返回稳定 acceptance 且 revision 不再 +1。
 func TestDecideTwoPhaseHappyPath(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
@@ -158,6 +162,7 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 }
 
 func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
+	t.Parallel()
 	engine, dir, _, _ := preparedEngine(t)
 	action := issueReady(t, engine)[0]
 	plan, _, err := engine.RecoverAttempt(action, Interruption{}, Observation{})
@@ -203,6 +208,7 @@ func TestRecoveryRequestEvidenceSurvivesDecisionAndReopen(t *testing.T) {
 // TestFreshnessStaleRejectedZeroChange：token 被「新签发」（任何后续
 // 提交）取代后旧 token 拒绝且零状态变化；重新获取的当前 token 放行。
 func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
@@ -255,6 +261,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 
 // TestDecideNegatives：未知 request、已决 request、选项不在落账选项集。
 func TestDecideNegatives(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, err := engine.Submit(cancelAbortRequest(t, "req-abort-1"), observedInput); err != nil {
@@ -310,6 +317,7 @@ func TestDecideNegatives(t *testing.T) {
 // TestReplayAcrossEngineRestart：台账持久——新引擎实例对同一事件重放
 // 仍返回原样 acceptance 且零状态变化（崩溃/重启后的幂等）。
 func TestReplayAcrossEngineRestart(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -349,6 +357,7 @@ func reopenEngine(t *testing.T, dir string) *Engine {
 // Snapshot token queries remain read-only and retain the supplied revision
 // even when a later request commits through the same engine.
 func TestSnapshotFreshnessRetainsItsRevision(t *testing.T) {
+	t.Parallel()
 	engine, _, _, _ := preparedEngine(t)
 	observedInput := Observation{}
 	accepted, err := engine.Submit(cancelAbortRequest(t, "original-request"), observedInput)

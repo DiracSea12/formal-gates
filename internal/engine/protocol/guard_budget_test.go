@@ -104,6 +104,7 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 // 槽位、已签发 QA 派发占用其中 1 个；digest 随 case-set 版本变化（AC-058
 // engine 侧）。
 func TestGuardBudgetDerivesFromAuthoritativeState(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	budget, err := engine.deriveGuardBudget(state)
 	if err != nil {
@@ -128,6 +129,7 @@ func TestGuardBudgetDerivesFromAuthoritativeState(t *testing.T) {
 // TestGuardBudgetNotEngagedBeforePipeline：受理前/重走再确认窗口（拓扑或路
 // 线未绑定）包络不生效——投影为 nil，审查系列派发不受影响。
 func TestGuardBudgetNotEngagedBeforePipeline(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	state.Topology = nil
 	budget, err := engine.deriveGuardBudget(state)
@@ -142,6 +144,7 @@ func TestGuardBudgetNotEngagedBeforePipeline(t *testing.T) {
 // TestGuardIssuanceAllowsSourceBackedTask：wave target 派发（QA/GATE 证明来
 // 源）在预算内照常放行。
 func TestGuardIssuanceAllowsSourceBackedTask(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardPipelineFixture(t)
 	gate := engine.guardIssuanceGate(state)
 	if err := gate(decision.IssuedSet{{ActionID: "act:qa-2", Task: qaTask, Step: qaTask.Step}}); err != nil {
@@ -152,6 +155,7 @@ func TestGuardIssuanceAllowsSourceBackedTask(t *testing.T) {
 // TestGuardIssuanceBlocksUnbackedTask：无授权来源的新 TaskKey（raw finding
 // 式扩容）零签发、可区分拒绝；guard 自身无授权路径。
 func TestGuardIssuanceBlocksUnbackedTask(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	// 伪造一个不在任何 wave/plan/set 中的 repair 任务：唯一 repair 来源是
@@ -174,6 +178,7 @@ func TestGuardIssuanceBlocksUnbackedTask(t *testing.T) {
 // 签发；一次性追加（MaxAttempts+1）后同 TaskKey 恢复放行且 digest 变化
 // （AC-059）。
 func TestGuardIssuanceBlocksExhaustedRetry(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardPipelineFixture(t)
 	state.EndedAttempts[qaTask] = Attempt{ID: "att:1", Attempts: 2, MaxAttempts: 2, RetryExhausted: true, IssuedAction: decision.IssuedAction{ActionID: "act:qa-1", Task: qaTask}}
 	gate := engine.guardIssuanceGate(state)
@@ -211,6 +216,7 @@ func TestGuardIssuanceBlocksExhaustedRetry(t *testing.T) {
 // TaskKey 的首个执行占 request 槽，其余执行才计 retry。执行由原派发
 // bindings 证明，当前或已终 Attempt 仅提供有限策略。
 func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardPipelineFixture(t)
 	state.DispatchBindings["act:qa-2"] = state.DispatchBindings["act:qa-1"]
 	state.EndedAttempts[qaTask] = Attempt{
@@ -249,6 +255,7 @@ func TestGuardUsedRetriesCountsExecutionsBeyondTheFirst(t *testing.T) {
 // 属于确认计划的批次任务集；计划外 batch scope 无授权来源（GUARD_ALLOWANCE_
 // BLOCKED），确认批次任务照常放行。
 func TestGuardBlocksOutOfPlanBatchScope(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	rogue := pipelineTask(cd, "engine.development.batch.v6", "plan:unconfirmed:batch-rogue")
@@ -271,6 +278,7 @@ func TestGuardBlocksOutOfPlanBatchScope(t *testing.T) {
 // TestGuardBlockedBugOnMisalignedLedger：已签发事实对不上账（无授权来源的
 // 已签发派发）＝BLOCKED_BUG 派生失败。
 func TestGuardBlockedBugOnMisalignedLedger(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	rogue := pipelineTask(cd, "engine.repair.v7", "sha256:rogue-candidate")
@@ -285,6 +293,7 @@ func TestGuardBlockedBugOnMisalignedLedger(t *testing.T) {
 // TestGuardBlockedBugOnOverissueWithoutLedgerFlag：attempt 账本未记耗尽而
 // 重算已超发＝BLOCKED_BUG（将要超发）。
 func TestGuardBlockedBugOnOverissueWithoutLedgerFlag(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardPipelineFixture(t)
 	state.EndedAttempts[qaTask] = Attempt{ID: "att:1", Attempts: 2, MaxAttempts: 2, IssuedAction: decision.IssuedAction{ActionID: "act:qa-1", Task: qaTask}}
 	gate := engine.guardIssuanceGate(state)
@@ -299,6 +308,7 @@ func TestGuardBlockedBugOnOverissueWithoutLedgerFlag(t *testing.T) {
 // 不一致（篡改）＝BLOCKED_BUG 拒绝读取；一致投影正常加载（恢复后投影与账本
 // 一致）。
 func TestGuardBudgetLoadBoundaryRejectsTamperedProjection(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	budget, err := engine.deriveGuardBudget(state)
 	if err != nil {
@@ -328,6 +338,7 @@ func TestGuardBudgetLoadBoundaryRejectsTamperedProjection(t *testing.T) {
 // （NEW_ATTEMPT，绑定/责任变化的新计划槽位）仍经派发 guard——治理任务换新
 // 必须在授权 basis 内，且其执行计数续在同一 TaskKey 的 Attempt 账本。
 func TestRecoveryNewAttemptPassesGuardAndContinuesAttemptLedger(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardedFunnelFixture(t)
 	state.PendingActions["act:qa-1"] = PendingAction{ActionID: "act:qa-1", Task: qaTask, Step: string(qaTask.Step), AttemptID: "att:qa-1"}
 	state.Attempts[qaTask] = Attempt{
@@ -398,6 +409,7 @@ func gateTaskKeyOf(w *ValidationWave) string {
 // 明——授权全集与 basis 声明集共用 establishedRepairWaves 单一归属点，账目
 // 不因回归错位（假阳性 BLOCKED_BUG 硬停）。
 func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	w := &state.Validation.Waves[0]
@@ -442,6 +454,7 @@ func TestGuardBasisKeepsEstablishedRepairAcrossWaveRegression(t *testing.T) {
 // 轮次/Attempt 代次/wave 计数——同一签发事实下系列与 attempt 账本读数保持
 // 其自身语义。
 func TestGuardEnvelopeLeavesSeriesCountersSole(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardPipelineFixture(t)
 	state.ReviewSeries = review.NewSet()
 	if err := engine.refreshGuardBudget(state); err != nil {
@@ -465,6 +478,7 @@ func TestGuardEnvelopeLeavesSeriesCountersSole(t *testing.T) {
 // 的有效义务与唯一返修 TaskKey 进 basis（预授权 repair 机械加入）；raw
 // finding（未裁决）不产生 source。
 func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
+	t.Parallel()
 	engine, state, _ := guardPipelineFixture(t)
 	cd := engine.cfg.Definition
 	w := &state.Validation.Waves[0]
@@ -534,6 +548,7 @@ func TestGuardBasisDeclaresEstablishedSources(t *testing.T) {
 // （wave 逐 target 状态与必跑用例）、已用/剩余轮数、dispatch signature/
 // TaskKey、engine allowance（权威 Guard 投影）与 owner cost/token cap 可用性。
 func TestRepairAskSummaryCarriesAuthorizationFacts(t *testing.T) {
+	t.Parallel()
 	engine, state := guardRepairFixture(t)
 	w := &state.Validation.Waves[0]
 	budget, err := engine.deriveGuardBudget(state)
@@ -620,6 +635,7 @@ func guardRepairFixture(t *testing.T) (*Engine, *State) {
 // 已提交状态——同事务签发改变额度投影后，未决 Ask 的 digest 与重算一致
 // （DECIDE 的摘要重核可用）。
 func TestValidationAskDigestBindsCommittedState(t *testing.T) {
+	t.Parallel()
 	engine, state := guardRepairFixture(t)
 	state.PendingAsks = map[string]PendingAsk{}
 	if !state.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: state.Validation.Waves[0].ID}, 7) {
@@ -657,6 +673,7 @@ func TestValidationAskDigestBindsCommittedState(t *testing.T) {
 // 之前执行）。构造：attempt 账本计数已达策略上限而未记耗尽（账本不一致）
 // ——投影不置 Wait，治理任务进 Ready，闸以 BLOCKED_BUG 拒绝。
 func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
+	t.Parallel()
 	engine, state, qaTask := guardedFunnelFixture(t)
 	state.EndedAttempts[qaTask] = Attempt{
 		ID: "att:qa-1", Attempts: 2, MaxAttempts: 2,
@@ -865,6 +882,7 @@ func mustStoreAt(t *testing.T, dir string) *persistence.Store {
 }
 
 func TestGuardBudgetKeepsFrozenSourcesWhenGateAndQASelectionsChange(t *testing.T) {
+	t.Parallel()
 	e, state, qa := guardPipelineFixture(t)
 	original := state.validationRouteDigest()
 	state.SelectedGates = []string{"security"}
@@ -899,6 +917,7 @@ func TestGuardBudgetKeepsFrozenSourcesWhenGateAndQASelectionsChange(t *testing.T
 }
 
 func TestGuardBudgetKeepsIssuedDevelopmentAuthorizationAcrossConfigurationChanges(t *testing.T) {
+	t.Parallel()
 	e, state, _ := guardPipelineFixture(t)
 	state.SelectedGates = []string{}
 	state.Validation.Waves = nil

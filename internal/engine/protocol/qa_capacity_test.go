@@ -9,6 +9,7 @@ import (
 )
 
 func TestQAAdmissionQueuesAtItsLimitAndFillsIndependentTotalCapacity(t *testing.T) {
+	t.Parallel()
 	engine := &Engine{cfg: Config{Definition: compiledCanonicalWorkflow(t), Capacity: 3}}
 	state := &State{Settings: &settings.Effective{Values: settings.Values{Capacity: 3, QACapacity: 1}}, PendingActions: map[string]PendingAction{"active-qa": {Task: runtime.TaskKey{Step: "qa.design"}}}}
 	ready := []decision.ReadyTask{{Task: runtime.TaskKey{Step: "qa.execution", Scope: "blackbox"}, Step: "qa.execution"}, {Task: runtime.TaskKey{Step: "development.worker", Scope: "independent"}, Step: "development.worker"}, {Task: runtime.TaskKey{Step: "development.repair", Scope: "other"}, Step: "development.repair"}}

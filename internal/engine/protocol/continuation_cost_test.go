@@ -11,6 +11,7 @@ import (
 )
 
 func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	probe := &costSourceProbe{state: CostSourceReady}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
@@ -80,6 +81,7 @@ func TestContinuationCostUsesOriginalCumulativeSourceAndAdmission(t *testing.T) 
 }
 
 func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
+	t.Parallel()
 	for _, location := range []string{"current", "ended-awaiting-result"} {
 		t.Run(location, func(t *testing.T) {
 			e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
@@ -129,6 +131,7 @@ func TestResumedDispatchCostUsesExistingUnfinishedExecutionOwner(t *testing.T) {
 }
 
 func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	probe := &costSourceProbe{state: CostSourceReady, usage: cost.Usage{InputCacheHitTokens: 10, InputCacheMissTokens: 20, OutputTokens: 5}}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)
@@ -156,6 +159,7 @@ func TestContinuationUnavailableKeepsGuardKnownLowerBound(t *testing.T) {
 }
 
 func TestResumedUnavailableDispatchRecordsKnownNativeUsage(t *testing.T) {
+	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
 	probe := &costSourceProbe{state: CostSourceUnavailable, reason: "original invocation has no provider usage"}
 	e.cfg.CostSource = continuationCostResolver(t, s, pending, probe)

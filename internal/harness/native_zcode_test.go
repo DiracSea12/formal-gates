@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // zcodePathHash is the sha256 of a path string, the revision's path hash.
@@ -931,7 +933,7 @@ func TestZcodeRespondRuntimeHeadersWithCredential(t *testing.T) {
 	if err != nil {
 		t.Skip("node is not available")
 	}
-	if runNativePackageTest(t) {
+	if testkit.RunNativePackageTest(t) {
 		return
 	}
 	root, err := nativePackageRoot()
@@ -1118,6 +1120,9 @@ func zcodeDrainEvents(z *zcodeClient, position int) int {
 // advanced, nothing released) shows the consumed events are collectable, not
 // merely hidden behind the cursor.
 func TestZcodeEventsReleasedUnderLongStream(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	const batches = 48
 	const batch = 32
 	const events = batches * batch // 1536

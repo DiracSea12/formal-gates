@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"formal-gates/internal/settings"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // zcodeTestEncrypt seals a value with the host's local cipher (see
@@ -47,7 +49,7 @@ func TestZcodeCredentialsKeepBoundEnvironmentAndActiveAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runNativePackageTest(t) {
+	if testkit.RunNativePackageTest(t) {
 		return
 	}
 	root, err := nativePackageRoot()
@@ -175,7 +177,7 @@ func TestZcodeConfiguredExecutableOwnsCredentialHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runNativePackageTest(t) {
+	if testkit.RunNativePackageTest(t) {
 		return
 	}
 	root, err := nativePackageRoot()

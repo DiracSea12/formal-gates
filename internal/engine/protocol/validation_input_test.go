@@ -11,6 +11,7 @@ import (
 )
 
 func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []string{"none", "task", "binding", "previous", "attempt"} {
 		t.Run(changed, func(t *testing.T) {
 			key := runtime.TaskKey{Node: "qa", Step: "design", Scope: "current-duty"}
@@ -39,6 +40,7 @@ func TestSemanticRejectionFeedbackRequiresOriginalBinding(t *testing.T) {
 }
 
 func TestValidationInputIssuesReviewScopeFromBaseline(t *testing.T) {
+	t.Parallel()
 	key := runtime.TaskKey{Node: "qa", Step: "review", Scope: "1:BLACKBOX:case-version"}
 	pending := PendingAction{ActionID: "review-action", Task: key}
 	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
@@ -58,6 +60,7 @@ func TestValidationInputIssuesReviewScopeFromBaseline(t *testing.T) {
 }
 
 func TestSharedReviewInheritanceIncludesApprovedOperations(t *testing.T) {
+	t.Parallel()
 	step := coverage.SharedStep{ID: "setup", Procedure: "prepare documented public state", Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "./app prepare", Stdin: "original input"}}}
 	set := &CaseSet{Manifest: coverage.AcceptanceManifest{SharedSteps: []coverage.SharedStep{step}, Cases: []coverage.AcceptanceCase{{CaseID: "case", SharedSteps: []string{"setup"}}}}}
 	set.ReviewHistory = []CaseReviewEvidence{{Manifest: set.Manifest, Review: coverage.ReviewResult{SharedStepDecisions: []coverage.ReviewDecision{{ID: "setup", Status: coverage.StatusPass, Reason: "approved shared operation and oracle context"}}}}}
@@ -75,6 +78,7 @@ func TestSharedReviewInheritanceIncludesApprovedOperations(t *testing.T) {
 }
 
 func TestSharedTestMaterialInheritanceRequiresCandidateContent(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"same", "equivalent", "changed", "unavailable"} {
 		t.Run(variant, func(t *testing.T) {
 			decision := coverage.ReviewDecision{ID: "setup", Status: coverage.StatusPass, Reason: "Read the associated fixture and independently classified it as test material"}
@@ -115,6 +119,7 @@ func TestSharedTestMaterialInheritanceRequiresCandidateContent(t *testing.T) {
 }
 
 func TestIntakeConfirmationFollowsSignedWorkEpoch(t *testing.T) {
+	t.Parallel()
 	initial := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "initial-solution"}
 	confirmed := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "confirmed-solution"}
 	latest := &IntakeConfirmationReceipt{RequirementRevision: "same-requirement", SolutionRevision: "latest-solution"}
@@ -151,6 +156,7 @@ func TestIntakeConfirmationFollowsSignedWorkEpoch(t *testing.T) {
 }
 
 func TestCarriedReviewRequiresOriginalCasesAndCandidate(t *testing.T) {
+	t.Parallel()
 	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{NodeID: "qa", ID: "design"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.design.v6"}}, {Header: compiler.CompiledHeader{NodeID: "qa", ID: "review"}, Payload: compiler.CompiledAgentStep{Handler: "engine.qa.review.rationale.v2"}}}}
 	for _, mode := range []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox, coverage.ReviewMerge} {
 		for _, variant := range []string{"carry", "no-carry", "redo", "missing-intake", "case-content", "candidate-content", "reopened"} {

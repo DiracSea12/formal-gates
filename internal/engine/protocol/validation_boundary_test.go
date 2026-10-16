@@ -12,6 +12,7 @@ import (
 // Abort authority removes ordinary delivery hints without changing the native
 // failure boundary or the planner's legal disposition precedence.
 func TestAbortRetiresOrdinaryValidationBoundary(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +49,7 @@ func TestAbortRetiresOrdinaryValidationBoundary(t *testing.T) {
 }
 
 func TestAbortKeepsNativeCleanupDispositionBoundary(t *testing.T) {
+	t.Parallel()
 	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
 	if err != nil {
 		t.Fatal(err)

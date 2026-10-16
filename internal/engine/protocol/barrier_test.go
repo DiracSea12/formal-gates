@@ -24,6 +24,7 @@ import (
 // host 对账是权威写入口——屏障期一律可区分拒绝且零状态变化；Ask 解决
 // （解除）后同一调用照常受理并落账。
 func TestBarrierRejectsRecoveryAndReconciliationUntilTheAskResolves(t *testing.T) {
+	t.Parallel()
 	engine, dir, plan, _ := preparedEngine(t)
 	observedInput := Observation{}
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
@@ -120,6 +121,7 @@ func hostAskStepsFixture(t *testing.T) (*compiler.CompiledDefinition, *compiler.
 // 取消终止决定在屏障期只落观察与决定事实——intent 清算、frontier
 // settle 与汇合步全部挂起，Ask 解除的同一事务统一收尾完成。
 func TestBarrierHoldsSettlementsUntilTheAskResolves(t *testing.T) {
+	t.Parallel()
 	cd, reg := hostAskStepsFixture(t)
 	engine, _ := reviewEngine(t, cd, reg)
 	observedInput := Observation{}
@@ -319,6 +321,7 @@ func driveFailedReceipt(t *testing.T, receiptDuringBarrier bool) failedRoutingFa
 // 观察（暂存保留、路由挂起留痕），解除事务按既定规则处置（删暂存＋路
 // 由留痕）；与解除后到达立即路由的顺序终态等价。
 func TestFailedReceiptRoutingConvergesAcrossOrders(t *testing.T) {
+	t.Parallel()
 	during := driveFailedReceipt(t, true)
 	after := driveFailedReceipt(t, false)
 	if during != after {
@@ -418,6 +421,7 @@ func driveCompletionOrder(t *testing.T, terminalFirst bool) completionFacts {
 // 先到"（完成路径：步骤完成＋补位签发）或"任务先报 TERMINAL"（terminal
 // 对账路径）完成，终态完全相同——含 pending 派发面与任务态。
 func TestTerminalAndResultFirstOrdersReachTheSameState(t *testing.T) {
+	t.Parallel()
 	resultFirst := driveCompletionOrder(t, false)
 	terminalFirst := driveCompletionOrder(t, true)
 	if resultFirst != terminalFirst {
@@ -441,6 +445,7 @@ func TestTerminalAndResultFirstOrdersReachTheSameState(t *testing.T) {
 // 接是观察事实（屏障期照常落账），暂存配对接纳挂起；Ask 解除的同一事
 // 务完成配对（Results 入账、计轮、暂存清空）。
 func TestUnknownReceiptAttachPairsWhenTheBarrierLifts(t *testing.T) {
+	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review")
 	engine, _ := reviewEngine(t, cd, reg)
 	observedInput := Observation{}

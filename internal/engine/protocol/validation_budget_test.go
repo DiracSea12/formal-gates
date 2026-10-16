@@ -9,6 +9,7 @@ import (
 )
 
 func TestFiniteRecoveryBudgetOffersRetryAndReopensIneffectiveDecision(t *testing.T) {
+	t.Parallel()
 	task := runtime.TaskKey{Node: "review", Step: "review.worker"}
 	s := NewState(decision.State{})
 	s.Attempts[task] = Attempt{IssuedAction: decision.IssuedAction{ActionID: "review-action", Task: task}, ID: "review-attempt", Attempts: 1, MaxAttempts: 2}

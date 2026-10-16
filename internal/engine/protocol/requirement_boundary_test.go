@@ -12,6 +12,7 @@ import (
 )
 
 func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{"abort", "proceed"} {
 		t.Run(choice, func(t *testing.T) {
 			engine, dir := canonicalReviewEngine(t)
@@ -119,6 +120,7 @@ func TestRequirementBarrierBeforePackagePreparation(t *testing.T) {
 }
 
 func TestReviewGrantAskLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{grantOption, declineOption} {
 		t.Run(choice, func(t *testing.T) {
 			cd, reg := singleCarrierFixture(t)
@@ -202,6 +204,7 @@ func TestReviewGrantAskLifecycle(t *testing.T) {
 }
 
 func TestReconfirmedContentOwnsFreshReviewGeneration(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, dir := reviewEngine(t, cd, reg)
 	first := issueReady(t, engine)[0]
@@ -233,6 +236,7 @@ func TestReconfirmedContentOwnsFreshReviewGeneration(t *testing.T) {
 }
 
 func TestRequirementAskExpiresAcrossReconfirmedContent(t *testing.T) {
+	t.Parallel()
 	cd, reg := singleCarrierFixture(t)
 	engine, dir := reviewEngine(t, cd, reg)
 	pending := &RequirementDecisionPayload{BaseRevision: "rev-1", CandidateRevision: "other-content", DeltaDigest: "delta:pending", ImpactDigest: "impact:pending", Source: RequirementSourceUserInitiated, Classification: RequirementClassificationPreserved, Reason: "an earlier proposal"}
