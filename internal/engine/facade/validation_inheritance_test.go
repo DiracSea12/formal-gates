@@ -21,6 +21,7 @@ func TestExecutionInheritanceChecksEveryRepair(t *testing.T) {
 		{"route addition preserves evidence", []string{"invalid", "invalid"}, true, true},
 	} {
 		t.Run(example.name, func(t *testing.T) {
+			t.Parallel()
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
 			original := d.run.Validation.Waves[0].Candidate.Identity

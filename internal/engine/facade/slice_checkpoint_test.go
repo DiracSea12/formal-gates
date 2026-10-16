@@ -218,6 +218,7 @@ func assertNoSuccessfulSliceReceipt(t *testing.T, child *validationDriver) {
 func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 	t.Parallel()
 	t.Run("selected gate missing", func(t *testing.T) {
+		t.Parallel()
 		child := reviewReadySlice(t, "all", OwnerBinding{})
 		id, input := child.gateAction("quality")
 		child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS"})
@@ -232,6 +233,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 		assertNoSuccessfulSliceReceipt(t, child)
 	})
 	t.Run("promotion missing", func(t *testing.T) {
+		t.Parallel()
 		child := reviewReadySlice(t, "selected", OwnerBinding{})
 		completeSliceGates(t, child)
 		state := driverState(t, child)
@@ -242,6 +244,7 @@ func TestSliceCheckpointRequiresAllDeliveryFacts(t *testing.T) {
 	})
 	for _, kind := range []string{"dirty", "drift", "tree", "barrier", "abort", "independent-seal"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			child := promotedSlice(t, "all", OwnerBinding{})
 			state := driverState(t, child)
 			var err error

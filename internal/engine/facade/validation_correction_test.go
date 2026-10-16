@@ -171,6 +171,7 @@ func TestCorrectionAfterRepairWaiverKeepsSnapshotDutyRetired(t *testing.T) {
 	t.Parallel()
 	for _, projection := range []string{"current", "route", "qa-retry", "requirement-carry"} {
 		t.Run(projection, func(t *testing.T) {
+			t.Parallel()
 			d, finding, origin := validationWithGateFinding(t)
 			resolveGateFinding(d, finding, origin)
 			repair, input := d.action("engine.repair.v7")

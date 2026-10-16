@@ -18,6 +18,7 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 	t.Parallel()
 	for _, variant := range []string{"unchanged", "held", "missing-proof", "baseline-missing", "shared-input-changed", "config-changed", "different-test-ref"} {
 		t.Run(variant, func(t *testing.T) {
+			t.Parallel()
 			d := candidateSourceDriver(t, "whitebox")
 			trees := map[string]map[string]string{}
 			reviewIntents := map[string]protocol.HostActionIntent{}

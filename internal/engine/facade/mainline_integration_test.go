@@ -634,6 +634,7 @@ func TestMainlineNativeChoicesPreserveNonConflictContent(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"binary", "delete"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			master, _ := mainlineChildren(t, kind)
 			id, input := master.action("engine.merge.resolve.v3")
 			if input.Conflict == nil || len(input.Conflict.Evidence.Conflicts) != 1 {
@@ -694,6 +695,7 @@ func TestMainlineAbortReconcilesPrefixAndStopsConflictWorker(t *testing.T) {
 	t.Parallel()
 	for _, point := range []string{"prefix", "later-commit", "worker"} {
 		t.Run(point, func(t *testing.T) {
+			t.Parallel()
 			kind := ""
 			if point == "worker" {
 				kind = "text"
@@ -758,6 +760,7 @@ func TestMainlineReopensDeliveryAndPartialCleanup(t *testing.T) {
 	t.Parallel()
 	for _, point := range []string{"promotion", "cleanup"} {
 		t.Run(point, func(t *testing.T) {
+			t.Parallel()
 			master, children := mainlineChildren(t, "")
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point, root: master.f.root}
 			master.f.vcsRunner, master.f.vcs = r, vcs.New(master.f.root, r)

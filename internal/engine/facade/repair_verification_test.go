@@ -363,6 +363,7 @@ func TestChildRepairWithoutQACasesChecksIntegratedSource(t *testing.T) {
 	t.Parallel()
 	for _, regression := range []bool{false, true} {
 		t.Run(map[bool]string{false: "passed", true: "regression"}[regression], func(t *testing.T) {
+			t.Parallel()
 			child, repair, input := childWithP2GateRepair(t)
 			plan := repairBatchPlan("FINAL")
 			plan.Batches = plan.Batches[:2]

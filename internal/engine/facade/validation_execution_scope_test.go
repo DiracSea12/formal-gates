@@ -20,6 +20,7 @@ func TestExecutionScopeControlsDispatchAndAdmission(t *testing.T) {
 		for _, checkpoint := range []bool{false, true} {
 			name := map[bool]string{false: "normal", true: "reopened"}[reopen] + "-" + map[bool]string{false: "complete", true: "checkpoint"}[checkpoint]
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				d := newValidationDriver(t, "blackbox", "quality")
 				d.fixtureTool, d.fixtureEnvironment = "tool-v1", "environment-v1"
 				d.reviewReady()
@@ -236,6 +237,7 @@ func TestExecutionScopeFollowsItsResponsibility(t *testing.T) {
 	t.Parallel()
 	for _, change := range []string{"route", "carry", "carry-route", "redo", "qa-retry"} {
 		t.Run(change, func(t *testing.T) {
+			t.Parallel()
 			var d *validationDriver
 			if change == "carry" {
 				root := t.TempDir()

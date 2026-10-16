@@ -17,6 +17,7 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 	t.Parallel()
 	for _, approvedArtifact := range []bool{false, true} {
 		t.Run(fmt.Sprintf("approved=%t", approvedArtifact), func(t *testing.T) {
+			t.Parallel()
 			d, _ := startNativeProviderDriver(t, "svn")
 			passPreDevelopmentReviews(t, d, commandPlan())
 			d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})

@@ -771,6 +771,7 @@ func TestWaiverFollowsCarriedResponsibilityWithoutCoveringNewWork(t *testing.T) 
 	t.Parallel()
 	for _, change := range []string{"qa-redo", "gate-redo", "route-addition"} {
 		t.Run(change, func(t *testing.T) {
+			t.Parallel()
 			d := postwaveRepairOffer(t)
 			completeWaivedCandidate(d)
 			old := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]

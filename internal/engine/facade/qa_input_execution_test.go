@@ -358,6 +358,7 @@ func main() {
 		{"changed", "; printf changed > prepared/intermediate"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
 			d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 				m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Create stage, intermediate and common product", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{
 					{Kind: coverage.OperationArgv, Argv: []string{first}},

@@ -199,6 +199,7 @@ func TestTypedObservationRetiresOnlySupersededExecution(t *testing.T) {
 	t.Parallel()
 	for _, execution := range []string{"unclaimed", "owned", "spawned", "unknown"} {
 		t.Run(execution, func(t *testing.T) {
+			t.Parallel()
 			d := gateImpactBoundary(t)
 			id, input := d.action("engine.validation.observation.v2")
 			state := driverState(t, d)
