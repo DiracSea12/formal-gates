@@ -966,6 +966,10 @@ func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
 
 func writeInstallSource(t *testing.T, skillText string) string {
 	t.Helper()
+	payload, err := installPackageOwnerBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -983,10 +987,6 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		`{"name":"ZCode","support":"host-target"}]}`+"\n")
 	mustWriteCLI(t, filepath.Join(source, "go.mod"), "module formal-gates\n")
 	mustWriteCLI(t, filepath.Join(source, ".github", "workflows", "portable-validation.yml"), "portable validation\n")
-	payload, err := installPackageOwnerBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
 	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), string(payload))
 	if err := os.Chmod(filepath.Join(source, "bin", installTestBinaryName()), 0o700); err != nil {
 		t.Fatal(err)

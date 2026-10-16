@@ -256,6 +256,7 @@ func TestNativeEditChecksRejectReadOnlyAndInvalidMutations(t *testing.T) {
 }
 
 func TestNativeEditChecksCoverEveryWorkspaceMutation(t *testing.T) {
+	t.Parallel()
 	tools, workspace := nativeEditCheckFixture(t)
 	callWorkspace(t, tools, `{"action":"mkdir","name":"destination"}`)
 	callWorkspace(t, tools, `{"action":"create","name":"source.txt","content":"first\nsecond\n"}`)
@@ -548,6 +549,7 @@ func TestNativeWorkspaceAuthorsExecutableFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("native Unix execution mode")
 	}
+	t.Parallel()
 	tools, workspace := nativeEditCheckFixture(t)
 	original := []byte("#!/bin/sh\nprintf 'hello\\n'\n")
 	args, _ := json.Marshal(map[string]any{"action": "create", "name": "hello.sh", "content": string(original), "executable": true})
