@@ -79,6 +79,7 @@ func TestGateDiscoveryIgnoresUnrelatedDirectEntries(t *testing.T) {
 }
 
 func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		make func(string)
@@ -170,6 +171,7 @@ func writeTestFile(t *testing.T, path, text string) {
 }
 
 func TestRoleRulesStayPrivateAndBindCatalogAndPackageContent(t *testing.T) {
+	t.Parallel()
 	root := promptPackage(t, map[string]string{"quality": "checks"})
 	before, err := prompts.LoadPromptCatalog(root)
 	if err != nil {
@@ -226,6 +228,7 @@ func TestRoleRulesStayPrivateAndBindCatalogAndPackageContent(t *testing.T) {
 }
 
 func TestRoleRuleCatalogRejectsIncompletePayloads(t *testing.T) {
+	t.Parallel()
 	for _, missing := range []string{"gate", "qa", "qa-design-blackbox", "qa-design-whitebox", "qa-execution-blackbox", "qa-execution-whitebox", "qa-review-blackbox", "qa-review-whitebox"} {
 		t.Run(missing, func(t *testing.T) {
 			root := promptPackage(t, nil)

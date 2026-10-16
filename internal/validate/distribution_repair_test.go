@@ -17,6 +17,9 @@ import (
 )
 
 func TestReleaseRootBootstrapPreservesExecutableModeAndIdentity(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	binary := filepath.Join(source, "bin", nativeBinaryName())
 	if err := os.Chmod(binary, 0o700); err != nil {
@@ -80,6 +83,7 @@ func TestReleaseRootBootstrapPreservesExecutableModeAndIdentity(t *testing.T) {
 }
 
 func TestAdmissionRejectsStaleInstalledDigest(t *testing.T) {
+	t.Parallel()
 	source := copyPackageFixture(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -150,6 +154,7 @@ func repairCommitRegistry(t *testing.T, path string, record RegistryRecord) {
 // （缺失或降级为 explanation-level）时，install 必须在创建任何 target/state
 // 之前非零拒绝，而不是以 exit 0 接受一个未登记 target。
 func TestInstallRejectsManifestUnregisteredHostTargetBeforeTargetCreation(t *testing.T) {
+	t.Parallel()
 	source := copyPackageFixture(t)
 	manifestPath := filepath.Join(source, "formal-gates.manifest.json")
 	manifest, err := os.ReadFile(manifestPath)
@@ -185,6 +190,9 @@ func TestInstallRejectsManifestUnregisteredHostTargetBeforeTargetCreation(t *tes
 
 // Start requires the committed bootstrap receipt before creating engine state.
 func TestWorkflowStartRequiresCommittedBootstrapReceipt(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	project := repairGitProject(t)
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -211,6 +219,9 @@ func TestWorkflowStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 
 // Drive checks current installation admission before writing worker materials.
 func TestEngineDriveRejectsDisabledAdmissionBeforeArtifactWrite(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	project := repairGitProject(t)
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -288,6 +299,7 @@ func repairStartEngine(project, target, registry, runID string) (*facade.Facade,
 }
 
 func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {
+	t.Parallel()
 	source := copyPackageFixture(t)
 	manifestPath := filepath.Join(source, "formal-gates.manifest.json")
 	manifest, err := os.ReadFile(manifestPath)
@@ -319,6 +331,9 @@ func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {
 }
 
 func TestFaultMatrixReceiptProvesPreparedPartialCopy(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	report, result := InstallFaultMatrix(InstallFaultMatrixOptions{Root: source, Fixture: "copy-component:runtime"})
 	if !result.OK() {
@@ -356,6 +371,9 @@ func TestFaultMatrixReceiptProvesPreparedPartialCopy(t *testing.T) {
 }
 
 func TestGlobalInstallRetiresDerivedAdmissionsWithoutChangingRunFiles(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)

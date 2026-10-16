@@ -8,12 +8,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // The local native peer executes the configured hook and MCP server. Its blocked
 // notification reflects the real hook response; these are protocol fixtures,
 // not evidence that an installed Codex host honors hooks.
 func TestCodexHookCanaryBindsNativeCallAndHostDecision(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "formal-gates")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")

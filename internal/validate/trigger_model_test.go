@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func readWorktreeFile(t *testing.T, relative string) string {
@@ -106,6 +108,9 @@ func TestManifestDescriptionStatesModel(t *testing.T) {
 	assertHasText(t, manifest.Description, "record-only lightweight route")
 }
 func TestInstallPreservesSkillAndManagedRule(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

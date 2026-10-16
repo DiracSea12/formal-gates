@@ -47,6 +47,7 @@ func TestWorkflowWorkerSourceUsesOriginalProvider(t *testing.T) {
 // A terminal projection may retain the slice registry after active checkpoints
 // have retired. The foreground boundary must consume terminal authority first.
 func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"COMPLETE", "ABORTED"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
@@ -112,6 +113,7 @@ func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
 }
 
 func TestWorkflowConsumerPreservesNonterminalChildError(t *testing.T) {
+	t.Parallel()
 	f, root, statePath := startEngineRunForWriterTest(t)
 	retainRetiredChildReference(t, root, "writer-exclusive")
 	result, err := consumeWorkflow(IO{}, f, root, "writer-exclusive")
@@ -171,6 +173,9 @@ func retainRetiredChildReference(t *testing.T, root, runID string) {
 }
 
 func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	receipt := writerIntakeReceipt(t, root)
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "requirements.md"}, {"commit", "-qm", "Confirmed input"}} {

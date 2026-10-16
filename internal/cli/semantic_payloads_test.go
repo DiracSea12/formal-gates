@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 )
 
 func assertIntakePayloadWithoutRun(t *testing.T, root string, want facade.IntakeConfirmationReceipt) {
@@ -33,6 +34,7 @@ func assertIntakePayloadWithoutRun(t *testing.T, root string, want facade.Intake
 }
 
 func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	request := cliStructuredRequirement("Select original materials.")
 	mustWriteCLI(t, filepath.Join(root, "need.md"), request)
@@ -71,6 +73,7 @@ func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
 }
 
 func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
+	t.Parallel()
 	for _, multiple := range []bool{false, true} {
 		t.Run(strconv.FormatBool(multiple), func(t *testing.T) {
 			root := t.TempDir()
@@ -152,6 +155,9 @@ func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
 }
 
 func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	var out, stderr bytes.Buffer
@@ -220,6 +226,9 @@ func TestControlPayloadSelectionConfirmsOriginalAskWithoutRewriting(t *testing.T
 }
 
 func TestProgressPayloadSelectionReadsOriginalCursor(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	var out, stderr bytes.Buffer
@@ -251,6 +260,9 @@ func TestProgressPayloadSelectionReadsOriginalCursor(t *testing.T) {
 }
 
 func TestNativePayloadSelectionBindsOriginalRequestAndTextBytes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	job := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "jobs", "original")
@@ -343,6 +355,7 @@ func TestNativePayloadSelectionBindsOriginalRequestAndTextBytes(t *testing.T) {
 }
 
 func TestOriginalPayloadPositionsRemainStableUnderConcurrentPreparation(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	var group sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -381,6 +394,9 @@ func TestOriginalPayloadPositionsRemainStableUnderConcurrentPreparation(t *testi
 }
 
 func TestNativeOriginalTextSelectionFollowsEachInputQuestion(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	run := filepath.Join(root, facade.EngineNamespace, "writer-exclusive")

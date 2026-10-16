@@ -8,6 +8,7 @@ import (
 )
 
 func TestVerifyReadyExemptsEngineRuntimeFiles(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.email", "mixed-generation@example.invalid")

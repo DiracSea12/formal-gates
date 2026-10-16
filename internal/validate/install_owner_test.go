@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/host"
 	"os"
 	"path/filepath"
@@ -83,6 +84,9 @@ func TestCursorHookUninstallRemovesOnlyInstallerConfiguration(t *testing.T) {
 }
 
 func TestUninstallPreservesSharedRuleAfterSkipHooksReinstall(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

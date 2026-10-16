@@ -1414,6 +1414,7 @@ func TestWorkflowExecutesOnlyOriginalSignedResumeAndTermination(t *testing.T) {
 		failed       bool
 	}{{"resume", "resume", false}, {"abort", "abort", false}, {"failed-resume", "resume", true}} {
 		t.Run(scenario.name, func(t *testing.T) {
+			t.Parallel()
 			choice := scenario.choice
 			f, _, s, binary := engineNativeFixture(t, true)
 			if scenario.failed {

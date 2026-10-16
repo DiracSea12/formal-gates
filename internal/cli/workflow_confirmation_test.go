@@ -13,6 +13,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/harness"
 )
 
@@ -94,6 +95,9 @@ func confirmationCall(t *testing.T, name string, arguments any, capability bool,
 }
 
 func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
@@ -153,6 +157,9 @@ func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
 }
 
 func TestWorkflowConfirmationServiceKeepsAgentRequestsSeparateFromDecisions(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
@@ -231,6 +238,9 @@ func TestWorkflowConfirmationViewDisplaysTheOriginalCandidateProject(t *testing.
 }
 
 func TestWorkflowConfirmationRejectsChangedCandidateAndCurrentRevision(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
@@ -281,6 +291,9 @@ func TestWorkflowConfirmationRejectsChangedCandidateAndCurrentRevision(t *testin
 }
 
 func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
@@ -339,6 +352,9 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 }
 
 func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
@@ -388,6 +404,9 @@ func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *
 }
 
 func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	cliGit(t, root, "init", "-q")
@@ -479,6 +498,9 @@ func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) 
 }
 
 func TestWorkflowConfirmationDeliversOnlyTheOriginalPendingNativeAnswer(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	run, err := f.Show()

@@ -13,6 +13,9 @@ import (
 )
 
 func TestUninstallRemovesOwnedPayloadsAfterLastSharedInstallation(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := installFixtureSource(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -177,6 +180,9 @@ func TestCommittedUninstallRecoveryRetiresLocksAtMaintenanceExit(t *testing.T) {
 }
 
 func TestUninstallRestoresOwnedPayloadsThroughOriginalJournal(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := installFixtureSource(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -240,6 +246,12 @@ func TestUninstallRestoresOwnedPayloadsThroughOriginalJournal(t *testing.T) {
 }
 
 func TestUninstallPreservesNonManagedConfigAndRuleBytes(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")

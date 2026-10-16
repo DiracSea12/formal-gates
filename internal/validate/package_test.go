@@ -12,6 +12,7 @@ import (
 )
 
 func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		rel  string
@@ -36,6 +37,7 @@ func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 }
 
 func TestPackageRequiresNativeHostScripts(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
 		t.Run(name, func(t *testing.T) {
 			root := copyPackageFixture(t)
@@ -55,6 +57,7 @@ func TestPackageRequiresNativeHostScripts(t *testing.T) {
 }
 
 func TestPackageManifestRequiresNativeHostScripts(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
 		t.Run(name, func(t *testing.T) {
 			root := copyPackageFixture(t)
@@ -81,6 +84,7 @@ func TestPackageRejectsWorkflowLevelWritePermission(t *testing.T) {
 }
 
 func TestPackageRejectsNonReleaseJobWritePermission(t *testing.T) {
+	t.Parallel()
 	root := copyPackageFixture(t)
 	mutateWorkflow(t, root, "go-validation:\n    name:", "go-validation:\n    permissions:\n      contents: write\n    name:")
 
@@ -104,6 +108,7 @@ func TestPackageRejectsReleaseJobMissingWritePermission(t *testing.T) {
 }
 
 func TestPackageRejectsReleaseJobWriteAllPermission(t *testing.T) {
+	t.Parallel()
 	root := copyPackageFixture(t)
 	mutateWorkflow(t, root, "    permissions:\n      contents: write", "    permissions: write-all")
 
@@ -126,6 +131,7 @@ func TestPackageRejectsReleaseJobExtraWritePermission(t *testing.T) {
 }
 
 func TestPackageRejectsReleaseJobWithoutReleaseCondition(t *testing.T) {
+	t.Parallel()
 	root := copyPackageFixture(t)
 	mutateWorkflow(t, root, "    if: github.event_name == 'release'\n", "")
 
@@ -173,6 +179,7 @@ func TestPackageRejectsBootstrapDarwinSuffix(t *testing.T) {
 }
 
 func TestPackageRejectsBootstrapUnpublishedArmSuffixes(t *testing.T) {
+	t.Parallel()
 	root := copyPackageFixture(t)
 	mutateFile(t, root, "install.command", "macos-arm64|macos-amd64|linux-amd64", "macos-arm64|macos-amd64|linux-amd64|linux-arm64")
 	mutateFile(t, root, "install.ps1", `$suffix -ne "windows-amd64"`, `$suffix -ne "windows-arm64"`)
@@ -200,6 +207,7 @@ func TestPackageRejectsBootstrapCanaryChecksumOmitted(t *testing.T) {
 }
 
 func TestPackageAllowsInstalledRuntimeWithoutBootstrapScripts(t *testing.T) {
+	t.Parallel()
 	root := copyPackageFixture(t)
 	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
 		if err := os.Remove(filepath.Join(root, rel)); err != nil {
@@ -214,6 +222,7 @@ func TestPackageAllowsInstalledRuntimeWithoutBootstrapScripts(t *testing.T) {
 }
 
 func TestPackageRejectsPartialBootstrapScripts(t *testing.T) {
+	t.Parallel()
 	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
 		t.Run(rel, func(t *testing.T) {
 			root := copyPackageFixture(t)

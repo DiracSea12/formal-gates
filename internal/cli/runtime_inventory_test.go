@@ -17,6 +17,9 @@ import (
 )
 
 func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	clearHostEnv(t)
 	source := writeInstallSource(t, "Installed runtime Submit marker")
 	if err := os.RemoveAll(filepath.Join(source, "prompts", "actions")); err != nil {

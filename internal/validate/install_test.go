@@ -140,6 +140,9 @@ func TestInstallAllowsActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testi
 }
 
 func TestInstallIgnoresActiveRunFromRelatedRegistryRecord(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	hostHome := t.TempDir()
 	t.Setenv("HOME", hostHome)

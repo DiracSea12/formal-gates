@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestWorkflowFlowNodeCatalogueIsReadOnly(t *testing.T) {
@@ -45,6 +46,9 @@ func TestWorkflowFlowNodeCatalogueIsReadOnly(t *testing.T) {
 }
 
 func TestWorkflowStartSelectsFlowNodesFromPublishedPositions(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	clearHostEnv(t)
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)

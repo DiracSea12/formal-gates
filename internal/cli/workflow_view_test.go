@@ -182,6 +182,9 @@ func TestWorkflowAbortConfirmationIncludesOnlyItsCurrentOperation(t *testing.T) 
 }
 
 func TestWorkflowPublicViewKeepsMachineOutputAndSavedCandidate(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	statePath := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "state.json")
@@ -234,6 +237,9 @@ func TestWorkflowPublicViewKeepsMachineOutputAndSavedCandidate(t *testing.T) {
 }
 
 func TestWorkflowNodeSelectionSavesOriginalPreviewWithoutWriting(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	run, err := f.Show()
@@ -278,6 +284,9 @@ func TestWorkflowNodeSelectionSavesOriginalPreviewWithoutWriting(t *testing.T) {
 }
 
 func TestWorkflowViewPreservesExecutionExitAndMachineConsumption(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	run, err := f.Drive()
@@ -324,6 +333,9 @@ func TestWorkflowViewPreservesExecutionExitAndMachineConsumption(t *testing.T) {
 }
 
 func TestWorkflowConfirmationUsesPreparedAskAndPreservesPreparationErrors(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	statePath := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "state.json")
@@ -384,6 +396,9 @@ func TestWorkflowConfirmationUsesPreparedAskAndPreservesPreparationErrors(t *tes
 }
 
 func TestWorkflowConfirmationUsesSavedTargetAndOriginalBindings(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	saved := filepath.Join(t.TempDir(), "confirmation.json")
@@ -710,6 +725,9 @@ func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
 }
 
 func TestWorkflowViewSeparatesQAExecutionGroupsFromFlowSwitch(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	run, err := f.Show()

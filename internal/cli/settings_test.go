@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"formal-gates/internal/validate"
@@ -28,6 +29,7 @@ func settingsCommand(t *testing.T, root, home string, args ...string) []byte {
 }
 
 func TestSettingsNamedConfigurationCommandsUsePublishedChoices(t *testing.T) {
+	t.Parallel()
 	root, home := t.TempDir(), t.TempDir()
 	shown := settingsCommand(t, root, home, "show")
 	var view struct {
@@ -100,6 +102,9 @@ func (platform *settingsSelectionPlatform) SelectionOptions(root, target string,
 }
 
 func TestSettingsExecutionChoicesUseNativeOptionsWithoutChangingRun(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	clearHostEnv(t)
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)

@@ -201,6 +201,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"none", "blackbox"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, mode)
 			d.plan = candidatePlan(nil)
 			extension := d.plan.Batches[0]
@@ -387,6 +388,7 @@ func TestInstalledAbortReclaimsInterruptedNativePrefixes(t *testing.T) {
 	t.Parallel()
 	for _, stage := range []string{"workspace", "pin", "track", "freeze"} {
 		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, "none", ".gates/input/requirements.md")
 			d.pauseOnInterrupt = true
 			if stage == "workspace" || stage == "pin" {
@@ -555,6 +557,7 @@ func TestInstalledCleanupControlRemainsAuthoritative(t *testing.T) {
 	t.Parallel()
 	for _, control := range []protocol.ControlKind{protocol.ControlRequestRequirementChange, protocol.ControlAbort} {
 		t.Run(string(control), func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, "none")
 			d.reviews()
 			d.untilValidation()

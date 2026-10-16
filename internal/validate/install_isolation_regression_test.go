@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 // Installation tests use an injected temporary HOME. Registry and launcher
@@ -111,6 +113,9 @@ func assertRealPathsUntouched(t *testing.T, watched []string, before map[string]
 // launcher publish boundary ("pointer"), the exact replacement step that
 // corrupted the real installation on 2026-08-21.
 func TestInstallFaultInjectionNeverTouchesRealUserHome(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	watched := isolationWatchedRealPaths(t)
 	before := isolationSnapshot(t, watched)
 
@@ -134,6 +139,9 @@ func TestInstallFaultInjectionNeverTouchesRealUserHome(t *testing.T) {
 // inside that root — the structural proof that the resolution honors the
 // injected home instead of the real one.
 func TestInstallIncidentStubReplacementLandsOnlyInInjectedHome(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	watched := isolationWatchedRealPaths(t)
 	before := isolationSnapshot(t, watched)
 

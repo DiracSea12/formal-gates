@@ -1119,6 +1119,7 @@ func TestInstalledPromotionRejectsTargetChanges(t *testing.T) {
 	t.Parallel()
 	for _, change := range []string{"dirty", "drift"} {
 		t.Run(change, func(t *testing.T) {
+			t.Parallel()
 			d := newCandidateDriver(t, "none")
 			d.reviews()
 			d.untilValidation()

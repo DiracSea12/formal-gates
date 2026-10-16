@@ -105,6 +105,9 @@ func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
 }
 
 func TestControlServerSkipHooksPreservesHostConfig(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	for _, platform := range []string{"codex", "zcode"} {
 		t.Run(platform, func(t *testing.T) {

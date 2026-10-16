@@ -82,6 +82,7 @@ func startEngineRunForWriterTest(t *testing.T) (*facade.Facade, string, string) 
 
 // 非引擎写入口不可创建其他状态，也不可改写 engine 权威状态。
 func TestLegacyWritersCannotReachEngineRunState(t *testing.T) {
+	t.Parallel()
 	f, root, statePath := startEngineRunForWriterTest(t)
 	if _, err := f.Drive(); err != nil {
 		t.Fatalf("drive: %v", err)
@@ -197,6 +198,9 @@ func snapshotEngineRunTree(t *testing.T, root, runID string) map[string]string {
 
 // Non-engine workflow entries cannot load or write a run.
 func TestLegacyWriteCommandsRejectEngineRunPerCommand(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	statePath := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "state.json")
@@ -234,6 +238,9 @@ func TestLegacyWriteCommandsRejectEngineRunPerCommand(t *testing.T) {
 // TestPublicCleanupCannotOperateOnActiveEngineRun：公开 cleanup 不是 engine 的
 // 第二清理通道——对活动 engine run 显式拒绝且 run 目录文件字节不变。
 func TestPublicCleanupCannotOperateOnActiveEngineRun(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -252,6 +259,9 @@ func TestPublicCleanupCannotOperateOnActiveEngineRun(t *testing.T) {
 // 入口与 engine 入口——legacy 写入口拒绝、engine 入口照常服务，writer/schema/
 // definition 绑定（request.json＋state.json 字节）不可改。
 func TestAlternatingLegacyAndEngineEntriesKeepBindingLocked(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	statePath := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "state.json")

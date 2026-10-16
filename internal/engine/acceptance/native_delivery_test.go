@@ -18,6 +18,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 			name = "ancestor-base"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			p := newInstalledStartProject(t)
 			files := map[string]string{"requirements.md": candidateDocument, "go.mod": "module candidate-app\n\ngo 1.22\n", "old_test.go": "package main\nimport \"testing\"\nfunc TestOld(t *testing.T) {}\n", "remove_test.go": "package main\nimport \"testing\"\nfunc TestRemove(t *testing.T) {}\n", "mode_test.go": "package main\nimport \"testing\"\nfunc TestMode(t *testing.T) {}\n"}
 			for path, body := range files {

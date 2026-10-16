@@ -11,10 +11,14 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/validate"
 )
 
 func TestWorkflowReentrySelectsExistingRunWithoutCopyingIdentity(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -43,6 +47,9 @@ func TestWorkflowReentrySelectsExistingRunWithoutCopyingIdentity(t *testing.T) {
 }
 
 func TestWorkflowReentryRetainsUnavailableRunAndSelectsCurrentRun(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	oldID := "writer-exclusive"
@@ -113,6 +120,9 @@ func TestWorkflowReentryRetainsUnavailableRunAndSelectsCurrentRun(t *testing.T) 
 }
 
 func TestWorkflowMultipleRunsRequireProgramPositionBeforeAnyWrite(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"))
@@ -174,6 +184,9 @@ func TestWorkflowMultipleRunsRequireProgramPositionBeforeAnyWrite(t *testing.T) 
 }
 
 func TestWorkflowReentryReadsTerminalAuthorityWithoutRunIdentity(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	request, err := protocol.NewRequestEvent("request-abort", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})

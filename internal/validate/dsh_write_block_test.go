@@ -14,6 +14,7 @@ import (
 )
 
 func TestHookResolvesDshAgentTypeFromLifecycleBinding(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runDir := filepath.Join(root, ".gates", "tmp", "run-1")
 	writeCurrentHookFixture(t, root, "run-1", true, true, "", "")

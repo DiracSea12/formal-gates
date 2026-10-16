@@ -105,6 +105,7 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 // through the façade so its nested content.phase is the real engine state
 // shape; the unsupported fixture is inert raw JSON and never opens a writer.
 func TestInstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		runID      string

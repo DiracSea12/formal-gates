@@ -15,6 +15,7 @@ import (
 )
 
 func TestGuardPreviewBinary(t *testing.T) {
+	t.Parallel()
 	// Execute the formal build in an unrelated working directory. Assertions only
 	// inspect the documented input/output and filesystem; no internal calculator is
 	// imported or used as a black-box oracle.

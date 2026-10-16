@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/prompts"
 	"os"
@@ -176,6 +177,9 @@ func admissionRecordByID(t *testing.T, document RegistryDocument, id string) Reg
 // (UNREGISTERED_INSTALL and no state) until
 // the documented install --bootstrap entry commits an accepted receipt.
 func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := admissionSource(t)
 	project := admissionGitProject(t)
 	isolated := t.TempDir()
@@ -227,6 +231,9 @@ func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 }
 
 func TestEngineAdmissionPrecedesWorkerMaterial(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := admissionSource(t)
 	project := admissionGitProject(t)
 	isolated := t.TempDir()
@@ -275,6 +282,7 @@ func TestEngineAdmissionPrecedesWorkerMaterial(t *testing.T) {
 }
 
 func TestInstallRejectsManifestUnregisteredHostTarget(t *testing.T) {
+	t.Parallel()
 	const claudeEntry = `{"name": "Claude Code", "support": "host-target"}`
 	scenarios := []struct {
 		name     string
@@ -334,6 +342,9 @@ func TestInstallRejectsManifestUnregisteredHostTarget(t *testing.T) {
 }
 
 func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := admissionSource(t)
 	project := admissionGitProject(t)
 	isolated := t.TempDir()

@@ -20,6 +20,9 @@ import (
 )
 
 func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	clearHostEnv(t)
 	source := writeInstallSource(t, "Installed workflow admission")
 	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
@@ -108,6 +111,9 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 }
 
 func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	for _, args := range [][]string{{"init"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "requirements.md"}, {"commit", "-m", "Confirmed input"}} {
@@ -165,6 +171,9 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 }
 
 func TestRequirementParsesFlagsBeforeSelectingExistingRuns(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"))
@@ -236,6 +245,7 @@ func TestRequirementParsesFlagsBeforeSelectingExistingRuns(t *testing.T) {
 }
 
 func TestRequirementCommandsCreateAndEditUsingPublishedPositions(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var out bytes.Buffer
 	streams := IO{Stdout: &out, Stderr: &bytes.Buffer{}, Stdin: strings.NewReader("")}
@@ -364,6 +374,7 @@ func TestSettingsHelpDoesNotReadOrWriteConfiguration(t *testing.T) {
 }
 
 func TestRequirementCommandsReviseExistingSectionsWithoutSelectingARequirement(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var out, errout bytes.Buffer
 	streams := IO{Stdout: &out, Stderr: &errout}
@@ -418,6 +429,7 @@ func TestRequirementCommandsReviseExistingSectionsWithoutSelectingARequirement(t
 }
 
 func TestRequirementCommandsAddContextToAnExistingEmptySection(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var out, errout bytes.Buffer
 	streams := IO{Stdout: &out, Stderr: &errout}
@@ -440,6 +452,7 @@ func TestRequirementCommandsAddContextToAnExistingEmptySection(t *testing.T) {
 }
 
 func TestGateDirectoryDocumentsRetainPublishedRequirementAndMaterialPositions(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var out, errors bytes.Buffer
 	streams := IO{Stdout: &out, Stderr: &errors, Stdin: strings.NewReader("")}
@@ -515,6 +528,7 @@ func TestGateDirectoryDocumentsRetainPublishedRequirementAndMaterialPositions(t 
 }
 
 func TestProjectDocumentsExcludeRepositoryMetadataAndPreserveUserFiles(t *testing.T) {
+	t.Parallel()
 	const document = "# Requirement and solution\n\n## 需求点\n\n### REQ-001：Output\n\n#### 要求\n\nReturn original input.\n\n#### 验收条件\n\n- AC-001：Original bytes are retained.\n\n#### 来源\n\nUser request.\n\n## 方案\n\nUse the existing owner.\n"
 	for _, gitDirectory := range []bool{true, false} {
 		name := "linked worktree"

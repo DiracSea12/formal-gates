@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func e2eWriteFile(t *testing.T, path, content string, mode os.FileMode) {
@@ -209,6 +211,7 @@ func e2eRunInstallLockChild(t *testing.T, target, mode string) string {
 }
 
 func TestPackageReceiptDeterminismAndIsolation(t *testing.T) {
+	t.Parallel()
 	// 夹具必须是真实 git 仓库：PackageReceipt 用 git ls-files --ignored 识
 	// 别被忽略的本地数据，只放一个文件的假 .git 目录会让 git 以退出码
 	// 128 失败。.gitignore 忽略 .gates/ 运行数据并忽略自身，收据清单因此
@@ -388,6 +391,7 @@ func TestRegistryTransactionOwnerPreservesRecords(t *testing.T) {
 }
 
 func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
+	t.Parallel()
 	source := e2eInstallSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -482,6 +486,9 @@ func TestInstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
 }
 
 func TestAdmissionRejectsIncompleteDisabledAndMissingRecords(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	path := filepath.Join(root, "registry.json")
 	home := filepath.Join(root, "home")
@@ -588,6 +595,9 @@ func TestInstallLockSerializesInstallAndUninstall(t *testing.T) {
 }
 
 func TestInstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, fault := range []string{"intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit"} {
 		t.Run(fault, func(t *testing.T) {
 			source := e2eInstallSource(t)
@@ -628,6 +638,7 @@ func TestInstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
 }
 
 func TestHookJSONFailureRestoresInstallAndWritesReceipt(t *testing.T) {
+	t.Parallel()
 	source := e2eInstallSource(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -661,6 +672,12 @@ func TestHookJSONFailureRestoresInstallAndWritesReceipt(t *testing.T) {
 }
 
 func TestUninstallFaultRestoresRuntimeHooksAndRule(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := e2eInstallSource(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -701,6 +718,7 @@ func TestUninstallFaultRestoresRuntimeHooksAndRule(t *testing.T) {
 }
 
 func TestCrashJournalReconcileRestoresBackupAndReceipt(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	target := filepath.Join(parent, "skills", "formal-gates")
 	registry := filepath.Join(parent, "registry", "registry.json")
@@ -751,6 +769,9 @@ func TestCrashJournalReconcileRestoresBackupAndReceipt(t *testing.T) {
 }
 
 func TestReleaseRollbackRestoresReleaseAndExecutable(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := e2eInstallSource(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -815,6 +836,7 @@ func TestRelativeReleaseRootCannotOverlapSource(t *testing.T) {
 }
 
 func TestInstallReceiptBindsAllRuntimeRoots(t *testing.T) {
+	t.Parallel()
 	source := e2eInstallSource(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -844,6 +866,9 @@ func TestInstallReceiptBindsAllRuntimeRoots(t *testing.T) {
 }
 
 func TestReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := e2eInstallSource(t)
 	binarySource := filepath.Join(source, "bin", nativeBinaryName())
 	marker := filepath.Join(t.TempDir(), "candidate-execution.marker")

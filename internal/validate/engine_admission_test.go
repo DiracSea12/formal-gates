@@ -8,10 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/host"
 )
 
 func TestResolveEngineAdmissionUsesCanonicalGlobalBinding(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -64,6 +68,9 @@ func TestResolveEngineAdmissionUsesCanonicalGlobalBinding(t *testing.T) {
 }
 
 func TestEngineAdmissionNormalizesRegisteredHostAliases(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -139,6 +146,9 @@ func installedAdmissionTarget(t *testing.T) (string, string) {
 }
 
 func TestProjectRuntimeFilesCollectsInstalledHosts(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

@@ -23,6 +23,7 @@ import (
 // the shared reviewer contract (contamination check applies), the gate block, and
 // a working-tree-vs-head change block with no requirement or dispatch binding.
 func TestComposeStandaloneGatePrompt(t *testing.T) {
+	t.Parallel()
 	root, pkg := standaloneGateFixture(t)
 	catalog, err := prompts.LoadPromptCatalog(pkg)
 	if err != nil {
@@ -167,6 +168,7 @@ func runGit(t *testing.T, root string, args ...string) string {
 
 // Captured values remain bound to the review after the live workspace changes.
 func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
+	t.Parallel()
 	root, pkg := standaloneGateFixture(t)
 	originals := map[string][]byte{
 		"removed.txt":   []byte(" deleted original \n\n"),

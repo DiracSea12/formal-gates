@@ -8,6 +8,7 @@ import (
 )
 
 func TestPackageReceiptRespectsLocalExclusionsWithoutHidingTrackedSources(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()

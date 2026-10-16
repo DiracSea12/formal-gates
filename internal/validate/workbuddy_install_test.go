@@ -5,9 +5,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestWorkBuddyProjectInstallationAndRemovalKeepNativeInstructions(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source, project, home := copyPackageFixture(t), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

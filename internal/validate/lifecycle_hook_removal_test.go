@@ -11,6 +11,7 @@ import (
 )
 
 func TestInstallerRemovesOwnedLifecycleHooksAndPreservesUserEntries(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{host.Claude, "claude", host.Codex, host.Cursor, host.ZCode} {
 		for _, upgrade := range []bool{false, true} {
 			t.Run(provider+map[bool]string{true: "/upgrade", false: "/uninstall"}[upgrade], func(t *testing.T) {

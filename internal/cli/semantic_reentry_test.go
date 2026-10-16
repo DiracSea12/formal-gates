@@ -12,9 +12,13 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	saved := filepath.Join(t.TempDir(), "confirmation.json")
@@ -84,6 +88,9 @@ func TestSemanticControlPublicConfirmationBindsOriginalAskAndReplays(t *testing.
 }
 
 func TestSemanticControlPublicInputModesRejectMixturesBeforeWrite(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -107,6 +114,9 @@ func TestSemanticControlPublicInputModesRejectMixturesBeforeWrite(t *testing.T) 
 }
 
 func TestSemanticReentryMessageSelectsOriginalBytesForRunAndWorker(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	f := startAdmittedEngineRun(t, root)
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json"))
@@ -188,6 +198,9 @@ func TestSemanticReentryMessageSelectsOriginalBytesForRunAndWorker(t *testing.T)
 }
 
 func TestSemanticReentryProgressUsesCompleteOriginalOutputAsCursor(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	before := snapshotEngineRunTree(t, root, "writer-exclusive")
@@ -223,6 +236,9 @@ func TestSemanticReentryProgressUsesCompleteOriginalOutputAsCursor(t *testing.T)
 }
 
 func TestNativeSemanticArgumentsUseOriginalParserBeforeSelection(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
 	run := filepath.Join(root, facade.EngineNamespace, "writer-exclusive")

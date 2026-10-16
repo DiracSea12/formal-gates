@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/validate"
 )
 
@@ -16,6 +17,9 @@ import (
 // run assembles the standalone prompt (no requirement or dispatch block) and gate
 // report resolves the original numeric source positions without changing run state.
 func TestCLIGateRunAndReportStandalone(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root, pkg := cliWorkflowFixture(t)
 	context := filepath.Join(t.TempDir(), "review.json")
 	if err := os.WriteFile(filepath.Join(root, "example.txt"), []byte("first line\nsecond line\n"), 0600); err != nil {
@@ -84,6 +88,9 @@ func TestCLIGateRunAndReportStandalone(t *testing.T) {
 }
 
 func TestStandaloneGateStartupSelectsPublishedCatalogPositions(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root, pkg := cliWorkflowFixture(t)
 	if err := os.WriteFile(filepath.Join(pkg, "gates", "other.md"), []byte("# Another gate\nCheck the current changes.\n"), 0600); err != nil {
 		t.Fatal(err)

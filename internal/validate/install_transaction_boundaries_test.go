@@ -350,6 +350,7 @@ func TestBaselineReceiptValidatesManifestPathsAndIdentityBoundaries(t *testing.T
 }
 
 func TestRegistryOwnerPreservesRecordsAcrossInstallAndUninstall(t *testing.T) {
+	t.Parallel()
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -486,6 +487,9 @@ func TestBootstrapReceiptBindsExactRegistryIdentity(t *testing.T) {
 }
 
 func TestAdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	packageRoot := installRepoRoot(t)
 	cases := []struct {
 		name   string
@@ -568,6 +572,9 @@ func installWorkflowNamespaceResidue(t *testing.T, root string) []string {
 }
 
 func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
@@ -613,6 +620,9 @@ func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
 }
 
 func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := copyPackageFixture(t)
 	hostRoot := t.TempDir()
 	t.Setenv("HOME", hostRoot)
@@ -681,6 +691,12 @@ func TestUnsupportedRunHasNoCurrentWriterFallback(t *testing.T) {
 }
 
 func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -746,6 +762,9 @@ func TestInstallAndUninstallUseTheSameLockOwner(t *testing.T) {
 }
 
 func TestInstallFaultsRestoreRegistryIdentityAndCleanup(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	faults := []struct {
 		name  string
 		phase string
@@ -923,6 +942,9 @@ func TestUninstallFaultsReconcileAndPreserveExternalContent(t *testing.T) {
 }
 
 func TestSupportedRestartReconcilesCrashJournalAutomatically(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := installFixtureSource(t)
 	project := t.TempDir()
 	root := t.TempDir()
@@ -980,6 +1002,9 @@ func TestSupportedRestartReconcilesCrashJournalAutomatically(t *testing.T) {
 }
 
 func TestReleaseRollbackRestoresAllOuterIdentity(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := installFixtureSource(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")

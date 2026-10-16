@@ -52,6 +52,9 @@ func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
 }
 
 func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source v1")
 	for _, ext := range []string{".ps1", ".psm1", ".psd1", ".py", ".pyc", ".pyo", ".sh", ".bash", ".bat", ".cmd", ".js", ".mjs", ".cjs"} {
 		mustWriteCLI(t, filepath.Join(source, "references", "helper"+ext), "script "+ext+"\n")
@@ -293,6 +296,9 @@ func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
 }
 
 func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -331,6 +337,9 @@ func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) 
 }
 
 func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -423,6 +432,9 @@ func TestRunInstallRejectsRemovedMultiHostAlias(t *testing.T) {
 }
 
 func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, host := range []string{"claude", "codex", "cursor"} {
 		t.Run(host, func(t *testing.T) {
 			source := writeInstallSource(t, "source")
@@ -453,6 +465,9 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 }
 
 func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	target := testInstallTargetPath(project, "codex")
@@ -513,6 +528,9 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 }
 
 func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "registered legacy target")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -546,6 +564,9 @@ func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
 }
 
 func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	configPath := filepath.Join(project, ".codex", "hooks.json")
@@ -600,6 +621,9 @@ func TestRunInstallRejectsCandidateBinaryWriterFlag(t *testing.T) {
 }
 
 func TestRunInstallHookFailureDoesNotClaimInstallSuccess(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	configPath := filepath.Join(project, ".claude", "settings.json")
@@ -622,6 +646,9 @@ func TestRunInstallHookFailureDoesNotClaimInstallSuccess(t *testing.T) {
 }
 
 func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	first := writeInstallSource(t, "source v1")
 	second := writeInstallSource(t, "source v2")
 	project := t.TempDir()
@@ -663,6 +690,9 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 }
 
 func TestRunInstallGlobalUsesTemporaryHome(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "global source")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -811,6 +841,9 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 }
 
 func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "registered marker owner")
 	home := t.TempDir()
 	t.Setenv("HOME", home)

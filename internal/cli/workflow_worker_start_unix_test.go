@@ -203,6 +203,9 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 }
 
 func TestWorkflowPendingAskStartsOriginalWorkerAndReusesOwnership(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, root, ref, directory := workflowStartFixture(t)
 	candidate, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
 	if err != nil {
@@ -533,6 +536,9 @@ func TestWorkflowWorkerStartHonorsActualCancellationAndRequirementBarrier(t *tes
 // The native consumer must reach the current preparation's original supervisor
 // after requirement replacement, rather than stop at its superseded topology Ask.
 func TestWorkflowConsumerStartsRequirementReplacementPreparation(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, root, original, originalDirectory := workflowStartFixture(t, &protocol.FlowSelection{Disabled: []string{"product-review", "start-readiness", "qa", "gate", "repair"}})
 	var material worker.Material
 	if err := readJSONFileInto(original.Path, &material); err != nil {
@@ -828,6 +834,9 @@ func workflowResumeFixture(t *testing.T) (*facade.Facade, string, facade.WorkerM
 }
 
 func TestWorkflowPendingAskStartsOriginalResumeAndReusesOwnership(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, root, ref, resume, originalDirectory := workflowResumeFixture(t)
 	previous := facade.NativeStartVerifier
 	facade.NativeStartVerifier = harness.NativeStartEvidence
@@ -1013,6 +1022,9 @@ func TestWorkflowAbortSettlesOriginalResume(t *testing.T) {
 }
 
 func TestWorkflowWorkerWaitsForOriginalExitAfterResult(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	previous := facade.NativeSourceVerifier
 	facade.NativeSourceVerifier = harness.NativeResultEvidence
 	t.Cleanup(func() { facade.NativeSourceVerifier = previous })
@@ -1039,6 +1051,9 @@ func TestWorkflowWorkerWaitsForOriginalExitAfterResult(t *testing.T) {
 }
 
 func TestWorkflowWorkerRecoversOriginalCostPendingResult(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	for _, reopen := range []bool{false, true} {
 		t.Run(fmt.Sprint("reopen=", reopen), func(t *testing.T) {
 			previousStart, previousSource := facade.NativeStartVerifier, facade.NativeSourceVerifier

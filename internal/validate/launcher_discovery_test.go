@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +82,9 @@ func launcherChildEnvironment(overrides map[string]string) []string {
 }
 
 func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0600)
 	home := t.TempDir()
