@@ -78,7 +78,7 @@ func (e *Engine) configurationPreview(s *State, selected ConfigurationSelection,
 		return p, err
 	}
 	routeChanged := projected.validationRouteDigest() != s.validationRouteDigest()
-	for _, work := range s.requirementWork(e.cfg.Definition) {
+	for _, work := range s.RequirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkCarry
 		reason := "Apply the confirmed workflow configuration"
 		unfinished := s.liveDispatch(work.ActionID) || s.TaskStatusOf(work.Task) != runtime.TaskTerminal

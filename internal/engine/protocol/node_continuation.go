@@ -145,7 +145,7 @@ func (s *State) BusinessNodes(cd *compiler.CompiledDefinition, parents ...Snapsh
 	var work []RequirementWork
 	if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil {
 		parent = parents[0].State
-		work = s.requirementWork(cd)
+		work = s.RequirementWork(cd)
 	}
 	for i := range nodes {
 		if !s.nodeFlowEnabled(nodes[i].Kind) {
@@ -204,7 +204,7 @@ func (e *Engine) nodeContinuationPreview(s *State, target string, revision uint6
 	if err := s.bindContinuationParent(&p, parents); err != nil {
 		return p, err
 	}
-	for _, w := range s.requirementWork(e.cfg.Definition) {
+	for _, w := range s.RequirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkCarry
 		if s.nodeOwnsTask(to, w.Task, e.cfg.Definition) {
 			disposition = RequirementWorkRedo

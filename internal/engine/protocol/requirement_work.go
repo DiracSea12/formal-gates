@@ -47,10 +47,11 @@ func (e *Engine) RequirementWork() ([]RequirementWork, error) {
 	if state == nil {
 		return nil, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	return state.requirementWork(e.cfg.Definition), nil
+	return state.RequirementWork(e.cfg.Definition), nil
 }
 
-func (state *State) requirementWork(cd *compiler.CompiledDefinition) []RequirementWork {
+// RequirementWork derives the redo/carry inventory from this state and its run definition.
+func (state *State) RequirementWork(cd *compiler.CompiledDefinition) []RequirementWork {
 	if d, ok := state.resetDecision(); ok && d.Reset.Applied && !d.Reset.Confirmed {
 		// Reset has already retired its old QA, gate and repair duties. The
 		// accepted preview retains each original development dispatch, including
@@ -187,7 +188,7 @@ func validateWorkDecisionShape(decisions []RequirementWorkDecision) error {
 }
 
 func (e *Engine) validateRequirementWork(state *State, decisions []RequirementWorkDecision, requesting bool) error {
-	current := state.requirementWork(e.cfg.Definition)
+	current := state.RequirementWork(e.cfg.Definition)
 	reject := func(detail string) error {
 		return &RejectedError{Code: CodeRequirementDecisionRejected, Detail: detail}
 	}

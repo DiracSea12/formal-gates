@@ -1452,10 +1452,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			return protocol.Acceptance{}, Run{}, err
 		}
 		preview := snap.State.ResetPreview()
-		preview.Work, err = f.engine.RequirementWork()
-		if err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
+		preview.Work = snap.State.RequirementWork(f.definition)
 		intake, err := prepareConfirmedIntake(f.root, snap.State.CurrentIntakeConfirmation(), snap.State.Route != "lightweight")
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err

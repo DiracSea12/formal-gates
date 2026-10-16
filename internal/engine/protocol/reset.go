@@ -103,7 +103,7 @@ func (e *Engine) acceptResetDecision(s *State, ask PendingAsk, d *DecidePayload)
 		return validationError("reset requires the exact preservation/cleanup preview and reason")
 	}
 	current := s.ResetPreview()
-	current.Work = s.requirementWork(e.cfg.Definition)
+	current.Work = s.RequirementWork(e.cfg.Definition)
 	current.RequirementRevision = ask.Reset.RequirementRevision
 	current.Intake = ask.Reset.Intake
 	current.Children = ask.Reset.Children
@@ -362,7 +362,7 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 	s.Decisions[d.RequestID] = d
 	request := "reset-confirm:" + d.RequestID
 	pkg := &RequirementDecisionPackage{Intake: preview.Intake, Coverage: s.confirmedCoverage(), CandidateRevision: preview.RequirementRevision, DeltaDigest: preview.Digest, ImpactDigest: preview.Digest, Source: RequirementSourceReset, Classification: RequirementClassificationPreserved, RedoProductReview: s.SliceChild == nil && s.FlowNodeEnabled(string(review.ProductReview)), RedoStartReadiness: s.SliceChild == nil && s.FlowNodeEnabled(string(review.StartReadiness)), ResetRequestID: d.RequestID}
-	for _, work := range s.requirementWork(e.cfg.Definition) {
+	for _, work := range s.RequirementWork(e.cfg.Definition) {
 		disposition := RequirementWorkRedo
 		if result, ok := s.Results[work.ActionID]; ok && result.Outcome == OutcomePass && (result.Validation == nil || result.Validation.Status != "CONTINUE") && s.validationRole(work.Task, e.cfg.Definition) == "engine.development.batch.v6" {
 			disposition = RequirementWorkCarry

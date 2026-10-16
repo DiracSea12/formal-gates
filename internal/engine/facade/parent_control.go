@@ -129,19 +129,16 @@ func (f *Facade) requirementChildren(state *protocol.State) ([]protocol.ChildReq
 			return nil, err
 		}
 		actual, err := child.engine.Load()
-		if err != nil {
-			if isMissingEngineState(err) {
-				summary, e := child.readSummary()
-				if e != nil {
-					return nil, e
-				}
-				actual.State = summary.Termination
-			} else {
-				return nil, err
+		var work []protocol.RequirementWork
+		if err == nil {
+			work = actual.State.RequirementWork(child.definition)
+		} else if isMissingEngineState(err) {
+			summary, e := child.readSummary()
+			if e != nil {
+				return nil, e
 			}
-		}
-		work, err := child.engine.RequirementWork()
-		if err != nil && !isMissingEngineState(err) {
+			actual.State = summary.Termination
+		} else {
 			return nil, err
 		}
 		decisions := make([]protocol.RequirementWorkDecision, len(work))
@@ -281,7 +278,10 @@ func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 			return err
 		}
 		snap, err := child.engine.Load()
-		if isMissingEngineState(err) {
+		var work []protocol.RequirementWork
+		if err == nil {
+			work = snap.State.RequirementWork(child.definition)
+		} else if isMissingEngineState(err) {
 			summary, e := child.readSummary()
 			err = e
 			snap.State = summary.Termination
@@ -290,10 +290,7 @@ func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {
 			return err
 		}
 		p := snap.State.ResetPreview()
-		p.Work, err = child.engine.RequirementWork()
-		if err != nil && !isMissingEngineState(err) {
-			return err
-		}
+		p.Work = work
 		p.RequirementRevision = preview.RequirementRevision
 		p.Intake = preview.Intake
 		p.Digest = p.CanonicalDigest()

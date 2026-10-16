@@ -647,7 +647,7 @@ func (e *Engine) Project(input Observation) (Projection, error) {
 	if err != nil {
 		return Projection{}, err
 	}
-	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.requirementWork(e.cfg.Definition)}, nil
+	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.RequirementWork(e.cfg.Definition)}, nil
 }
 
 // Drive advances deterministic engine-internal steps, then performs the
@@ -1324,7 +1324,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		if ev.Request.Control == ControlReset {
 			preview := state.ResetPreview()
-			preview.Work = state.requirementWork(e.cfg.Definition)
+			preview.Work = state.RequirementWork(e.cfg.Definition)
 			if ev.resetPreview != nil {
 				preview.RequirementRevision = ev.resetPreview.RequirementRevision
 				preview.Intake = ev.resetPreview.Intake
