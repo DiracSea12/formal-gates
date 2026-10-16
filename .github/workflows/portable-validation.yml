@@ -152,11 +152,14 @@ jobs:
         shell: cmd
         run: |
           bin\formal-gates.exe canary portable --root "%FORMAL_GATES_ARCHIVE_ROOT%" --format json > portable-canary.json
+          set "canary_exit_code=%ERRORLEVEL%"
+          type portable-canary.json
+          exit /b %canary_exit_code%
       - name: Run native portable canary (Unix)
         if: matrix.check == 'canary' && runner.os != 'Windows'
         shell: bash
         run: |
-          bin/formal-gates canary portable --root "$FORMAL_GATES_ARCHIVE_ROOT" --format json > portable-canary.json
+          bin/formal-gates canary portable --root "$FORMAL_GATES_ARCHIVE_ROOT" --format json | tee portable-canary.json
       - name: Prepare release evidence names (Windows)
         if: matrix.check == 'canary' && runner.os == 'Windows'
         shell: pwsh
