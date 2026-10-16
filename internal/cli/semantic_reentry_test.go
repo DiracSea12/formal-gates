@@ -167,6 +167,9 @@ func TestSemanticReentryMessageSelectsOriginalBytesForRunAndWorker(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.ContainsAny(filepath.Base(directory), `<>:"/\|?*`) {
+		t.Fatal("worker text payload directory contains nonportable identity characters", directory)
+	}
 	paths, err := facade.OriginalPayloadPaths(directory)
 	if err != nil || len(paths) != 1 {
 		t.Fatal(paths, err)

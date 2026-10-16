@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,7 +68,8 @@ func workerTextDirectory(f *facade.Facade, root, runID string, worker int) (stri
 		return "", fmt.Errorf("select a current displayed worker")
 	}
 	material := run.WorkerMaterials[ids[worker-1]]
-	return filepath.Join(workflowPayloadDirectory(root, runID, "messages"), string(material.ActionID), string(material.AttemptID)), nil
+	identity := sha256.Sum256([]byte(fmt.Sprintf("%q\n%q", material.ActionID, material.AttemptID)))
+	return filepath.Join(workflowPayloadDirectory(root, runID, "messages"), fmt.Sprintf("%x", identity)), nil
 }
 
 type positionListFlag []int

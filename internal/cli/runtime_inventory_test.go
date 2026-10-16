@@ -126,7 +126,7 @@ func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testin
 			if err := json.Unmarshal(result.Bytes(), &reply); err != nil || reply.Result.IsError {
 				t.Fatal(result.String(), err)
 			}
-			var matches struct{ Matches []struct{ Path string } }
+			var matches struct{ Matches []struct{ Path, Text string } }
 			if err := json.Unmarshal([]byte(reply.Result.Content[0].Text), &matches); err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +135,12 @@ func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testin
 				if admission.RuntimeFiles.ContainsFile(filepath.Join(project, filepath.FromSlash(match.Path))) {
 					t.Fatal("original admitted search published installed runtime", match)
 				}
-				found = found || match.Path == ".codex/user-notes.md"
+				if filepath.ToSlash(match.Path) == ".codex/user-notes.md" {
+					if match.Text != "Submit original project note\n" {
+						t.Fatal("original user content changed", match)
+					}
+					found = true
+				}
 			}
 			if !found {
 				t.Fatal("original user content was not read", result.String())

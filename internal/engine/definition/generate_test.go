@@ -2,7 +2,9 @@ package definition
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -114,7 +116,12 @@ func TestWriteGeneratedAtomic(t *testing.T) {
 	go func() {
 		defer reader.Done()
 		for {
-			b, err := os.ReadFile(path)
+			file, err := openGeneratedReader(path)
+			var b []byte
+			if err == nil {
+				b, err = io.ReadAll(file)
+				err = errors.Join(err, file.Close())
+			}
 			if err != nil {
 				select {
 				case torn <- fmt.Sprintf("read generated artifact: %v", err):

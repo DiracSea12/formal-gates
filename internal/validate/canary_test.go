@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"os"
 	"os/exec"
@@ -13,6 +14,60 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestPortableCanaryGitExcludesInstalledRuntimeLeaves(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	tool := ".codex/skills/formal-gates/internal/engine/acceptance/installed_candidate_test.go"
+	peer := ".codex/skills/formal-gates/prompts/user.md"
+	for path, body := range map[string]string{
+		tool: "installed runtime\n", peer: "user material\n",
+		"requirement.md": "confirmed requirement\n", "go.mod": "module portablefixture\n",
+		".gates/engine/canary/state.json": "runtime evidence\n",
+	} {
+		writeTestFile(t, filepath.Join(root, filepath.FromSlash(path)), body)
+	}
+	files := vcs.RuntimeFiles{Files: []string{canonicalRegistryPath(filepath.Join(root, filepath.FromSlash(tool)))}}
+	if err := initializeCanaryGit(root, files); err != nil {
+		t.Fatal(err)
+	}
+	p := vcs.New(root, nil).WithRuntimeFiles(files)
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := p.TreeEntries(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, tracked := entries[tool]; tracked {
+		t.Fatal("installed runtime entered the delivery candidate")
+	}
+	if len(entries) != 4 {
+		t.Fatalf("candidate must contain only fixture delivery files: %v", entries)
+	}
+	for _, path := range []string{".gitignore", "requirement.md", "go.mod", peer} {
+		if _, tracked := entries[path]; !tracked {
+			t.Fatalf("delivery file omitted: %s", path)
+		}
+	}
+	if err := p.VerifyReady(); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := p.AddWorktree(workspace, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, filepath.FromSlash(tool))); !os.IsNotExist(err) {
+		t.Fatalf("isolated candidate copied the installed runtime: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(peer))); err != nil || string(body) != "user material\n" {
+		t.Fatalf("isolated candidate lost adjacent user material: %q %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(tool))); err != nil || string(body) != "installed runtime\n" {
+		t.Fatalf("candidate creation changed installed runtime: %q %v", body, err)
+	}
+}
 
 func installedScriptRuntimeFixture(t *testing.T) string {
 	t.Helper()

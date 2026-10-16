@@ -8,7 +8,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
+
+// openGeneratedReader permits rename while retaining the reader's original file.
+func openGeneratedReader(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}
 
 func TestWriteGeneratedPreservesOpenReader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "制品😀.json")
@@ -17,7 +34,7 @@ func TestWriteGeneratedPreservesOpenReader(t *testing.T) {
 	if err := writeGenerated(path, stale); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	reader, err := os.Open(path)
+	reader, err := openGeneratedReader(path)
 	if err != nil {
 		t.Fatalf("open generated artifact: %v", err)
 	}

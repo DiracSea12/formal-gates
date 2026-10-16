@@ -270,7 +270,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module portablefixture\n\ngo 1.22\n"), 0600); err != nil {
 		return err
 	}
-	if err := initializeCanaryGit(root); err != nil {
+	if err := initializeCanaryGit(root, admission.RuntimeFiles); err != nil {
 		return err
 	}
 	base, err := (vcs.ExecRunner{}).Run(root, "git", "rev-parse", "HEAD")
@@ -686,7 +686,7 @@ func portableComparison(c coverage.AcceptanceCase, fact protocol.ExecutionFact) 
 	return worker.Observation{Result: result, Comparison: comparison}, nil
 }
 
-func initializeCanaryGit(root string) error {
+func initializeCanaryGit(root string, runtimeFiles vcs.RuntimeFiles) error {
 	runner := vcs.ExecRunner{}
 	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}} {
 		if _, err := runner.Run(root, "git", args...); err != nil {
@@ -697,16 +697,21 @@ func initializeCanaryGit(root string) error {
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/\n"), 0o600); err != nil {
 		return err
 	}
-	return commitCanaryGit(root, "base")
-}
-
-func commitCanaryGit(root, message string) error {
-	runner := vcs.ExecRunner{}
-	if _, err := runner.Run(root, "git", "add", "--all"); err != nil {
+	untracked, err := runner.RunRaw(root, "git", nil, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
 		return err
 	}
-	_, err := runner.Run(root, "git", "commit", "-m", message)
-	return err
+	var paths []string
+	for _, path := range strings.Split(string(untracked), "\x00") {
+		if path != "" && !runtimeFiles.ContainsFile(filepath.Join(root, filepath.FromSlash(path))) {
+			paths = append(paths, path)
+		}
+	}
+	p := vcs.New(root, runner)
+	if err := p.Track(paths); err != nil {
+		return err
+	}
+	return p.Commit("base")
 }
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) []CanaryInstallIdentity {
@@ -743,7 +748,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name, false, err.Error())
 			continue
 		}
-		releaseRoot := filepath.Join(project, "stable-release")
+		releaseRoot := filepath.Join(tempRoot, "stable-release", hostName)
 		report, err := Install(InstallOptions{Source: root, Host: tc.host, Scope: "project", Project: project, ReleaseRoot: releaseRoot, BinaryTarget: launcher, RegistryPath: registry, Force: true})
 		if err != nil {
 			addCheck(tc.name, false, err.Error())
@@ -819,7 +824,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		}
 		tc := struct{ name, host string }{name: "install-" + canary.host + "-native-runtime", host: canary.host}
 		project := filepath.Join(tempRoot, tc.name)
-		releaseRoot := filepath.Join(project, "stable-release")
+		releaseRoot := filepath.Join(tempRoot, "stable-release", canary.host)
 		canaryHome := filepath.Join(tempRoot, "stable-home", canary.host)
 		canaryLocalAppData := filepath.Join(tempRoot, "stable-localappdata", canary.host)
 		registry := filepath.Join(canaryHome, ".formal-gates", "registry.json")

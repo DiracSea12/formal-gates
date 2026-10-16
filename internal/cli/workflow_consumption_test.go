@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -201,12 +203,6 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(target, "bin"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// The consumer reaches its real request publication and supervisor boundary.
-	// The local supervisor fixture refuses execution before any native model call.
-	supervisor := "#!/bin/sh\n[ \"$#\" = 3 ] && [ \"$1\" = harness ] && [ \"$2\" = supervise ] || exit 92\nprintf '%s\\n' \"$3\" >> \"$WORKFLOW_SUPERVISOR_CALLS\"\nexit 93\n"
-	if err := os.WriteFile(filepath.Join(target, "bin", "formal-gates"), []byte(supervisor), 0700); err != nil {
-		t.Fatal(err)
-	}
 	homeA, homeB, configA, configB, binA, binB := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 	for _, path := range []*string{&homeA, &homeB, &configA, &configB, &binA, &binB} {
 		*path, err = filepath.EvalSymlinks(*path)
@@ -216,9 +212,21 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	}
 	calls := filepath.Join(t.TempDir(), "help-calls")
 	supervisorCalls := filepath.Join(t.TempDir(), "supervisor-calls")
-	peer := "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s|%s|%s|%s\\n' \"$HOME\" \"$CODEBUDDY_CONFIG_DIR\" \"$WORKBUDDY_CONFIG_DIR\" \"$ACC_PRODUCT_CONFIG_PATH\" >> \"$WORKFLOW_NATIVE_CALLS\"\nprintf '%s\\n' '--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk'\n"
-	for _, bin := range []string{binA, binB} {
-		if err := os.WriteFile(filepath.Join(bin, "codebuddy"), []byte(peer), 0700); err != nil {
+	peerName := "codebuddy"
+	if runtime.GOOS == "windows" {
+		peerName += ".exe"
+	}
+	peerPath := filepath.Join(binA, peerName)
+	build := exec.Command("go", "build", "-o", peerPath, filepath.Join("testdata", "native_paths_peer.go"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build native path peer: %v\n%s", err, output)
+	}
+	peer, err := os.ReadFile(peerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(binB, peerName), filepath.Join(target, "bin", installTestBinaryName())} {
+		if err := os.WriteFile(path, peer, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -226,6 +234,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	mustWriteCLI(t, product, `{}`)
 	originalPath := os.Getenv("PATH")
 	t.Setenv("HOME", homeA)
+	t.Setenv("USERPROFILE", homeA)
 	t.Setenv("PATH", binA+string(os.PathListSeparator)+originalPath)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", configA)
 	t.Setenv("ACC_PRODUCT_CONFIG_PATH", "")
@@ -248,6 +257,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 		material = ref
 	}
 	t.Setenv("HOME", homeB)
+	t.Setenv("USERPROFILE", homeB)
 	t.Setenv("PATH", binB+string(os.PathListSeparator)+originalPath)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", configB)
 	mustWriteCLI(t, filepath.Join(root, ".gates", "config.json"), `invalid edit ignored by cold worker`)
@@ -268,7 +278,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 		binding := request["binding"].(map[string]any)
 		environment := binding["environment"].(map[string]any)
 		launch := binding["launch"].(map[string]any)
-		if request["provider"] != "workbuddy" || request["model"] != "selected-model" || request["reasoning_effort"] != "high" || launch["executable"] != filepath.Join(binA, "codebuddy") || environment["HOME"] != homeA || environment["CODEBUDDY_CONFIG_DIR"] != configA || environment["WORKBUDDY_CONFIG_DIR"] != configA || environment["ACC_PRODUCT_CONFIG_PATH"] != product {
+		if request["provider"] != "workbuddy" || request["model"] != "selected-model" || request["reasoning_effort"] != "high" || launch["executable"] != peerPath || environment["HOME"] != homeA || environment["CODEBUDDY_CONFIG_DIR"] != configA || environment["WORKBUDDY_CONFIG_DIR"] != configA || environment["ACC_PRODUCT_CONFIG_PATH"] != product {
 			t.Fatalf("consumer discovered B instead of persisted A: %v", request)
 		}
 	}
@@ -285,7 +295,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(shown.Settings, run.Settings) || !reflect.DeepEqual(shown.Cost, run.Cost) || !reflect.DeepEqual(shown.GuardBudget, run.GuardBudget) {
 		t.Fatal("cold consumer changed settings, cap, cost or grants", err)
 	}
-	if os.Getenv("HOME") != homeB || os.Getenv("WORKBUDDY_CONFIG_DIR") != configB {
+	if os.Getenv("HOME") != homeB || os.Getenv("USERPROFILE") != homeB || os.Getenv("WORKBUDDY_CONFIG_DIR") != configB {
 		t.Fatal("consumer changed global environment")
 	}
 }
