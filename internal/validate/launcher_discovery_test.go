@@ -86,6 +86,7 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 		return
 	}
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "codex")
 	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0600)
 	home := t.TempDir()
 	source := copyPackageFixture(t)

@@ -54,6 +54,7 @@ func admissionRun(t *testing.T, dir, name string, args ...string) {
 func admissionGitProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, "claude")
 	admissionWrite(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Sample requirement."), 0o600)
 	admissionRun(t, root, "git", "init")
 	admissionRun(t, root, "git", "config", "user.email", "admission@example.invalid")

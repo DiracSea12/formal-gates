@@ -579,6 +579,7 @@ func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
 	installGitProjectAt(t, nested)
+	testkit.ConfigureNativePaths(t, nested, "codex")
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "launcher", nativeBinaryName())
 	parentOptions := InstallOptions{Source: source, Host: "codex", Scope: "project", Project: parent, RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true}
@@ -628,6 +629,7 @@ func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
 	t.Setenv("HOME", hostRoot)
 	t.Setenv("USERPROFILE", hostRoot)
 	project := installGitProject(t)
+	testkit.ConfigureNativePaths(t, project, "codex")
 	otherProject := t.TempDir()
 	registry := filepath.Join(hostRoot, ".formal-gates", "registry.json")
 	launcher := filepath.Join(hostRoot, ".local", "bin", nativeBinaryName())

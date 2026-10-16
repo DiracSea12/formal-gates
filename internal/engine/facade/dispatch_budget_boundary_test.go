@@ -1074,6 +1074,7 @@ func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
 func TestAttachedReceiptPreservesAuthorizedResumeIdentity(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	testkit.ConfigureNativePaths(t, root, meteredProvider)
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)
 	}
