@@ -256,19 +256,15 @@ func (f *Facade) syncReleasedChildren(state *protocol.State) error {
 	return nil
 }
 
-func (f *Facade) recordChildControl() error {
-	snap, err := f.engine.Load()
-	if err != nil {
-		return err
-	}
-	if snap.State.SliceChild == nil {
+func (f *Facade) recordChildControl(state *protocol.State) error {
+	if state.SliceChild == nil {
 		return nil
 	}
-	parent, err := Open(f.root, snap.State.SliceChild.MasterRunID, f.runtimeFiles)
+	parent, err := Open(f.root, state.SliceChild.MasterRunID, f.runtimeFiles)
 	if err != nil {
 		return err
 	}
-	return parent.engine.RecordChildControl(snap.State, protocol.Observation{})
+	return parent.engine.RecordChildControl(state, protocol.Observation{})
 }
 
 func (f *Facade) resetChildrenPreview(preview *protocol.ResetPreview) error {

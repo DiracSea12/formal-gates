@@ -1539,16 +1539,15 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if err := f.syncReleasedChildren(nil); err != nil {
 		return acceptance, Run{}, err
 	}
-	if err := f.recordChildControl(); err != nil {
+	current, err := f.engine.Load()
+	if err != nil {
 		return acceptance, Run{}, err
 	}
-	current, loadErr := f.engine.Load()
-	if loadErr == nil {
-		if _, err := f.workerMaterials(current.State, true); err != nil {
-			return acceptance, Run{}, err
-		}
-	} else if !isMissingEngineState(loadErr) {
-		return acceptance, Run{}, loadErr
+	if err := f.recordChildControl(current.State); err != nil {
+		return acceptance, Run{}, err
+	}
+	if _, err := f.workerMaterials(current.State, true); err != nil {
+		return acceptance, Run{}, err
 	}
 	run, err := f.projectOrSummary()
 	return acceptance, run, err

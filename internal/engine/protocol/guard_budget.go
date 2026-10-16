@@ -220,7 +220,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 		if !task.Valid() || authorized[task] {
 			return nil
 		}
-		provenance, maxAttempts, ok := e.guardTaskProvenance(state, task, comparisons, repairs)
+		provenance, maxAttempts, ok := e.guardTaskProvenance(state, task, comparisons, repairs, definitionDigest)
 		if !ok {
 			return fmt.Errorf("guard budget: authorized dispatch %s has no authorizing source", task.String())
 		}
@@ -515,7 +515,7 @@ func (s *State) originalGuardSource(task runtime.TaskKey, cd *compiler.CompiledD
 // （一次性用户追加只改该账本的 MaxAttempts，AC-059），无账本条目时用编译步策略。
 // 需求重走替换任务先经 sourceValidationTask 折叠回原任务——替换与原任务同源
 // 声明，provenance 按其来源归类。
-func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, comparisons []repairComparison, repairs []repairWork) (guard.Provenance, int, bool) {
+func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, comparisons []repairComparison, repairs []repairWork, definitionDigest string) (guard.Provenance, int, bool) {
 	role := state.validationRole(task, e.cfg.Definition)
 	source := state.sourceValidationTask(task)
 	maxAttempts := e.retryMaxAttempts(task.Step)
@@ -530,11 +530,10 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, compari
 	}
 	switch role {
 	case "engine.development.plan.v1":
-		data, err := encoder.Encode(e.cfg.Definition)
-		if err != nil {
+		if definitionDigest == "" {
 			return guard.Provenance{}, 0, false
 		}
-		return guard.Provenance{Kind: guard.DefinitionSource, Identity: guard.Identity{ID: encoder.Digest(data), Revision: string(e.cfg.Definition.Version)}}, maxAttempts, true
+		return guard.Provenance{Kind: guard.DefinitionSource, Identity: guard.Identity{ID: definitionDigest, Revision: string(e.cfg.Definition.Version)}}, maxAttempts, true
 	case "engine.validation.observation.v2":
 		if input := state.validationObservationInput(); input != nil && source == observationTask(e.cfg.Definition, input) {
 			return guard.Provenance{Kind: guard.RouteSource, Identity: guard.Identity{ID: "validation-route", Revision: state.validationRouteDigest()}}, maxAttempts, true
@@ -788,7 +787,7 @@ func (e *Engine) refreshGuardBudget(state *State) error {
 // 无授权来源或不在全集＝GUARD_ALLOWANCE_BLOCKED（扩张只经既有 typed Ask 通道）；
 // attempt 账本未标记耗尽而重算已超发＝BLOCKED_BUG。
 func (e *Engine) guardTaskAuthorized(state *State, basis guard.Basis, task runtime.TaskKey) error {
-	_, maxAttempts, ok := e.guardTaskProvenance(state, task, nil, nil)
+	_, maxAttempts, ok := e.guardTaskProvenance(state, task, nil, nil, basis.Definition.Identity.ID)
 	if !ok || !basisDeclaresTask(basis, task) {
 		return &RejectedError{
 			Code:   CodeGuardAllowanceBlocked,
