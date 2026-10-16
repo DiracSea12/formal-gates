@@ -105,6 +105,37 @@ func canaryPeerWrapper(testName, key, script string) string {
 	return "#!/bin/sh\n" + prefix + "exec " + quote(binary) + " -test.run='^" + testName + "$' -- \"$@\"\n"
 }
 
+// The writer owns the writable descriptor so concurrent parent launches cannot inherit it.
+func writePeerWrapper(path, body string) error {
+	cmd := exec.Command("/bin/sh", "-c", `printf '%s' "$1" > "$2"`, "peer-wrapper", body, path)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0755)
+}
+
+func TestPeerWrapperPreservesContentsAndMode(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "peer with spaces")
+	body := canaryPeerWrapper("TestScriptedPeer", "FORMAL_GATES_NATIVE_PEER_SCRIPT", filepath.Join(directory, "peer's script.json"))
+	for _, expected := range []string{body, body + "# exact replacement\n"} {
+		if err := writePeerWrapper(path, expected); err != nil {
+			t.Fatal(err)
+		}
+		if actual := readTestFile(t, path); actual != expected {
+			t.Fatalf("wrapper bytes = %q, want %q", actual, expected)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0755 {
+			t.Fatalf("wrapper mode = %o, want 755", info.Mode().Perm())
+		}
+	}
+}
+
 func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir string, answer map[string]any) error {
 	c := e.canary
 	workspace := resolveNativePath(textOf(request["workspace"]))
@@ -129,7 +160,7 @@ func (e *canaryLocalExecutor) prepareNativePeer(request map[string]any, dir stri
 		wrapperBody = "#!/bin/sh\ncase \"$1\" in\n*/zcode_credential.mjs) exec " + quote(textOf(launch["executable"])) +
 			" \"$@\" ;;\n*)\n" + strings.TrimPrefix(wrapperBody, "#!/bin/sh\n") + ";;\nesac\n"
 	}
-	if err := os.WriteFile(wrapper, []byte(wrapperBody), 0755); err != nil {
+	if err := writePeerWrapper(wrapper, wrapperBody); err != nil {
 		return err
 	}
 	launch["executable"] = wrapper
@@ -333,7 +364,7 @@ func TestCanaryNativePeersValidateLaunchInputs(t *testing.T) {
 					}
 					wrapperBody = strings.Replace(wrapperBody, "#!/bin/sh\n", "#!/bin/sh\n"+prefix, 1)
 					wrapperBody = strings.Replace(wrapperBody, "\"$@\"\n", "\"$@\""+suffix+"\n", 1)
-					if err := os.WriteFile(wrapper, []byte(wrapperBody), 0755); err != nil {
+					if err := writePeerWrapper(wrapper, wrapperBody); err != nil {
 						t.Fatal(err)
 					}
 					environment := binding["environment"]

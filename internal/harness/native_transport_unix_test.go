@@ -207,7 +207,7 @@ func startPeer(t *testing.T, script peerScript) (executable, echoPath string) {
 	}
 	wrapper := filepath.Join(dir, "dsh")
 	wrapperBody := canaryPeerWrapper("TestScriptedPeer", "FORMAL_GATES_NATIVE_PEER_SCRIPT", scriptPath)
-	if err := os.WriteFile(wrapper, []byte(wrapperBody), 0o755); err != nil {
+	if err := writePeerWrapper(wrapper, wrapperBody); err != nil {
 		t.Fatal(err)
 	}
 	return wrapper, echoPath
