@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"slices"
 
 	"formal-gates/internal/cost"
@@ -134,7 +133,7 @@ func (e *Engine) recordRetiredDispatchCosts(state *State, expectedRevision uint6
 		return nil
 	}
 	var original State
-	if err := json.Unmarshal(base.Content, &original); err != nil {
+	if err := original.UnmarshalJSON(base.Content); err != nil {
 		return err
 	}
 	slices.Sort(ids)

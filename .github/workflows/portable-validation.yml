@@ -123,7 +123,7 @@ jobs:
           chmod +x "$archive_root/bin/formal-gates"
           echo "FORMAL_GATES_ARCHIVE_ROOT=$archive_root" >> "$GITHUB_ENV"
       - name: Run Go tests
-        run: go test -json ./... -timeout=0 -tags=qastructure -parallel=20
+        run: go test ./... -json -timeout=0 -tags=qastructure -parallel=20
       - name: Run go vet
         run: go vet ./...
       - name: Run Go race tests (Unix)

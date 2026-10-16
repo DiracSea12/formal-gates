@@ -910,7 +910,7 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	capacity := 16
 	if stored, err := store.Load(); err == nil {
 		var state protocol.State
-		if err := json.Unmarshal(stored.Content, &state); err != nil {
+		if err := state.UnmarshalJSON(stored.Content); err != nil {
 			return nil, err
 		}
 		nativeRoot = state.NativeRoot
