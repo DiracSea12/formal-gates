@@ -512,7 +512,7 @@ func TestFencedTerminalWindowsRetainEvidenceAndAllowPureReplay(t *testing.T) {
 			if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
-			run, err := f.project()
+			run, err := f.project(nil)
 			if err != nil {
 				t.Fatal(err)
 			}

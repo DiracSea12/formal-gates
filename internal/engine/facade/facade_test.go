@@ -353,7 +353,7 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
 		t.Fatalf("complete engine: %v", err)
 	}
-	run, err := f.project()
+	run, err := f.project(nil)
 	if err != nil {
 		t.Fatalf("project complete run: %v", err)
 	}

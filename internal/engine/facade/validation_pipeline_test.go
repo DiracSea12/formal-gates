@@ -272,7 +272,7 @@ func (d *validationDriver) drive() {
 			}
 			_, _, err = d.f.engine.Drive(protocol.Observation{})
 			if err == nil {
-				r, err = d.f.project()
+				r, err = d.f.project(nil)
 			}
 		} else {
 			r, err = d.f.Drive()
@@ -1266,7 +1266,7 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 		return nil, Run{}, err
 	}
 	f := &Facade{admission: admitted, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: engine, envelope: store.Envelope(), definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcs.New(root, options.VCSRunner)}
-	run, err := f.project()
+	run, err := f.project(nil)
 	return f, run, err
 }
 
@@ -1546,7 +1546,7 @@ func (d *validationDriver) assertRequiredValidationComplete(scope coverage.Scope
 			}
 		}
 		var err error
-		d.run, err = d.f.project()
+		d.run, err = d.f.project(nil)
 		if err != nil {
 			d.t.Fatal(err)
 		}

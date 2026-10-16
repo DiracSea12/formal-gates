@@ -643,6 +643,12 @@ func (e *Engine) Project(input Observation) (Projection, error) {
 	if err != nil {
 		return Projection{}, err
 	}
+	return e.ProjectSnapshot(snapshot, input)
+}
+
+// ProjectSnapshot derives read-only views from an already validated snapshot.
+func (e *Engine) ProjectSnapshot(snapshot Snapshot, input Observation) (Projection, error) {
+	e = e.observing(input)
 	plan, err := e.decide(snapshot.State)
 	if err != nil {
 		return Projection{}, err

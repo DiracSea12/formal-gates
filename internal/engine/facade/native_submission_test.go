@@ -91,7 +91,7 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 				if _, _, err = f.engine.Drive(protocol.Observation{}); err != nil {
 					t.Fatal(err)
 				}
-				run, err := f.project()
+				run, err := f.project(nil)
 				if err != nil || run.Status != "ABORTED" {
 					t.Fatalf("normal abort did not finish: %s %v", run.Status, err)
 				}

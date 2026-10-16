@@ -796,7 +796,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		return nil, Run{}, cleanupFailedStart(err)
 	}
 	f := &Facade{admission: admission, root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity, vcsRunner: options.VCSRunner, vcs: vcsProvider, runtimeFiles: options.RuntimeFiles}
-	run, err := f.project()
+	run, err := f.project(nil)
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -1063,7 +1063,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 		if err := f.publishSliceReceipt(snap.State.SliceReceipt); err != nil {
 			return Run{}, err
 		}
-		return f.project()
+		return f.project(&snap)
 	}
 	terminalReady := snap.State.Phase == runtime.PhaseTerminal || snap.State.DeliveryComplete(f.definition) && snap.State.ResourcesCleaned()
 	if !terminalReady {
@@ -1156,7 +1156,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 	if _, err := f.workerMaterials(current.State, true); err != nil {
 		return Run{}, err
 	}
-	run, err := f.project()
+	run, err := f.project(&current)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1173,7 +1173,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 				return Run{}, err
 			}
 		}
-		if run, err = f.project(); err != nil {
+		if run, err = f.project(nil); err != nil {
 			return Run{}, err
 		}
 		// 终态快照边界（regular COMPLETE）：发布前后双 resolve 核验原生身份恒等。
@@ -1227,7 +1227,7 @@ func (f *Facade) sealDelivered() error {
 		if err != nil {
 			return err
 		}
-		run, err := f.project()
+		run, err := f.project(nil)
 		if err != nil {
 			return err
 		}
@@ -1413,7 +1413,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, err
 	}
 	if recorded {
-		run, err := f.projectOrSummary()
+		run, err := f.projectOrSummary(nil)
 		return accepted, run, err
 	}
 	unlock, err := f.acquireWriteWindow()
@@ -1426,7 +1426,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, err
 	}
 	if recorded {
-		run, err := f.projectOrSummary()
+		run, err := f.projectOrSummary(nil)
 		return accepted, run, err
 	}
 	var observation protocol.Observation
@@ -1546,7 +1546,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if _, err := f.workerMaterials(current.State, true); err != nil {
 		return acceptance, Run{}, err
 	}
-	run, err := f.projectOrSummary()
+	run, err := f.projectOrSummary(&current)
 	return acceptance, run, err
 }
 
@@ -1581,18 +1581,18 @@ func (f *Facade) replayTerminalEvent(event protocol.Event) (protocol.Acceptance,
 }
 
 func (f *Facade) Next() (decision.NextResult, error) {
-	run, err := f.projectOrSummary()
+	run, err := f.projectOrSummary(nil)
 	if err != nil {
 		return decision.NextResult{}, err
 	}
 	return run.Next, nil
 }
 
-func (f *Facade) Show() (Run, error)   { return f.projectOrSummary() }
-func (f *Facade) Status() (Run, error) { return f.projectOrSummary() }
+func (f *Facade) Show() (Run, error)   { return f.projectOrSummary(nil) }
+func (f *Facade) Status() (Run, error) { return f.projectOrSummary(nil) }
 
-func (f *Facade) projectOrSummary() (Run, error) {
-	run, err := f.project()
+func (f *Facade) projectOrSummary(snapshot *protocol.Snapshot) (Run, error) {
+	run, err := f.project(snapshot)
 	if err == nil && run.Status != "COMPLETE" && run.Status != "ABORTED" {
 		return run, nil
 	}
@@ -1631,8 +1631,14 @@ func isMissingEngineState(err error) bool {
 	return errors.As(err, &rejected) && rejected.Code == protocol.CodeNotInitialized
 }
 
-func (f *Facade) project() (Run, error) {
-	projection, err := f.engine.Project(protocol.Observation{})
+func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
+	var projection protocol.Projection
+	var err error
+	if snapshot == nil {
+		projection, err = f.engine.Project(protocol.Observation{})
+	} else {
+		projection, err = f.engine.ProjectSnapshot(*snapshot, protocol.Observation{})
+	}
 	if err != nil {
 		return Run{}, err
 	}
@@ -2014,7 +2020,7 @@ func (f *Facade) freezeCleanupSummary(s *protocol.State) error {
 	if err != nil {
 		return err
 	}
-	run, err := f.project()
+	run, err := f.project(nil)
 	if err != nil {
 		return err
 	}
