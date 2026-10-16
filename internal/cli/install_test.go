@@ -418,6 +418,9 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 }
 
 func TestRunInstallRejectsRemovedMultiHostAlias(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer

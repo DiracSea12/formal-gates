@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/settings"
 )
 
@@ -34,6 +35,9 @@ func confirmConfiguration(t *testing.T, f *Facade, input ConfigurationInput) (Co
 }
 
 func TestConfigurationControlPinsSavedSuiteDuringReviewBeforeTopology(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	f, root := workerMaterialFacade(t)
 	if _, err := f.Drive(); err != nil {
 		t.Fatal(err)

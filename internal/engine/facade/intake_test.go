@@ -350,6 +350,9 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 }
 
 func TestStartRejectsInvalidIntakeAndResolverFailureBeforeIntent(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	adapter := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-refusal", InstallName: "intake-refusal", Installable: true}, fail: true}
 	if err := host.Register(adapter); err != nil {
 		t.Fatal(err)
@@ -396,6 +399,9 @@ func TestStartRejectsInvalidIntakeAndResolverFailureBeforeIntent(t *testing.T) {
 }
 
 func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	preview, err := PrepareIntake(root, "requirements.md", "", nil, true)
