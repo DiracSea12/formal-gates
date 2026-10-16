@@ -216,6 +216,7 @@ func TestMainlineReopenAdmitsOriginalNativePrefixes(t *testing.T) {
 	t.Parallel()
 	for _, point := range []string{"merge", "commit", "cases", "candidate"} {
 		t.Run(point, func(t *testing.T) {
+			t.Parallel()
 			r := &mergeInterruption{Runner: vcs.ExecRunner{}, point: point}
 			master, _ := mainlineReady(t, "", false)
 			root := master.f.root
