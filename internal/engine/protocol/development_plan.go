@@ -570,13 +570,18 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 		request, p, latest = id, proposal, d.Revision
 	}
 	// Identical confirmations preserve the original execution contract reference.
-	digest := planContractDigest(p)
+	var digest string
 	for id, d := range s.Decisions {
 		if d.Revision >= latest || decisionPlanConfirmation(d) == nil {
 			continue
 		}
-		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == digest {
-			request, latest = id, d.Revision
+		if proposal := s.decisionPlanProposal(d); proposal != nil {
+			if digest == "" {
+				digest = planContractDigest(p)
+			}
+			if planContractDigest(proposal) == digest {
+				request, latest = id, d.Revision
+			}
 		}
 	}
 	return request, p, s.requirementRevisionAt(latest)
@@ -598,13 +603,18 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 			request, p, latest = id, proposal, d.Revision
 		}
 	}
-	digest := planContractDigest(p)
+	var digest string
 	for id, d := range s.Decisions {
 		if d.Revision >= latest {
 			continue
 		}
-		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == digest {
-			request, latest = id, d.Revision
+		if proposal := s.decisionPlanProposal(d); proposal != nil {
+			if digest == "" {
+				digest = planContractDigest(p)
+			}
+			if planContractDigest(proposal) == digest {
+				request, latest = id, d.Revision
+			}
 		}
 	}
 	return request, p, s.requirementRevisionAt(latest)
