@@ -141,8 +141,15 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 		if err != nil || json.Unmarshal(body, &response) != nil || response.Boundary != "ASK" || len(response.Blocked) != 0 {
 			t.Fatalf("original source collection: %v %s", err, body)
 		}
-		if recovered, err := NativeJobSource("codex", directory); err != nil || !reflect.DeepEqual(recovered, source) || nativePeerTurns(t, s) != 2 {
-			t.Fatal("collection or replay reissued the original turn", recovered, err)
+		recovered, err := NativeJobSource("codex", directory)
+		if err != nil {
+			t.Fatal("collection or replay lost the original source", err)
+		}
+		if !reflect.DeepEqual(recovered, source) {
+			t.Fatalf("collection or replay changed the original source: before=%#v after=%#v", source, recovered)
+		}
+		if turns := nativePeerTurns(t, s); turns != 2 {
+			t.Fatalf("collection or replay issued %d turns, want original developer and independent gate: %s", turns, body)
 		}
 	}
 	var state struct {

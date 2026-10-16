@@ -374,9 +374,7 @@ func TestSVNChangedPathsFromPreservesNativeValuesAndReversions(t *testing.T) {
 	if err := os.Remove(filepath.Join(p.root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("empty", filepath.Join(p.root, "link")); err != nil {
-		t.Fatal(err)
-	}
+	svnWriteLink(t, filepath.Join(p.root, "link"), "empty")
 	paths, err = p.ChangedPathsFrom(base)
 	if err != nil || !reflect.DeepEqual(paths, []string{"body.txt", "empty", "link"}) {
 		t.Fatal("complete native file/property/link diff differs", paths, err)
@@ -394,9 +392,7 @@ func TestSVNChangedPathsFromPreservesNativeValuesAndReversions(t *testing.T) {
 	if err := os.Remove(filepath.Join(p.root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("body.txt", filepath.Join(p.root, "link")); err != nil {
-		t.Fatal(err)
-	}
+	svnWriteLink(t, filepath.Join(p.root, "link"), "body.txt")
 	paths, err = p.ChangedPathsFrom(base)
 	if err != nil || len(paths) != 0 {
 		t.Fatal("native values restored to development retained a false diff", paths, err)

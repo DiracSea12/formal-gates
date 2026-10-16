@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +88,18 @@ func nativeFixtureLog(t *testing.T) *os.File {
 	t.Cleanup(func() { file.Close() })
 	return file
 }
+func svnWriteLink(t *testing.T, path, target string) {
+	t.Helper()
+	var err error
+	if runtime.GOOS == "windows" {
+		err = os.WriteFile(path, []byte("link "+target), 0644)
+	} else {
+		err = os.Symlink(target, path)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	t.Helper()
 	for _, tool := range []string{"svn", "svnadmin"} {
@@ -108,10 +121,9 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	if err := os.WriteFile(filepath.Join(wc, "body.txt"), []byte(" leading\ntrailing\n\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("body.txt", filepath.Join(wc, "link")); err != nil {
-		t.Fatal(err)
-	}
+	svnWriteLink(t, filepath.Join(wc, "link"), "body.txt")
 	nativeCommand(t, runner, wc, "svn", "add", "body.txt", "empty", "link")
+	nativeCommand(t, runner, wc, "svn", "propset", "svn:special", "true", "link")
 	nativeCommand(t, runner, wc, "svn", "propset", "svn:executable", "true", "body.txt")
 	property := filepath.Join(root, "property")
 	if err := os.WriteFile(property, []byte{' ', 0, 1, '\n'}, 0644); err != nil {
@@ -140,6 +152,10 @@ func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
 	var body nativeEntry
 	if err := json.Unmarshal([]byte(entries["body.txt"]), &body); err != nil || !bytes.Equal(body.Properties["svn:executable"], []byte("*")) {
 		t.Fatalf("native executable property = %q, %v", body.Properties["svn:executable"], err)
+	}
+	var link nativeEntry
+	if err := json.Unmarshal([]byte(entries["link"]), &link); err != nil || !bytes.Equal(link.Properties["svn:special"], []byte("*")) || string(link.Content) != "link body.txt" || entryMode(entries["link"]) != "120000" {
+		t.Fatalf("native link material = %+v, %v", link, err)
 	}
 	workspace := filepath.Join(nativeFixtureDirectory(t), "candidate")
 	handle := PlanWorkspace("svn", base, "owned", "candidate")

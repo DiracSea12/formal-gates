@@ -46,12 +46,52 @@ func (p *Provider) Worktrees() ([]Worktree, error) {
 	return result, nil
 }
 func (p *Provider) AddWorktree(path, base string) error {
-	if relative, err := filepath.Rel(p.root, path); filepath.IsAbs(path) && err == nil {
-		// Git exports this spelling as GIT_DIR to its checkout subprocess.
-		path = "." + string(filepath.Separator) + relative
+	target := path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(p.root, target)
 	}
-	_, err := p.runner.Run(p.root, "git", "worktree", "add", "--detach", path, base)
+	exists, err := p.WorkspaceExists(target, WorkspaceHandle{})
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := p.runner.Run(p.root, "git", "worktree", "add", "--no-checkout", "--detach", "--", path, base); err != nil {
+			return err
+		}
+	}
+	workspace := p.At(target)
+	if exists {
+		identity, err := workspace.Resolve()
+		if err != nil {
+			return err
+		}
+		if identity != base {
+			return fmt.Errorf("workspace identity differs from original source")
+		}
+	}
+	ready, err := workspace.WorkspaceCheckoutReady()
+	if err != nil || ready {
+		return err
+	}
+	_, err = p.runner.Run(target, "git", "reset", "--hard", "--no-recurse-submodules", base)
 	return err
+}
+
+// WorkspaceCheckoutReady observes Git's index, atomically installed after the
+// initial checkout. Native workspace registration alone also exists without it.
+func (p *Provider) WorkspaceCheckoutReady() (bool, error) {
+	if p.name != "git" {
+		return true, nil
+	}
+	index, err := p.runner.Run(p.root, "git", "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(index)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 func (p *Provider) RemoveWorktree(path string) error {
 	_, err := p.runner.Run(p.root, "git", "worktree", "remove", "--force", path)

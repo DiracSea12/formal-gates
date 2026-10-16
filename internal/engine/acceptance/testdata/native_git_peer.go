@@ -35,8 +35,14 @@ func main() {
 		panic(err)
 	}
 	operation := arguments
-	for len(operation) >= 2 && operation[0] == "-c" {
-		operation = operation[2:]
+	for len(operation) > 0 {
+		if len(operation) >= 2 && operation[0] == "-c" {
+			operation = operation[2:]
+		} else if strings.HasPrefix(operation[0], "--git-dir=") || strings.HasPrefix(operation[0], "--work-tree=") {
+			operation = operation[1:]
+		} else {
+			break
+		}
 	}
 	match := false
 	if len(operation) >= 2 {

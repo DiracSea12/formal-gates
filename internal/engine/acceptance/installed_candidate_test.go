@@ -1015,7 +1015,7 @@ func TestNativeGitInterceptionPreservesNativeEffects(t *testing.T) {
 	}
 	for index := range 2 {
 		workspace := filepath.Join(t.TempDir(), "workspace")
-		output, err := invoke("-c", "core.longpaths=true", "-c", "candidate.argument=two words", "worktree", "add", "--detach", workspace, base)
+		output, err := invoke("-c", "core.longpaths=true", "-c", "candidate.argument=two words", "--git-dir="+filepath.Join(directory, ".git"), "--work-tree=.", "worktree", "add", "--detach", workspace, base)
 		if (err != nil) != (index == 0) {
 			t.Fatalf("native prefix must interrupt only its first successful execution: call=%d output=%q err=%v", index, output, err)
 		}

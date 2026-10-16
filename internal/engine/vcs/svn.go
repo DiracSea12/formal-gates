@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,7 +115,8 @@ func svnRepositoryURL(root, path string) (string, error) {
 	return node.String(), nil
 }
 func svnEntryKind(value nativeEntry) string {
-	if value.Properties["svn:special"] != nil {
+	// Windows SVN working copies store special nodes as ordinary files.
+	if runtime.GOOS != "windows" && value.Properties["svn:special"] != nil {
 		return "link"
 	}
 	return value.Kind

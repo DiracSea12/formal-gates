@@ -629,7 +629,7 @@ func (f *Facade) observeWorktree(path, identity string, handles ...vcs.Workspace
 			return false, fmt.Errorf("native workspace values differ from original source")
 		}
 	}
-	return true, nil
+	return native.WorkspaceCheckoutReady()
 }
 func (f *Facade) ensureRef(ref, identity string, mayWrite bool, invoked *bool) (bool, error) {
 	if ref == "" {

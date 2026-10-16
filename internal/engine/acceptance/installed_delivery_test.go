@@ -22,20 +22,21 @@ import (
 func nativeWorktreeAddCount(trace string, resource protocol.NativeResource) int {
 	count := 0
 	for _, line := range strings.Split(trace, "\n") {
-		prefix, arguments, found := strings.Cut(line, "\tworktree\tadd\t--detach\t")
+		prefix, arguments, found := strings.Cut(line, "\tworktree\tadd\t")
 		if !found {
 			continue
 		}
 		fields := strings.Split(arguments, "\t")
-		if len(fields) != 2 {
+		boundary := slices.Index(fields, "--")
+		if boundary < 0 || len(fields) != boundary+3 {
 			continue
 		}
-		path := fields[0]
+		path := fields[boundary+1]
 		if !filepath.IsAbs(path) {
 			cwd, _, _ := strings.Cut(prefix, "\t")
 			path = filepath.Join(cwd, path)
 		}
-		if vcs.SamePath(path, resource.Path) && fields[1] == resource.Source {
+		if vcs.SamePath(path, resource.Path) && fields[boundary+2] == resource.Source {
 			count++
 		}
 	}
@@ -46,8 +47,11 @@ func TestNativeWorktreeAddCountUsesRecordedIdentity(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	resource := protocol.NativeResource{Path: filepath.Join(root, "workspace"), Source: strings.Repeat("a", 40)}
-	line := func(cwd, prefix, path, source string) string {
-		return cwd + prefix + "\tworktree\tadd\t--detach\t" + path + "\t" + source + "\n"
+	line := func(cwd, prefix, path, source string, options ...string) string {
+		if len(options) == 0 {
+			options = []string{"--detach"}
+		}
+		return cwd + prefix + "\tworktree\tadd\t" + strings.Join(options, "\t") + "\t--\t" + path + "\t" + source + "\n"
 	}
 	relative := line(root, "", "workspace", resource.Source)
 	for _, test := range []struct {
@@ -57,6 +61,8 @@ func TestNativeWorktreeAddCountUsesRecordedIdentity(t *testing.T) {
 		{"absolute", line(root, "", resource.Path, resource.Source), 1},
 		{"relative", relative, 1},
 		{"global-config", line(root, "\t-c\tcore.longpaths=true", "workspace", resource.Source), 1},
+		{"checkout-options", line(root, "", "workspace", resource.Source, "--no-checkout", "--detach"), 1},
+		{"reordered-options", line(root, "", "workspace", resource.Source, "--detach", "--no-checkout"), 1},
 		{"different-directory", line(filepath.Join(root, "other"), "", "workspace", resource.Source), 0},
 		{"different-path", line(root, "", "other-workspace", resource.Source), 0},
 		{"different-source", line(root, "", "workspace", strings.Repeat("b", 40)), 0},

@@ -25,7 +25,7 @@ func Replace(source, destination string) error {
 		return err
 	}
 
-	// FileRenameInfoEx 使用 FILE_RENAME_INFO 的原生对齐与 UTF-16 字节长度。
+	// FILE_RENAME_INFO carries a NUL-terminated name; FileNameLength excludes the NUL.
 	type fileRenameInformation struct {
 		Flags          uint32
 		RootDirectory  windows.Handle
@@ -34,11 +34,11 @@ func Replace(source, destination string) error {
 	}
 	var layout fileRenameInformation
 	nameLength := len(name) - 1
-	buffer := make([]byte, int(unsafe.Offsetof(layout.FileName))+nameLength*2)
+	buffer := make([]byte, int(unsafe.Offsetof(layout.FileName))+len(name)*2)
 	info := (*fileRenameInformation)(unsafe.Pointer(&buffer[0]))
 	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
 	info.FileNameLength = uint32(nameLength * 2)
-	copy(unsafe.Slice(&info.FileName[0], nameLength), name[:nameLength])
+	copy(unsafe.Slice(&info.FileName[0], len(name)), name)
 
 	handle, err := windows.CreateFile(sourcePtr, windows.DELETE,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,

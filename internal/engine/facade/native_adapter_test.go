@@ -42,7 +42,17 @@ func TestNativeWorkspaceObservationUsesDirectoryIdentity(t *testing.T) {
 	git("commit", "-qm", "Workspace source")
 	base := git("rev-parse", "HEAD")
 	workspace := filepath.Join(t.TempDir(), "editing")
-	git("worktree", "add", "--detach", workspace, base)
+	git("worktree", "add", "--no-checkout", "--detach", workspace, base)
+	f := &Facade{root: root, vcs: vcs.New(root, vcs.ExecRunner{})}
+	if found, err := f.observeWorktree(workspace, base); err != nil || found {
+		t.Fatalf("registration without checkout observed as complete: found=%t err=%v", found, err)
+	}
+	if ready, err := f.vcs.At(workspace).WorkspaceCheckoutReady(); err != nil || ready {
+		t.Fatalf("observation populated the checkout: ready=%t err=%v", ready, err)
+	}
+	if err := f.vcs.CreateWorkspace(workspace, base, "", vcs.WorkspaceHandle{}); err != nil {
+		t.Fatal(err)
+	}
 	before := git("worktree", "list", "--porcelain")
 	t.Logf("workspace requested=%s canonical-registration=%s", workspace, before)
 	want, err := os.Stat(workspace)
@@ -59,7 +69,6 @@ func TestNativeWorkspaceObservationUsesDirectoryIdentity(t *testing.T) {
 	if !registered {
 		t.Fatal("fixture did not create the actual registered workspace")
 	}
-	f := &Facade{root: root, vcs: vcs.New(root, vcs.ExecRunner{})}
 	found, observeErr := f.observeWorktree(workspace, base)
 	if after := git("worktree", "list", "--porcelain"); after != before {
 		t.Fatal("observation changed native registration")

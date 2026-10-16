@@ -1,6 +1,8 @@
 package vcs
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -264,6 +266,7 @@ func realRepo(t *testing.T) *Provider {
 	run("init")
 	run("config", "user.email", "engine-vcs@example.invalid")
 	run("config", "user.name", "Engine VCS Test")
+	run("config", "core.autocrlf", "false")
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/tmp/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -275,24 +278,150 @@ func realRepo(t *testing.T) *Provider {
 	return p
 }
 
-func TestAddWorktreePreservesRelativeTargetIdentity(t *testing.T) {
+func TestAddWorktreePreservesTargetIdentity(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	for _, target := range []string{filepath.Join(root, "-candidate"), "candidate"} {
 		t.Run(target, func(t *testing.T) {
-			runner := &stubRunner{responses: map[string]string{"git worktree add": ""}}
+			runner := &stubRunner{responses: map[string]string{
+				"git worktree list": "", "git worktree add": "", "git reset": "",
+				"git rev-parse --path-format=absolute --git-path index": filepath.Join(root, "missing-index"),
+			}}
 			if err := New(root, runner).AddWorktree(target, headIdentity); err != nil {
 				t.Fatal(err)
 			}
-			want := target
-			if filepath.IsAbs(target) {
-				want = "." + string(filepath.Separator) + "-candidate"
-			}
-			argv := []string{"git", "worktree", "add", "--detach", want, headIdentity}
-			if len(runner.commands) != 1 || !slices.Equal(runner.commands[0], argv) {
+			argv := []string{"git", "worktree", "add", "--no-checkout", "--detach", "--", target, headIdentity}
+			if len(runner.commands) != 4 || !slices.Equal(runner.commands[1], argv) {
 				t.Fatalf("worktree command = %q, want %q", runner.commands, argv)
 			}
 		})
+	}
+}
+
+func TestGitWindowsArgumentsUseNativeWorktreeDirectory(t *testing.T) {
+	t.Parallel()
+	p := realRepo(t)
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(p.root, ".gates", "qa-isolation", "editing")
+	if err := p.CreateWorkspace(workspace, base, "", WorkspaceHandle{}); err != nil {
+		t.Fatal(err)
+	}
+	gitdir, err := p.runner.Run(workspace, "git", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(canonical, gitdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{gitdir, relative} {
+		if err := os.WriteFile(filepath.Join(workspace, ".git"), []byte("gitdir: "+link+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, root := range []string{p.root, workspace} {
+			args := gitWindowsArgs(root, []string{"rev-parse", "--show-toplevel"})
+			got, err := p.runner.Run(root, "git", args...)
+			if err != nil || !SamePath(got, root) {
+				t.Fatalf("native workspace root=%q err=%v want=%q", got, err, root)
+			}
+		}
+	}
+}
+
+type checkoutResponseRunner struct {
+	Runner
+	loseResponse bool
+	checkouts    int
+}
+
+func (r *checkoutResponseRunner) Run(dir, command string, args ...string) (string, error) {
+	output, err := r.Runner.Run(dir, command, args...)
+	if command == "git" && len(args) != 0 && args[0] == "reset" {
+		r.checkouts++
+		if err == nil && r.loseResponse {
+			r.loseResponse = false
+			return output, errors.New("checkout response lost")
+		}
+	}
+	return output, err
+}
+
+func TestGitWorkspaceCheckoutResumesNativePrefixes(t *testing.T) {
+	t.Parallel()
+	for _, empty := range []bool{false, true} {
+		for _, prefix := range []string{"registered", "response-lost"} {
+			t.Run(fmt.Sprintf("empty=%t/%s", empty, prefix), func(t *testing.T) {
+				p := realRepo(t)
+				if empty {
+					if _, err := p.runner.Run(p.root, "git", "rm", "--", ".gitignore", "app.go"); err != nil {
+						t.Fatal(err)
+					}
+					if err := p.Commit("empty source"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				base, err := p.Resolve()
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(p.root, ".gates", "qa-isolation", "editing")
+				runner := &checkoutResponseRunner{Runner: p.runner, loseResponse: prefix == "response-lost"}
+				creator := New(p.root, runner)
+				if prefix == "registered" {
+					if _, err := p.runner.Run(p.root, "git", "worktree", "add", "--no-checkout", "--detach", path, base); err != nil {
+						t.Fatal(err)
+					}
+					if ready, err := p.At(path).WorkspaceCheckoutReady(); err != nil || ready {
+						t.Fatalf("registered workspace is ready=%t err=%v", ready, err)
+					}
+				}
+				err = creator.CreateWorkspace(path, base, "", WorkspaceHandle{})
+				if (err != nil) != (prefix == "response-lost") {
+					t.Fatalf("checkout prefix %s err=%v", prefix, err)
+				}
+				workspace := p.At(path)
+				if ready, err := workspace.WorkspaceCheckoutReady(); err != nil || !ready {
+					t.Fatalf("completed workspace is ready=%t err=%v", ready, err)
+				}
+				want, err := p.TreeDigest(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, err := workspace.StagedTreeDigest(); err != nil || got != want {
+					t.Fatalf("checkout index=%q err=%v want=%q", got, err, want)
+				}
+				if !empty {
+					if body, err := os.ReadFile(filepath.Join(path, "app.go")); err != nil || string(body) != "package main\n" {
+						t.Fatalf("source file=%q err=%v", body, err)
+					}
+				}
+				for _, name := range []string{"app.go", "user.txt"} {
+					if err := os.WriteFile(filepath.Join(path, name), []byte("user content\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for range 2 {
+					if err := creator.CreateWorkspace(path, base, "", WorkspaceHandle{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if runner.checkouts != 1 {
+					t.Fatalf("checkout repeated after completion: %d", runner.checkouts)
+				}
+				for _, name := range []string{"app.go", "user.txt"} {
+					if body, err := os.ReadFile(filepath.Join(path, name)); err != nil || string(body) != "user content\n" {
+						t.Fatalf("repeated creation changed %s=%q err=%v", name, body, err)
+					}
+				}
+			})
+		}
 	}
 }
 

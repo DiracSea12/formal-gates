@@ -31,7 +31,7 @@ func (r ExecRunner) Run(dir, command string, args ...string) (string, error) {
 
 func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
 	if runtime.GOOS == "windows" && command == "git" {
-		args = append([]string{"-c", "core.longpaths=true"}, args...)
+		args = gitWindowsArgs(dir, args)
 	}
 	if command == "p4" {
 		absolute, err := filepath.Abs(dir)
@@ -56,6 +56,18 @@ func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]b
 		return stdout.Bytes(), fmt.Errorf("%s: %s", command, detail)
 	}
 	return stdout.Bytes(), nil
+}
+
+func gitWindowsArgs(dir string, args []string) []string {
+	options := []string{"-c", "core.longpaths=true"}
+	if body, err := os.ReadFile(filepath.Join(dir, ".git")); err == nil {
+		if gitdir, ok := strings.CutPrefix(string(body), "gitdir: "); ok {
+			gitdir = strings.TrimRight(gitdir, "\r\n")
+			// Repository discovery precedes core.longpaths configuration.
+			options = append(options, "--git-dir="+gitdir, "--work-tree=.")
+		}
+	}
+	return append(options, args...)
 }
 
 // Provider 绑定一个工作区根并提供该工作区的快照操作。零值不可用；New 构造。

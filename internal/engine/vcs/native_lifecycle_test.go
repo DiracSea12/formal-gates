@@ -739,6 +739,7 @@ func TestSVNLiteralTargetsPreserveEncodedNativePaths(t *testing.T) {
 	if err := p.Track([]string{name}); err != nil {
 		t.Fatal(err)
 	}
+	nativeCommand(t, runner, p.root, "svn", "propset", "svn:executable", "true", "--", svnLiteral(name))
 	if err := p.Commit("literal path delivery"); err != nil {
 		t.Fatal(err)
 	}
@@ -853,12 +854,17 @@ func TestSVNNodeKindReplacementPreservesDeclaredMaterial(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "link":
-				if err := os.Symlink("empty", target); err != nil {
-					t.Fatal(err)
-				}
+				svnWriteLink(t, target, "empty")
 			default:
 				if err := os.WriteFile(target, []byte("replacement\n"), 0644); err != nil {
 					t.Fatal(err)
+				}
+			}
+			if runtime.GOOS == "windows" {
+				if change.kind == "link" {
+					nativeCommand(t, runner, q.root, "svn", "propset", "svn:special", "true", "--", svnLiteral(change.path))
+				} else if change.path == "link" {
+					nativeCommand(t, runner, q.root, "svn", "propdel", "svn:special", "--", svnLiteral(change.path))
 				}
 			}
 			actualPaths, err := q.ChangedPathsFrom(before)
@@ -895,6 +901,16 @@ func TestSVNNodeKindReplacementPreservesDeclaredMaterial(t *testing.T) {
 				t.Fatal(err)
 			}
 			candidate := nativeIdentityAt(t, q)
+			if change.kind == "link" {
+				entry, err := q.Entry(candidate, change.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var link nativeEntry
+				if err := json.Unmarshal([]byte(entry), &link); err != nil || string(link.Content) != "link empty" || string(link.Properties["svn:special"]) != "*" || entryMode(entry) != "120000" {
+					t.Fatalf("replacement link material = %+v, %v", link, err)
+				}
+			}
 			delta, err := p.Changes(base, candidate)
 			if err != nil {
 				t.Fatal(err)
