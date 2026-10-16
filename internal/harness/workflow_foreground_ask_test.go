@@ -56,7 +56,11 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 			t.Fatalf("consumer ended before original acknowledgement: %v %s", err, out.Bytes())
 		default:
 		}
-		if _, err := NativeStartEvidence("codex", directory); err == nil {
+		_, heldErr := os.Stat(filepath.Join(s.config, "held-turn"))
+		if heldErr != nil && !os.IsNotExist(heldErr) {
+			t.Fatal(heldErr)
+		}
+		if _, err := NativeStartEvidence("codex", directory); err == nil && heldErr == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -72,15 +76,13 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 	if _, _, err := confirmFacadeFixtureControl(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Ask foreground: %v %s", err, out.Bytes())
+	if err := <-done; err != nil {
+		t.Fatalf("Ask foreground: %v %s", err, out.Bytes())
+	}
+	for _, path := range []string{filepath.Join(s.config, "release-turn"), filepath.Join(directory, "exit.json")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("Ask returned after the original job was released or completed", path, err)
 		}
-	case <-time.After(time.Second):
-		release()
-		<-done
-		t.Fatal("persisted Ask waited for the independent original job")
 	}
 	var response struct {
 		Boundary string            `json:"boundary"`

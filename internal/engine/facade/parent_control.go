@@ -40,12 +40,13 @@ func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
 				u()
 			}
 		}()
-		if _, err := f.engine.Load(); isMissingEngineState(err) {
+		current, err := f.engine.Load()
+		if isMissingEngineState(err) {
 			return u, nil
 		} else if err != nil {
 			return nil, err
 		}
-		if err = f.syncReleasedChildren(); err != nil {
+		if err = f.syncReleasedChildren(current.State); err != nil {
 			return nil, err
 		}
 		return u, nil
@@ -190,15 +191,18 @@ func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisi
 func disposition(v string) bool {
 	return v == protocol.RequirementWorkCarry || v == protocol.RequirementWorkRedo
 }
-func (f *Facade) syncReleasedChildren() error {
-	snap, err := f.engine.Load()
-	if err != nil {
-		return err
+func (f *Facade) syncReleasedChildren(state *protocol.State) error {
+	if state == nil {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return err
+		}
+		state = snap.State
 	}
-	if snap.State.SliceChild != nil || snap.State.ChildCreation == nil {
+	if state.SliceChild != nil || state.ChildCreation == nil {
 		return nil
 	}
-	for _, plan := range snap.State.ChildCreation.Children {
+	for _, plan := range state.ChildCreation.Children {
 		established, err := runDirectoryEstablished(filepath.Join(f.root, EngineNamespace, plan.RunID))
 		if err != nil {
 			return err
@@ -223,14 +227,14 @@ func (f *Facade) syncReleasedChildren() error {
 			if loadErr == nil {
 				err = child.recordIntakeReceipt(actual.State)
 				if err == nil {
-					err = child.engine.SyncParentReset(snap.State, protocol.Observation{})
+					err = child.engine.SyncParentReset(state, protocol.Observation{})
 				}
 				if err == nil && actual.State.Phase != runtime.PhasePreparing {
-					err = child.engine.SyncParentRequirement(snap.State, protocol.Observation{})
+					err = child.engine.SyncParentRequirement(state, protocol.Observation{})
 				}
 				if err == nil {
 					actual, err = child.engine.Load()
-					if err == nil && snap.State.SliceChildren[plan.SliceID] == plan.RunID {
+					if err == nil && state.SliceChildren[plan.SliceID] == plan.RunID {
 						err = f.engine.RecordChildControl(actual.State, protocol.Observation{})
 					}
 					if err == nil && actual.State.ResetPending() {

@@ -637,7 +637,10 @@ func (s *State) workspaceParametersCurrent(p WorkspaceParameters, cd *compiler.C
 	}
 	if p.Resource.Role == "check" {
 		for _, result := range s.Results {
-			if proof, ok := s.editSourceProof(result.ActionID); ok && s.editResultCurrent(result) && s.checkResource(result.ActionID, proof).ID == p.Resource.ID {
+			if !s.editResultCurrent(result) {
+				continue
+			}
+			if proof, ok := s.editSourceProof(result.ActionID); ok && s.checkResource(result.ActionID, proof).ID == p.Resource.ID {
 				return true
 			}
 		}

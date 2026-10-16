@@ -314,11 +314,12 @@ func (p *Provider) p4Entries(id nativeIdentity) (map[string]string, error) {
 	return entries, nil
 }
 func (p *Provider) p4ChangedPaths() ([]string, error) {
-	records, err := p.p4JSON("reconcile", "-n", "//"+p.p4Client()+"/...")
+	client := p.p4Client()
+	records, err := p.p4JSON("reconcile", "-n", "//"+client+"/...")
 	if err != nil {
 		return nil, err
 	}
-	opened, err := p.p4JSON("opened", "//"+p.p4Client()+"/...")
+	opened, err := p.p4JSON("opened", "//"+client+"/...")
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +330,7 @@ func (p *Provider) p4ChangedPaths() ([]string, error) {
 		if native == "" {
 			continue
 		}
-		logical := strings.TrimPrefix(native, "//"+p.p4Client()+"/")
+		logical := strings.TrimPrefix(native, "//"+client+"/")
 		if filepath.IsAbs(native) && !strings.HasPrefix(native, "//") {
 			relative, e := filepath.Rel(p.root, native)
 			if e != nil {

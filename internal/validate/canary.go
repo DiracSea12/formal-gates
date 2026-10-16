@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -710,15 +711,32 @@ func commitCanaryGit(root, message string) error {
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) []CanaryInstallIdentity {
 	var identities []CanaryInstallIdentity
-	canaryHome := filepath.Join(tempRoot, "stable-home")
-	canaryLocalAppData := filepath.Join(tempRoot, "stable-localappdata")
-	registry := filepath.Join(canaryHome, ".formal-gates", "registry.json")
-	launcher := filepath.Join(canaryHome, ".local", "bin", nativeBinaryName())
-	if runtime.GOOS == "windows" {
-		launcher = filepath.Join(canaryLocalAppData, "formal-gates", "bin", nativeBinaryName())
-	}
-	stableEnv := canaryEnvironment(canaryHome, canaryLocalAppData)
-	for _, hostName := range host.InstallableNames() {
+	hosts := host.InstallableNames()
+	canaries := make([]struct {
+		host    string
+		report  InstallReport
+		command *exec.Cmd
+		output  bytes.Buffer
+		checks  []CanaryCheck
+	}, len(hosts))
+	for index, hostName := range hosts {
+		canary := &canaries[index]
+		canary.host = hostName
+		addCheck := func(name string, ok bool, detail string) {
+			status := "PASS"
+			if !ok {
+				status = "FAIL"
+			}
+			canary.checks = append(canary.checks, CanaryCheck{Name: name, Status: status, Detail: detail})
+		}
+		canaryHome := filepath.Join(tempRoot, "stable-home", hostName)
+		canaryLocalAppData := filepath.Join(tempRoot, "stable-localappdata", hostName)
+		registry := filepath.Join(canaryHome, ".formal-gates", "registry.json")
+		launcher := filepath.Join(canaryHome, ".local", "bin", nativeBinaryName())
+		if runtime.GOOS == "windows" {
+			launcher = filepath.Join(canaryLocalAppData, "formal-gates", "bin", nativeBinaryName())
+		}
+		stableEnv := canaryEnvironment(canaryHome, canaryLocalAppData)
 		tc := struct{ name, host string }{name: "install-" + hostName + "-native-runtime", host: hostName}
 		project := filepath.Join(tempRoot, tc.name)
 		if err := os.MkdirAll(project, 0o700); err != nil {
@@ -731,6 +749,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name, false, err.Error())
 			continue
 		}
+		canary.report = report
 		for _, target := range report.Targets {
 			identities = append(identities, CanaryInstallIdentity{Host: target.Host, Target: target.TargetPath, ReleaseRoot: target.ReleaseRoot, VCSIdentity: target.VCSIdentity, PackageDigest: target.PackageDigest, InstalledDigest: target.InstalledDigest, CanonicalPaths: target.CanonicalPaths, Disjoint: target.Disjoint, Registry: report.Registry, RegistryRecordID: target.RegistryRecordID, RegistryEpoch: report.RegistryEpoch})
 			installedBinary := filepath.Join(target.TargetPath, "bin", nativeBinaryName())
@@ -782,8 +801,36 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		}
 		canaryCommand := exec.Command(launcher, "canary", "portable", "--root", installedTarget, "--format", "json")
 		canaryCommand.Env = append(stableEnv, "FORMAL_GATES_INSTALLED_CANARY=1", "FORMAL_GATES_CANARY_PACKAGE_ROOT="+report.Targets[0].TargetPath, "FORMAL_GATES_CANARY_WORKFLOW_ROOT="+project, "FORMAL_GATES_CANARY_REGISTRY="+registry, "FORMAL_GATES_CANARY_RECORD="+canaryRecord)
-		if output, canaryErr := canaryCommand.CombinedOutput(); canaryErr != nil {
-			addCheck(tc.name+"-installed-binary-canary", false, fmt.Sprintf("%v (%s)", canaryErr, strings.TrimSpace(string(output))))
+		canaryCommand.Stdout = &canary.output
+		canaryCommand.Stderr = &canary.output
+		if canaryErr := canaryCommand.Start(); canaryErr != nil {
+			addCheck(tc.name+"-installed-binary-canary", false, fmt.Sprintf("%v (%s)", canaryErr, strings.TrimSpace(canary.output.String())))
+			continue
+		}
+		canary.command = canaryCommand
+	}
+	for index := range canaries {
+		canary := &canaries[index]
+		for _, check := range canary.checks {
+			addCheck(check.Name, check.Status == "PASS", check.Detail)
+		}
+		if canary.command == nil {
+			continue
+		}
+		tc := struct{ name, host string }{name: "install-" + canary.host + "-native-runtime", host: canary.host}
+		project := filepath.Join(tempRoot, tc.name)
+		releaseRoot := filepath.Join(project, "stable-release")
+		canaryHome := filepath.Join(tempRoot, "stable-home", canary.host)
+		canaryLocalAppData := filepath.Join(tempRoot, "stable-localappdata", canary.host)
+		registry := filepath.Join(canaryHome, ".formal-gates", "registry.json")
+		launcher := filepath.Join(canaryHome, ".local", "bin", nativeBinaryName())
+		if runtime.GOOS == "windows" {
+			launcher = filepath.Join(canaryLocalAppData, "formal-gates", "bin", nativeBinaryName())
+		}
+		stableEnv := canaryEnvironment(canaryHome, canaryLocalAppData)
+		report := canary.report
+		if canaryErr := canary.command.Wait(); canaryErr != nil {
+			addCheck(tc.name+"-installed-binary-canary", false, fmt.Sprintf("%v (%s)", canaryErr, strings.TrimSpace(canary.output.String())))
 			continue
 		}
 		addCheck(tc.name+"-installed-binary-canary", true, "stable launcher completed the installed target canary")

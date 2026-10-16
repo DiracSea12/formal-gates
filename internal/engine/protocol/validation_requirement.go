@@ -28,22 +28,25 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave
 		return key
 	}
 	for action, pending := range s.PendingActions {
-		if !s.prewaveDispatchCurrent(action, cd) || !s.sameValidationDuty(s.DispatchBindings[action], wave) {
+		if pending.Task.Step != key.Step || !s.prewaveDispatchCurrent(action, cd) || !s.sameValidationDuty(s.DispatchBindings[action], wave) {
 			continue
 		}
-		if pending.Task.Step == key.Step && s.validationMode(pending.Task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(pending.Task), key) {
+		if s.validationMode(pending.Task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(pending.Task), key) {
 			return pending.Task
 		}
 	}
 	for task, attempt := range s.EndedAttempts {
-		if !s.endedWorkCurrent(attempt, cd) || attempt.Work != nil && !s.sameValidationDuty(*attempt.Work, wave) {
+		if task.Step != key.Step || !s.endedWorkCurrent(attempt, cd) || attempt.Work != nil && !s.sameValidationDuty(*attempt.Work, wave) {
 			continue
 		}
-		if task.Step == key.Step && s.validationMode(task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(task), key) {
+		if s.validationMode(task) == s.validationMode(key) && sameRequiredDuty(s.validationRole(key, cd), s.sourceValidationTask(task), key) {
 			return task
 		}
 	}
 	for _, required := range s.requiredWorkTasks() {
+		if required.Step != key.Step {
+			continue
+		}
 		current := true
 		for _, binding := range s.DispatchBindings {
 			if binding.Task == required {
@@ -51,7 +54,7 @@ func (s *State) validationRequiredTask(key runtime.TaskKey, wave *ValidationWave
 				break
 			}
 		}
-		if !current || required.Step != key.Step {
+		if !current {
 			continue
 		}
 		source := s.sourceValidationTask(required)

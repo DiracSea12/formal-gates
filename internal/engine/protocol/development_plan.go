@@ -570,11 +570,12 @@ func (s *State) confirmedDevelopmentPlan() (string, *GranularityReview, string) 
 		request, p, latest = id, proposal, d.Revision
 	}
 	// Identical confirmations preserve the original execution contract reference.
+	digest := planContractDigest(p)
 	for id, d := range s.Decisions {
 		if d.Revision >= latest || decisionPlanConfirmation(d) == nil {
 			continue
 		}
-		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == planContractDigest(p) {
+		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == digest {
 			request, latest = id, d.Revision
 		}
 	}
@@ -597,11 +598,12 @@ func (s *State) confirmedSlicePlan() (string, *GranularityReview, string) {
 			request, p, latest = id, proposal, d.Revision
 		}
 	}
+	digest := planContractDigest(p)
 	for id, d := range s.Decisions {
 		if d.Revision >= latest {
 			continue
 		}
-		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == planContractDigest(p) {
+		if proposal := s.decisionPlanProposal(d); proposal != nil && planContractDigest(proposal) == digest {
 			request, latest = id, d.Revision
 		}
 	}
@@ -667,8 +669,9 @@ func (s *State) plannedBatchSource(task runtime.TaskKey) (DevelopmentBatch, bool
 		if p == nil {
 			continue
 		}
+		prefix := planTaskScope(p, "")
 		for _, b := range p.Batches {
-			if original.Scope == planTaskScope(p, b.ID) {
+			if original.Scope == prefix+b.ID {
 				return b, true
 			}
 		}

@@ -1233,6 +1233,8 @@ esac
 
 func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 	root := installRepoRoot(t)
+	binary := filepath.Join(t.TempDir(), nativeBinaryName())
+	installRun(t, root, "go", "build", "-o", binary, "./cmd/formal-gates")
 	receipt, err := PackageReceipt(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1304,7 +1306,7 @@ func TestPackageInventoryAndCurrentHelp(t *testing.T) {
 		{[]string{"canary", "codex-hook", "--help"}, "canary codex-hook"},
 		{[]string{"canary", "codex-hook-probe", "--help"}, "canary codex-hook-probe"},
 	} {
-		output := installRun(t, root, "go", append([]string{"run", "./cmd/formal-gates"}, surface.args...)...)
+		output := installRun(t, root, binary, surface.args...)
 		if !strings.Contains(strings.ToLower(output), strings.ToLower(surface.marker)) {
 			t.Fatalf("help surface %q omitted %q: %s", strings.Join(surface.args, " "), surface.marker, output)
 		}

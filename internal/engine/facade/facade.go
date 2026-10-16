@@ -1087,7 +1087,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 		_, err = f.engine.CompleteAll(protocol.Observation{})
 	} else {
 		for {
-			if err := f.syncReleasedChildren(); err != nil {
+			if err := f.syncReleasedChildren(nil); err != nil {
 				return Run{}, err
 			}
 			if err := f.driveChildren(); err != nil {
@@ -1536,7 +1536,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if err := f.syncResetRequirement(); err != nil {
 		return acceptance, Run{}, err
 	}
-	if err := f.syncReleasedChildren(); err != nil {
+	if err := f.syncReleasedChildren(nil); err != nil {
 		return acceptance, Run{}, err
 	}
 	if err := f.recordChildControl(); err != nil {

@@ -125,7 +125,10 @@ func (s *State) editSourceProof(action string) (CandidateEvidence, bool) {
 			continue
 		}
 		intent, ok := s.hostIntent(receipt.ActionID)
-		if !ok {
+		if !ok || intent.Adapter == nil {
+			continue
+		}
+		if stage, known := intent.Adapter.Params["stage"].(string); known && stage != "CHECK_SOURCE" {
 			continue
 		}
 		p, err := candidateParameters(intent)

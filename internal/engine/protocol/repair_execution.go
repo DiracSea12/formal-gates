@@ -272,8 +272,14 @@ func (s *State) repairIntegrationReceipt(stage string, source runtime.TaskKey, t
 	var proof CandidateEvidence
 	for action, receipt := range s.HostActionReceipts {
 		intent, exists := s.hostIntent(action)
+		if !exists || intent.Adapter == nil {
+			continue
+		}
+		if candidateStage, known := intent.Adapter.Params["stage"].(string); known && candidateStage != stage {
+			continue
+		}
 		p, err := candidateParameters(intent)
-		if !exists || err != nil || p.Stage != stage || p.Integration == nil || p.Integration.RepairTask == nil || *p.Integration.RepairTask != source || !sameTaskPointer(p.Integration.TargetTask, target) || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+		if err != nil || p.Stage != stage || p.Integration == nil || p.Integration.RepairTask == nil || *p.Integration.RepairTask != source || !sameTaskPointer(p.Integration.TargetTask, target) || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
 			continue
 		}
 		if !s.repairIntegrationCurrent(p) {
@@ -702,18 +708,19 @@ func ValidateFinalRepairEvidence(members []DevelopmentEvidence, e DevelopmentEvi
 // Gate findings retain their source target; an accepted repair disposition
 // projects the next member Task without rewriting its completed source result.
 func (s *State) repairGateCorrection(work repairWork) (string, bool) {
+	var targets []*ValidationTarget
 	for _, gate := range s.repairGates(work) {
 		_, target := s.memberGateTarget(work, gate)
 		if target == nil || target.Status != "PASS" && target.Status != "FAIL" && target.Status != "DISPOSED" && target.Status != "AUTHORIZED_SKIP" {
 			return "", false
 		}
+		targets = append(targets, target)
 	}
 
 	var actions []string
 	pureP2 := true
-	for _, gate := range s.repairGates(work) {
-		_, target := s.memberGateTarget(work, gate)
-		if target == nil || target.Status != "FAIL" {
+	for _, target := range targets {
+		if target.Status != "FAIL" {
 			continue
 		}
 		found, required := false, false

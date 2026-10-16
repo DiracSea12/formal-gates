@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
@@ -93,7 +94,15 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeInvocationFile(filepath.Join(directory, "process.json"), map[string]any{"pid": os.Getpid(), "pgid": syscall.Getpgrp(), "started_at": float64(time.Now().UnixNano()) / 1e9, "request_digest": digest}); err != nil {
+	processTime, err := exec.Command("ps", "-p", fmt.Sprint(os.Getpid()), "-o", "lstart=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.TrimSpace(string(processTime)), time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInvocationFile(filepath.Join(directory, "process.json"), map[string]any{"pid": os.Getpid(), "pgid": syscall.Getpgrp(), "started_at": float64(created.UnixNano()) / 1e9, "request_digest": digest}); err != nil {
 		t.Fatal(err)
 	}
 	release()

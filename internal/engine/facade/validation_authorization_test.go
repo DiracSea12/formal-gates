@@ -1259,6 +1259,7 @@ func TestRepairChoicesWhileFreshQAIsPending(t *testing.T) {
 	t.Parallel()
 	for _, choice := range []string{"approve", "waive", "retry_qa"} {
 		t.Run(choice, func(t *testing.T) {
+			t.Parallel()
 			d := postwaveRepairOffer(t)
 			repeatRepairQA(d)
 			d.recordExecutionScope(coverage.ReviewBlackbox, "invalid")
@@ -1324,6 +1325,7 @@ func TestQARetryReplacesSelectedExecution(t *testing.T) {
 	t.Parallel()
 	for _, life := range []string{"unissued", "running", "awaiting-result", "completed"} {
 		t.Run(life, func(t *testing.T) {
+			t.Parallel()
 			d := postwaveRepairOffer(t)
 			repeatRepairQA(d)
 			var action string
@@ -1433,6 +1435,7 @@ func TestWaiverKeepsFreshQAResultsInTheirOwnResponsibility(t *testing.T) {
 	for _, extent := range []string{"partial", "all"} {
 		for _, verdict := range []string{"PASS", "FAIL"} {
 			t.Run(extent+"/"+verdict, func(t *testing.T) {
+				t.Parallel()
 				d := postwaveRepairOffer(t)
 				if verdict == "FAIL" {
 					d.fixtureQAResults = map[string]protocol.CheckEvidence{"invalid": {ExitCode: 0, StdoutText: "malformed command exits successfully on this fresh execution"}}
@@ -1587,6 +1590,7 @@ func TestPendingRepairControlChoicesKeepTheirOwnEffects(t *testing.T) {
 	t.Parallel()
 	for _, choice := range []string{"decline", "requirement", "abort"} {
 		t.Run(choice, func(t *testing.T) {
+			t.Parallel()
 			var d *validationDriver
 			if choice == "abort" {
 				root := t.TempDir()
