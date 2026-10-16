@@ -228,15 +228,6 @@ func resolveSpawn(argv []string, cwd string, request map[string]any) (string, []
 	return "", candidates
 }
 
-// childSignalGrace is the bounded window runChild grants the SIGTERM channel
-// after the child has been reaped by a signal, to confirm whether the supervisor
-// itself also received the (process-group) SIGTERM. If so the receipt is a
-// cancellation (130); otherwise the child's own -N is reported unchanged. The
-// common non-cancelled path (a normal exit, or a child death by signal the
-// supervisor did not share) is unaffected except for this short wait in the
-// latter sub-case.
-const childSignalGrace = 250 * time.Millisecond
-
 // runChild walks the candidate list (in PATH order), relaying stdin and capturing
 // stdout/stderr to the job's stream files, and returns the receipt's exit code and
 // error text. Each candidate is tried in
@@ -262,7 +253,7 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 	}()
 
 	// Install the cancellation handler before starting a child. Cancellation
-	// terminates the child's own process group when available, never our group.
+	// terminates the child's isolated process group on POSIX or process on Windows.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -319,9 +310,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stdout: outF,
 		Stderr: errF,
 	}
-	if supervisedOwnedJob(request) {
-		cmd.SysProcAttr = supervisorSysProcAttr()
-	}
+	cmd.SysProcAttr = supervisorSysProcAttr()
 	if startErr := cmd.Start(); startErr != nil {
 		var errno syscall.Errno
 		if errors.As(startErr, &errno) && errno == syscall.ENOENT {
@@ -334,20 +323,14 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 	if supervisedOwnedJob(request) {
 		defer signalSupervisedChild(cmd, true)
 	}
-	code, errorMsg, cancelled := waitChild(cmd, sigCh, supervisedOwnedJob(request))
-	if cancelled {
-		return 130, "owned job was cancelled", true
-	}
+	code, errorMsg := waitChild(cmd, sigCh)
 	return code, errorMsg, true
 }
 
-// waitChild reaps the started child on a goroutine and settles the receipt. It
-// prefers the supervisor's SIGTERM: if SIGTERM arrives while waiting, the receipt
-// is a deterministic cancellation (130, "owned job was cancelled"), even when the
-// same process-group signal also killed the child. If the child dies by a signal
-// and no SIGTERM reached the supervisor within childSignalGrace, the child's own
-// -N is reported unchanged (including -15 with an empty error and -9 for SIGKILL).
-func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, grouped bool) (int, string, bool) {
+// waitChild reaps the started child and settles its receipt. The supervisor
+// forwards cancellation to the isolated child and records 130 with the
+// cancellation error. Independent child exits retain their exit or signal code.
+func waitChild(cmd *exec.Cmd, sigCh chan os.Signal) (int, string) {
 	type status struct {
 		signaled bool
 		sig      int
@@ -368,40 +351,24 @@ func waitChild(cmd *exec.Cmd, sigCh chan os.Signal, grouped bool) (int, string, 
 	}()
 
 	terminate := func() {
-		if grouped {
-			signalSupervisedChild(cmd, false)
-		} else {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-		}
+		signalSupervisedChild(cmd, false)
 		select {
 		case <-resCh:
 		case <-time.After(5 * time.Second):
-			if grouped {
-				signalSupervisedChild(cmd, true)
-			} else {
-				_ = cmd.Process.Kill()
-			}
+			signalSupervisedChild(cmd, true)
 			<-resCh
 		}
 	}
 	select {
 	case <-sigCh:
-		// Terminate the owned child or child group, then settle its exit.
+		// Terminate the child and settle its exit before recording cancellation.
 		terminate()
-		return 130, "owned job was cancelled", true
+		return 130, "owned job was cancelled"
 	case s := <-resCh:
 		if s.signaled {
-			// The child died by a signal. Give the supervisor's signal channel a
-			// bounded moment to confirm whether the same group SIGTERM also
-			// reached the supervisor; if so this is a cancellation.
-			select {
-			case <-sigCh:
-				return 130, "owned job was cancelled", true
-			case <-time.After(childSignalGrace):
-				return -s.sig, "", false
-			}
+			return -s.sig, ""
 		}
-		return s.exitCode, "", false
+		return s.exitCode, ""
 	}
 }
 

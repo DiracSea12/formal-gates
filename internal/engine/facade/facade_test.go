@@ -708,10 +708,11 @@ var admissionRuntime struct {
 
 func testAdmission(t *testing.T, root, recordID, packageDigest, provider string) *Admission {
 	t.Helper()
-	admissionFixtureMutex.Lock()
-	defer admissionFixtureMutex.Unlock()
 	key := strings.Join([]string{root, recordID, provider}, "\x00")
-	if a := admissionFixtures[key]; a != nil {
+	admissionFixtureMutex.Lock()
+	a := admissionFixtures[key]
+	admissionFixtureMutex.Unlock()
+	if a != nil {
 		return a
 	}
 	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, provider)
@@ -769,7 +770,12 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 			t.Fatal(err)
 		}
 	}
-	a := &Admission{RegistryPath: registryPath, Target: target, Root: root,
+	admissionFixtureMutex.Lock()
+	defer admissionFixtureMutex.Unlock()
+	if a := admissionFixtures[key]; a != nil {
+		return a
+	}
+	a = &Admission{RegistryPath: registryPath, Target: target, Root: root,
 		Provider: provider, PackageDigest: packageDigest, InstalledTargetIdentity: recordID,
 		Generation: generation, Lease: lease, Token: token}
 	admissionFixtures[key] = a

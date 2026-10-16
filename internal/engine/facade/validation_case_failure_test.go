@@ -18,6 +18,7 @@ func TestCaseFailuresUseOriginalEvidenceAndOneAdjudicatedRepair(t *testing.T) {
 	t.Parallel()
 	for _, delivery := range []string{"normal", "held", "checkpoint", "native-resume"} {
 		t.Run(delivery, func(t *testing.T) {
+			t.Parallel()
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.fixtureQAResults = map[string]protocol.CheckEvidence{
 				"normal":  {ExitCode: 1, StdoutText: "unexpected valid-input error"},

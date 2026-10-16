@@ -106,14 +106,15 @@ func (c *engineCanary) initFixtureRepository(repositoryRoot ...string) {
 	}
 	ready := false
 	for i := 0; i < 50; i++ {
-		if _, err := (vcs.ExecRunner{}).Run("", "p4", "info"); err == nil {
+		if _, err = (vcs.ExecRunner{}).Run("", "p4", "info"); err == nil {
 			ready = true
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !ready {
-		c.fail("private p4d did not start")
+		body, readErr := os.ReadFile(log.Name())
+		c.fail("private p4d did not start: address=%s pid=%d probe=%v log=%q readError=%v\n%s", address, server.Process.Pid, err, log.Name(), readErr, body)
 	}
 	spec := "Client: main\nOwner: fixture\nRoot: " + c.project + "\nLineEnd: unix\nView:\n\t//depot/main/... //main/...\n"
 	c.fixtureCommand(c.project, "p4", []byte(spec), "client", "-i")

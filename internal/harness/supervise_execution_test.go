@@ -8,9 +8,38 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestSuperviseOrdinaryCheckPreservesBackgroundDescendant(t *testing.T) {
+	t.Parallel()
+	bin := supervisorBinary(t)
+	jobDir, workDir, env := newJob(t, bin, map[string]any{
+		"kind": "check", "argv": []string{"/bin/sh", "-c", "sleep 60 & printf '%s' \"$!\" > child.pid"}, "stdin": "",
+	})
+	if code := runSupervisor(t, bin, jobDir, env); code != 0 {
+		t.Fatalf("supervisor exit = %d", code)
+	}
+	pidBytes, err := os.ReadFile(filepath.Join(workDir, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(pidBytes))
+	if err != nil || pid <= 0 {
+		t.Fatalf("actual descendant pid %q: %v", pidBytes, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	receipt := readReceipt(t, jobDir)
+	if receipt["exit_code"] != float64(0) || receipt["error"] != "" {
+		t.Fatalf("ordinary check receipt: %#v", receipt)
+	}
+	status, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+	if state := strings.TrimSpace(string(status)); err != nil || state == "" || strings.HasPrefix(state, "Z") {
+		t.Fatalf("ordinary check stopped background descendant %d: %q %v", pid, state, err)
+	}
+}
 
 func TestSuperviseCheckRunsUntilCompletion(t *testing.T) {
 	t.Parallel()

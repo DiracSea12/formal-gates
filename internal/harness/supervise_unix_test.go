@@ -91,11 +91,9 @@ func TestSuperviseCancel(t *testing.T) {
 	}
 }
 
-// TestSuperviseCancelGroup pins D2 determinism: production cancellation signals
-// the supervisor's whole process group (Store.cancel_jobs uses os.killpg), which
-// also reaches the child. Across many rounds the receipt must be the deterministic
-// 130 / "owned job was cancelled" every single time, never the child's own
-// signal death (-15) even though the group signal killed the child too.
+// TestSuperviseCancelGroup checks that signalling the supervisor's process group
+// cancels the isolated child through the supervisor and records 130 with the
+// exact cancellation error on every invocation.
 func TestSuperviseCancelGroup(t *testing.T) {
 	t.Parallel()
 	bin := supervisorBinary(t)
@@ -116,12 +114,8 @@ func TestSuperviseCancelGroup(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("round %d: start: %v", round, err)
 		}
-		// Wait for POSITIVE proof the supervisor is past SIGTERM-handler
-		// installation: the child touches child-started before exec'ing the long
-		// sleep, and handler arming strictly precedes the first spawn. Waiting for
-		// process.json alone is racy (it is written before the handler is armed), so
-		// a group signal landing in that window killed the supervisor outright (no
-		// exit.json, "signal: terminated") and made this test fail under load.
+		// A running child proves the cancellation handler is installed;
+		// process.json is written before the handler is armed.
 		waitForFile(t, marker)
 		pgid, err := syscall.Getpgid(cmd.Process.Pid)
 		if err != nil {
@@ -163,6 +157,7 @@ func TestSuperviseExitCodes(t *testing.T) {
 		{"exit0", []string{"/usr/bin/true"}, 0},
 		{"exit7", []string{"/bin/sh", "-c", "exit 7"}, 7},
 		{"exit130explicit", []string{"/bin/sh", "-c", "exit 130"}, 130},
+		{"sigterm", []string{"/bin/sh", "-c", "kill -TERM $$"}, -15},
 		{"sigkill", []string{"/bin/sh", "-c", "kill -9 $$"}, -9},
 	}
 	for _, c := range cases {

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// supervisorSysProcAttr puts the supervisor in a fresh process group.
+// supervisorSysProcAttr starts each supervised process in a fresh process group.
 func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }

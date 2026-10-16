@@ -261,7 +261,8 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !ready {
-		t.Fatal("private p4d did not start")
+		body, readErr := os.ReadFile(log.Name())
+		t.Fatalf("private p4d did not start: address=%s pid=%d probe=%v log=%q readError=%v\n%s", port, server.Process.Pid, err, log.Name(), readErr, body)
 	}
 	wc := filepath.Join(root, "main")
 	if err = os.MkdirAll(wc, 0755); err != nil {

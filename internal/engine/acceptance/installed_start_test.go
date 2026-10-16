@@ -679,18 +679,27 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	readPending := make(chan error, 1)
+	type inputWriteResult struct {
+		written int
+		err     error
+	}
+	readPending := make(chan inputWriteResult, 1)
 	go func() {
-		_, err := input.Write(bytes.Repeat([]byte(" "), 2*1024*1024))
-		readPending <- err
+		written, err := input.Write(bytes.Repeat([]byte(" "), 2*1024*1024))
+		readPending <- inputWriteResult{written: written, err: err}
 	}()
 	select {
-	case err := <-readPending:
-		if err != nil {
-			t.Fatalf("CLI did not reach event input after Open: %v", err)
+	case result := <-readPending:
+		if result.err != nil {
+			_ = cmd.Process.Kill()
+			waitErr := cmd.Wait()
+			t.Fatalf("CLI did not reach event input after Open: written=%d write=%v exit=%v output=%s", result.written, result.err, waitErr, &output)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("CLI did not consume event input after Open")
+		_ = cmd.Process.Kill()
+		waitErr := cmd.Wait()
+		result := <-readPending
+		t.Fatalf("CLI did not consume event input after Open: written=%d write=%v exit=%v output=%s", result.written, result.err, waitErr, &output)
 	}
 	p.install(t, "zcode", "global")
 	document, err := validate.LoadRegistry(request.AdmissionRegistryPath)

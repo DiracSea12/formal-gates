@@ -132,6 +132,7 @@ func TestResolvedProblemDoesNotDisposeCurrentCaseFailure(t *testing.T) {
 	t.Parallel()
 	for _, rawOpen := range []bool{false, true} {
 		t.Run(fmt.Sprintf("independent-raw=%t", rawOpen), func(t *testing.T) {
+			t.Parallel()
 			d := newValidationDriver(t, "blackbox", "quality")
 			d.reviewReady()
 			qa, qi := d.action("engine.qa.execution.v4")

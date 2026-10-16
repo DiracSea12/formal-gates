@@ -403,6 +403,7 @@ func TestExecutionScopeKeepsOriginalEvidenceAcrossDeliveryOrder(t *testing.T) {
 	for _, held := range []bool{false, true} {
 		for _, resultFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("held=%t/result-first=%t", held, resultFirst), func(t *testing.T) {
+				t.Parallel()
 				d := repairedExecutionDriver(t)
 				d.recordExecutionScope(coverage.ReviewBlackbox, "normal")
 				qa, in := d.action("engine.qa.execution.v4")
