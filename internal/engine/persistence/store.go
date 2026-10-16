@@ -274,6 +274,7 @@ func (s *Store) readDocument() (*document, error) {
 	if observed := contentDigestOf(compact); observed != doc.ContentDigest {
 		return nil, &IntegrityMismatchError{Path: s.statePath(), Expected: doc.ContentDigest, Observed: observed}
 	}
+	doc.Content = compact
 	return &doc, nil
 }
 
