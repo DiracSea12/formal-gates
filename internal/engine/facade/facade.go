@@ -1078,6 +1078,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 		return Run{}, err
 	}
 	var plan *decision.Plan
+	var currentSnapshot *protocol.Snapshot
 	if terminalReady {
 		plan, _, err = f.engine.Plan(protocol.Observation{})
 		if err != nil {
@@ -1120,6 +1121,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 				}
 				continue
 			}
+			currentSnapshot = &current
 			break
 		}
 	}
@@ -1133,6 +1135,7 @@ func (f *Facade) driveInWindow() (Run, error) {
 	// Native delivery has one verifier. A child freezes a recoverable checkpoint;
 	// an ordinary regular run seals. An abort consumes its existing decision.
 	if plan != nil && plan.Next.Kind == decision.KindComplete && snap.State.Route != "lightweight" {
+		currentSnapshot = nil
 		current, loadErr := f.engine.Load()
 		if loadErr != nil {
 			return Run{}, loadErr
@@ -1149,14 +1152,17 @@ func (f *Facade) driveInWindow() (Run, error) {
 			}
 		}
 	}
-	current, err := f.engine.Load()
-	if err != nil {
+	if currentSnapshot == nil {
+		current, loadErr := f.engine.Load()
+		if loadErr != nil {
+			return Run{}, loadErr
+		}
+		currentSnapshot = &current
+	}
+	if _, err := f.workerMaterials(currentSnapshot.State, true); err != nil {
 		return Run{}, err
 	}
-	if _, err := f.workerMaterials(current.State, true); err != nil {
-		return Run{}, err
-	}
-	run, err := f.project(&current)
+	run, err := f.project(currentSnapshot)
 	if err != nil {
 		return Run{}, err
 	}
