@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,9 +99,9 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	wc := filepath.Join(root, "main")
 	runner := &nativeTestRunner{log: nativeFixtureLog(t)}
 	nativeCommand(t, runner, root, "svnadmin", "create", repo)
-	url := "file://" + repo
-	nativeCommand(t, runner, root, "svn", "mkdir", url+"/trunk", url+"/branches", "-m", "fixture roots")
-	nativeCommand(t, runner, root, "svn", "checkout", url+"/trunk", wc)
+	repositoryURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(repo), "/")}).String()
+	nativeCommand(t, runner, root, "svn", "mkdir", repositoryURL+"/trunk", repositoryURL+"/branches", "-m", "fixture roots")
+	nativeCommand(t, runner, root, "svn", "checkout", repositoryURL+"/trunk", wc)
 	if err := os.MkdirAll(filepath.Join(wc, "empty"), 0755); err != nil {
 		t.Fatal(err)
 	}

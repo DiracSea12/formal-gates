@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,8 +115,9 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 	if name == "svn" {
 		repo := filepath.Join(nativeFixtureDirectory(t), "repository")
 		command("", "svnadmin", "create", repo)
-		command("", "svn", "mkdir", "file://"+repo+"/trunk", "-m", "fixture trunk")
-		command("", "svn", "checkout", "file://"+repo+"/trunk", root)
+		repositoryURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(repo), "/")}).String()
+		command("", "svn", "mkdir", repositoryURL+"/trunk", "-m", "fixture trunk")
+		command("", "svn", "checkout", repositoryURL+"/trunk", root)
 	} else {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {

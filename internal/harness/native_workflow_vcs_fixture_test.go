@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,8 +73,9 @@ func (c *engineCanary) initFixtureRepository(repositoryRoot ...string) {
 			c.fail("private SVN repository directory: %v", err)
 		}
 		c.fixtureCommand("", "svnadmin", nil, "create", repository)
-		c.fixtureCommand("", "svn", nil, "mkdir", "file://"+repository+"/trunk", "-m", "fixture trunk")
-		c.fixtureCommand("", "svn", nil, "checkout", "file://"+repository+"/trunk", c.project)
+		repositoryURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(repository), "/")}).String()
+		c.fixtureCommand("", "svn", nil, "mkdir", repositoryURL+"/trunk", "-m", "fixture trunk")
+		c.fixtureCommand("", "svn", nil, "checkout", repositoryURL+"/trunk", c.project)
 		return
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -1396,7 +1396,7 @@ func (d *validationDriver) observeFixtureAdapter() bool {
 				}
 				argv := operation.Argv
 				if operation.Kind == coverage.OperationShell {
-					argv = []string{"/bin/sh", "-c", operation.Command}
+					argv = coverage.ShellCommand(operation.Command)
 				}
 				invocation, err := json.Marshal(argv)
 				if err != nil {

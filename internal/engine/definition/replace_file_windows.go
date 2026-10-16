@@ -3,60 +3,49 @@
 package definition
 
 import (
-	"os"
-	"syscall"
-	"time"
+	"errors"
+	"path/filepath"
 	"unsafe"
-)
 
-// replaceFileW 绑定 Windows 原生文件替换调用；replaceCompletedFile 对已存在
-// 的目标调用 ReplaceFileW，目标不存在时调用 os.Rename。
-var replaceFileW = syscall.NewLazyDLL("kernel32.dll").NewProc("ReplaceFileW")
-
-const (
-	windowsSharingViolation = syscall.Errno(32)
-	windowsLockViolation    = syscall.Errno(33)
+	"golang.org/x/sys/windows"
 )
 
 func replaceCompletedFile(source, destination string) error {
-	if _, err := os.Stat(destination); os.IsNotExist(err) {
-		return os.Rename(source, destination)
-	} else if err != nil {
-		return err
-	}
-	destinationPtr, err := syscall.UTF16PtrFromString(destination)
+	destination, err := filepath.Abs(destination)
 	if err != nil {
 		return err
 	}
-	sourcePtr, err := syscall.UTF16PtrFromString(source)
+	name, err := windows.UTF16FromString(destination)
 	if err != nil {
 		return err
 	}
-	// 仅共享/锁冲突错误进行有界重试；其他调用错误直接返回。
-	const (
-		maxAttempts = 200
-		retryDelay  = 2 * time.Millisecond
-	)
-	for attempt := 0; ; attempt++ {
-		result, _, callErr := replaceFileW.Call(
-			uintptr(unsafe.Pointer(destinationPtr)),
-			uintptr(unsafe.Pointer(sourcePtr)),
-			0,
-			0,
-			0,
-			0,
-		)
-		if result != 0 {
-			return nil
-		}
-		errno := callErr
-		if errno == syscall.Errno(0) {
-			errno = syscall.EINVAL
-		}
-		if attempt < maxAttempts && (errno == windowsSharingViolation || errno == windowsLockViolation) {
-			time.Sleep(retryDelay)
-			continue
-		}
-		return errno
+	sourcePtr, err := windows.UTF16PtrFromString(source)
+	if err != nil {
+		return err
 	}
+
+	// FileRenameInfoEx 使用 FILE_RENAME_INFO 的原生对齐与 UTF-16 字节长度。
+	type fileRenameInformation struct {
+		Flags          uint32
+		RootDirectory  windows.Handle
+		FileNameLength uint32
+		FileName       [1]uint16
+	}
+	var layout fileRenameInformation
+	nameLength := len(name) - 1
+	buffer := make([]byte, int(unsafe.Offsetof(layout.FileName))+nameLength*2)
+	info := (*fileRenameInformation)(unsafe.Pointer(&buffer[0]))
+	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.FileNameLength = uint32(nameLength * 2)
+	copy(unsafe.Slice(&info.FileName[0], nameLength), name[:nameLength])
+
+	handle, err := windows.CreateFile(sourcePtr, windows.DELETE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return err
+	}
+	err = windows.SetFileInformationByHandle(handle, windows.FileRenameInfoEx,
+		&buffer[0], uint32(len(buffer)))
+	return errors.Join(err, windows.CloseHandle(handle))
 }

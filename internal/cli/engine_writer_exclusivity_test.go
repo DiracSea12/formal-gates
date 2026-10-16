@@ -130,7 +130,7 @@ func startAdmittedEngineRun(t *testing.T, root string, nativeBase ...string) *fa
 		t.Fatal(homeErr)
 	}
 	originalInvocation := os.Args[0]
-	os.Args[0] = filepath.Join(homePath, ".local", "bin", "formal-gates")
+	os.Args[0] = filepath.Join(homePath, ".local", "bin", installTestBinaryName())
 	t.Cleanup(func() { os.Args[0] = originalInvocation })
 	var stdout, stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {

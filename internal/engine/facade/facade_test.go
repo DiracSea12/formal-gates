@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -741,8 +742,12 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 			t.Fatal(err)
 		}
 	}
+	name := "formal-gates"
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
+	}
 	admissionRuntime.once.Do(func() {
-		binary := filepath.Join(t.TempDir(), "formal-gates")
+		binary := filepath.Join(t.TempDir(), name)
 		command := exec.Command("go", "build", "-o", binary, "./cmd/formal-gates")
 		command.Dir = source
 		if output, err := command.CombinedOutput(); err != nil {
@@ -757,7 +762,7 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 	if err := os.MkdirAll(filepath.Join(target, "bin"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "bin", "formal-gates"), admissionRuntime.binary, 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "bin", name), admissionRuntime.binary, 0700); err != nil {
 		t.Fatal(err)
 	}
 	// Unit workflows issue this declared custom gate from their private catalog.

@@ -51,7 +51,7 @@ func addQAOperationReceipt(t *testing.T, s *State, p CheckParameters, stdout str
 	evidence := CheckEvidence{ParametersDigest: intent.PayloadDigest, SourceIdentity: p.SourceIdentity, SourceDigest: p.SourceDigest, WorkspaceID: p.WorkspaceID, RequestDigest: "request:" + id, Directory: "evidence:" + id, ExitCode: exit, Stdout: proof(stdout), Stderr: proof(""), StdoutText: stdout, Tool: "actual-tool", Environment: "actual-environment"}
 	argv := p.QA.Operation.Argv
 	if p.QA.Operation.Kind == coverage.OperationShell {
-		argv = []string{"/bin/sh", "-c", p.QA.Operation.Command}
+		argv = coverage.ShellCommand(p.QA.Operation.Command)
 	}
 	invocation, err := json.Marshal(argv)
 	if err != nil {
