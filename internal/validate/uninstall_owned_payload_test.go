@@ -209,6 +209,10 @@ func TestUninstallRestoresOwnedPayloadsThroughOriginalJournal(t *testing.T) {
 	if err = os.Chmod(resource, 0750); err != nil {
 		t.Fatal(err)
 	}
+	resourceInfo, err := os.Stat(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
 	paths := []string{registry, registry + ".install.json", registry + ".bootstrap.json", launcher, filepath.Join(release, "bin", nativeBinaryName()), filepath.Join(installed.Targets[0].TargetPath, "README.md")}
 	before := map[string][]byte{}
 	modes := map[string]os.FileMode{}
@@ -234,7 +238,7 @@ func TestUninstallRestoresOwnedPayloadsThroughOriginalJournal(t *testing.T) {
 		}
 	}
 	info, err := os.Stat(resource)
-	if err != nil || info.Mode().Perm() != 0750 {
+	if err != nil || info.Mode().Perm() != resourceInfo.Mode().Perm() {
 		t.Fatal("journal did not restore empty resource mode", err)
 	}
 	var receipt installRecoveryReceipt

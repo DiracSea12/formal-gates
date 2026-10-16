@@ -96,9 +96,8 @@ func TestReferencedPythonArtifactsPreserveProductionAndImmutableProof(t *testing
 					p.Paths = []string{"test_app.py", "verified.py"}
 					p.ReviewCases = map[string]string{"valid": "verified.py::test_valid"}
 				default:
-					if err := os.Chmod(filepath.Join(path, "test_app.py"), 0755); err != nil {
-						t.Fatal(err)
-					}
+					git(path, "config", "core.filemode", "false")
+					git(path, "update-index", "--chmod=+x", "test_app.py")
 				}
 			}
 			if variant == "shared" {

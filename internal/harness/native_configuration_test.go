@@ -2,7 +2,9 @@ package harness
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"formal-gates/internal/settings"
@@ -10,11 +12,22 @@ import (
 
 func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
 	t.Parallel()
+	native, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, err = filepath.EvalSymlinks(native)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, provider := range []string{"claude", "codex", "cursor", "dsh", "zcode"} {
 		t.Run(provider, func(t *testing.T) {
 			root := resolveNativePath(t.TempDir())
 			executable := filepath.Join(root, "native-cli")
-			if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			if runtime.GOOS == "windows" {
+				executable += ".exe"
+			}
+			if err := os.Link(native, executable); err != nil {
 				t.Fatal(err)
 			}
 			home := filepath.Join(root, "native-home")

@@ -1,6 +1,6 @@
 //go:build windows
 
-package definition
+package atomicfile
 
 import (
 	"errors"
@@ -10,7 +10,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func replaceCompletedFile(source, destination string) error {
+// Replace publishes a completed file by replacing the destination directory entry.
+func Replace(source, destination string) error {
 	destination, err := filepath.Abs(destination)
 	if err != nil {
 		return err

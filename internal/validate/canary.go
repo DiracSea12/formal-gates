@@ -702,7 +702,7 @@ func portableComparison(c coverage.AcceptanceCase, fact protocol.ExecutionFact) 
 
 func initializeCanaryGit(root string, runtimeFiles vcs.RuntimeFiles) error {
 	runner := vcs.ExecRunner{}
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}} {
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}, {"config", "core.autocrlf", "false"}} {
 		if _, err := runner.Run(root, "git", args...); err != nil {
 			return err
 		}

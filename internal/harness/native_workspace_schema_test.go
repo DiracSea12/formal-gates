@@ -7,6 +7,7 @@ import (
 	"formal-gates/internal/engine/worker"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -148,8 +149,9 @@ func TestWorkspaceActionDeclarationsUseOriginalRPC(t *testing.T) {
 			if value := rpc("tools/call", invalid); value["isError"] != true {
 				t.Fatal("invalid original action arguments accepted", invalid, value)
 			}
-			if value := rpc("tools/call", args); value["isError"] != false {
-				t.Fatal("declared original invocation rejected", args, value)
+			applied := rpc("tools/call", args)
+			if applied["isError"] != false {
+				t.Fatal("declared original invocation rejected", args, applied)
 			}
 			switch action {
 			case "replace", "copy-range":
@@ -177,8 +179,20 @@ func TestWorkspaceActionDeclarationsUseOriginalRPC(t *testing.T) {
 				}
 			case "executable":
 				info, err := os.Stat(filepath.Join(workspace, "source.txt"))
-				if err != nil || info.Mode()&0111 != 0111 {
+				expected := os.FileMode(0111)
+				if runtime.GOOS == "windows" {
+					expected = 0
+				}
+				if err != nil || info.Mode()&0111 != expected {
 					t.Fatal("original executable bits", err)
+				}
+				var result map[string]any
+				if err := json.Unmarshal([]byte(textOf(getOf(listOf(applied["content"])[0], "text"))), &result); err != nil || result["executable"] != true {
+					t.Fatal("original executable declaration", result, err)
+				}
+				body, err := os.ReadFile(filepath.Join(workspace, "source.txt"))
+				if err != nil || string(body) != "alpha\nbeta\n" {
+					t.Fatal("executable action changed original file bytes", string(body), err)
 				}
 			}
 			projected := zcodeSemanticToolSchema(schema)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/encoder"
 )
@@ -102,7 +103,7 @@ func writeGenerated(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("gen-definition: %w", err)
 	}
-	if err := replaceCompletedFile(tmpName, path); err != nil {
+	if err := atomicfile.Replace(tmpName, path); err != nil {
 		return fmt.Errorf("gen-definition: %w", err)
 	}
 	return nil

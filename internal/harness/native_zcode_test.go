@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -344,7 +343,7 @@ func zcodeTestAccountClient(t *testing.T, data string) *zcodeClient {
 		t.Skip("node is not available")
 	}
 	zcodeTestCredentialHelper(t)
-	return &zcodeClient{executable: resolveNativePath(node), hostData: data, environment: map[string]string{"HOME": data, "ZCODE_DATA_BASE_DIR": data, zcodeCredentialHelperEnv: filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)}}
+	return &zcodeClient{executable: resolveNativePath(node), hostData: data, environment: map[string]string{"HOME": data, "USERPROFILE": data, "ZCODE_DATA_BASE_DIR": data, zcodeCredentialHelperEnv: filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile)}}
 }
 
 // TestZcodeBuiltinProviderRevision pins the revision format: the catalogue's
@@ -592,11 +591,7 @@ func TestZcodeAccountProvisioningFollowsDesktopLogin(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(store), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	account, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := strings.Join([]string{"zcode-credential-fallback", runtime.GOOS, nativeHome, account.Username}, ":")
+	secret := zcodeTestFallbackSecret(t, client.executable, nativeHome)
 	login := func(current string) map[string]string {
 		return map[string]string{
 			"oauth:active_provider": zcodeTestEncrypt(t, secret, "zhipu"),

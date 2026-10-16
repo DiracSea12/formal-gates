@@ -181,6 +181,7 @@ func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
 		}
 	}
 	runGit(t, root, "add", ".")
+	runGit(t, root, "update-index", "--chmod=+x", "executable.sh")
 	runGit(t, root, "commit", "--no-verify", "--no-gpg-sign", "-m", "Native comparison materials")
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "index value\n")
 	runGit(t, root, "add", "delivery.txt")
@@ -198,9 +199,7 @@ func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "removed.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(root, "executable.sh"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	runGit(t, root, "update-index", "--chmod=-x", "executable.sh")
 	head := standaloneGateHead(t, root)
 	status := runGit(t, root, "status", "--porcelain=v1", "--untracked-files=all")
 	index, err := os.ReadFile(filepath.Join(root, ".git", "index"))
@@ -247,7 +246,7 @@ func TestStandaloneComparisonPublishesOriginalValuesAndLocations(t *testing.T) {
 				t.Fatalf("untracked native entry: %+v", row)
 			}
 		case "executable.sh":
-			if row.BaseMode != "100644" || row.Mode != "100755" {
+			if row.BaseMode != "100755" || row.Mode != "100644" {
 				t.Fatalf("mode-only native entry: %+v", row)
 			}
 		}

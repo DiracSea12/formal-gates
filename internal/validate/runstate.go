@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -52,5 +53,5 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return replaceCompletedFile(tmpName, path)
+	return atomicfile.Replace(tmpName, path)
 }

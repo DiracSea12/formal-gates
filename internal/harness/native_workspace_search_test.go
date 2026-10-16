@@ -74,7 +74,8 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 	for _, raw := range matches {
 		row := raw.(map[string]any)
 		path := row["path"].(string)
-		if int(row["line"].(float64)) != wantLines[path] || !strings.Contains(row["text"].(string), "needle") {
+		sourcePath := filepath.ToSlash(path)
+		if int(row["line"].(float64)) != wantLines[sourcePath] || !strings.Contains(row["text"].(string), "needle") {
 			t.Fatal(row)
 		}
 		read, err := tools.fact(int(row["read"].(float64)), "read")
@@ -85,11 +86,11 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(read.Paths, []string{path}) || !bytes.Equal(read.Content, []byte(sources[path])) || listing.Paths[int(row["entry"].(float64))-1] != path {
+		if !reflect.DeepEqual(read.Paths, []string{path}) || !bytes.Equal(read.Content, []byte(sources[sourcePath])) || listing.Paths[int(row["entry"].(float64))-1] != path {
 			t.Fatalf("original search evidence: %+v %+v", read, listing)
 		}
 		published := call(`{"action":"read","listing":` + workspaceNumber(row["listing"]) + `,"entry":` + workspaceNumber(row["entry"]) + `}`)
-		if path == "pkg/app_test.go" && len(published["testSymbols"].([]any)) != 1 {
+		if sourcePath == "pkg/app_test.go" && len(published["testSymbols"].([]any)) != 1 {
 			t.Fatal("search did not retain original symbol read", published)
 		}
 	}
@@ -102,7 +103,7 @@ func TestNativeWorkspaceSearchPublishesOriginalVisibleReads(t *testing.T) {
 		}
 	}
 	selected := call(`{"action":"search","query":"needle","listing":` + workspaceNumber(listing) + `,"entry":` + workspaceNumber(entry) + `}`)
-	if rows := selected["matches"].([]any); len(rows) != 1 || rows[0].(map[string]any)["path"] != "pkg/app_test.go" {
+	if rows := selected["matches"].([]any); len(rows) != 1 || rows[0].(map[string]any)["path"] != filepath.Join("pkg", "app_test.go") {
 		t.Fatal(selected)
 	}
 	if rows := call(`{"action":"search","query":"absent literal"}`)["matches"].([]any); len(rows) != 0 {

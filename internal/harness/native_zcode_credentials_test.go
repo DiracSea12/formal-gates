@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -40,6 +39,20 @@ func zcodeTestEncrypt(t *testing.T, secret, value string) string {
 	return "enc:v1:" + encode(nonce) + "." + encode(tag) + "." + encode(body)
 }
 
+func zcodeTestFallbackSecret(t *testing.T, node, home string) string {
+	t.Helper()
+	command := exec.Command(node, "-p", `JSON.stringify([process.platform, require('node:os').userInfo().username])`)
+	body, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity []string
+	if err := json.Unmarshal(body, &identity); err != nil || len(identity) != 2 {
+		t.Fatal("native credential identity", string(body), err)
+	}
+	return strings.Join([]string{"zcode-credential-fallback", identity[0], home, identity[1]}, ":")
+}
+
 func TestZcodeCredentialsKeepBoundEnvironmentAndActiveAccount(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -68,10 +81,7 @@ func TestZcodeCredentialsKeepBoundEnvironmentAndActiveAccount(t *testing.T) {
 	t.Setenv("USERPROFILE", engineHome)
 	t.Setenv("ZCODE_CREDENTIAL_SECRET", "")
 	t.Setenv(zcodeCredentialHelperEnv, "")
-	account, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fallbackSecret := zcodeTestFallbackSecret(t, node, nativeHome)
 	encrypt := func(secret, value string) string { return zcodeTestEncrypt(t, secret, value) }
 	store := filepath.Join(nativeHome, ".zcode", "v2", zcodeCredentialsFile)
 	if err := os.MkdirAll(filepath.Dir(store), 0755); err != nil {
@@ -80,7 +90,7 @@ func TestZcodeCredentialsKeepBoundEnvironmentAndActiveAccount(t *testing.T) {
 	for _, configuredSecret := range []string{"", "bound-fixture-secret"} {
 		secret := configuredSecret
 		if secret == "" {
-			secret = strings.Join([]string{"zcode-credential-fallback", runtime.GOOS, nativeHome, account.Username}, ":")
+			secret = fallbackSecret
 		}
 		value := map[string]string{
 			"account-provider:p1:identity":                            encrypt(secret, "fixture"),

@@ -148,6 +148,10 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				original, err := os.Lstat(launcher)
+				if err != nil {
+					t.Fatal(err)
+				}
 				release := filepath.Join(root, "release")
 				registry := filepath.Join(root, "registry.json")
 				observed := filepath.Join(root, "observed.json")
@@ -171,7 +175,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 				if kind == "symlink" && journal.Binary.LinkTarget != oldBinary {
 					t.Fatalf("journal does not retain original launcher link: %+v", journal.Binary)
 				}
-				if kind == "regular" && (journal.Binary.Mode != 0o700 || journal.Binary.Backup == "") {
+				if kind == "regular" && (journal.Binary.Mode != uint32(original.Mode().Perm()) || journal.Binary.Backup == "") {
 					t.Fatalf("journal does not retain original launcher file identity: %+v", journal.Binary)
 				}
 				data, err = os.ReadFile(observed + ".binary")

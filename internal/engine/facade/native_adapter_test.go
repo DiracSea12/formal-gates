@@ -310,9 +310,8 @@ func TestWhiteboxOwnershipRequiresEveryExistingEndpoint(t *testing.T) {
 				}
 				paths = []string{"old.fixture", "old_test.go"}
 			case "test-mode":
-				if err := os.Chmod(filepath.Join(path, "old_test.go"), 0755); err != nil {
-					t.Fatal(err)
-				}
+				git(path, "config", "core.filemode", "false")
+				git(path, "update-index", "--chmod=+x", "old_test.go")
 				paths = []string{"old_test.go"}
 			}
 			r := protocol.NativeResource{ID: "authoring", Owner: "ownership", Role: "whitebox-authoring", Path: path, Ref: "refs/formal-gates/ownership/authoring", Source: base, Identity: base, Status: "READY"}

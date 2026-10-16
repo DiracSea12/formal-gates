@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/coordination"
 )
 
@@ -362,7 +363,7 @@ func atomicCopyFile(source, target string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return replaceCompletedFile(tmpPath, target)
+	return atomicfile.Replace(tmpPath, target)
 }
 
 type installRecoveryReceipt struct {

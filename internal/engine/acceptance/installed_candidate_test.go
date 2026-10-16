@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -924,11 +925,109 @@ if [ "$result" -eq 0 ] && [ "$match" = true ] && [ ! -f "$CANDIDATE_NATIVE_MARKE
 fi
 exit "$result"
 `
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0755); err != nil {
+	if runtime.GOOS == "windows" {
+		buildInstalledBinaryAt(d.t, repoRoot(d.t), "./internal/engine/acceptance/testdata/native_git_peer.go", filepath.Join(dir, "git.exe"))
+	} else if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0755); err != nil {
 		d.t.Fatal(err)
 	}
 	d.env = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), "CANDIDATE_NATIVE_GIT=" + realGit, "CANDIDATE_NATIVE_LOG=" + d.breakLog, "CANDIDATE_NATIVE_STAGE=" + stage, "CANDIDATE_NATIVE_MARKER=" + d.breakMarker}
 }
+
+func TestNativeGitInterceptionParent(t *testing.T) {
+	if os.Getenv("FORMAL_GATES_GIT_INTERCEPTION_PARENT") != "1" {
+		return
+	}
+	var arguments []string
+	if err := json.Unmarshal([]byte(os.Getenv("FORMAL_GATES_GIT_INTERCEPTION_ARGS")), &arguments); err != nil {
+		panic(err)
+	}
+	command := exec.Command(os.Getenv("FORMAL_GATES_GIT_INTERCEPTION_PEER"), arguments...)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := command.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
+		panic(err)
+	}
+	os.Exit(0)
+}
+
+func TestNativeGitInterceptionPreservesNativeEffects(t *testing.T) {
+	t.Parallel()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := executablePath(filepath.Join(t.TempDir(), "git"))
+	buildInstalledBinaryAt(t, repoRoot(t), "./internal/engine/acceptance/testdata/native_git_peer.go", peer)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(arguments ...string) string {
+		t.Helper()
+		command := exec.Command(realGit, arguments...)
+		command.Dir = directory
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("native git %q: %v %s", arguments, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init", "-q")
+	runGit("config", "user.name", "Native Git fixture")
+	runGit("config", "user.email", "native-git@example.invalid")
+	runGit("config", "core.autocrlf", "false")
+	const content = "native input\n"
+	if err := os.WriteFile(filepath.Join(directory, "artifact.txt"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "artifact.txt")
+	runGit("commit", "-qm", "Native source")
+	base := runGit("rev-parse", "HEAD")
+	log, marker := filepath.Join(t.TempDir(), "native.log"), filepath.Join(t.TempDir(), "interrupted")
+	parent, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expectedLog strings.Builder
+	invoke := func(arguments ...string) ([]byte, error) {
+		t.Helper()
+		body, err := json.Marshal(arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(parent, "-test.run=^TestNativeGitInterceptionParent$")
+		command.Dir = directory
+		command.Env = append(os.Environ(), "FORMAL_GATES_GIT_INTERCEPTION_PARENT=1", "FORMAL_GATES_GIT_INTERCEPTION_ARGS="+string(body), "FORMAL_GATES_GIT_INTERCEPTION_PEER="+peer, "CANDIDATE_NATIVE_GIT="+realGit, "CANDIDATE_NATIVE_LOG="+log, "CANDIDATE_NATIVE_MARKER="+marker, "CANDIDATE_NATIVE_STAGE=workspace", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=candidate.environment", "GIT_CONFIG_VALUE_0=native environment")
+		output, callErr := command.CombinedOutput()
+		expectedLog.WriteString(directory + "\t" + strings.Join(arguments, "\t") + "\n")
+		if actual := string(readInstalledFile(t, log)); actual != expectedLog.String() {
+			t.Fatalf("native cwd or full arguments changed:\n%s\nwant:\n%s", actual, &expectedLog)
+		}
+		return output, callErr
+	}
+	if output, err := invoke("-c", "core.longpaths=true", "config", "--get", "candidate.environment"); err != nil || string(output) != "native environment\n" {
+		t.Fatalf("nonmatching native command changed its environment or result: %q %v", output, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("nonmatching command interrupted its parent: %v", err)
+	}
+	for index := range 2 {
+		workspace := filepath.Join(t.TempDir(), "workspace")
+		output, err := invoke("-c", "core.longpaths=true", "-c", "candidate.argument=two words", "worktree", "add", "--detach", workspace, base)
+		if (err != nil) != (index == 0) {
+			t.Fatalf("native prefix must interrupt only its first successful execution: call=%d output=%q err=%v", index, output, err)
+		}
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("native interruption marker missing: %v", err)
+		}
+		if actual, err := os.ReadFile(filepath.Join(workspace, "artifact.txt")); err != nil || string(actual) != content {
+			t.Fatalf("interception did not preserve its successful native effect: %q %v", actual, err)
+		}
+	}
+}
+
 func TestInstalledCandidateResumesNativeWrites(t *testing.T) {
 	t.Parallel()
 	for _, stage := range []string{"workspace", "track", "artifact", "pin", "unknown", "freeze", "promotion", "squash", "delivery", "cleanup"} {
