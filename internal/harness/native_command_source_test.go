@@ -135,6 +135,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
 					argv, expected = coverage.ShellCommand(operation.Command), "<片段>\n"+stdin
 				}
 				cmd := exec.Command(argv[0], argv[1:]...)
+				ApplyNativeCommandLine(cmd)
 				cmd.Dir, cmd.Stdin = workspace, strings.NewReader(operation.Stdin)
 				output, err := cmd.CombinedOutput()
 				if err != nil || string(output) != expected {
@@ -277,6 +278,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementPayloads(t *testing.T) {
 					wantOutput = "<原命令 \"quoted\">\n" + stdin
 				}
 				cmd := exec.Command(argv[0], argv[1:]...)
+				ApplyNativeCommandLine(cmd)
 				cmd.Dir, cmd.Stdin = workspace, strings.NewReader(operation.Stdin)
 				output, err := cmd.CombinedOutput()
 				if err != nil || string(output) != wantOutput {
@@ -450,6 +452,7 @@ func TestNativeDeveloperPreparesDeclaredProjectCheckCalls(t *testing.T) {
 	}
 	argv := coverage.ShellCommand(checks[0].Command)
 	actual := exec.Command(argv[0], argv[1:]...)
+	ApplyNativeCommandLine(actual)
 	actual.Dir = workspace
 	out, err := actual.CombinedOutput()
 	if err != nil || string(out) != "<--label>\n<原命令 two words>\n<>\nnext-line\n" {
@@ -490,6 +493,7 @@ func TestNativeQAAuthorsProjectInvocations(t *testing.T) {
 			}
 			argv := coverage.ShellCommand(operation.Command)
 			actual := exec.Command(argv[0], argv[1:]...)
+			ApplyNativeCommandLine(actual)
 			actual.Dir = workspace
 			out, err := actual.CombinedOutput()
 			if err != nil || string(out) != "<--label>\n<原命令 two words>\n<>\nnext-line\n" {

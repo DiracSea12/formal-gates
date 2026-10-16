@@ -18,6 +18,8 @@ func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }
 
+func ApplyNativeCommandLine(cmd *exec.Cmd) {}
+
 // terminateJob signals the supervisor's whole process group with SIGTERM —
 // the supervisor's own cancellation path, which settles the child and writes
 // the deterministic 130 receipt. Signalling a group that already exited is a

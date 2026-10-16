@@ -3,12 +3,18 @@
 package harness
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+
+	"formal-gates/internal/engine/coverage"
 )
 
 func TestSupervisedWindowsPeer(t *testing.T) {
@@ -16,11 +22,76 @@ func TestSupervisedWindowsPeer(t *testing.T) {
 	case "echo":
 		fmt.Print(os.Getenv("SUPERVISED_WINDOWS_VALUE"))
 		os.Exit(0)
+	case "argv":
+		if len(os.Args) < 3 || os.Args[2] != "--" {
+			t.Fatal("expected original peer argument boundary", os.Args)
+		}
+		body, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"argv": os.Args[3:], "stdin": string(body)}); err != nil {
+			t.Fatal(err)
+		}
+		os.Exit(0)
 	case "wait":
 		if err := os.WriteFile(os.Getenv("SUPERVISED_WINDOWS_READY"), []byte("started"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Hour)
+	}
+}
+
+func TestSuperviseWindowsPreservesQuotedShellTextAndNativeArguments(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := filepath.Join(t.TempDir(), "原文 quoted peer.exe")
+	if err := os.Link(executable, peer); err != nil {
+		t.Fatal(err)
+	}
+	input := "first \"原文\"\r\nsecond\t  "
+	arguments := []string{"", "two words", `原文 "quoted"`}
+	native := append([]string{peer, "-test.run=^TestSupervisedWindowsPeer$", "--"}, arguments...)
+	text := `"` + peer + `" -test.run=^TestSupervisedWindowsPeer$ -- "" "two words" "原文 \"quoted\""`
+	for name, argv := range map[string][]string{"native": native, "shell": coverage.ShellCommand(text)} {
+		t.Run(name, func(t *testing.T) {
+			originalArgv := append([]string(nil), argv...)
+			command := exec.Command(argv[0], argv[1:]...)
+			command.SysProcAttr = supervisorSysProcAttr()
+			attributes := *command.SysProcAttr
+			ApplyNativeCommandLine(command)
+			if !reflect.DeepEqual(command.Args, originalArgv) || command.SysProcAttr.CreationFlags != attributes.CreationFlags || name == "native" && command.SysProcAttr.CmdLine != "" {
+				t.Fatal("native command changed arguments or process-group attributes", command)
+			}
+			directory := t.TempDir()
+			request := map[string]any{"kind": "check", "argv": argv, "cwd": directory, "stdin": input, "environment": map[string]any{"SUPERVISED_WINDOWS_PEER": "argv"}}
+			writeRequest(t, directory, request)
+			originalRequest := readBytes(t, filepath.Join(directory, "request.json"))
+			if code := Supervise(directory); code != 0 {
+				t.Fatal("supervisor failed", code)
+			}
+			receipt := readReceipt(t, directory)
+			if receipt["exit_code"] != float64(0) || receipt["error"] != "" {
+				t.Fatal("original command failed", receipt, string(readBytes(t, filepath.Join(directory, "stderr.log"))))
+			}
+			var observed struct {
+				Argv  []string `json:"argv"`
+				Stdin string   `json:"stdin"`
+			}
+			if err := json.Unmarshal(readBytes(t, filepath.Join(directory, "stdout.log")), &observed); err != nil || !reflect.DeepEqual(observed.Argv, arguments) || observed.Stdin != input {
+				t.Fatal("original native arguments or stdin changed", observed, err)
+			}
+			if !bytes.Equal(originalRequest, readBytes(t, filepath.Join(directory, "request.json"))) {
+				t.Fatal("native launch rewrote the original approved request")
+			}
+		})
+	}
+	ordinary := exec.Command(peer, "/D", "/S", "/C", text)
+	ApplyNativeCommandLine(ordinary)
+	if ordinary.SysProcAttr != nil || !reflect.DeepEqual(ordinary.Args, []string{peer, "/D", "/S", "/C", text}) {
+		t.Fatal("ordinary ARGV acquired CMD parsing", ordinary)
 	}
 }
 

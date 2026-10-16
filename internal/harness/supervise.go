@@ -312,6 +312,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		Stderr: errF,
 	}
 	cmd.SysProcAttr = supervisorSysProcAttr()
+	ApplyNativeCommandLine(cmd)
 	if startErr := cmd.Start(); startErr != nil {
 		var errno syscall.Errno
 		if errors.As(startErr, &errno) && errno == syscall.ENOENT {

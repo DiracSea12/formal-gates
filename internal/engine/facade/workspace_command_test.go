@@ -10,11 +10,12 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/harness"
 )
 
 func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 	root := t.TempDir()
-	peer := filepath.Join(t.TempDir(), "workspace-peer")
+	peer := filepath.Join(t.TempDir(), "原文 workspace-peer")
 	if os.PathSeparator == '\\' {
 		peer += ".exe"
 	}
@@ -68,6 +69,7 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 			invoke := func(binding string) string {
 				argv := request["argv"].([]string)
 				child := exec.Command(argv[0], argv[1:]...)
+				harness.ApplyNativeCommandLine(child)
 				child.Dir = request["cwd"].(string)
 				child.Stdin = strings.NewReader(request["stdin"].(string))
 				child.Env = append(os.Environ(), "FORMAL_GATES_WORKSPACE="+binding)

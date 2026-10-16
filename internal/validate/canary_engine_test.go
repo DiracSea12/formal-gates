@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/harness"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
 )
@@ -165,6 +166,7 @@ func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(argv[0], argv[1:]...)
+			harness.ApplyNativeCommandLine(cmd)
 			cmd.Dir = root
 			output, err := cmd.CombinedOutput()
 			if (err == nil) != (contents == canaryDeliveryContents) {
@@ -179,6 +181,7 @@ func TestPortableWorkerReportsFailedDevelopmentCheck(t *testing.T) {
 	root := t.TempDir()
 	argv := coverage.ShellCommand("exit 37")
 	command := exec.Command(argv[0], argv[1:]...)
+	harness.ApplyNativeCommandLine(command)
 	command.Dir = root
 	if err := command.Run(); err == nil {
 		t.Fatal("failure fixture unexpectedly passed")

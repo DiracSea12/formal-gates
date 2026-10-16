@@ -4,6 +4,8 @@ package harness
 
 import (
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -12,6 +14,18 @@ import (
 
 func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
+}
+
+// ApplyNativeCommandLine preserves approved CMD text through its native parser.
+func ApplyNativeCommandLine(cmd *exec.Cmd) {
+	argv := cmd.Args
+	if len(argv) != 5 || !strings.EqualFold(filepath.Base(argv[0]), "cmd.exe") || argv[1] != "/D" || argv[2] != "/S" || argv[3] != "/C" {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CmdLine = syscall.EscapeArg(argv[0]) + ` /D /S /C "` + argv[4] + `"`
 }
 
 // Console break reaches the supervisor's cancellation handler and receipt path.

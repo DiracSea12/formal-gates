@@ -19,6 +19,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/harness"
 )
 
 func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) (*Facade, *protocol.State, string) {
@@ -595,6 +596,7 @@ func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
 			argv = coverage.ShellCommand(`.\app.cmd run ` + value)
 		}
 		command := exec.Command(argv[0], argv[1:]...)
+		harness.ApplyNativeCommandLine(command)
 		command.Dir = input.Workspace.Path
 		output, err := command.CombinedOutput()
 		if value == "valid" && err != nil || value == "invalid" && err == nil {
