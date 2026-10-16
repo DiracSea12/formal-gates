@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -18,12 +19,49 @@ import (
 	"formal-gates/internal/engine/worker"
 )
 
+func commandSourceExecutable(t *testing.T, target, source string) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(file, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		target += ".exe"
+	}
+	if output, err := exec.Command("go", "build", "-o", target, file).CombinedOutput(); err != nil {
+		t.Fatalf("build command fixture: %v %s", err, output)
+	}
+	return target
+}
+
+func commandSourcePrintf(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return "/usr/bin/printf"
+	}
+	return commandSourceExecutable(t, filepath.Join(t.TempDir(), "printf"), `package main
+import ("fmt"; "io"; "os")
+func main() {
+ if len(os.Args) < 2 || os.Args[1] != "%s" { os.Exit(2) }
+ for _, argument := range os.Args[2:] { fmt.Print(argument) }
+ if _, err := io.Copy(os.Stdout, os.Stdin); err != nil { panic(err) }
+}`)
+}
+
+func commandSourceShell(posix, powershell string) string {
+	if runtime.GOOS == "windows" {
+		return `powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ` + powershell + `"`
+	}
+	return posix
+}
+
 func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
+	printf := commandSourcePrintf(t)
 	for _, entrypoint := range []string{"design", "commands", "revision"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
-			command, argument, stdin := "printf '<片段>\\n'; cat", " 中文 'two words' ", " first🙂\r\nsecond尾"
-			original := "命令🙂 [" + command + "] end\r\n参数 [" + argument + "] tail\r\n输入 [" + stdin + "] end\r\n程序 [/usr/bin/printf]\r\n格式 [%s]"
+			command, argument, stdin := commandSourceShell("printf '<片段>\\n'; cat", "[Console]::Write('<片段>'+[char]10); [Console]::Write([Console]::In.ReadToEnd())"), " 中文 'two words' ", " first🙂\r\nsecond尾"
+			original := "命令🙂 [" + command + "] end\r\n参数 [" + argument + "] tail\r\n输入 [" + stdin + "] end\r\n程序 [" + printf + "]\r\n格式 [%s]"
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path, input.RequirementDocument.Content = "requirements.md", original
 			if entrypoint == "commands" {
@@ -57,7 +95,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
 			argumentParts := map[string]any{"parts": []any{columns(2, argumentFirst, argumentMiddle-1), columns(2, argumentMiddle, argumentFirst+utf8.RuneCountInString(argument)-1)}}
 			operations := []any{
 				map[string]any{"kind": "SHELL", "command": command, "stdin": map[string]any{"read": number, "from": 3, "to": 4, "fromColumn": utf8.RuneCountInString("输入 [") + 1, "toColumn": utf8.RuneCountInString("second尾")}},
-				map[string]any{"kind": "ARGV", "argv": []string{"/usr/bin/printf", "%s", "", argument}},
+				map[string]any{"kind": "ARGV", "argv": []string{printf, "%s", "", argument}},
 			}
 			value := map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "approved output", "operations": operations}}, "sharedSteps": []any{map[string]any{"procedure": "original preparation", "artifacts": []any{argumentParts}, "operations": operations}}, "coverage": []any{}}
 			if entrypoint == "commands" {
@@ -87,7 +125,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
 					t.Fatal("shared original fragments changed")
 				}
 			}
-			want := []coverage.Operation{{Kind: coverage.OperationShell, Command: command, Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{"/usr/bin/printf", "%s", "", argument}}}
+			want := []coverage.Operation{{Kind: coverage.OperationShell, Command: command, Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{printf, "%s", "", argument}}}
 			if !reflect.DeepEqual(actual, want) {
 				t.Fatal("original fragments or empty argv changed", actual)
 			}
@@ -123,13 +161,14 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementFragments(t *testing.T) {
 }
 
 func TestNativeQAAuthorsCallsAndRetainsRequirementPayloads(t *testing.T) {
+	printf := commandSourcePrintf(t)
 	for _, entrypoint := range []string{"design", "commands", "revision"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			directory, workspace := nativeToolFixture(t)
-			command := "printf '<原命令 \"quoted\">\\n'; cat\n"
+			command := commandSourceShell("printf '<原命令 \"quoted\">\\n'; cat", "[Console]::Write('<原命令 '+[char]34+'quoted'+[char]34+'>'+[char]10); [Console]::Write([Console]::In.ReadToEnd())") + "\n"
 			stdin := " 中文 \"input\"\r\n\r\n"
 			argument := " two words \"quoted\"\r\n"
-			original := "Confirmed values:\n" + command + stdin + argument + "/usr/bin/printf"
+			original := "Confirmed values:\n" + command + stdin + argument + printf
 			input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "issued-run", Handler: "engine.qa.design.v6", Provider: "dsh", Pending: protocol.PendingAction{ActionID: "issued-action", AttemptID: "original-attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{ReviewKind: coverage.ReviewBlackbox}}}}
 			input.RequirementDocument.Path = "requirements.md"
 			input.RequirementDocument.Content = original
@@ -190,7 +229,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementPayloads(t *testing.T) {
 				t.Fatal("repeated requirement read replaced its original source position")
 			}
 			selectLines := func(from, to int) any { return map[string]any{"read": number, "from": from, "to": to} }
-			operations := []any{map[string]any{"kind": "SHELL", "command": command, "stdin": selectLines(3, 4)}, map[string]any{"kind": "ARGV", "argv": []string{"/usr/bin/printf", "%s", argument}}}
+			operations := []any{map[string]any{"kind": "SHELL", "command": command, "stdin": selectLines(3, 4)}, map[string]any{"kind": "ARGV", "argv": []string{printf, "%s", argument}}}
 			value := map[string]any{"cases": []any{map[string]any{"scenario": "SUCCESS", "oracle": "approved output", "operations": operations}}, "sharedSteps": []any{map[string]any{"procedure": "original preparation", "artifacts": []any{selectLines(5, 5)}, "operations": operations}}, "coverage": []any{}}
 			if entrypoint == "commands" {
 				value = map[string]any{"commands": []any{operations}}
@@ -226,7 +265,7 @@ func TestNativeQAAuthorsCallsAndRetainsRequirementPayloads(t *testing.T) {
 					t.Fatal("original artifact bytes changed")
 				}
 			}
-			want := []coverage.Operation{{Kind: coverage.OperationShell, Command: command, Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{"/usr/bin/printf", "%s", argument}}}
+			want := []coverage.Operation{{Kind: coverage.OperationShell, Command: command, Stdin: stdin}, {Kind: coverage.OperationArgv, Argv: []string{printf, "%s", argument}}}
 			if !reflect.DeepEqual(actual, want) {
 				t.Fatal("original operation values changed", actual)
 			}
@@ -275,7 +314,13 @@ func nativeProjectCallFixture(t *testing.T, input protocol.WorkerInput, semantic
 	if err := os.Mkdir(filepath.Join(workspace, "checks"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "checks", "project-check"), []byte("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n"), 0755); err != nil {
+	if runtime.GOOS == "windows" {
+		commandSourceExecutable(t, filepath.Join(workspace, "checks", "project-check"), `package main
+import ("fmt"; "os")
+func main() { for _, argument := range os.Args[1:] { fmt.Printf("<%s>\n", argument) } }
+`)
+		command = `checks\project-check.exe --label "原命令 two words" "" & powershell -NoProfile -NonInteractive -Command "[Console]::Write('next-line'+[char]10)"` + "\n"
+	} else if err := os.WriteFile(filepath.Join(workspace, "checks", "project-check"), []byte("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("Project checks:\n"+command), 0600); err != nil {

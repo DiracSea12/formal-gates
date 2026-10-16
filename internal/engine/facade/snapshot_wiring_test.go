@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -53,6 +54,7 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	run("init")
 	run("config", "user.email", "snapshot-wiring@example.invalid")
 	run("config", "user.name", "Snapshot Wiring Test")
+	run("config", "core.autocrlf", "false")
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,11 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "app"), []byte("#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"), 0700); err != nil {
+	app, appBody := "app", "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"
+	if goruntime.GOOS == "windows" {
+		app, appBody = "app.cmd", "@echo off\r\nif \"%~1\"==\"run\" if \"%~2\"==\"valid\" exit /b 0\r\nexit /b 1\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(root, app), []byte(appBody), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {

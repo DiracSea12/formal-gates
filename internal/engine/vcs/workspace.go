@@ -46,6 +46,10 @@ func (p *Provider) Worktrees() ([]Worktree, error) {
 	return result, nil
 }
 func (p *Provider) AddWorktree(path, base string) error {
+	if relative, err := filepath.Rel(p.root, path); filepath.IsAbs(path) && err == nil {
+		// Git exports this spelling as GIT_DIR to its checkout subprocess.
+		path = "." + string(filepath.Separator) + relative
+	}
 	_, err := p.runner.Run(p.root, "git", "worktree", "add", "--detach", path, base)
 	return err
 }

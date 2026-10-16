@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -42,7 +43,7 @@ const defpath = "/bin:/usr/bin"
 // Supervise takes execution ownership of one job directory. It claims
 // the owner lock, records its
 // own process identity, spawns the request's command with the merged
-// environment, captures stdout/stderr to disk with an fsync, honours SIGTERM
+// environment, captures stdout/stderr to disk with an fsync, honours native
 // cancellation, and writes the original request-bound exit receipt and proofs.
 //
 // Exit codes:
@@ -217,12 +218,12 @@ func resolveSpawn(argv []string, cwd string, request map[string]any) (string, []
 	}
 
 	// A bare argv[0] is resolved against the merged environment's PATH; an
-	// argv[0] containing a separator is an explicit path and is tried as-is
-	// (single candidate, no PATH walk). The error text (recorded at exec time,
+	// argv[0] containing a separator is an explicit path with no PATH walk.
+	// The error text (recorded at exec time,
 	// in runChild) always names argv[0] exactly, never the resolved path.
 	name := argv[0]
-	if strings.ContainsRune(name, os.PathSeparator) {
-		return "", []string{name}
+	if filepath.Base(name) != name || filepath.VolumeName(name) != "" {
+		return "", executableCandidates(name, mergedEnvMap(request))
 	}
 	candidates := searchCandidates(name, mergedEnvMap(request))
 	return "", candidates
@@ -255,7 +256,7 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 	// Install the cancellation handler before starting a child. Cancellation
 	// terminates the child's isolated process group on POSIX or process on Windows.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
 	defer signal.Stop(sigCh)
 
 	var firstErr string
@@ -379,12 +380,19 @@ func mergedEnvMap(request map[string]any) map[string]string {
 	merged := map[string]string{}
 	for _, e := range os.Environ() {
 		if i := strings.IndexByte(e, '='); i >= 0 {
-			merged[e[:i]] = e[i+1:]
+			key := e[:i]
+			if runtime.GOOS == "windows" {
+				key = strings.ToUpper(key)
+			}
+			merged[key] = e[i+1:]
 		}
 	}
 	if envRaw, ok := request["environment"].(map[string]any); ok {
 		for k, v := range envRaw {
 			if vs, ok := v.(string); ok {
+				if runtime.GOOS == "windows" {
+					k = strings.ToUpper(k)
+				}
 				merged[k] = vs
 			}
 		}
@@ -413,17 +421,44 @@ func searchCandidates(name string, env map[string]string) []string {
 	if !ok {
 		pathEnv = defpath
 	}
-	out := make([]string, 0, strings.Count(pathEnv, ":")+1)
-	for _, dir := range strings.Split(pathEnv, ":") {
+	out := []string{}
+	directories := filepath.SplitList(pathEnv)
+	if pathEnv == "" {
+		directories = []string{""}
+	}
+	for _, dir := range directories {
 		var cand string
 		if dir == "" {
-			cand = "./" + name
+			cand = "." + string(filepath.Separator) + name
 		} else {
 			cand = filepath.Join(dir, name)
 		}
-		out = append(out, cand)
+		out = append(out, executableCandidates(cand, env)...)
 	}
 	return out
+}
+
+func executableCandidates(name string, env map[string]string) []string {
+	if runtime.GOOS != "windows" {
+		return []string{name}
+	}
+	extensions := env["PATHEXT"]
+	if extensions == "" {
+		extensions = ".COM;.EXE;.BAT;.CMD"
+	}
+	candidates := []string{}
+	if filepath.Ext(name) != "" {
+		candidates = append(candidates, name)
+	}
+	for _, extension := range filepath.SplitList(extensions) {
+		if extension != "" {
+			if extension[0] != '.' {
+				extension = "." + extension
+			}
+			candidates = append(candidates, name+extension)
+		}
+	}
+	return candidates
 }
 
 func spawnErr(name string, errno int, filename string) string {
@@ -544,7 +579,9 @@ func observeSupervisor(directory, requestDigest string, cancel bool) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		terminateJob(&exec.Cmd{Process: process}, pgid)
+		if err := terminateJob(&exec.Cmd{Process: process}, pgid); err != nil {
+			return false, err
+		}
 	}
 	return alive, nil
 }

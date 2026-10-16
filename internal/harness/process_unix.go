@@ -22,14 +22,18 @@ func supervisorSysProcAttr() *syscall.SysProcAttr {
 // the supervisor's own cancellation path, which settles the child and writes
 // the deterministic 130 receipt. Signalling a group that already exited is a
 // no-op.
-func terminateJob(cmd *exec.Cmd, pgid int) {
+func terminateJob(cmd *exec.Cmd, pgid int) error {
 	if pgid > 0 {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
-		return
+		err := syscall.Kill(-pgid, syscall.SIGTERM)
+		if err == syscall.ESRCH {
+			return nil
+		}
+		return err
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
+		return cmd.Process.Signal(syscall.SIGTERM)
 	}
+	return nil
 }
 
 // processCreationTime reads one PID's creation time from the platform's

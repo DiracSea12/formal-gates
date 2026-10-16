@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManife
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
 	plan := commandPlan()
-	plan.Batches[0].Checks[0].Command = "printf checked"
+	plan.Batches[0].Checks[0].Command = nativeFixtureCommand("printf checked", "[Console]::Write('checked')")
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native QA inputs"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
@@ -69,14 +70,17 @@ func TestQAExecutionBindsCommandsThenComparesOriginalFacts(t *testing.T) {
 		m.Cases[0].Operations = nil
 		m.Cases[0].Steps = "Print accepted input and capture both streams and the exit"
 		m.Cases[0].Oracle = "stdout is accepted"
-		m.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf rejected; printf detail >&2; exit 7"}}
+		m.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf rejected; printf detail >&2; exit 7", "[Console]::Write('rejected'); [Console]::Error.Write('detail'); exit 7")}}
 		m.Cases[1].Oracle = "stdout is rejected, stderr is detail and exit is 7"
 	})
 	action, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.CommandCases) > 0 })
 	if !slices.Equal(input.CommandCases, []string{"normal"}) || d.run.Validation.Sets[coverage.ReviewBlackbox].Status != "FROZEN" {
 		t.Fatal("missing invocation was not approved and frozen before execution input")
 	}
-	raw := []byte(`{"commands":[[{"kind":"SHELL","command":"printf unexpected; printf x > \"$FORMAL_GATES_QA_OUTPUT_DIR/invocations\""}]]}`)
+	raw, err := json.Marshal(map[string]any{"commands": [][]coverage.Operation{{{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`printf unexpected; printf x > "$FORMAL_GATES_QA_OUTPUT_DIR/invocations"`, `[Console]::Write('unexpected'); [IO.File]::WriteAllText(($env:FORMAL_GATES_QA_OUTPUT_DIR+'/invocations'),'x')`)}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	issued := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &input}
 	event, err := worker.DecodeResult(issued, d.eventID(), raw, "original-command-author-output")
 	if err != nil {
@@ -152,6 +156,9 @@ func buildPreparationExecutable(t *testing.T, directory, source string) string {
 		t.Fatal(err)
 	}
 	tool := filepath.Join(directory, "prepare")
+	if runtime.GOOS == "windows" {
+		tool += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", tool, file)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build preparation executable: %v %s", err, out)
@@ -162,10 +169,10 @@ func buildPreparationExecutable(t *testing.T, directory, source string) string {
 func TestShellPreparationExecutesEachCaseAndIsolatesCaseWork(t *testing.T) {
 	t.Parallel()
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
-		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "mkdir -p prepared; printf x >> prepared/runs; printf common > prepared/product"}}}}
+		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("mkdir -p prepared; printf x >> prepared/runs; printf common > prepared/product", "[IO.Directory]::CreateDirectory('prepared') > $null; [IO.File]::AppendAllText('prepared/runs','x'); [IO.File]::WriteAllText('prepared/product','common')")}}}}
 		for index := range m.Cases {
 			m.Cases[index].SharedSteps = []string{"prepare"}
-			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`}}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`, `if ([IO.File]::Exists($env:FORMAL_GATES_QA_WORK_DIR+'/state')) { exit 1 }; [IO.File]::WriteAllText(($env:FORMAL_GATES_QA_WORK_DIR+'/state'),'private'); [Console]::Write([IO.File]::ReadAllText('prepared/product')); [Console]::Write($env:FORMAL_GATES_QA_WORK_DIR); [Console]::Error.Write($env:TMPDIR)`)}}
 		}
 	})
 	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
@@ -209,7 +216,7 @@ func main() {
 		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare a common product once", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{tool}}}}}
 		for index := range m.Cases {
 			m.Cases[index].SharedSteps = []string{"prepare"}
-			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`}}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`test ! -e "$FORMAL_GATES_QA_WORK_DIR/state"; printf private > "$FORMAL_GATES_QA_WORK_DIR/state"; cat prepared/product; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"; printf '%s' "$TMPDIR" >&2`, `if ([IO.File]::Exists($env:FORMAL_GATES_QA_WORK_DIR+'/state')) { exit 1 }; [IO.File]::WriteAllText(($env:FORMAL_GATES_QA_WORK_DIR+'/state'),'private'); [Console]::Write([IO.File]::ReadAllText('prepared/product')); [Console]::Write($env:FORMAL_GATES_QA_WORK_DIR); [Console]::Error.Write($env:TMPDIR)`)}}
 		}
 	})
 	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
@@ -304,10 +311,10 @@ func assertCaseWorkIsolationAndSharedExecutionRecovery(t *testing.T, d *validati
 func TestIndependentPreparationActuallyRunsInEachPrivateEnvironment(t *testing.T) {
 	t.Parallel()
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
-		m.SharedSteps = []coverage.SharedStep{{ID: "install", Procedure: "Exercise independent mutable installation", Independent: true, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: `test ! -e "$FORMAL_GATES_QA_WORK_DIR/install"; printf x > "$FORMAL_GATES_QA_WORK_DIR/install"; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"`}}}}
+		m.SharedSteps = []coverage.SharedStep{{ID: "install", Procedure: "Exercise independent mutable installation", Independent: true, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`test ! -e "$FORMAL_GATES_QA_WORK_DIR/install"; printf x > "$FORMAL_GATES_QA_WORK_DIR/install"; printf '%s' "$FORMAL_GATES_QA_WORK_DIR"`, `if ([IO.File]::Exists($env:FORMAL_GATES_QA_WORK_DIR+'/install')) { exit 1 }; [IO.File]::WriteAllText(($env:FORMAL_GATES_QA_WORK_DIR+'/install'),'x'); [Console]::Write($env:FORMAL_GATES_QA_WORK_DIR)`)}}}}
 		for index := range m.Cases {
 			m.Cases[index].SharedSteps = []string{"install"}
-			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: `cat "$FORMAL_GATES_QA_WORK_DIR/install"`}}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`cat "$FORMAL_GATES_QA_WORK_DIR/install"`, `[Console]::Write([IO.File]::ReadAllText($env:FORMAL_GATES_QA_WORK_DIR+'/install'))`)}}
 		}
 	})
 	_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
@@ -352,10 +359,10 @@ func main() {
 	if err != nil { panic(err) }
 	if err := os.WriteFile("prepared/product", body, 0600); err != nil { panic(err) }
 }`)
-	for _, scenario := range []struct{ name, cleanup string }{
-		{"unchanged", ""},
-		{"removed", "; rm -f prepared/stage prepared/intermediate prepared/product"},
-		{"changed", "; printf changed > prepared/intermediate"},
+	for _, scenario := range []struct{ name, cleanup, windowsCleanup string }{
+		{"unchanged", "", ""},
+		{"removed", "; rm -f prepared/stage prepared/intermediate prepared/product", "; [IO.File]::Delete('prepared/stage'); [IO.File]::Delete('prepared/intermediate'); [IO.File]::Delete('prepared/product')"},
+		{"changed", "; printf changed > prepared/intermediate", "; [IO.File]::WriteAllText('prepared/intermediate','changed')"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Parallel()
@@ -367,7 +374,7 @@ func main() {
 				}}}
 				for index := range m.Cases {
 					m.Cases[index].SharedSteps = []string{"prepare"}
-					m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "cat prepared/product" + scenario.cleanup}}
+					m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("cat prepared/product"+scenario.cleanup, "[Console]::Write([IO.File]::ReadAllText('prepared/product'))"+scenario.windowsCleanup)}}
 				}
 			})
 			_, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.ExecutionFacts) == 2 })
@@ -438,30 +445,45 @@ func assertPreparationExecutesChangedExternalInput(t *testing.T, invocation stri
 	directory := t.TempDir()
 	tool := filepath.Join(directory, "prepare.sh")
 	ready, release := filepath.Join(directory, "ready"), filepath.Join(directory, "release")
-	t.Setenv("QA_PREPARATION_TOOL", tool)
 	t.Setenv("QA_PREPARATION_READY", ready)
 	t.Setenv("QA_PREPARATION_RELEASE", release)
 	old := "#!/bin/sh\nmkdir -p prepared; printf x >> prepared/runs; printf old > prepared/product; printf old; printf ready > \"$QA_PREPARATION_READY\"; while test ! -e \"$QA_PREPARATION_RELEASE\"; do sleep 0.01; done\n"
 	updated := "#!/bin/sh\nmkdir -p prepared; printf x >> prepared/runs; printf new > prepared/product; printf new\n"
+	interpreter := []string{"/bin/sh"}
+	if runtime.GOOS == "windows" {
+		tool = filepath.Join(directory, "prepare.ps1")
+		old = "[IO.Directory]::CreateDirectory('prepared') > $null; [IO.File]::AppendAllText('prepared/runs','x'); [IO.File]::WriteAllText('prepared/product','old'); [Console]::Write('old'); [IO.File]::WriteAllText($env:QA_PREPARATION_READY,'ready'); while (-not [IO.File]::Exists($env:QA_PREPARATION_RELEASE)) { Start-Sleep -Milliseconds 10 }\n"
+		updated = "[IO.Directory]::CreateDirectory('prepared') > $null; [IO.File]::AppendAllText('prepared/runs','x'); [IO.File]::WriteAllText('prepared/product','new'); [Console]::Write('new')\n"
+		interpreter = []string{"powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"}
+	}
+	t.Setenv("QA_PREPARATION_TOOL", tool)
 	if err := os.WriteFile(tool, []byte(old), 0700); err != nil {
 		t.Fatal(err)
 	}
-	operation := coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", tool}}
+	operation := coverage.Operation{Kind: coverage.OperationArgv, Argv: append(append([]string{}, interpreter...), tool)}
 	switch invocation {
 	case "SHELL":
-		operation = coverage.Operation{Kind: coverage.OperationShell, Command: `"$QA_PREPARATION_TOOL"`}
+		operation = coverage.Operation{Kind: coverage.OperationShell, Command: nativeFixtureCommand(`"$QA_PREPARATION_TOOL"`, `& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $env:QA_PREPARATION_TOOL`)}
 	case "SCRIPT_EXECUTABLE":
 		script := filepath.Join(directory, "invoke.sh")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\n\"$QA_PREPARATION_TOOL\"\n"), 0700); err != nil {
+		body := "#!/bin/sh\n\"$QA_PREPARATION_TOOL\"\n"
+		if runtime.GOOS == "windows" {
+			script = filepath.Join(directory, "invoke.cmd")
+			body = "@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%QA_PREPARATION_TOOL%\"\r\n"
+		}
+		if err := os.WriteFile(script, []byte(body), 0700); err != nil {
 			t.Fatal(err)
 		}
 		operation = coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{script}}
+		if runtime.GOOS == "windows" {
+			operation.Argv = coverage.ShellCommand(`"` + script + `"`)
+		}
 	}
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		m.SharedSteps = []coverage.SharedStep{{ID: "prepare", Procedure: "Prepare the product using the configured external tool", Artifacts: []string{"prepared"}, Operations: []coverage.Operation{operation}}}
 		for index := range m.Cases {
 			m.Cases[index].SharedSteps = []string{"prepare"}
-			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "cat prepared/product"}}
+			m.Cases[index].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("cat prepared/product", "[Console]::Write([IO.File]::ReadAllText('prepared/product'))")}}
 		}
 	})
 	changed := make(chan error, 1)
@@ -525,7 +547,7 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 	d, _ := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
 		for index := range m.Cases {
 			m.Cases[index].Operations = nil
-			m.Cases[index].PublicEntry = "/bin/sh fixture"
+			m.Cases[index].PublicEntry = "platform command fixture"
 			m.Cases[index].Steps = "Print this case's fixed streams and exit, and append its private invocation proof"
 		}
 		m.Cases[0].Oracle = "stdout alpha, stderr one, exit zero"
@@ -534,9 +556,9 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 	action, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.CommandCases) == 2 })
 	commands := [][]coverage.Operation{}
 	for _, id := range input.CommandCases {
-		command := `printf alpha; printf one >&2; printf x >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"`
+		command := nativeFixtureCommand(`printf alpha; printf one >&2; printf x >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"`, `[Console]::Write('alpha'); [Console]::Error.Write('one'); [IO.File]::AppendAllText(($env:FORMAL_GATES_QA_OUTPUT_DIR+'/executed'),'x')`)
 		if id == "invalid" {
-			command = `printf beta; printf two >&2; printf y >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"; exit 7`
+			command = nativeFixtureCommand(`printf beta; printf two >&2; printf y >> "$FORMAL_GATES_QA_OUTPUT_DIR/executed"; exit 7`, `[Console]::Write('beta'); [Console]::Error.Write('two'); [IO.File]::AppendAllText(($env:FORMAL_GATES_QA_OUTPUT_DIR+'/executed'),'y'); exit 7`)
 		}
 		commands = append(commands, []coverage.Operation{{Kind: coverage.OperationShell, Command: command}})
 	}
@@ -632,7 +654,7 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 	d.business(development, protocol.ValidationResult{Binding: di.Binding, Status: "PASS", Development: batchEvidence(di)})
 	d.drive()
 	design, qi := d.action("engine.qa.design.v6")
-	body := "import subprocess\nimport unittest\nclass Behavior(unittest.TestCase):\n    def test_normal(self):\n        self.assertEqual(subprocess.run(['./app', 'run', 'valid']).returncode, 0)\n    def test_invalid(self):\n        self.assertNotEqual(subprocess.run(['./app', 'run', 'invalid']).returncode, 0)\n"
+	body := "import os\nimport subprocess\nimport unittest\ncommand = [os.environ['COMSPEC'], '/D', '/S', '/C', r'.\\app.cmd'] if os.name == 'nt' else ['./app']\nclass Behavior(unittest.TestCase):\n    def test_normal(self):\n        self.assertEqual(subprocess.run(command + ['run', 'valid']).returncode, 0)\n    def test_invalid(self):\n        self.assertNotEqual(subprocess.run(command + ['run', 'invalid']).returncode, 0)\n"
 	if err := os.WriteFile(filepath.Join(qi.Workspace.Path, "test_recipe.py"), []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -683,9 +705,12 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 // execution, and same-source commands run there in order without folding.
 func TestSharedInvocationCheckpointExecutesApprovedPrefixAndDeclaredCase(t *testing.T) {
 	t.Parallel()
-	for _, scenario := range []struct{ name, raw string }{
-		{"same-source duplicate commands are not folded", `{"commands":[[{"kind":"SHELL","command":"printf ready > prepared-input"},{"kind":"SHELL","command":"printf ready > prepared-input"}],[{"kind":"SHELL","command":"printf checked > prepared-marker"}],[{"kind":"SHELL","command":"cat prepared-input prepared-marker"}]]}`},
-		{"same-source commands run in order", `{"commands":[[{"kind":"SHELL","command":"printf re > prepared-input"},{"kind":"SHELL","command":"sleep 0.1; printf ady >> prepared-input"}],[{"kind":"SHELL","command":"printf checked > prepared-marker"}],[{"kind":"SHELL","command":"cat prepared-input prepared-marker"}]]}`},
+	readProducts := nativeFixtureCommand("cat prepared-input prepared-marker", "[Console]::Write([IO.File]::ReadAllText('prepared-input')+[IO.File]::ReadAllText('prepared-marker'))")
+	writeMarker := nativeFixtureCommand("printf checked > prepared-marker", "[IO.File]::WriteAllText('prepared-marker','checked')")
+	writeReady := nativeFixtureCommand("printf ready > prepared-input", "[IO.File]::WriteAllText('prepared-input','ready')")
+	for _, scenario := range []struct{ name, first, second string }{
+		{"same-source duplicate commands are not folded", writeReady, writeReady},
+		{"same-source commands run in order", nativeFixtureCommand("printf re > prepared-input", "[IO.File]::WriteAllText('prepared-input','re')"), nativeFixtureCommand("sleep 0.1; printf ady >> prepared-input", "Start-Sleep -Milliseconds 100; [IO.File]::AppendAllText('prepared-input','ady')")},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			d, manifest := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
@@ -697,14 +722,21 @@ func TestSharedInvocationCheckpointExecutesApprovedPrefixAndDeclaredCase(t *test
 					m.Cases[i].Steps = "read the input and marker"
 					m.Cases[i].Oracle = "stdout is readychecked and exit zero"
 				}
-				m.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "cat prepared-input prepared-marker"}}
+				m.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: readProducts}}
 				m.Cases[1].Operations = nil
 			})
 			action, input := awaitQAInput(t, d, func(in protocol.ValidationInput) bool { return len(in.CommandCases) > 0 })
 			if !reflect.DeepEqual(input.CommandSources, []string{"shared:prepare-input", "shared:prepare-marker", "case:invalid"}) {
 				t.Fatalf("wrong missing source identities: %+v", input)
 			}
-			raw := []byte(scenario.raw)
+			raw, err := json.Marshal(map[string]any{"commands": [][]coverage.Operation{
+				{{Kind: coverage.OperationShell, Command: scenario.first}, {Kind: coverage.OperationShell, Command: scenario.second}},
+				{{Kind: coverage.OperationShell, Command: writeMarker}},
+				{{Kind: coverage.OperationShell, Command: readProducts}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
 			issued := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: input.Handler, Provider: d.host(), Pending: d.run.PendingActions[action], Validation: &input}
 			event, err := worker.DecodeResult(issued, d.eventID(), raw, "actual-source-bound-invocations")
 			if err != nil {

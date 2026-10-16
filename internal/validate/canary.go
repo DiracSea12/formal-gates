@@ -3,6 +3,7 @@ package validate
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -552,6 +553,11 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 	}
 	switch in.Handler {
 	case "engine.development.batch.v6":
+		for _, check := range in.Development.Checks {
+			if check.ExitCode != 0 || check.Error != "" {
+				return payload, fmt.Errorf("portable development check failed: invocation=%s exit=%d error=%q stdout=%q stderr=%q", check.Invocation, check.ExitCode, check.Error, check.StdoutText, check.StderrText)
+			}
+		}
 		if err := os.WriteFile(filepath.Join(workspace, "delivery.txt"), []byte(canaryDeliveryContents), 0600); err != nil {
 			return payload, err
 		}
@@ -570,9 +576,17 @@ func portableWorkerResult(input protocol.WorkerInput, checked map[string]bool, f
 			}
 			switch check.Purpose {
 			case protocol.CheckFullBuild:
-				commands = append(commands, "cp delivery.txt built-delivery.txt")
+				command := "cp delivery.txt built-delivery.txt"
+				if runtime.GOOS == "windows" {
+					command = `powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; [IO.File]::WriteAllBytes('built-delivery.txt', [IO.File]::ReadAllBytes('delivery.txt'))"`
+				}
+				commands = append(commands, command)
 			case protocol.CheckFullTests:
-				commands = append(commands, "printf 'delivery\\n' | cmp - built-delivery.txt")
+				command := "printf 'delivery\\n' | cmp - built-delivery.txt"
+				if runtime.GOOS == "windows" {
+					command = fmt.Sprintf(`powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; if ([Convert]::ToBase64String([IO.File]::ReadAllBytes('built-delivery.txt')) -cne '%s') { exit 1 }"`, base64.StdEncoding.EncodeToString([]byte(canaryDeliveryContents)))
+				}
+				commands = append(commands, command)
 			default:
 				return payload, fmt.Errorf("unsupported portable verification purpose: %s", check.Purpose)
 			}

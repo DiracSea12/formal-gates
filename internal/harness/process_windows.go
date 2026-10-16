@@ -2,31 +2,40 @@
 
 package harness
 
-// Windows supervision terminates the recorded process. Process creation
-// time is unavailable, so a recorded PID cannot establish liveness.
-
 import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-// supervisorSysProcAttr is the plain spawn on Windows.
 func supervisorSysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{}
+	return &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 }
 
-// terminateJob kills the supervisor process; without SIGTERM the supervisor
-// cannot write its cancellation receipt, so the job settles as killed.
-func terminateJob(cmd *exec.Cmd, _ int) {
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
+// Console break reaches the supervisor's cancellation handler and receipt path.
+func terminateJob(_ *exec.Cmd, pgid int) error {
+	return windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(pgid))
 }
 
-// processCreationTime is unavailable on this platform.
 func processCreationTime(pid int) (time.Time, bool) {
-	return time.Time{}, false
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer windows.CloseHandle(handle)
+	var created, exited, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, created.Nanoseconds()), true
 }
 
-func signalSupervisedChild(cmd *exec.Cmd, _ bool) { _ = cmd.Process.Kill() }
+func signalSupervisedChild(cmd *exec.Cmd, kill bool) {
+	if kill {
+		_ = cmd.Process.Kill()
+		return
+	}
+	_ = windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(cmd.Process.Pid))
+}

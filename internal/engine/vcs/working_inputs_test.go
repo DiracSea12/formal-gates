@@ -82,12 +82,16 @@ func TestWorkingTreeDigestBindsSymlinkAndCleanExecutableMode(t *testing.T) {
 	if err := os.Chmod(filepath.Join(p.root, "first.txt"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(filepath.Join(p.root, "first.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if status, err := p.Status(); err != nil || status != "" {
 		t.Fatalf("executable input is not native clean: %q %v", status, err)
 	}
 	executable, err := p.WorkingTreeDigest(base)
-	if err != nil || executable == before {
-		t.Fatalf("actual executable mode did not change input digest: %s %v", executable, err)
+	if err != nil || (executable != before) != (info.Mode()&0111 != 0) {
+		t.Fatalf("input digest does not reflect actual executable mode %v: %s %v", info.Mode(), executable, err)
 	}
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
@@ -134,9 +138,13 @@ func TestWorkingTreeDigestBindsAllContentAndNativeModes(t *testing.T) {
 	if err := os.Chmod(filepath.Join(p.root, "first.txt"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(filepath.Join(p.root, "first.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	mode, err := p.WorkingTreeDigest(base)
-	if err != nil || mode == previous {
-		t.Fatalf("native mode did not change digest: %s %v", mode, err)
+	if err != nil || (mode != previous) != (info.Mode()&0111 != 0) {
+		t.Fatalf("input digest does not reflect actual native mode %v: %s %v", info.Mode(), mode, err)
 	}
 	if err := os.Remove(filepath.Join(p.root, "second.txt")); err != nil {
 		t.Fatal(err)

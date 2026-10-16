@@ -2,10 +2,12 @@ package facade
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +17,27 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/worker"
 )
+
+func nativeFixtureCommand(posix, powershell string) string {
+	if runtime.GOOS == "windows" {
+		return `powershell -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ` + powershell + `"`
+	}
+	return posix
+}
+
+func qaArgumentExecutable(t *testing.T, format, marker, value string) string {
+	t.Helper()
+	return buildPreparationExecutable(t, t.TempDir(), fmt.Sprintf(`package main
+import ("fmt"; "io"; "os")
+func main() {
+	for _, argument := range os.Args[1:] { fmt.Printf(%q, argument) }
+	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil { panic(err) }
+	f, err := os.OpenFile(%q, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil { panic(err) }
+	if _, err := f.WriteString(%q); err != nil { panic(err) }
+	if err := f.Close(); err != nil { panic(err) }
+}`, format, marker, value))
+}
 
 func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 	t.Parallel()
@@ -45,21 +68,22 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 	base := run("rev-parse", "HEAD")
 	d := nativeMasterAt(t, root, base, nil)
 	plan := commandPlan()
-	plan.Batches[0].Checks = []protocol.DevelopmentCheck{{ID: "probe-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "probe-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -run '^TestPass$' ./..."}}
+	plan.Batches[0].Checks = []protocol.DevelopmentCheck{{ID: "probe-build", Purpose: protocol.CheckFullBuild, Command: "go build ./..."}, {ID: "probe-tests", Purpose: protocol.CheckFullTests, Command: "go test -timeout=0 -run ^TestPass$ ./..."}}
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved operation contract"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox", "whitebox"}))
 	d.drive()
 	development, di := d.action("engine.development.batch.v6")
+	argumentTool := qaArgumentExecutable(t, "<%s>", "executions", "x")
 	cases := []struct {
 		name                string
 		operation           coverage.Operation
 		ref, output, status string
 		exit                int
 	}{
-		{name: "argv", operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", "printf '<%s>' \"$1\" \"$2\" \"$3\"; cat; printf x >> executions", "fixture", "", "two words", "\"quoted\""}, Stdin: "stdin\n"}, output: "<><two words><\"quoted\">stdin\n"},
-		{name: "shell", operation: coverage.Operation{Kind: coverage.OperationShell, Command: "printf '%s' 'line with quotes'\nprintf '\\n'; cat", Stdin: "exact input\n"}, output: "line with quotes\nexact input\n"},
-		{name: "negative", operation: coverage.Operation{Kind: coverage.OperationShell, Command: "printf rejection; exit 7"}, output: "rejection", exit: 7},
+		{name: "argv", operation: coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{argumentTool, "", "two words", "\"quoted\""}, Stdin: "stdin\n"}, output: "<><two words><\"quoted\">stdin\n"},
+		{name: "shell", operation: coverage.Operation{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf '%s' 'line with quotes'\nprintf '\\n'; cat", "[Console]::Write('line with quotes'+[char]10); [Console]::Write([Console]::In.ReadToEnd())"), Stdin: "exact input\n"}, output: "line with quotes\nexact input\n"},
+		{name: "negative", operation: coverage.Operation{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf rejection; exit 7", "[Console]::Write('rejection'); exit 7")}, output: "rejection", exit: 7},
 		{name: "GoPass", ref: "app_test.go::TestPass", status: "pass"},
 		{name: "GoFail", ref: "app_test.go::TestFail", status: "fail", exit: 1},
 		{name: "GoSkip", ref: "app_test.go::TestSkip", status: "not-executed"},
@@ -198,7 +222,7 @@ func TestQAApprovedOperationsObserveOriginalFacts(t *testing.T) {
 			if item.operation.Kind == coverage.OperationArgv && !reflect.DeepEqual(request.Argv, item.operation.Argv) {
 				t.Fatalf("argv values changed: %q", request.Argv)
 			}
-			if item.operation.Kind == coverage.OperationShell && (len(request.Argv) != 3 || request.Argv[2] != item.operation.Command) {
+			if item.operation.Kind == coverage.OperationShell && !reflect.DeepEqual(request.Argv, coverage.ShellCommand(item.operation.Command)) {
 				t.Fatalf("shell bytes changed: %q", request.Argv)
 			}
 			if request.Stdin != item.operation.Stdin || request.Cwd != workspace.Path {
@@ -224,7 +248,7 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	plan := commandPlan()
-	plan.Batches[0].Checks[0].Command = "printf checked"
+	plan.Batches[0].Checks[0].Command = nativeFixtureCommand("printf checked", "[Console]::Write('checked')")
 	d := nativeMasterAt(t, root, base, nil)
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "One approved command case"}})
@@ -233,9 +257,9 @@ func TestQAOperationPublicWorkflowUsesNativeReceipts(t *testing.T) {
 	dev, di := d.action("engine.development.batch.v6")
 	design, qi := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(qi)
-	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '%s' "$1"; cat; printf x >> qa-executions`, "fixture", "quoted words"}, Stdin: " actual-input"}}
+	manifest.Cases[0].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{qaArgumentExecutable(t, "%s", "qa-executions", "x"), "quoted words"}, Stdin: " actual-input"}}
 	manifest.Cases[0].Oracle = "stdout is quoted words actual-input"
-	manifest.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf rejected; exit 7"}}
+	manifest.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf rejected; exit 7", "[Console]::Write('rejected'); exit 7")}}
 	manifest.Cases[1].Oracle = "stdout is rejected and actual exit is 7"
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()
@@ -373,7 +397,7 @@ func TestQAGoPublicWorkflowKeepsUnmatchedCasePending(t *testing.T) {
 	run("commit", "-qm", "Frozen tests")
 	base := run("rev-parse", "HEAD")
 	plan := commandPlan()
-	plan.Batches[0].Checks[0].Command = "printf checked"
+	plan.Batches[0].Checks[0].Command = nativeFixtureCommand("printf checked", "[Console]::Write('checked')")
 	d := nativeMasterAt(t, root, base, nil)
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Frozen precise Go cases"}})

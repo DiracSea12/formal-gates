@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,6 +30,16 @@ func (r ExecRunner) Run(dir, command string, args ...string) (string, error) {
 }
 
 func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
+	if runtime.GOOS == "windows" && command == "git" {
+		args = append([]string{"-c", "core.longpaths=true"}, args...)
+	}
+	if command == "p4" {
+		absolute, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, fmt.Errorf("p4 working directory: %w", err)
+		}
+		args = append([]string{"-d", absolute}, args...)
+	}
 	cmd := exec.Command(command, args...)
 	if cmd.Err != nil {
 		return nil, fmt.Errorf("%s: %w", command, cmd.Err)

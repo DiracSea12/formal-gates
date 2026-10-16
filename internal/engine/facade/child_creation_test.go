@@ -475,6 +475,9 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 	if _, err := runner.Run(root, "git", "add", "startup.txt", "tool"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := runner.Run(root, "git", "update-index", "--chmod=+x", "tool"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := runner.Run(root, "git", "commit", "-m", "startup contents"); err != nil {
 		t.Fatal(err)
 	}

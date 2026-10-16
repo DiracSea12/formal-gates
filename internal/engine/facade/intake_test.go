@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -282,6 +283,7 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 				}
 			}
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("INTAKE_NATIVE_ROOT", "native-A")
 			f, run, err := Start(options)
 			if err != nil || selected.calls != 1 || unselected.calls != 0 {
@@ -421,8 +423,26 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 	homeA, homeB, nativeA, nativeB, binA, binB = canonical(homeA), canonical(homeB), canonical(nativeA), canonical(nativeB), canonical(binA), canonical(binB)
 	calls := filepath.Join(t.TempDir(), "calls")
 	peer := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"$*\" \"$HOME\" \"$CODEBUDDY_CONFIG_DIR\" \"$WORKBUDDY_CONFIG_DIR\" \"$ACC_PRODUCT_CONFIG_PATH\" >> \"$NATIVE_INTAKE_CALLS\"\n[ \"$#\" = 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s\\n' '--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk'\n"
+	peerName := "codebuddy"
+	if runtime.GOOS == "windows" {
+		peerName += ".exe"
+	}
 	for _, bin := range []string{binA, binB} {
-		if err := os.WriteFile(filepath.Join(bin, "codebuddy"), []byte(peer), 0700); err != nil {
+		if runtime.GOOS == "windows" {
+			tool := buildPreparationExecutable(t, bin, `package main
+import ("fmt"; "os"; "strings")
+func main() {
+ f, err := os.OpenFile(os.Getenv("NATIVE_INTAKE_CALLS"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+ if err != nil { panic(err) }
+ fmt.Fprintf(f, "%s|%s|%s|%s|%s\n", strings.Join(os.Args[1:], " "), os.Getenv("HOME"), os.Getenv("CODEBUDDY_CONFIG_DIR"), os.Getenv("WORKBUDDY_CONFIG_DIR"), os.Getenv("ACC_PRODUCT_CONFIG_PATH"))
+ if err := f.Close(); err != nil { panic(err) }
+ if len(os.Args) != 2 || os.Args[1] != "--help" { os.Exit(91) }
+ fmt.Println("--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk")
+}`)
+			if err := os.Rename(tool, filepath.Join(bin, peerName)); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(filepath.Join(bin, peerName), []byte(peer), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -444,6 +464,7 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 	}
 	originalPath := os.Getenv("PATH")
 	t.Setenv("HOME", homeA)
+	t.Setenv("USERPROFILE", homeA)
 	t.Setenv("PATH", binA+string(os.PathListSeparator)+originalPath)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", nativeA)
 	t.Setenv("ACC_PRODUCT_CONFIG_PATH", "")
@@ -460,10 +481,14 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 	want := loaded
 	want.Values.Native = maps.Clone(loaded.Values.Native)
 	want.Sources = maps.Clone(loaded.Sources)
-	for key, value := range map[string]string{"workbuddyExecutable": filepath.Join(binA, "codebuddy"), "workbuddyHome": homeA, "workbuddyConfigRoot": nativeA, "workbuddyProductConfig": filepath.Join(nativeA, "cache", "acc-product-config-v3.json")} {
+	for key, value := range map[string]string{"workbuddyExecutable": filepath.Join(binA, peerName), "workbuddyHome": homeA, "workbuddyConfigRoot": nativeA, "workbuddyProductConfig": filepath.Join(nativeA, "cache", "acc-product-config-v3.json")} {
 		want.Values.Native[key] = value
 	}
-	for key, source := range map[string]string{"workbuddyExecutable": "PATH", "workbuddyHome": "HOME", "workbuddyConfigRoot": "WORKBUDDY_CONFIG_DIR", "workbuddyProductConfig": "workbuddyConfigRoot"} {
+	homeSource := "HOME"
+	if runtime.GOOS == "windows" {
+		homeSource = "USERPROFILE"
+	}
+	for key, source := range map[string]string{"workbuddyExecutable": "PATH", "workbuddyHome": homeSource, "workbuddyConfigRoot": "WORKBUDDY_CONFIG_DIR", "workbuddyProductConfig": "workbuddyConfigRoot"} {
 		want.Sources[key] = source
 	}
 	want.Values.TokenCap = nil
@@ -491,6 +516,7 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 		material = value
 	}
 	t.Setenv("HOME", homeB)
+	t.Setenv("USERPROFILE", homeB)
 	t.Setenv("PATH", binB+string(os.PathListSeparator)+originalPath)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", nativeB)
 	if err := os.WriteFile(config, []byte("invalid edit ignored by Open and invocation"), 0600); err != nil {
@@ -550,7 +576,15 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(want.Values.Native["workbuddyExecutable"], []byte(peer+"# current invocation content\n"), 0700); err != nil {
+	updatedPeer := []byte(peer + "# current invocation content\n")
+	if runtime.GOOS == "windows" {
+		updatedPeer, err = os.ReadFile(want.Values.Native["workbuddyExecutable"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		updatedPeer = append(updatedPeer, []byte("current invocation content\n")...)
+	}
+	if err := os.WriteFile(want.Values.Native["workbuddyExecutable"], updatedPeer, 0700); err != nil {
 		t.Fatal(err)
 	}
 	fingerprint := protocol.Observation{}
@@ -591,7 +625,7 @@ func TestNativeStartKeepsFrozenPathsForColdWorkerAndResume(t *testing.T) {
 	options.Request.RunID = "native-paths-fresh"
 	options.Settings = &loaded
 	_, fresh, err := Start(options)
-	if err != nil || fresh.Settings.Values.Native["workbuddyHome"] != homeB || fresh.Settings.Values.Native["workbuddyConfigRoot"] != nativeB || fresh.Settings.Values.Native["workbuddyExecutable"] != filepath.Join(binB, "codebuddy") {
+	if err != nil || fresh.Settings.Values.Native["workbuddyHome"] != homeB || fresh.Settings.Values.Native["workbuddyConfigRoot"] != nativeB || fresh.Settings.Values.Native["workbuddyExecutable"] != filepath.Join(binB, peerName) {
 		t.Fatalf("new run did not resolve B: %+v %v", fresh.Settings, err)
 	}
 }

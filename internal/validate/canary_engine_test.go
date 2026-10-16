@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
@@ -156,19 +157,43 @@ func TestPortableFullTestCommandChecksExactArtifactBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := payload.(map[string]any)["commands"].([]string)[0]
-	for _, contents := range []string{"delivery\n", "delivery", "delivery\n\n"} {
+	argv := coverage.ShellCommand(command)
+	for _, contents := range []string{"delivery\n", "delivery", "delivery\n\n", "delivery\r\n", "\xef\xbb\xbfdelivery\n"} {
 		t.Run(fmt.Sprintf("bytes-%d", len(contents)), func(t *testing.T) {
 			root := t.TempDir()
 			if err := os.WriteFile(filepath.Join(root, "built-delivery.txt"), []byte(contents), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("/bin/sh", "-c", command)
+			cmd := exec.Command(argv[0], argv[1:]...)
 			cmd.Dir = root
 			output, err := cmd.CombinedOutput()
 			if (err == nil) != (contents == canaryDeliveryContents) {
 				t.Fatalf("complete tests for %q output=%q err=%v", contents, output, err)
 			}
 		})
+	}
+}
+
+func TestPortableWorkerReportsFailedDevelopmentCheck(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	argv := coverage.ShellCommand("exit 37")
+	command := exec.Command(argv[0], argv[1:]...)
+	command.Dir = root
+	if err := command.Run(); err == nil {
+		t.Fatal("failure fixture unexpectedly passed")
+	}
+	invocation, err := json.Marshal(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := protocol.WorkerInput{Validation: &protocol.ValidationInput{
+		Handler: "engine.development.batch.v6", Workspace: &protocol.NativeResource{Path: root},
+		Development: &protocol.DevelopmentInput{Checks: []protocol.CheckEvidence{{Invocation: string(invocation), ExitCode: command.ProcessState.ExitCode()}}},
+	}}
+	var facts []worker.LocationFact
+	if _, err := portableWorkerResult(input, map[string]bool{}, &facts); err == nil || !strings.Contains(err.Error(), "exit=37") || !strings.Contains(err.Error(), string(invocation)) {
+		t.Fatalf("failed native check lost its original invocation and exit status: %v", err)
 	}
 }
 

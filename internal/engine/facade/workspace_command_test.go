@@ -14,8 +14,16 @@ import (
 
 func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 	root := t.TempDir()
+	peer := filepath.Join(t.TempDir(), "workspace-peer")
+	if os.PathSeparator == '\\' {
+		peer += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", peer, filepath.Join("testdata", "workspace_command_peer.go"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workspace peer: %v %s", err, output)
+	}
 	t.Setenv("FORMAL_GATES_WORKSPACE", filepath.Join(root, "ambient workspace"))
-	command := `cd "$FORMAL_GATES_WORKSPACE" && cat identity && cd 'relative directory' && cat identity && cat`
+	command := `"` + peer + `"`
 	state := &protocol.State{RunID: "run", NativeResources: map[string]protocol.NativeResource{}}
 	facade := &Facade{}
 	for _, identity := range []string{"current", "other"} {
@@ -35,14 +43,14 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 		workspace := state.NativeResources[identity].Path
 		for _, kind := range []string{"development", "qa-shell", "qa-argv"} {
 			parameters := protocol.CheckParameters{WorkspaceID: identity, Check: protocol.DevelopmentCheck{Command: command}}
-			expectedArgv := []string{"/bin/sh", "-c", command}
+			expectedArgv := coverage.ShellCommand(command)
 			expectedStdin := ""
 			expectedCwd := workspace
 			if kind != "development" {
 				parameters.QA = &protocol.QACheckParameters{WorkspaceRoot: workspace, Directory: "relative directory", Operation: coverage.Operation{Kind: coverage.OperationShell, Command: command, Stdin: "stdin value\n"}}
 				expectedStdin, expectedCwd = parameters.QA.Operation.Stdin, filepath.Join(workspace, parameters.QA.Directory)
 				if kind == "qa-argv" {
-					parameters.QA.Operation = coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", command + `; printf '<%s>' "$1"`, "argument identity", ""}, Stdin: expectedStdin}
+					parameters.QA.Operation = coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{peer, "argument identity", ""}, Stdin: expectedStdin}
 					expectedArgv = parameters.QA.Operation.Argv
 				}
 			}
@@ -89,7 +97,7 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 	literal := `cd '/old approved workspace' && printf '%s' "unchanged"`
 	parameters := protocol.CheckParameters{WorkspaceID: "current", QA: &protocol.QACheckParameters{WorkspaceRoot: state.NativeResources["current"].Path, Operation: coverage.Operation{Kind: coverage.OperationShell, Command: literal}}}
 	request, err := facade.checkRequest(state, protocol.HostActionIntent{}, parameters)
-	if err != nil || !reflect.DeepEqual(request["argv"], []string{"/bin/sh", "-c", literal}) {
+	if err != nil || !reflect.DeepEqual(request["argv"], coverage.ShellCommand(literal)) {
 		t.Fatal("original fixed-path shell was silently rewritten")
 	}
 }

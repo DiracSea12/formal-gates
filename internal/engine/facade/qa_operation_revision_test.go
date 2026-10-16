@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,7 +18,7 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
 	plan := commandPlan()
-	plan.Batches[0].Checks[0].Command = "printf checked"
+	plan.Batches[0].Checks[0].Command = nativeFixtureCommand("printf checked", "[Console]::Write('checked')")
 	d.reviewPass(plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "Approved native operations"}})
 	d.confirmRoute(routeDecisionForGates([]string{"blackbox"}))
@@ -25,12 +26,12 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	design, qi := d.action("engine.qa.design.v6")
 	manifest := simpleManifest(qi)
 	original := []coverage.Operation{
-		{Kind: coverage.OperationArgv, Argv: []string{"/bin/sh", "-c", `printf '<%s>' "$1" "$2"; cat; printf a >> qa-executions`, "fixture", "", "two words"}, Stdin: " original input\n"},
-		{Kind: coverage.OperationShell, Command: "printf '%s' 'shell original'; cat; printf b >> qa-executions", Stdin: " shell input\n"},
+		{Kind: coverage.OperationArgv, Argv: []string{qaArgumentExecutable(t, "<%s>", "qa-executions", "a"), "", "two words"}, Stdin: " original input\n"},
+		{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf '%s' 'shell original'; cat; printf b >> qa-executions", "[Console]::Write('shell original'); [Console]::Write([Console]::In.ReadToEnd()); [IO.File]::AppendAllText('qa-executions','b')"), Stdin: " shell input\n"},
 	}
 	manifest.Cases[0].Operations = original
 	manifest.Cases[0].Oracle = "The approved operations and final new observation produce their declared streams"
-	manifest.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf rejected; exit 7"}}
+	manifest.Cases[1].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("printf rejected; exit 7", "[Console]::Write('rejected'); exit 7")}}
 	d.business(design, protocol.ValidationResult{Binding: qi.Binding, Status: "PASS", Manifest: &manifest})
 	review, ri := d.action("engine.qa.review.rationale.v2")
 	rejected := approvedReview(manifest)
@@ -41,12 +42,16 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 	d.business(review, protocol.ValidationResult{Binding: ri.Binding, Status: "FAIL", Review: &rejected})
 	design, qi = d.action("engine.qa.design.v6")
 	workerInput := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, Handler: qi.Handler, Provider: d.host(), Pending: d.run.PendingActions[design], Validation: &qi}
-	raw := []byte(`{"cases":[{"case":1,"operations":[{"reuse":1,"stdin":" changed input\n"},{"reuse":2},{"kind":"SHELL","command":"printf new-observation; printf c >> qa-executions"}]}],"coverage":[null]}`)
+	newCommand := nativeFixtureCommand("printf new-observation; printf c >> qa-executions", "[Console]::Write('new-observation'); [IO.File]::AppendAllText('qa-executions','c')")
+	raw, err := json.Marshal(map[string]any{"cases": []any{map[string]any{"case": 1, "operations": []any{map[string]any{"reuse": 1, "stdin": " changed input\n"}, map[string]any{"reuse": 2}, coverage.Operation{Kind: coverage.OperationShell, Command: newCommand}}}}, "coverage": []any{nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	event, err := worker.DecodeResultWithPaths(workerInput, d.eventID(), raw, "original-revision-output", []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(append([]coverage.Operation{}, original...), coverage.Operation{Kind: coverage.OperationShell, Command: "printf new-observation; printf c >> qa-executions"})
+	want := append(append([]coverage.Operation{}, original...), coverage.Operation{Kind: coverage.OperationShell, Command: newCommand})
 	want[0].Stdin = " changed input\n"
 	if !reflect.DeepEqual(event.Result.Validation.Manifest.Cases[0].Operations, want) || !reflect.DeepEqual(qi.Manifest.Cases[0].Operations, original) {
 		t.Fatal("revision changed unmodified invocation bytes or its original manifest")
@@ -94,7 +99,7 @@ func TestRevisedQAOperationsUseOriginalNativeReceiptPipeline(t *testing.T) {
 		if err := readCheckDocument(filepath.Join(operation.Evidence.Directory, "request.json"), &request); err != nil {
 			t.Fatal(err)
 		}
-		if request.Stdin != want[index].Stdin || want[index].Kind == coverage.OperationArgv && !reflect.DeepEqual(request.Argv, want[index].Argv) || want[index].Kind == coverage.OperationShell && (len(request.Argv) != 3 || request.Argv[2] != want[index].Command) {
+		if request.Stdin != want[index].Stdin || want[index].Kind == coverage.OperationArgv && !reflect.DeepEqual(request.Argv, want[index].Argv) || want[index].Kind == coverage.OperationShell && !reflect.DeepEqual(request.Argv, coverage.ShellCommand(want[index].Command)) {
 			t.Fatal("persistent native request changed original invocation bytes", request)
 		}
 		if operation.Evidence.ExitCode != 0 || operation.Evidence.StdoutText != []string{"<><two words> changed input\n", "shell original shell input\n", "new-observation"}[index] {

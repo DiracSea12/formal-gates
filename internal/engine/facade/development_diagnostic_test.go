@@ -21,7 +21,7 @@ func TestFailedDevelopmentBuildCarriesOriginalDiagnosticsToContinuation(t *testi
 	const command = "go build app.go"
 	f, state, base := developmentCheckFixture(t,
 		protocol.DevelopmentCheck{ID: "build", Purpose: protocol.CheckFullBuild, Command: command},
-		protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
+		protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("true", "exit 0")})
 	retainNativeEvidence(t, f)
 	intent := developmentCheckIntent(t, f, state, base, "build", command)
 	evidence := observeDevelopmentCheck(t, f, state, intent, true)

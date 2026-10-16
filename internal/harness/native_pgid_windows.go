@@ -2,6 +2,5 @@
 
 package harness
 
-// nativeProcessGroupID is unreachable on Windows: newNativeClient guards the
-// call with runtime.GOOS and records a null pgid.
-func nativeProcessGroupID(pid int) (int, error) { return 0, nil }
+// A supervisor starts a new Windows console process group whose ID is its PID.
+func nativeProcessGroupID(pid int) (int, error) { return pid, nil }

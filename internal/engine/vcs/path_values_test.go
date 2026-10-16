@@ -4,16 +4,25 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 )
 
+func nativeFilenameCases() []string {
+	paths := []string{" artifact.txt", "说明.txt"}
+	if runtime.GOOS != "windows" {
+		paths = append(paths, "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`)
+	}
+	return paths
+}
+
 // Native path lists and staging preserve filename bytes independently of Git's
 // display quoting, and reads leave the index unchanged.
 func TestChangedPathsPreserveFilenameBytes(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{" artifact.txt", "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`, "说明.txt"} {
+	for _, path := range nativeFilenameCases() {
 		t.Run(path, func(t *testing.T) {
 			p := realRepo(t)
 			base, err := p.Resolve()
@@ -77,7 +86,7 @@ func TestChangedPathsPreserveFilenameBytes(t *testing.T) {
 
 func TestTrackPreservesFilenameBytes(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{" artifact.txt", "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`, "说明.txt"} {
+	for _, path := range nativeFilenameCases() {
 		t.Run(path, func(t *testing.T) {
 			p := realRepo(t)
 			if err := os.WriteFile(filepath.Join(p.Root(), "unrelated.txt"), []byte("unrelated\n"), 0600); err != nil {
@@ -153,7 +162,7 @@ func TestChangesPreserveOriginalPathsWithDefaultGitQuoting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wanted := []string{" artifact.txt", "artifact.txt ", "\tartifact.txt", "line\nartifact.txt", `"artifact".txt`, "说明.txt", removed}
+	wanted := append(nativeFilenameCases(), removed)
 	for _, path := range wanted[:len(wanted)-1] {
 		if err := os.WriteFile(filepath.Join(p.Root(), path), []byte("ordinary artifact\n"), 0600); err != nil {
 			t.Fatal(err)
@@ -194,6 +203,9 @@ func TestApplyArtifactPreservesOriginalPathsAcrossStagedPrefix(t *testing.T) {
 	t.Parallel()
 	p := realRepo(t)
 	removed, modified, added := " removed.txt", "\tmodified.txt", "说明\n.txt "
+	if runtime.GOOS == "windows" {
+		modified, added = " modified.txt", "说明.txt"
+	}
 	for _, path := range []string{removed, modified} {
 		if err := os.WriteFile(filepath.Join(p.Root(), path), []byte("base\n"), 0600); err != nil {
 			t.Fatal(err)

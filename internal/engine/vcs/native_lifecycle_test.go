@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -597,7 +598,7 @@ func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 		t.Fatalf("workspace content differs from bound material: %q %v", body, err)
 	}
 	info, err := os.Stat(filepath.Join(p.root, "body.txt"))
-	if err != nil || info.Mode()&0111 == 0 || value.Filetype != "text+x" {
+	if err != nil || value.Filetype != "text+x" || runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
 		t.Fatalf("workspace lost its executable filetype: %v %v", info, err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

@@ -3,6 +3,7 @@ package vcs
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -272,6 +273,81 @@ func realRepo(t *testing.T) *Provider {
 	run("add", "--all")
 	run("commit", "-m", "base")
 	return p
+}
+
+func TestAddWorktreePreservesRelativeTargetIdentity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, target := range []string{filepath.Join(root, "-candidate"), "candidate"} {
+		t.Run(target, func(t *testing.T) {
+			runner := &stubRunner{responses: map[string]string{"git worktree add": ""}}
+			if err := New(root, runner).AddWorktree(target, headIdentity); err != nil {
+				t.Fatal(err)
+			}
+			want := target
+			if filepath.IsAbs(target) {
+				want = "." + string(filepath.Separator) + "-candidate"
+			}
+			argv := []string{"git", "worktree", "add", "--detach", want, headIdentity}
+			if len(runner.commands) != 1 || !slices.Equal(runner.commands[0], argv) {
+				t.Fatalf("worktree command = %q, want %q", runner.commands, argv)
+			}
+		})
+	}
+}
+
+func TestNestedGitWorkspacesPreserveContentAndCleanup(t *testing.T) {
+	t.Parallel()
+	p := realRepo(t)
+	base, err := p.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation := filepath.Join(p.Root(), ".gates", "qa-isolation", "validation", strings.Repeat("a", 64))
+	child := filepath.Join(validation, ".gates", "qa-isolation", "child-"+strings.Repeat("b", 64), strings.Repeat("c", 64))
+	if err := p.CreateWorkspace(validation, base, "", WorkspaceHandle{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.At(validation).CreateWorkspace(child, base, "", WorkspaceHandle{}); err != nil {
+		t.Fatal(err)
+	}
+	resumed := New(p.Root(), nil)
+	for range 2 {
+		identity, observed, err := resumed.ObservedWorkspace(child, base, "", WorkspaceHandle{})
+		if err != nil || !observed || identity != base {
+			t.Fatalf("observed child = %s, %t, %v", identity, observed, err)
+		}
+	}
+	content := []byte("package main // child workspace\n")
+	if err := os.WriteFile(filepath.Join(child, "app.go"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := resumed.At(child)
+	if err := workspace.Track([]string{"app.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Commit("child content"); err != nil {
+		t.Fatal(err)
+	}
+	head, err := workspace.Resolve()
+	if err != nil || head == base {
+		t.Fatalf("child snapshot = %s, %v", head, err)
+	}
+	body, err := resumed.runner.RunRaw(child, "git", nil, "show", head+":app.go")
+	if err != nil || string(body) != string(content) {
+		t.Fatalf("committed child content = %q, %v", body, err)
+	}
+	for _, path := range []string{child, validation} {
+		if err := resumed.CleanupWorkspace(path, "", WorkspaceHandle{}); err != nil {
+			t.Fatal(err)
+		}
+		if absent, err := resumed.WorkspaceAbsent(path, WorkspaceHandle{}); err != nil || !absent {
+			t.Fatalf("workspace %s absent = %t, %v", path, absent, err)
+		}
+	}
+	if err := p.VerifyReady(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRealRepositorySmokeCoversProviderOperations(t *testing.T) {

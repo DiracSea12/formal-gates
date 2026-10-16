@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"formal-gates/internal/cost"
@@ -32,6 +33,9 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 	}
 	root, home := resolveNativePath(t.TempDir()), t.TempDir()
 	binary := filepath.Join(root, "peer")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	version := 1
 	valueKey := func() string {
 		if version == 2 {
@@ -41,9 +45,9 @@ func TestNativePlatformRegistrationCarriesAllPublicCapabilities(t *testing.T) {
 	}
 	writePeer := func() {
 		t.Helper()
-		body := fmt.Sprintf("#!/bin/sh\nprintf '{\"identity\":\"%%s\",\"%s\":\"%%s\",\"input\":%%s,\"output\":%%s}\\n' \"${2:-peer-session}\" \"$1\" \"${#1}\" %d\nprintf 'stderr-%%s\\n' \"$1\" >&2\n", valueKey(), version)
-		if err := os.WriteFile(binary, []byte(body), 0700); err != nil {
-			t.Fatal(err)
+		build := exec.Command("go", "build", "-ldflags", fmt.Sprintf("-X main.valueKey=%s -X main.version=%d", valueKey(), version), "-o", binary, filepath.Join("testdata", "native_platform_peer.go"))
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build native platform peer: %v %s", err, output)
 		}
 	}
 	writePeer()

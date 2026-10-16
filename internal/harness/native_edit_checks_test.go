@@ -51,6 +51,11 @@ func nativeEditCheckFixture(t *testing.T) (*nativeWorkspaceTools, string) {
 	material.Input.Validation.Workspace.Source = git("rev-parse", "HEAD")
 	material.Input.Handler = "engine.development.batch.v6"
 	material.Input.Validation.Development = &protocol.DevelopmentInput{Batch: protocol.DevelopmentBatch{ID: "approved", Checks: []protocol.DevelopmentCheck{{ID: "edit", Purpose: protocol.CheckEdit, Command: "printf edit; printf diagnostic >&2; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\""}, {ID: "full", Purpose: protocol.CheckFullTests, Command: "touch full-ran"}, {ID: "ordinary", Command: "touch ordinary-ran"}}}}
+	if runtime.GOOS == "windows" {
+		material.Input.Validation.Development.Batch.Checks[0].Command = `<nul set /p "=edit" & <nul set /p "=diagnostic" 1>&2 & <nul set /p "=x" >> "%FORMAL_GATES_WORKSPACE%\.gates\tmp\check-count" & exit /b 0`
+		material.Input.Validation.Development.Batch.Checks[1].Command = `type nul > full-ran`
+		material.Input.Validation.Development.Batch.Checks[2].Command = `type nul > ordinary-ran`
+	}
 	if err := os.MkdirAll(filepath.Join(workspace, ".gates", "tmp"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +113,11 @@ func TestNativeWorkspaceRunsDeclaredEditChecks(t *testing.T) {
 }
 
 func TestNativeWorkspacePreparesDeclaredEditCallsBeforeMutation(t *testing.T) {
-	for _, command := range []string{"printf checked; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\"", "printf failed >&2; exit 7"} {
+	commands := []string{"printf checked; printf x >> \"$FORMAL_GATES_WORKSPACE/.gates/tmp/check-count\"", "printf failed >&2; exit 7"}
+	if runtime.GOOS == "windows" {
+		commands = []string{`<nul set /p "=checked" & <nul set /p "=x" >> "%FORMAL_GATES_WORKSPACE%\.gates\tmp\check-count" & exit /b 0`, `<nul set /p "=failed" 1>&2 & exit 7`}
+	}
+	for _, command := range commands {
 		tools, workspace := nativeEditCheckFixture(t)
 		material := *tools.material
 		input := material.Input
@@ -508,6 +517,9 @@ func TestNativeEditCheckFailureDiagnosticsReachTheWorker(t *testing.T) {
 	path := textOf(getOf(getOf(getOf(request, "engine"), "workerMaterial"), "path"))
 	material := *tools.material
 	material.Input.Validation.Development.Batch.Checks[0].Command = "printf original-output; printf 'exact failure: source line 3' >&2; exit 7"
+	if runtime.GOOS == "windows" {
+		material.Input.Validation.Development.Batch.Checks[0].Command = `<nul set /p "=original-output" & <nul set /p "=exact failure: source line 3" 1>&2 & exit /b 7`
+	}
 	if err := writeAtomicJSON(path, material); err != nil {
 		t.Fatal(err)
 	}

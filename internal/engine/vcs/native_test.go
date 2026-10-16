@@ -112,7 +112,7 @@ func svnFixture(t *testing.T) (*Provider, *nativeTestRunner) {
 		t.Fatal(err)
 	}
 	nativeCommand(t, runner, wc, "svn", "add", "body.txt", "empty", "link")
-	nativeCommand(t, runner, wc, "svn", "propset", "svn:executable", "*", "body.txt")
+	nativeCommand(t, runner, wc, "svn", "propset", "svn:executable", "true", "body.txt")
 	property := filepath.Join(root, "property")
 	if err := os.WriteFile(property, []byte{' ', 0, 1, '\n'}, 0644); err != nil {
 		t.Fatal(err)
@@ -136,6 +136,10 @@ func TestSVNImmutableValuesWorkspacePromotionCleanup(t *testing.T) {
 	}
 	if !strings.Contains(entries["."], "custom:binary") || !strings.Contains(entries["empty"], "custom:directory") || !strings.Contains(entries["body.txt"], "IGxlYWRpbmcKdHJhaWxpbmcKCg==") {
 		t.Fatalf("native values omitted: %v", entries)
+	}
+	var body nativeEntry
+	if err := json.Unmarshal([]byte(entries["body.txt"]), &body); err != nil || !bytes.Equal(body.Properties["svn:executable"], []byte("*")) {
+		t.Fatalf("native executable property = %q, %v", body.Properties["svn:executable"], err)
 	}
 	workspace := filepath.Join(nativeFixtureDirectory(t), "candidate")
 	handle := PlanWorkspace("svn", base, "owned", "candidate")
@@ -240,7 +244,7 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	}
 	port := listener.Addr().String()
 	listener.Close()
-	root := nativeFixtureDirectory(t)
+	root := canonicalPath(nativeFixtureDirectory(t))
 	serverRoot := filepath.Join(root, "server")
 	if err = os.MkdirAll(serverRoot, 0755); err != nil {
 		t.Fatal(err)
@@ -280,6 +284,32 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	nativeCommand(t, runner, wc, "p4", "submit", "-d", "fixture values")
 	return NewNative(wc, "p4", runner).At(wc, WorkspaceHandle{Client: "main"}), runner
 }
+
+func TestP4RunnerUsesDeclaredWorkingDirectory(t *testing.T) {
+	p, runner := p4Fixture(t)
+	for _, test := range []struct{ name, dir string }{{"absolute", p.Root()}, {"relative", "main"}, {"process", ""}} {
+		t.Run(test.name, func(t *testing.T) {
+			cwd := filepath.Dir(p.Root())
+			if test.dir == "" {
+				cwd = p.Root()
+			}
+			t.Chdir(cwd)
+			t.Setenv("PWD", t.TempDir())
+			path := "directory-" + test.name + ".txt"
+			if err := os.WriteFile(filepath.Join(p.Root(), path), []byte("workspace content\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.Run(test.dir, "p4", "add", path); err != nil {
+				t.Fatal(err)
+			}
+			records, err := p.p4JSON("fstat", "//main/"+path)
+			if err != nil || len(records) != 1 || records[0]["depotFile"] != "//depot/main/"+path || !SamePath(records[0]["clientFile"], filepath.Join(p.Root(), path)) {
+				t.Fatalf("native file identity = %v, %v", records, err)
+			}
+		})
+	}
+}
+
 func TestP4ImmutableFiletypeWorkspacePromotionCleanup(t *testing.T) {
 	t.Parallel()
 	p, runner := p4Fixture(t)

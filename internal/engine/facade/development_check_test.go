@@ -9,10 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
@@ -176,8 +178,8 @@ func observeDevelopmentCheck(t *testing.T, f *Facade, s *protocol.State, intent 
 
 func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	t.Parallel()
-	command := "printf '%s' 'a b' | cat > generated; printf x >> executions; printf '%s' 'a b'"
-	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "quoted", Purpose: protocol.CheckFullBuild, Command: command}, protocol.DevelopmentCheck{ID: "dependent", Purpose: protocol.CheckFullTests, Command: "test \"$(cat generated)\" = 'a b'; printf 'dependent'"})
+	command := nativeFixtureCommand("printf '%s' 'a b' | cat > generated; printf x >> executions; printf '%s' 'a b'", "[IO.File]::WriteAllText('generated','a b'); [IO.File]::AppendAllText('executions','x'); [Console]::Write('a b')")
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "quoted", Purpose: protocol.CheckFullBuild, Command: command}, protocol.DevelopmentCheck{ID: "dependent", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("test \"$(cat generated)\" = 'a b'; printf 'dependent'", "if ([IO.File]::ReadAllText('generated') -cne 'a b') { exit 1 }; [Console]::Write('dependent')")})
 	intent := developmentCheckIntent(t, f, s, base, "quoted", command)
 	first := observeDevelopmentCheck(t, f, s, intent, true)
 	if first.ExitCode != 0 || first.Error != "" {
@@ -194,14 +196,18 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	if err := readCheckDocument(filepath.Join(first.Directory, "request.json"), &request); err != nil {
 		t.Fatal(err)
 	}
-	if len(request.Argv) != 3 || request.Argv[2] != command || request.Cwd != first.WorkingDirectory {
+	if !reflect.DeepEqual(request.Argv, coverage.ShellCommand(command)) || request.Cwd != first.WorkingDirectory {
 		t.Fatalf("actual command transport %#v", request)
 	}
-	toolBytes, err := os.ReadFile("/bin/sh")
+	shell, err := exec.LookPath(coverage.ShellCommand(command)[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := fmt.Sprintf("/bin/sh sha256:%x", sha256.Sum256(toolBytes))
+	toolBytes, err := os.ReadFile(shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := fmt.Sprintf("%s sha256:%x", shell, sha256.Sum256(toolBytes))
 	var receipt struct {
 		Tool        string `json:"tool_identity"`
 		Environment string `json:"environment_identity"`
@@ -238,7 +244,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = snap.State
-	dependent := developmentCheckIntent(t, f, s, base, "dependent", "test \"$(cat generated)\" = 'a b'; printf 'dependent'")
+	dependent := developmentCheckIntent(t, f, s, base, "dependent", nativeFixtureCommand("test \"$(cat generated)\" = 'a b'; printf 'dependent'", "if ([IO.File]::ReadAllText('generated') -cne 'a b') { exit 1 }; [Console]::Write('dependent')"))
 	if result := observeDevelopmentCheck(t, f, s, dependent, true); result.ExitCode != 0 {
 		t.Fatalf("same batch generator dependency lost %#v", result)
 	}
@@ -249,7 +255,7 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 	if err := json.Unmarshal(original, &altered); err != nil {
 		t.Fatal(err)
 	}
-	altered["argv"] = []string{"/bin/sh", "-c", "true"}
+	altered["argv"] = coverage.ShellCommand(nativeFixtureCommand("true", "exit 0"))
 	changed, _ := json.Marshal(altered)
 	if err := os.WriteFile(requestPath, changed, 0600); err != nil {
 		t.Fatal(err)
@@ -271,8 +277,8 @@ func TestDevelopmentCheckExactCommandAndObservedReceipt(t *testing.T) {
 
 func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
 	t.Parallel()
-	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "exit-comparison", Purpose: protocol.CheckFullBuild, Command: "sh -c 'exit 2'; test $? -eq 1"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
-	intent := developmentCheckIntent(t, f, s, base, "exit-comparison", "sh -c 'exit 2'; test $? -eq 1")
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "exit-comparison", Purpose: protocol.CheckFullBuild, Command: nativeFixtureCommand("sh -c 'exit 2'; test $? -eq 1", "& $env:COMSPEC /D /C exit 2; if ($LASTEXITCODE -ne 1) { exit 1 }")}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("true", "exit 0")})
+	intent := developmentCheckIntent(t, f, s, base, "exit-comparison", nativeFixtureCommand("sh -c 'exit 2'; test $? -eq 1", "& $env:COMSPEC /D /C exit 2; if ($LASTEXITCODE -ne 1) { exit 1 }"))
 	result := observeDevelopmentCheck(t, f, s, intent, true)
 	if result.ExitCode != 1 || result.Error != "" {
 		t.Fatalf("approved comparison was not faithfully failed %#v", result)
@@ -288,8 +294,8 @@ func TestDevelopmentCheckActualFailureAndUnknownOwnership(t *testing.T) {
 
 func TestDevelopmentCheckAbortSettlesProcess(t *testing.T) {
 	t.Parallel()
-	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "cancel", Purpose: protocol.CheckFullBuild, Command: "printf 'started'; sleep 10"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
-	intent := developmentCheckIntent(t, f, s, base, "cancel", "printf 'started'; sleep 10")
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "cancel", Purpose: protocol.CheckFullBuild, Command: nativeFixtureCommand("printf 'started'; sleep 10", "[Console]::Write('started'); Start-Sleep -Seconds 10")}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("true", "exit 0")})
+	intent := developmentCheckIntent(t, f, s, base, "cancel", nativeFixtureCommand("printf 'started'; sleep 10", "[Console]::Write('started'); Start-Sleep -Seconds 10"))
 	invoked := false
 	unlock, err := f.acquireWriteWindow()
 	if err != nil {
@@ -325,9 +331,9 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
 			plan := commandPlan()
-			command := "printf '%s' 'a b' | cat; sh -c 'exit 2'; test $? -eq 2"
+			command := nativeFixtureCommand("printf '%s' 'a b' | cat; sh -c 'exit 2'; test $? -eq 2", "[Console]::Write('a b'); & $env:COMSPEC /D /C exit 2; if ($LASTEXITCODE -ne 2) { exit 1 }; exit 0")
 			if !successful {
-				command = "printf '%s' 'a b' | cat; sh -c 'exit 2'; test $? -eq 1"
+				command = nativeFixtureCommand("printf '%s' 'a b' | cat; sh -c 'exit 2'; test $? -eq 1", "[Console]::Write('a b'); & $env:COMSPEC /D /C exit 2; if ($LASTEXITCODE -ne 1) { exit 1 }; exit 0")
 			}
 			plan.Batches[0].Checks[0].Command = command
 			consumer := plan.Batches[0]
@@ -432,8 +438,8 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 
 func TestDevelopmentCheckSourceChangeCannotProveInput(t *testing.T) {
 	t.Parallel()
-	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "source-change", Purpose: protocol.CheckFullBuild, Command: "printf changed > app.txt; printf 'exit zero'"}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: "true"})
-	intent := developmentCheckIntent(t, f, s, base, "source-change", "printf changed > app.txt; printf 'exit zero'")
+	f, s, base := developmentCheckFixture(t, protocol.DevelopmentCheck{ID: "source-change", Purpose: protocol.CheckFullBuild, Command: nativeFixtureCommand("printf changed > app.txt; printf 'exit zero'", "[IO.File]::WriteAllText('app.txt','changed'); [Console]::Write('exit zero')")}, protocol.DevelopmentCheck{ID: "tests", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("true", "exit 0")})
+	intent := developmentCheckIntent(t, f, s, base, "source-change", nativeFixtureCommand("printf changed > app.txt; printf 'exit zero'", "[IO.File]::WriteAllText('app.txt','changed'); [Console]::Write('exit zero')"))
 	result := observeDevelopmentCheck(t, f, s, intent, true)
 	if result.ExitCode != 0 || result.Error != "check changed an immutable source input: app.txt" {
 		t.Fatalf("changed source falsely verified %#v", result)
@@ -463,8 +469,12 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := batchEvidence(input)
-	evidence.Commands = []string{"printf 'actual build'", "./missing-project-test"}
+	evidence.Commands = []string{nativeFixtureCommand("printf 'actual build'", "[Console]::Write('actual build')"), nativeFixtureCommand("./missing-project-test", `& .\missing-project-test`)}
 	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: evidence})
+	missingExit := 127
+	if goruntime.GOOS == "windows" {
+		missingExit = 1
+	}
 	var failed protocol.HostActionReceipt
 	var failure protocol.CheckEvidence
 	for failed.ActionID == "" {
@@ -478,7 +488,7 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 			if err := decodeReceiptEvidence(receipt, &observed); err != nil {
 				t.Fatal(err)
 			}
-			if observed.SourceActionID == action && observed.ExitCode == 127 {
+			if observed.SourceActionID == action && observed.ExitCode == missingExit {
 				failed, failure = receipt, observed
 			}
 		}
@@ -507,7 +517,7 @@ func TestDevelopmentPreparesMissingCallsAndRepairsActualFailure(t *testing.T) {
 		t.Fatal("failure did not retain its original development obligation")
 	}
 	correction := batchEvidence(next)
-	correction.Commands = []string{evidence.Commands[0], "printf 'actual tests'"}
+	correction.Commands = []string{evidence.Commands[0], nativeFixtureCommand("printf 'actual tests'", "[Console]::Write('actual tests')")}
 	accepted := d.submit(protocol.Event{Kind: protocol.KindWorkerResult, Result: &protocol.WorkerResultPayload{ActionID: action, Provider: d.host(), Outcome: protocol.OutcomePass, PayloadDigest: string(d.eventID()), SourceResult: next.Development.Result.Digest, Validation: &protocol.ValidationResult{Binding: next.Binding, Status: "PASS", Development: correction}}})
 	if accepted.Status != "ACCEPTED" {
 		t.Fatalf("corrected call rejected: %+v", accepted)
@@ -580,7 +590,11 @@ func TestDevelopmentPreparesCallsInCleanWorkspace(t *testing.T) {
 		t.Fatal("clean command fixture received another requirement duty", issued.RequirementPoints)
 	}
 	for _, value := range []string{"valid", "invalid"} {
-		command := exec.Command("./app", "run", value)
+		argv := []string{"./app", "run", value}
+		if goruntime.GOOS == "windows" {
+			argv = coverage.ShellCommand(`.\app.cmd run ` + value)
+		}
+		command := exec.Command(argv[0], argv[1:]...)
 		command.Dir = input.Workspace.Path
 		output, err := command.CombinedOutput()
 		if value == "valid" && err != nil || value == "invalid" && err == nil {
