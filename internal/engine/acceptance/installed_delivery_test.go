@@ -15,8 +15,60 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
 )
+
+func nativeWorktreeAddCount(trace string, resource protocol.NativeResource) int {
+	count := 0
+	for _, line := range strings.Split(trace, "\n") {
+		prefix, arguments, found := strings.Cut(line, "\tworktree\tadd\t--detach\t")
+		if !found {
+			continue
+		}
+		fields := strings.Split(arguments, "\t")
+		if len(fields) != 2 {
+			continue
+		}
+		path := fields[0]
+		if !filepath.IsAbs(path) {
+			cwd, _, _ := strings.Cut(prefix, "\t")
+			path = filepath.Join(cwd, path)
+		}
+		if vcs.SamePath(path, resource.Path) && fields[1] == resource.Source {
+			count++
+		}
+	}
+	return count
+}
+
+func TestNativeWorktreeAddCountUsesRecordedIdentity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	resource := protocol.NativeResource{Path: filepath.Join(root, "workspace"), Source: strings.Repeat("a", 40)}
+	line := func(cwd, prefix, path, source string) string {
+		return cwd + prefix + "\tworktree\tadd\t--detach\t" + path + "\t" + source + "\n"
+	}
+	relative := line(root, "", "workspace", resource.Source)
+	for _, test := range []struct {
+		name, trace string
+		count       int
+	}{
+		{"absolute", line(root, "", resource.Path, resource.Source), 1},
+		{"relative", relative, 1},
+		{"global-config", line(root, "\t-c\tcore.longpaths=true", "workspace", resource.Source), 1},
+		{"different-directory", line(filepath.Join(root, "other"), "", "workspace", resource.Source), 0},
+		{"different-path", line(root, "", "other-workspace", resource.Source), 0},
+		{"different-source", line(root, "", "workspace", strings.Repeat("b", 40)), 0},
+		{"duplicate", relative + relative, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if count := nativeWorktreeAddCount(test.trace, resource); count != test.count {
+				t.Fatalf("native add count=%d, want=%d; trace=%q", count, test.count, test.trace)
+			}
+		})
+	}
+}
 
 // Probe edits stay in their issued root until normal resource cleanup. The
 // successor consumes the original conclusion and shares delivery edits only.
@@ -121,8 +173,7 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 				t.Fatalf("resource resume or concurrent drive repeated a native add:\n%s", trace)
 			}
 			for _, resource := range state.NativeResources {
-				command := "\tworktree\tadd\t--detach\t" + resource.Path + "\t" + resource.Source + "\n"
-				if strings.Count(trace, command) != 1 {
+				if nativeWorktreeAddCount(trace, resource) != 1 {
 					t.Fatalf("native add differs from its unique registered path and source: %+v\n%s", resource, trace)
 				}
 			}
