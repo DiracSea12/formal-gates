@@ -213,13 +213,14 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 	}
 	// 授权全集枚举（单一事实源）：枚举桶内任务经 guardTaskProvenance 归类——
 	// 分类失败的枚举项即构造错误（返回错误，零派发）。
-	comparisons := state.repairComparisonContexts(e.cfg.Definition)
+	repairs := state.repairWork()
+	comparisons := state.repairComparisonContextsForWork(e.cfg.Definition, repairs)
 	authorized := map[runtime.TaskKey]bool{}
 	declare := func(task runtime.TaskKey) error {
 		if !task.Valid() || authorized[task] {
 			return nil
 		}
-		provenance, maxAttempts, ok := e.guardTaskProvenance(state, task, comparisons)
+		provenance, maxAttempts, ok := e.guardTaskProvenance(state, task, comparisons, repairs)
 		if !ok {
 			return fmt.Errorf("guard budget: authorized dispatch %s has no authorizing source", task.String())
 		}
@@ -299,7 +300,7 @@ func (e *Engine) guardBasis(state *State) (guard.Basis, error) {
 				}
 			}
 		}
-		for _, work := range state.repairWork() {
+		for _, work := range repairs {
 			if err := declare(work.task); err != nil {
 				return guard.Basis{}, err
 			}
@@ -514,7 +515,7 @@ func (s *State) originalGuardSource(task runtime.TaskKey, cd *compiler.CompiledD
 // （一次性用户追加只改该账本的 MaxAttempts，AC-059），无账本条目时用编译步策略。
 // 需求重走替换任务先经 sourceValidationTask 折叠回原任务——替换与原任务同源
 // 声明，provenance 按其来源归类。
-func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, comparisons []repairComparison) (guard.Provenance, int, bool) {
+func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, comparisons []repairComparison, repairs []repairWork) (guard.Provenance, int, bool) {
 	role := state.validationRole(task, e.cfg.Definition)
 	source := state.sourceValidationTask(task)
 	maxAttempts := e.retryMaxAttempts(task.Step)
@@ -615,7 +616,10 @@ func (e *Engine) guardTaskProvenance(state *State, task runtime.TaskKey, compari
 				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: source.String(), Revision: w.ExpectedDigest}}, maxAttempts, true
 			}
 		}
-		for _, work := range state.repairWork() {
+		if repairs == nil {
+			repairs = state.repairWork()
+		}
+		for _, work := range repairs {
 			if state.sourceValidationTask(work.task) == source {
 				return guard.Provenance{Kind: guard.RepairSource, Identity: guard.Identity{ID: work.wave.Repair.Task.String(), Revision: work.wave.ExpectedDigest}}, maxAttempts, true
 			}
@@ -784,7 +788,7 @@ func (e *Engine) refreshGuardBudget(state *State) error {
 // 无授权来源或不在全集＝GUARD_ALLOWANCE_BLOCKED（扩张只经既有 typed Ask 通道）；
 // attempt 账本未标记耗尽而重算已超发＝BLOCKED_BUG。
 func (e *Engine) guardTaskAuthorized(state *State, basis guard.Basis, task runtime.TaskKey) error {
-	_, maxAttempts, ok := e.guardTaskProvenance(state, task, nil)
+	_, maxAttempts, ok := e.guardTaskProvenance(state, task, nil, nil)
 	if !ok || !basisDeclaresTask(basis, task) {
 		return &RejectedError{
 			Code:   CodeGuardAllowanceBlocked,

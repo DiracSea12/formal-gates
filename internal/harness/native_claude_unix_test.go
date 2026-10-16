@@ -412,9 +412,7 @@ func TestClaudeOriginalSupervisorReceiptAndCancellation(t *testing.T) {
 				process, _ := readJSONFile(filepath.Join(s.directory, "native-process.json"))
 				number, _ := getOf(process, "pid").(json.Number).Int64()
 				pid := int(number)
-				if syscall.Kill(pid, 0) == nil {
-					t.Fatal("native process survived group cancellation")
-				}
+				assertNativeProcessTerminated(t, pid)
 			} else {
 				first, err := settleNativeReceipt(s.directory, receipt)
 				if err != nil {

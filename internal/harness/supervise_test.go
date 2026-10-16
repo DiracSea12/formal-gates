@@ -13,33 +13,37 @@ import (
 	"time"
 )
 
-// supervisorBinary writes the current source build to a private executable.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	os.RemoveAll(supervisorBuildDirectory)
+	os.Exit(code)
+}
+
+// supervisorBinary links the completed source build to a private executable path.
 // Process ownership and SIGTERM cancellation require a separate process.
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
-	body, err := supervisorRuntime()
+	binary, err := supervisorRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := "formal-gates"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	out := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(out, body, 0700); err != nil {
+	out := filepath.Join(t.TempDir(), filepath.Base(binary))
+	if err := os.Link(binary, out); err != nil {
 		t.Fatal(err)
 	}
 	return out
 }
 
-var supervisorRuntime = sync.OnceValues(func() ([]byte, error) {
+var supervisorBuildDirectory string
+
+var supervisorRuntime = sync.OnceValues(func() (string, error) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Dir(filepath.Dir(filepath.Dir(file))) // internal/harness -> repo root
 	directory, err := os.MkdirTemp("", "formal-gates-supervisor-*")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	defer os.RemoveAll(directory)
+	supervisorBuildDirectory = directory
 	name := "formal-gates"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -48,9 +52,9 @@ var supervisorRuntime = sync.OnceValues(func() ([]byte, error) {
 	build := exec.Command("go", "build", "-o", out, "./cmd/formal-gates")
 	build.Dir = root
 	if b, err := build.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("build supervisor: %w\n%s", err, b)
+		return "", fmt.Errorf("build supervisor: %w\n%s", err, b)
 	}
-	return os.ReadFile(out)
+	return out, nil
 })
 
 func envSlice(m map[string]string) []string {

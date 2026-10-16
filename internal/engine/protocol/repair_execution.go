@@ -222,25 +222,26 @@ func (s *State) repairDependenciesReady(work repairWork) bool {
 	if work.previous != nil {
 		return true
 	}
+	members := s.repairMembers(work.wave)
 	if work.plan.VerificationTier == "CHECKPOINT" {
 		for _, group := range work.plan.CheckpointGroups {
 			if slices.Contains(group, work.batch.ID) {
 				break
 			}
-			for _, member := range s.repairMembers(work.wave) {
+			for _, member := range members {
 				if slices.Contains(group, member.batch.ID) && (s.developmentResultRecord(member.task) == nil || !s.repairGatesComplete(member)) {
 					return false
 				}
 			}
 		}
 	}
-	for _, member := range s.repairMembers(work.wave) {
+	for _, member := range members {
 		if slices.Contains(work.batch.DependsOn, member.batch.ID) {
 			if s.developmentResultRecord(member.task) == nil || !s.repairGatesComplete(member) {
 				return false
 			}
 			if s.NativeRoot != "" {
-				if _, _, ok := s.repairIntegrationReceipt("MERGE_FINISH", member.task, &work.task); !ok {
+				if _, _, ok := s.repairIntegrationReceipt("MERGE_FINISH", member, &work.task, members); !ok {
 					return false
 				}
 			}
@@ -273,7 +274,7 @@ func (s *State) repairSource(task runtime.TaskKey) (HostActionIntent, CandidateE
 	return found, proof, found.ActionID != ""
 }
 
-func (s *State) repairIntegrationReceipt(stage string, source runtime.TaskKey, target *runtime.TaskKey) (HostActionIntent, CandidateEvidence, bool) {
+func (s *State) repairIntegrationReceipt(stage string, work repairWork, target *runtime.TaskKey, members []repairWork) (HostActionIntent, CandidateEvidence, bool) {
 	var found HostActionIntent
 	var proof CandidateEvidence
 	for action, receipt := range s.HostActionReceipts {
@@ -285,10 +286,10 @@ func (s *State) repairIntegrationReceipt(stage string, source runtime.TaskKey, t
 			continue
 		}
 		p, err := candidateParameters(intent)
-		if err != nil || p.Stage != stage || p.Integration == nil || p.Integration.RepairTask == nil || *p.Integration.RepairTask != source || !sameTaskPointer(p.Integration.TargetTask, target) || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
+		if err != nil || p.Stage != stage || p.Integration == nil || p.Integration.RepairTask == nil || *p.Integration.RepairTask != work.task || !sameTaskPointer(p.Integration.TargetTask, target) || !s.candidateContextCurrent(p) || receipt.Status != HostActionStatusExecuted && receipt.Status != HostActionStatusReconciled {
 			continue
 		}
-		if !s.repairIntegrationCurrent(p) {
+		if !s.repairIntegrationCurrentWithMembers(p, work.wave, members) {
 			continue
 		}
 		v, err := decodeCandidateEvidence(receipt)
@@ -305,9 +306,20 @@ func sameTaskPointer(a, b *runtime.TaskKey) bool {
 
 func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 	i := p.Integration
-	if i == nil || i.RepairTask == nil {
+	if i == nil || i.RepairTask == nil || s.Validation == nil {
 		return false
 	}
+	for index := range s.Validation.Waves {
+		w := &s.Validation.Waves[index]
+		if w.Repair != nil {
+			return s.repairIntegrationCurrentWithMembers(p, w, s.repairMembers(w))
+		}
+	}
+	return false
+}
+
+func (s *State) repairIntegrationCurrentWithMembers(p CandidateParameters, knownWave *ValidationWave, knownMembers []repairWork) bool {
+	i := p.Integration
 	var work *repairWork
 	var members []repairWork
 	if s.Validation != nil {
@@ -316,10 +328,12 @@ func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 			if w.Repair == nil {
 				continue
 			}
-			current := s.repairMembers(w)
+			current := knownMembers
+			if w != knownWave {
+				current = s.repairMembers(w)
+			}
 			for _, member := range current {
 				if member.task == *i.RepairTask {
-					member.result = s.developmentResultRecord(member.task)
 					work = &member
 					members = current
 					break
@@ -327,7 +341,7 @@ func (s *State) repairIntegrationCurrent(p CandidateParameters) bool {
 			}
 		}
 	}
-	if work == nil || work.result == nil {
+	if work == nil || s.developmentResultRecord(work.task) == nil {
 		return false
 	}
 	source, proof, ok := s.repairSource(work.task)
@@ -362,14 +376,14 @@ func (s *State) repairAssemblyResource(w *ValidationWave, members []repairWork) 
 	return r
 }
 
-func (s *State) repairMergeParameters(work repairWork, target *runtime.TaskKey, prefix string, resource NativeResource) (CandidateParameters, bool) {
+func (s *State) repairMergeParameters(work repairWork, target *runtime.TaskKey, prefix string, resource NativeResource, members []repairWork) (CandidateParameters, bool) {
 	source, proof, frozen := s.repairSource(work.task)
 	if !frozen {
 		return CandidateParameters{}, false
 	}
 	i := &IntegrationParameters{RepairTask: &work.task, SourceAction: source.ActionID, TargetTask: target, Incoming: proof.Identity, IncomingTree: proof.Digest}
 	stage := "MERGE_START"
-	if start, _, ok := s.repairIntegrationReceipt(stage, work.task, target); ok {
+	if start, _, ok := s.repairIntegrationReceipt(stage, work, target, members); ok {
 		stage, i.StartAction = "MERGE_FINISH", start.ActionID
 	}
 	return CandidateParameters{Stage: stage, Base: prefix, WorkspaceID: resource.ID, Integration: i, RequirementRevision: s.Validation.RequirementRevision, Generation: s.Validation.Generation, RouteScope: s.validationRouteDigest()}, true
@@ -397,16 +411,17 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 		}
 		r := s.taskResource(member.task, cd)
 		prefix := s.ResourceStartIdentity(r)
-		for _, dep := range s.repairMembers(member.wave) {
+		members := s.repairMembers(member.wave)
+		for _, dep := range members {
 			if !slices.Contains(member.batch.DependsOn, dep.batch.ID) {
 				continue
 			}
-			if _, proof, ok := s.repairIntegrationReceipt("MERGE_FINISH", dep.task, &member.task); ok {
+			if _, proof, ok := s.repairIntegrationReceipt("MERGE_FINISH", dep, &member.task, members); ok {
 				prefix = proof.Identity
 				continue
 			}
 			if s.developmentResultRecord(dep.task) != nil && s.repairGatesComplete(dep) {
-				return s.repairMergeParameters(dep, &member.task, prefix, r)
+				return s.repairMergeParameters(dep, &member.task, prefix, r, members)
 			}
 			break
 		}
@@ -428,11 +443,11 @@ func (s *State) repairCandidateParameters(cd *compiler.CompiledDefinition) (Cand
 		r := s.repairAssemblyResource(w, members)
 		prefix := s.ResourceStartIdentity(r)
 		for _, member := range members {
-			if _, proof, ok := s.repairIntegrationReceipt("MERGE_FINISH", member.task, nil); ok {
+			if _, proof, ok := s.repairIntegrationReceipt("MERGE_FINISH", member, nil, members); ok {
 				prefix = proof.Identity
 				continue
 			}
-			return s.repairMergeParameters(member, nil, prefix, r)
+			return s.repairMergeParameters(member, nil, prefix, r, members)
 		}
 	}
 	return CandidateParameters{}, false
@@ -645,7 +660,7 @@ func (s *State) repairFinalSource(work repairWork, members []repairWork) (HostAc
 	if len(members) == 1 {
 		return s.repairSource(work.task)
 	}
-	return s.repairIntegrationReceipt("MERGE_FINISH", work.task, nil)
+	return s.repairIntegrationReceipt("MERGE_FINISH", work, nil, members)
 }
 
 // Pure P2 split repairs self-run the exact integrated content once. This is

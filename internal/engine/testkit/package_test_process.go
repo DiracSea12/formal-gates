@@ -30,11 +30,7 @@ func RunNativePackageTest(t *testing.T) bool {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(target, body, 0o755); err != nil {
+	if err := os.Link(executable, target); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(target, "-test.timeout=0", "-test.v", "-test.run=^"+t.Name()+"$")

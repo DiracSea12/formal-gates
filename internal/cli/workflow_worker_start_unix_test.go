@@ -102,7 +102,11 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeInvocationFile(filepath.Join(directory, "process.json"), map[string]any{"pid": os.Getpid(), "pgid": syscall.Getpgrp(), "started_at": float64(created.UnixNano()) / 1e9, "request_digest": digest}); err != nil {
+	processPath := filepath.Join(directory, "process.json.tmp")
+	if err := writeInvocationFile(processPath, map[string]any{"pid": os.Getpid(), "pgid": syscall.Getpgrp(), "started_at": float64(created.UnixNano()) / 1e9, "request_digest": digest}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(processPath, filepath.Join(directory, "process.json")); err != nil {
 		t.Fatal(err)
 	}
 	release()

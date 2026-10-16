@@ -123,13 +123,13 @@ jobs:
           chmod +x "$archive_root/bin/formal-gates"
           echo "FORMAL_GATES_ARCHIVE_ROOT=$archive_root" >> "$GITHUB_ENV"
       - name: Run Go tests
-        run: go test ./... -timeout=0 -tags=qastructure
+        run: go test -json ./... -timeout=0 -tags=qastructure -parallel=20
       - name: Run go vet
         run: go vet ./...
       - name: Run Go race tests (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: go test -timeout=0 -race ./internal/validate ./internal/cli
+        run: go test -json -timeout=0 -race ./internal/validate ./internal/cli
       - name: Validate package (Windows)
         if: runner.os == 'Windows'
         shell: cmd

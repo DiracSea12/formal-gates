@@ -52,6 +52,18 @@ func canarySubprocessOutput(cmd *exec.Cmd) (output []byte, err error) {
 	return cmd.CombinedOutput()
 }
 
+func assertNativeProcessTerminated(t *testing.T, pid int) {
+	t.Helper()
+	status, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+	if err == nil && strings.HasPrefix(strings.TrimSpace(string(status)), "Z") {
+		return
+	}
+	if syscall.Kill(pid, 0) == syscall.ESRCH {
+		return
+	}
+	t.Fatalf("native process %d remains executing: status=%q status_error=%v", pid, strings.TrimSpace(string(status)), err)
+}
+
 type canaryLocalExecutor struct {
 	t      *testing.T
 	canary *engineCanary
@@ -251,9 +263,10 @@ func TestCanaryACPAndAppServerCancellation(t *testing.T) {
 				t.Fatal(err)
 			}
 			pid, err := strconv.Atoi(textOf(getOf(process, "pid")))
-			if err != nil || syscall.Kill(pid, 0) == nil {
-				t.Fatalf("native process survived: %v %v", process, err)
+			if err != nil {
+				t.Fatal(err)
 			}
+			assertNativeProcessTerminated(t, pid)
 			if got, err := readJSONFile(filepath.Join(dir, "native-request.json")); err != nil || !valuesEqual(got, request) {
 				t.Fatalf("cancel rewrote request: %v %v", got, err)
 			}

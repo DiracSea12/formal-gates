@@ -34,11 +34,15 @@ func (s *State) repairComparisonResult(task runtime.TaskKey) *WorkerResult {
 }
 
 func (s *State) repairComparisonContexts(cd *compiler.CompiledDefinition) []repairComparison {
+	return s.repairComparisonContextsForWork(cd, s.repairWork())
+}
+
+func (s *State) repairComparisonContextsForWork(cd *compiler.CompiledDefinition, repairs []repairWork) []repairComparison {
 	var contexts []repairComparison
 	if s.Validation == nil || !s.FlowNodeEnabled("repair") {
 		return contexts
 	}
-	for _, work := range s.repairWork() {
+	for _, work := range repairs {
 		r := work.result
 		if r == nil || !s.editResultCurrent(*r) || !r.Validation.Binding.PureP2 || len(r.Validation.Development.AffectedCases) == 0 {
 			continue
