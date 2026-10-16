@@ -170,9 +170,7 @@ func (s *State) WorkerInput(id string, cd *compiler.CompiledDefinition) (WorkerI
 				}
 			}
 		}
-	}
-	if input.Handler == "engine.repair.v7" || input.Handler == "engine.development.plan.v1" || input.Review != nil && input.Review.Action == review.StartReadiness && !input.DevelopmentDisabled {
-		_, input.ApprovedPlan, _ = s.confirmedDevelopmentPlan()
+		input.ApprovedPlan = plan
 	}
 	input.RequirementPoints = s.workerRequirementPoints(input)
 	return input, true

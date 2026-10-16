@@ -104,16 +104,19 @@ func (f *Facade) acquireWriteWindow() (unlock func(), err error) {
 	return release, nil
 }
 
-func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, error) {
-	snap, err := f.engine.Load()
-	if err != nil {
-		return nil, err
+func (f *Facade) requirementChildren(state *protocol.State) ([]protocol.ChildRequirementDecision, error) {
+	if state == nil {
+		snap, err := f.engine.Load()
+		if err != nil {
+			return nil, err
+		}
+		state = snap.State
 	}
 	var out []protocol.ChildRequirementDecision
-	if snap.State.SliceChild != nil || snap.State.ChildCreation == nil {
+	if state.SliceChild != nil || state.ChildCreation == nil {
 		return out, nil
 	}
-	for _, plan := range snap.State.ChildCreation.Children {
+	for _, plan := range state.ChildCreation.Children {
 		established, err := runDirectoryEstablished(filepath.Join(f.root, EngineNamespace, plan.RunID))
 		if err != nil {
 			return nil, err
@@ -146,7 +149,7 @@ func (f *Facade) requirementChildren() ([]protocol.ChildRequirementDecision, err
 			decisions[i].Work = w
 		}
 		material := actual.State.ChildRequirementMaterial(decisions)
-		material.EnteredMainline = snap.State.SliceEnteredMainline(plan.RunID)
+		material.EnteredMainline = state.SliceEnteredMainline(plan.RunID)
 		out = append(out, material)
 	}
 	return out, nil
@@ -155,7 +158,7 @@ func (f *Facade) validateChildRequirementPackage(pkg *protocol.RequirementDecisi
 	if pkg == nil {
 		return nil
 	}
-	actual, err := f.requirementChildren()
+	actual, err := f.requirementChildren(nil)
 	if err != nil {
 		return err
 	}

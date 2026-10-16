@@ -141,14 +141,19 @@ func (s *State) BusinessNodes(cd *compiler.CompiledDefinition, parents ...Snapsh
 	}
 	add("cleanup")
 	add("abort")
+	var parent *State
+	var work []RequirementWork
+	if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil {
+		parent = parents[0].State
+		work = s.requirementWork(cd)
+	}
 	for i := range nodes {
 		if !s.nodeFlowEnabled(nodes[i].Kind) {
 			nodes[i].Unavailable = "该职责已由用户关闭；节点继续不改变主流程选择"
 			nodes[i].Missing = append(nodes[i].Missing, nodes[i].Unavailable)
 			continue
 		}
-		if s.SliceChild != nil && len(parents) == 1 && parents[0].State != nil && s.nodeCheckpointChanges(nodes[i], cd) {
-			parent := parents[0].State
+		if parent != nil && s.nodeCheckpointChanges(nodes[i], work, cd) {
 			if parent.SliceEnteredMainline(s.RunID) {
 				nodes[i].Unavailable = "该片已进入主线；普通修改由主线职责承接，重建需主运行授权"
 			} else if len(parent.SliceIntegrationClaims(s.RunID)) != 0 {
@@ -632,12 +637,12 @@ func (s *State) nodeInputsReady(n BusinessNode, cd *compiler.CompiledDefinition)
 	return false
 }
 
-func (s *State) nodeCheckpointChanges(target BusinessNode, cd *compiler.CompiledDefinition) bool {
+func (s *State) nodeCheckpointChanges(target BusinessNode, work []RequirementWork, cd *compiler.CompiledDefinition) bool {
 	if target.Kind == "route" {
 		return true
 	}
-	for _, work := range s.requirementWork(cd) {
-		if s.nodeOwnsTask(target, work.Task, cd) {
+	for _, item := range work {
+		if s.nodeOwnsTask(target, item.Task, cd) {
 			return true
 		}
 	}

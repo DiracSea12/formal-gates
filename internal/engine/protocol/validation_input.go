@@ -181,14 +181,13 @@ func (s *State) validationInput(pending PendingAction, cd *compiler.CompiledDefi
 			input.Development = s.repairDevelopmentInput(*work)
 		}
 	}
-	_, input.SourcePoints = s.coveragePoints()
+	input.Manifest.Points, input.SourcePoints = s.coveragePoints()
 	input.Manifest.Binding = coverage.ManifestBinding{SourceBinding: c.RequiredSources.Binding, ReviewKind: mode, RouteScope: s.validationRouteDigest(), TopologyScope: digestOfCanonical(s.Topology)}
 	for _, src := range c.RequiredSources.Sources {
 		if src.Applicability == coverage.QAApplicability {
 			input.Manifest.Sources = append(input.Manifest.Sources, src.SourceID)
 		}
 	}
-	input.Manifest.Points, _ = s.coveragePoints()
 	if set := s.Validation.Sets[mode]; set != nil {
 		input.Manifest = set.Manifest
 		if (role == "engine.qa.design.v6" || role == "engine.qa.review.rationale.v2") && len(set.AffectedCases) > 0 {

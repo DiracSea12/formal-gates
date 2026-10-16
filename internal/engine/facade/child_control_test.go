@@ -589,7 +589,7 @@ func requirementChildChoices(t *testing.T, d *validationDriver) []protocol.Child
 	if err != nil {
 		t.Fatal(err)
 	}
-	choices, err := d.f.requirementChildren()
+	choices, err := d.f.requirementChildren(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

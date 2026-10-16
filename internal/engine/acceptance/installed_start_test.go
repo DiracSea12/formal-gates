@@ -678,7 +678,16 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	completed := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(completed)
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-completed
+	})
 	type inputWriteResult struct {
 		written int
 		err     error
@@ -692,14 +701,12 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	case result := <-readPending:
 		if result.err != nil {
 			_ = cmd.Process.Kill()
-			waitErr := cmd.Wait()
+			<-completed
 			t.Fatalf("CLI did not reach event input after Open: written=%d write=%v exit=%v output=%s", result.written, result.err, waitErr, &output)
 		}
-	case <-time.After(10 * time.Second):
-		_ = cmd.Process.Kill()
-		waitErr := cmd.Wait()
+	case <-completed:
 		result := <-readPending
-		t.Fatalf("CLI did not consume event input after Open: written=%d write=%v exit=%v output=%s", result.written, result.err, waitErr, &output)
+		t.Fatalf("CLI exited before consuming event input after Open: written=%d write=%v exit=%v output=%s", result.written, result.err, waitErr, &output)
 	}
 	p.install(t, "zcode", "global")
 	document, err := validate.LoadRegistry(request.AdmissionRegistryPath)
@@ -721,7 +728,8 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	if err := input.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Wait(); err == nil || !strings.Contains(output.String(), "STALE_FENCING_TOKEN") {
+	<-completed
+	if err := waitErr; err == nil || !strings.Contains(output.String(), "STALE_FENCING_TOKEN") {
 		t.Fatalf("retained CLI token: err=%v output=%s", err, &output)
 	}
 	if !reflect.DeepEqual(before, files()) {

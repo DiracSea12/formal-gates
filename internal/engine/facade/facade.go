@@ -1758,7 +1758,7 @@ func (f *Facade) project() (Run, error) {
 	}
 	run.RequirementWork = work
 	if snap.State.Phase != runtime.PhaseTerminal {
-		run.RequirementChildren, err = f.requirementChildren()
+		run.RequirementChildren, err = f.requirementChildren(snap.State)
 		if err != nil {
 			return Run{}, err
 		}
