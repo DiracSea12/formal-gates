@@ -450,7 +450,7 @@ func TestTransportReverseRequestDefaultReply(t *testing.T) {
 	client, directory, echoPath := spawnClient(t, peerScript{Steps: []peerStep{
 		{Send: `{"id": "r1", "method": "session/ping", "params": {}}`},
 		{Send: `{"id": 7, "method": "session/ping2", "params": {}}`},
-		{On: "initialize", Send: `{"id": 1, "result": {}}`},
+		{On: `"id":7`, Send: `{"id": 1, "result": {}}`},
 	}}, nil)
 	defer client.close()
 	if _, err := client.request("initialize", map[string]any{}); err != nil {
