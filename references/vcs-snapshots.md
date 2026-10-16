@@ -8,6 +8,8 @@ adapter 负责 provider/root 探测、status/diff/untracked、base/current/ances
 创建、显式 track/add/open/reopen、resolve 核验、集成、commit/submit、snapshot、Git
 压缩、已授权 reset/rollback、cleanup 和崩溃对账。只跟踪明确交付路径，不加入无关文件。
 
+Windows 上的 Git 工作区受原生 Git 路径长度限制；项目路径过深时，请移到更浅的目录。
+
 reviewer/QA 使用 Controller 绑定 provider、base/current、definition 版本与 digest 的
 只读 snapshot/diff artifact。质量门重跑始终比较原基线到最终候选完整 diff；继承判断
 比较受影响范围并绑定原始证据，不用修复增量代替完整门审。

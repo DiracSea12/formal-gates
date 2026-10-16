@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -434,6 +435,10 @@ func TestNestedGitWorkspacesPreserveContentAndCleanup(t *testing.T) {
 	}
 	validation := filepath.Join(p.Root(), ".gates", "qa-isolation", "validation", strings.Repeat("a", 64))
 	child := filepath.Join(validation, ".gates", "qa-isolation", "child-"+strings.Repeat("b", 64), strings.Repeat("c", 64))
+	if runtime.GOOS == "windows" {
+		validation = filepath.Join(p.Root(), ".gates", "qa-isolation", "validation")
+		child = filepath.Join(validation, ".gates", "qa-isolation", "child")
+	}
 	if err := p.CreateWorkspace(validation, base, "", WorkspaceHandle{}); err != nil {
 		t.Fatal(err)
 	}
