@@ -293,7 +293,18 @@ func TestP4RunnerUsesDeclaredWorkingDirectory(t *testing.T) {
 			if test.dir == "" {
 				cwd = p.Root()
 			}
-			t.Chdir(cwd)
+			original, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(cwd); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.Chdir(original); err != nil {
+					t.Errorf("restore test working directory: %v", err)
+				}
+			})
 			t.Setenv("PWD", t.TempDir())
 			path := "directory-" + test.name + ".txt"
 			if err := os.WriteFile(filepath.Join(p.Root(), path), []byte("workspace content\n"), 0o644); err != nil {
