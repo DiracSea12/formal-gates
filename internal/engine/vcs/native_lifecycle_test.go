@@ -762,7 +762,7 @@ func TestSVNLiteralTargetsPreserveEncodedNativePaths(t *testing.T) {
 	}
 	nativeCommand(t, runner, p.root, "svn", "copy", svnURL(bound), svnLiteral(scope), "-m", "fixture project scope")
 	scopedRoot := filepath.Join(nativeFixtureDirectory(t), "scoped @% names")
-	nativeCommand(t, runner, p.root, "svn", "checkout", svnLiteral(scope), scopedRoot)
+	nativeCommand(t, runner, p.root, "svn", "checkout", svnLiteral(scope), scopedRoot+"/")
 	scoped := p.At(scopedRoot)
 	scopedBase := nativeIdentityAt(t, scoped)
 	h := PlanWorkspace("svn", scopedBase, "literal", "candidate")

@@ -587,7 +587,8 @@ func (p *Provider) svnCreateWorkspace(workspace string, id nativeIdentity, messa
 	} else if exists {
 		return nil
 	}
-	_, err = p.runner.Run(p.root, "svn", "checkout", "-r", strconv.Itoa(revision), h.URL+"@"+strconv.Itoa(revision), workspace)
+	// A trailing separator keeps destination names out of SVN's peg parsing.
+	_, err = p.runner.Run(p.root, "svn", "checkout", "-r", strconv.Itoa(revision), h.URL+"@"+strconv.Itoa(revision), workspace+"/")
 	return err
 }
 func (p *Provider) svnWorkspaceAbsent(workspace string, h WorkspaceHandle) (bool, error) {

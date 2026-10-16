@@ -49,15 +49,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-      - name: Configure Go execution environment
-        shell: bash
-        run: |
-          GOCACHE="$(go env GOCACHE)"
-          GOMODCACHE="$(go env GOMODCACHE)"
-          printf 'GOCACHE=%s\nGOMODCACHE=%s\nGODEBUG=%s\n' "$GOCACHE" "$GOMODCACHE" "${GODEBUG:+$GODEBUG,}memprofilerate=0" >> "$GITHUB_ENV"
       - name: Install Subversion (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -94,6 +85,15 @@ jobs:
           curl -fsSL https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4d -o "$tools/p4d"
           chmod +x "$tools/p4" "$tools/p4d"
           echo "$tools" >> "$GITHUB_PATH"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Configure Go execution environment
+        shell: bash
+        run: |
+          GOCACHE="$(go env GOCACHE)"
+          GOMODCACHE="$(go env GOMODCACHE)"
+          printf 'GOCACHE=%s\nGOMODCACHE=%s\nGODEBUG=%s\n' "$GOCACHE" "$GOMODCACHE" "${GODEBUG:+$GODEBUG,}memprofilerate=0" >> "$GITHUB_ENV"
       - name: Build native CLI (Windows)
         if: runner.os == 'Windows'
         shell: cmd

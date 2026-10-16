@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -290,7 +291,11 @@ func (p *Provider) p4Entries(id nativeIdentity) (map[string]string, error) {
 		}
 		bound := *p
 		bound.handle.Source = encodeNative(id)
-		body, err := bound.p4Raw(nil, "print", "-q", "-K", address.Depot+"#"+file["rev"])
+		body, err := bound.p4Raw(nil, "-G", "print", "-q", "-K", address.Depot+"#"+file["rev"])
+		if err != nil {
+			return nil, err
+		}
+		body, err = p4PrintContent(body)
 		if err != nil {
 			return nil, err
 		}
@@ -313,6 +318,69 @@ func (p *Provider) p4Entries(id nativeIdentity) (map[string]string, error) {
 	}
 	return entries, nil
 }
+
+// P4's print records carry repository bytes without terminal text conversion.
+func p4PrintContent(body []byte) ([]byte, error) {
+	if len(body) == 0 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	var content []byte
+	for len(body) > 0 {
+		if body[0] != '{' {
+			return nil, fmt.Errorf("invalid P4 print record")
+		}
+		body = body[1:]
+		record := map[string]string{}
+		for len(body) > 0 && body[0] != '0' {
+			key, rest, err := p4PrintString(body)
+			if err != nil {
+				return nil, err
+			}
+			body = rest
+			if len(body) > 0 && body[0] == 'i' {
+				if len(body) < 5 {
+					return nil, io.ErrUnexpectedEOF
+				}
+				body = body[5:]
+				continue
+			}
+			value, rest, err := p4PrintString(body)
+			if err != nil {
+				return nil, err
+			}
+			record[string(key)], body = string(value), rest
+		}
+		if len(body) == 0 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		body = body[1:]
+		switch record["code"] {
+		case "text", "binary":
+			content = append(content, record["data"]...)
+		case "stat", "info":
+		case "error":
+			return nil, fmt.Errorf("p4: %s", record["data"])
+		default:
+			return nil, fmt.Errorf("unexpected P4 print record code %q", record["code"])
+		}
+	}
+	return content, nil
+}
+
+func p4PrintString(body []byte) ([]byte, []byte, error) {
+	if len(body) < 5 {
+		return nil, nil, io.ErrUnexpectedEOF
+	}
+	if body[0] != 's' {
+		return nil, nil, fmt.Errorf("invalid P4 print string")
+	}
+	size := int64(binary.LittleEndian.Uint32(body[1:5]))
+	if size > int64(len(body)-5) {
+		return nil, nil, io.ErrUnexpectedEOF
+	}
+	return body[5 : 5+size], body[5+size:], nil
+}
+
 func (p *Provider) p4ChangedPaths() ([]string, error) {
 	client := p.p4Client()
 	records, err := p.p4JSON("reconcile", "-n", "//"+client+"/...")

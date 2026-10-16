@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -289,7 +290,7 @@ func (f *Facade) checkRequest(s *protocol.State, intent protocol.HostActionInten
 	}
 	environment := map[string]any{"FORMAL_GATES_WORKSPACE": workspace.Path}
 	if p.QA != nil && (p.QA.Preparation == nil || p.QA.Preparation.Independent) {
-		base := filepath.Join(workspace.Path, ".gates", "tmp", "qa-cases", strings.TrimPrefix(preparationDigest(p.QA.CaseID), "sha256:"))
+		base := filepath.Join(workspace.Path, ".gates", "tmp", "qa-cases", strconv.Itoa(slices.Index(p.QA.Execution.ExpectedCaseIDs, p.QA.CaseID)))
 		for _, item := range []struct{ Name, Directory string }{{"FORMAL_GATES_QA_INPUT_DIR", "input"}, {"FORMAL_GATES_QA_WORK_DIR", "work"}, {"FORMAL_GATES_QA_OUTPUT_DIR", "output"}, {"TMPDIR", "temp"}, {"TMP", "temp"}, {"TEMP", "temp"}} {
 			environment[item.Name] = filepath.Join(base, item.Directory)
 		}

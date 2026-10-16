@@ -257,6 +257,9 @@ func TestSharedInvocationPlansKeepOrderedRecipesAcrossRecoveryAndRepair(t *testi
 		t.Fatalf("repair plans=%+v %v", repair, err)
 	}
 	for i, p := range repair {
+		if !reflect.DeepEqual(p.QA.Execution.ExpectedCaseIDs, context.affected) {
+			t.Fatalf("repair case %s lost its frozen case environment identity: %v", p.QA.CaseID, p.QA.Execution.ExpectedCaseIDs)
+		}
 		if p.QA.Source != plans[i].QA.Source || p.QA.Ordinal != plans[i].QA.Ordinal || !reflect.DeepEqual(p.QA.Recipe, plans[i].QA.Recipe) || !reflect.DeepEqual(p.QA.Operation, plans[i].QA.Operation) || p.SourceIdentity != "repaired-candidate" {
 			t.Fatalf("repair changed original recipe identity %d %+v", i, p)
 		}

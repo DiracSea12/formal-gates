@@ -313,6 +313,63 @@ func TestNativeWaitDuration(t *testing.T) {
 	}
 }
 
+// A per-message timeout permits a request to exceed its budget while messages
+// remain available; a bounded request must stop at its total deadline.
+func TestTransportPerMessageWaitHasNoTotalDeadline(t *testing.T) {
+	t.Parallel()
+	const budget = 800 * time.Millisecond
+	for _, tc := range []struct {
+		name    string
+		bounded bool
+	}{
+		{name: "per message"},
+		{name: "total deadline", bounded: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &nativeClient{
+				messages: newNativeQueue(),
+				hooks: nativeHooks{
+					requestPrefix:  "DSH_NATIVE",
+					defaultTimeout: budget,
+					bounded:        tc.bounded,
+				},
+			}
+			var received []any
+			client.hooks.received = func(message any) {
+				received = append(received, message)
+				if len(received) == 1 {
+					time.Sleep(budget)
+				}
+			}
+			client.stdin = immediateReplyWriter{write: func(body []byte) (int, error) {
+				frame := decodeTestJSON(t, string(body))
+				if getOf(frame, "method") != "initialize" || !valuesEqual(getOf(frame, "params"), map[string]any{}) {
+					t.Fatalf("request frame = %s", body)
+				}
+				for i := 0; i < 12; i++ {
+					client.messages.put(map[string]any{"method": "session/event"})
+				}
+				client.messages.put(map[string]any{"id": getOf(frame, "id"), "result": map[string]any{"ok": true}})
+				return len(body), nil
+			}}
+
+			start := time.Now()
+			result, err := client.request("initialize", map[string]any{})
+			if time.Since(start) < budget {
+				t.Fatal("the exchange must outlast the request budget")
+			}
+			if tc.bounded {
+				blocked, ok := err.(*blockedError)
+				if !ok || blocked.message != "DSH_NATIVE_TIMEOUT: initialize" || len(received) != 1 {
+					t.Fatalf("bounded request: result=%v err=%v received=%v", result, err, received)
+				}
+			} else if err != nil || objectOrEmpty(result)["ok"] != true || len(received) != 13 {
+				t.Fatalf("per-message request must accept the late response: result=%v err=%v received=%v", result, err, received)
+			}
+		})
+	}
+}
+
 // TestReadJSONFileSemantics pins infra.read: duplicate keys are refused with
 // the HarnessError family, a missing file keeps the OS error text, a malformed
 // document is an invalid-JSON error, and trailing data after the document is

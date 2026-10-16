@@ -53,7 +53,7 @@ func (ExecRunner) RunRaw(dir, command string, input []byte, args ...string) ([]b
 		if detail == "" {
 			detail = err.Error()
 		}
-		return stdout.Bytes(), fmt.Errorf("%s: %s", command, detail)
+		return stdout.Bytes(), fmt.Errorf("%s: cwd=%q argv=%q: %s", command, cmd.Dir, cmd.Args, detail)
 	}
 	return stdout.Bytes(), nil
 }

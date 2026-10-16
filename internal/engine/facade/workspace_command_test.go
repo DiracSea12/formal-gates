@@ -48,7 +48,7 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 			expectedStdin := ""
 			expectedCwd := workspace
 			if kind != "development" {
-				parameters.QA = &protocol.QACheckParameters{WorkspaceRoot: workspace, Directory: "relative directory", Operation: coverage.Operation{Kind: coverage.OperationShell, Command: command, Stdin: "stdin value\n"}}
+				parameters.QA = &protocol.QACheckParameters{CaseID: "normal", Execution: coverage.ExecutionBinding{ExpectedCaseIDs: []string{"invalid", "normal"}}, WorkspaceRoot: workspace, Directory: "relative directory", Operation: coverage.Operation{Kind: coverage.OperationShell, Command: command, Stdin: "stdin value\n"}}
 				expectedStdin, expectedCwd = parameters.QA.Operation.Stdin, filepath.Join(workspace, parameters.QA.Directory)
 				if kind == "qa-argv" {
 					parameters.QA.Operation = coverage.Operation{Kind: coverage.OperationArgv, Argv: []string{peer, "argument identity", ""}, Stdin: expectedStdin}
@@ -61,6 +61,15 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 			}
 			if !reflect.DeepEqual(request["argv"], expectedArgv) || request["stdin"] != expectedStdin || request["cwd"] != expectedCwd {
 				t.Fatal("approved argv, stdin or relative directory changed")
+			}
+			if parameters.QA != nil {
+				environment := request["environment"].(map[string]any)
+				base := filepath.Join(workspace, ".gates", "tmp", "qa-cases", "1")
+				for name, directory := range map[string]string{"FORMAL_GATES_QA_INPUT_DIR": "input", "FORMAL_GATES_QA_WORK_DIR": "work", "FORMAL_GATES_QA_OUTPUT_DIR": "output", "TMPDIR": "temp", "TMP": "temp", "TEMP": "temp"} {
+					if environment[name] != filepath.Join(base, directory) {
+						t.Fatal("case environment does not use its frozen order within the registered workspace", name, environment[name])
+					}
+				}
 			}
 			fresh, err := facade.checkRequest(state, protocol.HostActionIntent{PayloadDigest: "approved inputs"}, parameters)
 			if err != nil || !reflect.DeepEqual(request, fresh) {
@@ -97,7 +106,7 @@ func TestApprovedCommandsUseRegisteredWorkspaceEnvironment(t *testing.T) {
 		}
 	}
 	literal := `cd '/old approved workspace' && printf '%s' "unchanged"`
-	parameters := protocol.CheckParameters{WorkspaceID: "current", QA: &protocol.QACheckParameters{WorkspaceRoot: state.NativeResources["current"].Path, Operation: coverage.Operation{Kind: coverage.OperationShell, Command: literal}}}
+	parameters := protocol.CheckParameters{WorkspaceID: "current", QA: &protocol.QACheckParameters{CaseID: "normal", Execution: coverage.ExecutionBinding{ExpectedCaseIDs: []string{"normal"}}, WorkspaceRoot: state.NativeResources["current"].Path, Operation: coverage.Operation{Kind: coverage.OperationShell, Command: literal}}}
 	request, err := facade.checkRequest(state, protocol.HostActionIntent{}, parameters)
 	if err != nil || !reflect.DeepEqual(request["argv"], coverage.ShellCommand(literal)) {
 		t.Fatal("original fixed-path shell was silently rewritten")

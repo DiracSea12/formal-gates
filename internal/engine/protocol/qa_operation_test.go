@@ -149,8 +149,22 @@ func TestCommonPreparationWaitsForCompleteConsumerCase(t *testing.T) {
 			t.Fatal("repair approved shared consumer plans", err)
 		}
 		addQAOperationReceipt(t, s, plans[0], "ready", 0)
-		if recovered, found := s.repairComparisonContext(binding.Task, cd); !found || recovered.binding != binding || recovered.source.Identity != proof.Identity {
+		raw, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored State
+		if err := json.Unmarshal(raw, &restored); err != nil {
+			t.Fatal(err)
+		}
+		s = &restored
+		recovered, found := s.repairComparisonContext(binding.Task, cd)
+		if !found || recovered.binding != binding || recovered.source.Identity != proof.Identity || !reflect.DeepEqual(recovered.affected, context.affected) {
 			t.Fatal("original repair receipt did not reconstruct its precise comparison context")
+		}
+		restoredPlans, err := s.repairComparisonPlans(recovered, cd)
+		if err != nil || !reflect.DeepEqual(restoredPlans, plans) {
+			t.Fatal("repair recovery changed the original case environment or operation", err)
 		}
 		e := &Engine{cfg: Config{Definition: cd}}
 		if _, err := e.prepareAdapterIntent(s, 1, "op.check", plans[2], ""); err == nil {
@@ -167,6 +181,12 @@ func TestCommonPreparationWaitsForCompleteConsumerCase(t *testing.T) {
 			t.Fatal("ended repair consumer did not release the signing frontier", err)
 		}
 		s.PendingHostActions[second.ActionID] = second
+		for _, intent := range []HostActionIntent{consumer, second} {
+			issued, err := checkParameters(intent)
+			if err != nil || !reflect.DeepEqual(issued.QA.Execution.ExpectedCaseIDs, context.affected) {
+				t.Fatal("signed repair operation lost its frozen case environment identity", err)
+			}
+		}
 		if !s.qaCheckExecutionReady(second, cd) || !s.NativeActionWritable(second, cd) || s.ExecutableHostActions(cd)[second.ActionID].ActionID == "" {
 			t.Fatal("repair negative-exit consumer did not release its original common environment")
 		}

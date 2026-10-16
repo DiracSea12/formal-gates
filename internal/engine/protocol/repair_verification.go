@@ -211,6 +211,7 @@ func (s *State) repairComparisonPlans(context repairComparison, cd *compiler.Com
 			return nil, err
 		}
 		for ordinal, operation := range operations {
+			operation.Execution.ExpectedCaseIDs = context.affected
 			operation.CaseID, operation.Ordinal, operation.WorkspaceRoot = id, ordinal, context.resource.Path
 			plans = append(plans, CheckParameters{Repair: repairCheckSources(context), QA: &operation, Binding: context.binding, SourceIdentity: context.source.Identity, SourceDigest: context.source.Digest, WorkspaceID: context.resource.ID})
 		}
