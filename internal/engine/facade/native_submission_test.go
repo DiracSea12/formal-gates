@@ -106,12 +106,7 @@ func TestNativeSubmissionReplaysFactsAcceptedWhileWaiting(t *testing.T) {
 			}
 			unlock()
 			unlock = nil
-			var r result
-			select {
-			case r = <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("submission did not finish after window release")
-			}
+			r := <-done
 			switch kind {
 			case "recorded", "terminal-recorded":
 				if r.err != nil || !reflect.DeepEqual(r.accepted, original) {

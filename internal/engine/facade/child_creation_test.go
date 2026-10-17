@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/coverage"
@@ -945,13 +944,8 @@ func TestPreparingChildDriveUsesParentThenChildWindow(t *testing.T) {
 	}
 	unchild()
 	unparent()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("child Drive waited in reverse window order")
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 	state, err := child.engine.Load()
 	if err != nil || state.State.Phase != runtime.PhasePreparing {

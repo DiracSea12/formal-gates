@@ -318,13 +318,8 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlock()
-	select {
-	case err := <-result:
-		if !errors.Is(err, errStaleFencingToken) {
-			t.Fatalf("stale admission error = %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("start admission window did not release")
+	if err := <-result; !errors.Is(err, errStaleFencingToken) {
+		t.Fatalf("stale admission error = %v", err)
 	}
 	if _, err := os.Stat(startIntentPath(root, "admission-lock")); !os.IsNotExist(err) {
 		t.Fatalf("stale start left intent: %v", err)

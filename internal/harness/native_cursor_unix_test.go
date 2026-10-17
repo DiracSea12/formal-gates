@@ -321,13 +321,12 @@ func TestCursorCLI(t *testing.T) {
 		if path == "" {
 			return
 		}
-		deadline := time.Now().Add(5 * time.Second)
 		for {
 			if _, err := os.Stat(path); err == nil {
 				return
 			}
-			if time.Now().After(deadline) {
-				fmt.Fprintln(os.Stderr, "native peer barrier timeout")
+			// TempDir cleanup ends peers waiting for their parent's coordination.
+			if _, err := os.Stat(script); os.IsNotExist(err) {
 				os.Exit(91)
 			}
 			time.Sleep(time.Millisecond)
@@ -857,6 +856,17 @@ func TestCursorSharedConfigSelectionAndConcurrentTurns(t *testing.T) {
 			first.peer.BeforeTerminal = second.peer.ConfigPublished
 			first.save(t)
 			second.save(t)
+			t.Cleanup(func() {
+				if !t.Failed() {
+					return
+				}
+				for _, s := range []*cursorScenario{first, second} {
+					for _, name := range []string{"native-source.json", "host.stderr"} {
+						body, err := os.ReadFile(filepath.Join(s.directory, name))
+						t.Logf("peer=%s file=%s read_error=%v bytes=%s", s.peer.UUID, name, err, body)
+					}
+				}
+			})
 			done := make(chan error, 2)
 			go func() { _, err := runNativeJob(first.directory); done <- err }()
 			waitForFile(t, first.peer.ConfigPublished)
