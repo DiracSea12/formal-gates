@@ -97,11 +97,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(supervisorBinary(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(binary, body, 0700); err != nil {
+	if err := os.Link(supervisorBinary(t), binary); err != nil {
 		t.Fatal(err)
 	}
 	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}

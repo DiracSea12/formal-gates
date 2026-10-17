@@ -81,7 +81,12 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(launcher, data, 0o700); err != nil {
+				// Unix launchers reuse the completed build without a writable copy.
+				if runtime.GOOS == "windows" {
+					if err := os.WriteFile(launcher, data, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Link(candidate, launcher); err != nil {
 					t.Fatal(err)
 				}
 				run := func(binary string, args ...string) []byte {
