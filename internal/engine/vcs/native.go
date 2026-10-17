@@ -134,14 +134,11 @@ func (p *Provider) Pending(base, expected string) (Pending, error) {
 		if err != nil {
 			return Pending{}, err
 		}
-		status, err := p.Status()
+		status, err := p.runner.Run(p.root, "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all")
 		if err != nil {
-			return Pending{}, err
+			return Pending{}, fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
 		}
-		tracked, err := p.StagedOnly()
-		if err != nil {
-			return Pending{}, err
-		}
+		clean, tracked := gitStatusState(p.excludeRuntimeUntracked(status))
 		equal := false
 		if expected != "" {
 			digest, e := p.TreeDigest(expected)
@@ -150,7 +147,7 @@ func (p *Provider) Pending(base, expected string) (Pending, error) {
 			}
 			equal = digest == tree
 		}
-		return Pending{Fingerprint: tree, Changes: changes, Clean: status == "", Tracked: tracked, Equal: equal, Prefix: true}, nil
+		return Pending{Fingerprint: tree, Changes: changes, Clean: clean, Tracked: tracked, Equal: equal, Prefix: true}, nil
 	}
 	if p.name == "svn" {
 		return p.svnPending(base, expected)

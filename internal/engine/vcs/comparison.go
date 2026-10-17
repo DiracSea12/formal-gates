@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 )
 
 // SnapshotComparison carries the original native entry transition and bytes.
@@ -42,16 +43,19 @@ func (p *Provider) CompareWorkingTree(base string) ([]SnapshotComparison, error)
 		if err != nil {
 			return nil, err
 		}
-		paths, err := p.ChangedPathsFrom(base)
+		untracked, err := p.runner.RunRaw(p.root, "git", nil, "ls-files", "--others", "--exclude-standard", "-z")
 		if err != nil {
 			return nil, err
 		}
+		paths := nulPaths(string(untracked))
+		slices.Sort(paths)
+		paths = slices.Compact(paths)
 		known := map[string]bool{}
 		for _, change := range changes {
 			known[change.Path] = true
 		}
 		for _, path := range paths {
-			if !known[path] {
+			if !known[path] && !p.isRuntimeStatusPath(path) {
 				changes = append(changes, Change{Path: path, Kind: "A", BaseMode: "000000"})
 			}
 		}

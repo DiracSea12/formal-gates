@@ -335,8 +335,9 @@ func (p *Provider) ApplyArtifact(identity string, paths []string) error {
 // Errors report actual query or decoding failures. Test inputs are true,
 // production inputs false, and absent keys UNKNOWN; production takes precedence.
 func (p *Provider) InputOwnership(testReferences ...string) (map[string]bool, error) {
+	root := canonicalPath(p.root)
 	configured := false
-	for directory := canonicalPath(p.root); ; directory = filepath.Dir(directory) {
+	for directory := root; ; directory = filepath.Dir(directory) {
 		for _, name := range []string{"go.mod", "go.work"} {
 			_, err := os.Stat(filepath.Join(directory, name))
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -395,7 +396,7 @@ func (p *Provider) InputOwnership(testReferences ...string) (map[string]bool, er
 		if pkg.ForTest != "" || len(pkg.Match) == 0 {
 			continue
 		}
-		relative, err := filepath.Rel(canonicalPath(p.root), canonicalPath(pkg.Dir))
+		relative, err := filepath.Rel(root, canonicalPath(pkg.Dir))
 		if err != nil {
 			return nil, err
 		}

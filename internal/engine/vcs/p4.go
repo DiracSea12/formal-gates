@@ -33,7 +33,10 @@ func (p *Provider) p4Raw(input []byte, args ...string) ([]byte, error) {
 	return p.runner.RunRaw(p.configRoot, "p4", input, p.p4Args(args...)...)
 }
 func (p *Provider) p4JSON(args ...string) ([]map[string]string, error) {
-	body, commandErr := p.p4Raw(nil, append([]string{"-ztag", "-Mj"}, args...)...)
+	return p.p4JSONInput(nil, args...)
+}
+func (p *Provider) p4JSONInput(input []byte, args ...string) ([]map[string]string, error) {
+	body, commandErr := p.p4Raw(input, append([]string{"-ztag", "-Mj"}, args...)...)
 	if commandErr != nil && len(body) == 0 {
 		return nil, commandErr
 	}
@@ -291,20 +294,37 @@ func (p *Provider) p4IdentityJSON(id nativeIdentity, args ...string) ([]map[stri
 }
 func (p *Provider) p4Entries(id nativeIdentity) (map[string]string, error) {
 	entries := map[string]string{".": entryValue(nativeEntry{Kind: "view", View: id.View, LineEnd: id.LineEnd, Charset: id.Charset, StreamSpec: id.StreamSpec})}
+	if len(id.Files) == 0 {
+		return entries, nil
+	}
+	bound := *p
+	bound.handle.Source = encodeNative(id)
+	files := map[string]map[string]string{}
+	var input strings.Builder
 	for _, address := range id.Files {
-		records, err := p.p4IdentityJSON(id, "files", address.Depot+"@"+strconv.Itoa(id.Revision))
-		if err != nil {
-			return nil, err
+		if _, exists := files[address.Depot]; !exists {
+			files[address.Depot] = nil
+			input.WriteString(address.Depot + "@" + strconv.Itoa(id.Revision) + "\n")
 		}
-		if len(records) != 1 {
+	}
+	records, err := bound.p4JSONInput([]byte(input.String()), "-x", "-", "files")
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range records {
+		if prior, exists := files[file["depotFile"]]; !exists || prior != nil {
 			return nil, fmt.Errorf("P4 immutable file address is not unique")
 		}
-		file := records[0]
+		files[file["depotFile"]] = file
+	}
+	for _, address := range id.Files {
+		file := files[address.Depot]
+		if file == nil {
+			return nil, fmt.Errorf("P4 immutable file address is not unique")
+		}
 		if file["action"] == "delete" || file["action"] == "move/delete" {
 			continue
 		}
-		bound := *p
-		bound.handle.Source = encodeNative(id)
 		body, err := bound.p4Raw(nil, "-G", "print", "-q", "-K", address.Depot+"#"+file["rev"])
 		if err != nil {
 			return nil, err
@@ -453,7 +473,8 @@ func (p *Provider) p4Track(paths []string) error {
 	return err
 }
 func (p *Provider) p4Commit(message string) error {
-	pending, err := p.p4JSON("changes", "-l", "-s", "pending", "-c", p.p4Client())
+	client := p.p4Client()
+	pending, err := p.p4JSON("changes", "-l", "-s", "pending", "-c", client)
 	if err != nil {
 		return err
 	}
@@ -472,13 +493,13 @@ func (p *Provider) p4Commit(message string) error {
 			return err
 		}
 	}
-	changes, err := p.p4JSON("changes", "-l", "-s", "submitted", "-c", p.p4Client(), "//"+p.p4Client()+"/...")
+	changes, err := p.p4JSON("changes", "-l", "-s", "submitted", "-c", client, "//"+client+"/...")
 	if err != nil {
 		return err
 	}
 	for _, change := range changes {
 		if strings.TrimSuffix(change["desc"], "\n") == message {
-			_, err = p.p4Raw(nil, "sync", "-f", "//"+p.p4Client()+"/...@"+change["change"])
+			_, err = p.p4Raw(nil, "sync", "-f", "//"+client+"/...@"+change["change"])
 			return err
 		}
 	}
@@ -893,13 +914,14 @@ func (p *Provider) p4Index() ([]IndexEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	opened, err := p.p4JSON("fstat", "-Or", "-Op", "//"+p.p4Client()+"/...")
+	client := p.p4Client()
+	opened, err := p.p4JSON("fstat", "-Or", "-Op", "//"+client+"/...")
 	if err != nil {
 		return nil, err
 	}
 	conflicts := map[string]string{}
 	for _, file := range opened {
-		logical := strings.TrimPrefix(file["clientFile"], "//"+p.p4Client()+"/")
+		logical := strings.TrimPrefix(file["clientFile"], "//"+client+"/")
 		// A deleted file can still require a native branch or delete resolve.
 		_, unresolved := file["unresolved"]
 		if (file["action"] == "delete" || file["action"] == "move/delete") && !unresolved {
@@ -975,7 +997,8 @@ func (p *Provider) p4Pending(base, expected string) (Pending, error) {
 			return result, err
 		}
 		expectedChanges := entryChanges(baseEntries, want)
-		opened, err := p.p4JSON("fstat", "-Or", "-Op", "//"+p.p4Client()+"/...")
+		client := p.p4Client()
+		opened, err := p.p4JSON("fstat", "-Or", "-Op", "//"+client+"/...")
 		if err != nil {
 			return result, err
 		}
@@ -1032,7 +1055,7 @@ func (p *Provider) p4Pending(base, expected string) (Pending, error) {
 			}
 			if change.Mode == "000000" {
 				equal = equal && slices.ContainsFunc(opened, func(r map[string]string) bool {
-					return strings.TrimPrefix(r["clientFile"], "//"+p.p4Client()+"/") == change.Path && (r["action"] == "delete" || r["action"] == "move/delete")
+					return strings.TrimPrefix(r["clientFile"], "//"+client+"/") == change.Path && (r["action"] == "delete" || r["action"] == "move/delete")
 				})
 			}
 		}
@@ -1045,7 +1068,7 @@ func (p *Provider) p4Pending(base, expected string) (Pending, error) {
 			if record["action"] == "" {
 				continue
 			}
-			logical := strings.TrimPrefix(record["clientFile"], "//"+p.p4Client()+"/")
+			logical := strings.TrimPrefix(record["clientFile"], "//"+client+"/")
 			if !slices.ContainsFunc(expectedChanges, func(c Change) bool { return c.Path == logical }) {
 				prefix = false
 			}

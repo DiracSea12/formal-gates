@@ -142,17 +142,23 @@ func (p *Provider) StagedOnly() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("cannot inspect unsubmitted git changes: %w", err)
 	}
-	staged := false
-	for _, line := range strings.Split(p.excludeRuntimeUntracked(pending), "\n") {
+	_, staged := gitStatusState(p.excludeRuntimeUntracked(pending))
+	return staged, nil
+}
+
+func gitStatusState(status string) (clean, staged bool) {
+	clean = true
+	for _, line := range strings.Split(status, "\n") {
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "## ") {
 			continue
 		}
+		clean = false
 		if len(line) < 2 || line[0] == ' ' || line[0] == '?' || line[1] != ' ' {
-			return false, nil
+			return false, false
 		}
 		staged = true
 	}
-	return staged, nil
+	return clean, staged
 }
 
 // Resolve 返回当前 HEAD 的提交身份（40/64 位 hex，小写规范化）。
