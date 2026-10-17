@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -145,7 +144,7 @@ func TestWorkflowForegroundAskPreservesOriginalLiveJob(t *testing.T) {
 		if err != nil {
 			t.Fatal("collection or replay lost the original source", err)
 		}
-		if !reflect.DeepEqual(recovered, source) {
+		if !valuesEqual(recovered, source) {
 			t.Fatalf("collection or replay changed the original source: before=%#v after=%#v", source, recovered)
 		}
 		if turns := nativePeerTurns(t, s); turns != 2 {
