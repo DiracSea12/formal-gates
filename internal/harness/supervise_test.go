@@ -19,13 +19,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// supervisorBinary copies the completed source build to a private executable file.
-// Process ownership and SIGTERM cancellation require a separate process.
+// supervisorBinary supplies the completed source build for subprocess tests.
+// Windows uses independent executable bytes so other tests cannot pin its file.
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
 	binary, err := supervisorRuntime()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		return binary
 	}
 	out := filepath.Join(t.TempDir(), filepath.Base(binary))
 	if err := os.WriteFile(out, readBytes(t, binary), 0o700); err != nil {
