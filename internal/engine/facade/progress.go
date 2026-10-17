@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -263,7 +264,7 @@ func progressEpoch(value any) float64 {
 	return 0
 }
 func progressProcess(directory, name string) (map[string]any, bool, error) {
-	raw, err := os.ReadFile(filepath.Join(directory, name))
+	raw, err := atomicfile.ReadFile(filepath.Join(directory, name))
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}

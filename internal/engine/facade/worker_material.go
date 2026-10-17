@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/worker"
@@ -501,7 +502,7 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 		ExitCode      *int   `json:"exit_code"`
 		RequestDigest string `json:"request_digest"`
 	}
-	body, err := os.ReadFile(filepath.Join(directory, "exit.json"))
+	body, err := atomicfile.ReadFile(filepath.Join(directory, "exit.json"))
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -514,7 +515,7 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 	var process struct {
 		RequestDigest string `json:"request_digest"`
 	}
-	body, err = os.ReadFile(filepath.Join(directory, "process.json"))
+	body, err = atomicfile.ReadFile(filepath.Join(directory, "process.json"))
 	if err != nil {
 		return err
 	}

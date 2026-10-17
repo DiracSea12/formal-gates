@@ -33,6 +33,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"formal-gates/internal/atomicfile"
 )
 
 // nativeUnbounded is the request timeout marker for "the host decides how long
@@ -96,7 +98,7 @@ func nativeErrorText(err error) string {
 // readJSONFile reads and decodes one evidence/request file: a
 // repeated object key is refused, never silently collapsed.
 func readJSONFile(path string) (any, error) {
-	data, err := os.ReadFile(path)
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

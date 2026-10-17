@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
@@ -1472,7 +1473,7 @@ func providerHelp() string {
 }
 
 func readJSONFileInto(path string, value any) error {
-	data, err := os.ReadFile(path)
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return err
 	}

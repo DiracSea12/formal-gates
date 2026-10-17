@@ -12,13 +12,14 @@ import (
 	"strconv"
 	"strings"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
 
 func readCheckDocument(path string, value any) error {
-	body, err := os.ReadFile(path)
+	body, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return err
 	}

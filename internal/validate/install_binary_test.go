@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -138,7 +139,11 @@ func TestInstallBinaryPublicationOwnsRunningExecutable(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			destination := filepath.Join(root, "launcher"+filepath.Ext(executable))
-			if err := os.WriteFile(destination, payload, 0o700); err != nil {
+			if runtime.GOOS == "windows" {
+				if err := os.WriteFile(destination, payload, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Link(executable, destination); err != nil {
 				t.Fatal(err)
 			}
 			expectedExecutable, err := filepath.EvalSymlinks(destination)
