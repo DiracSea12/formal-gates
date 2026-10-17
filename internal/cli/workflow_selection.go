@@ -32,8 +32,10 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 		return nil, true, err
 	}
 	type runChoice struct {
-		id   string
-		view map[string]any
+		id      string
+		view    map[string]any
+		facade  *facade.Facade
+		openErr error
 	}
 	var runs []runChoice
 	for _, entry := range entries {
@@ -52,7 +54,8 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 		} else if err != nil {
 			return nil, true, err
 		}
-		f, _, err := openEngineIfPresent(root, entry.Name())
+		f, _, openErr := openEngineIfPresent(root, entry.Name())
+		err := openErr
 		var run facade.Run
 		if err == nil {
 			run, err = f.Show()
@@ -84,7 +87,7 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 				choice["requirement"] = run.IntakeConfirmationReceipt.RequirementSource
 			}
 		}
-		runs = append(runs, runChoice{id: entry.Name(), view: choice})
+		runs = append(runs, runChoice{id: entry.Name(), view: choice, facade: f, openErr: openErr})
 	}
 	if position > len(runs) {
 		return nil, true, fmt.Errorf("run number is not in the current choices")
@@ -104,7 +107,7 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 	if position == 0 {
 		position = 1
 	}
-	*runID = runs[position-1].id
-	f, _, err := openEngineIfPresent(root, *runID)
-	return f, true, err
+	selected := runs[position-1]
+	*runID = selected.id
+	return selected.facade, true, selected.openErr
 }

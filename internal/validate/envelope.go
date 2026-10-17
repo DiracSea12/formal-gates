@@ -328,10 +328,7 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		if err != nil {
 			return err
 		}
-		realPath, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return err
-		}
+		realPath := filepath.Join(rootReal, rel)
 		sum := sha256.Sum256(data)
 		entries = append(entries, PackageEntry{Path: filepath.ToSlash(rel), Mode: uint32(info.Mode().Perm()), Size: info.Size(), SHA256: hex.EncodeToString(sum[:]), RealPath: filepath.Clean(realPath)})
 		return nil
