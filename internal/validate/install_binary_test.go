@@ -10,8 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"formal-gates/internal/coordination"
 )
 
 func TestInstallBinaryPublicationOwnsRunningExecutable(t *testing.T) {
@@ -31,12 +29,12 @@ func TestInstallBinaryPublicationOwnsRunningExecutable(t *testing.T) {
 		if action == "maintenance" {
 			root := os.Getenv("FORMAL_GATES_INSTALL_BINARY_ROOT")
 			registry := filepath.Join(root, "registry.json")
-			unlock, err := coordination.AcquirePathWaiting(installLockPath(registry), "install/uninstall")
+			unlock, err := acquireInstallLock(registry)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer unlock()
-			unlockRegistry, err := coordination.AcquirePathWaiting(registryLockPath(registry), "registry")
+			unlockRegistry, err := acquireRegistryLock(registry)
 			if err != nil {
 				t.Fatal(err)
 			}

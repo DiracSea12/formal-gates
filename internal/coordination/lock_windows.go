@@ -47,11 +47,17 @@ func retirePath(path string) error {
 	return errors.Join(err, windows.CloseHandle(handle))
 }
 
-// lockFile 从零偏移锁定一字节范围（可超出文件末尾），以
-// EXCLUSIVE_LOCK 保证独占，FAIL_IMMEDIATELY 在冲突时立即失败。
+// Go callers reserve byte 1 before taking the business lock at byte 0.
+// Admission conflicts fail immediately; the internal install cleanup process
+// holds only byte 0, so an admitted caller waits for its protected work.
 func lockFile(f *os.File) error {
-	return windows.LockFileEx(windows.Handle(f.Fd()),
+	if err := windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0, 1, 0, &windows.Overlapped{Offset: 1}); err != nil {
+		return err
+	}
+	return windows.LockFileEx(windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK,
 		0, 1, 0, &windows.Overlapped{})
 }
 
@@ -60,9 +66,13 @@ func isLockHeld(err error) bool {
 	return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
 }
 
-// lockFileBlocking 与 lockFile 同一范围，但去掉 FAIL_IMMEDIATELY：冲突时由
-// 内核排队，持有者释放后取得锁。
+// lockFileBlocking waits for the same ranges as lockFile.
 func lockFileBlocking(f *os.File) error {
+	if err := windows.LockFileEx(windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK,
+		0, 1, 0, &windows.Overlapped{Offset: 1}); err != nil {
+		return err
+	}
 	return windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK,
 		0, 1, 0, &windows.Overlapped{})

@@ -1,6 +1,6 @@
 // Package coordination holds this repository's path-lock primitive: an
 // exclusive cross-process lock adjudicated by the kernel on each opener's own
-// descriptor (flock on POSIX, a one-byte LockFile range on Windows). A holder
+// descriptor (flock on POSIX, LockFile ranges on Windows). A holder
 // that dies has its lock released by the kernel, and a leftover lock file
 // never blocks a new acquirer. Acquisition verifies the descriptor still names
 // the canonical path; owners can retire that path after their business ends.
