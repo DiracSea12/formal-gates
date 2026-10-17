@@ -95,7 +95,6 @@ func TestRequirementDevelopmentRedoPreservesActualWhiteboxMaterials(t *testing.T
 					t.Fatal(err)
 				}
 			}
-			t.Logf("old workspace %s; new developer %s (test error %v); new QA %s (test error %v); retained cases=%d", before.Workspace.Path, newInput.Workspace.Path, statErr, after.Workspace.Path, materialErr, len(after.Manifest.Cases))
 			if after.Workspace.Source != d.run.Validation.DevelopmentSnapshot {
 				t.Fatal("new author is not bound to the actual current development")
 			}
