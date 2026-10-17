@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"formal-gates/internal/engine/coverage"
@@ -248,11 +250,16 @@ func (t *nativeWorkspaceTools) completeEditChecks(number int, mutationError stri
 					return nil, err
 				}
 			} else {
-				if err := claimJob(directory, request); err != nil {
-					return nil, err
-				}
-				t.leaveExecutionWindow()
-				receipt, err = executeRequest(directory, request)
+				receipt, err = func() (map[string]any, error) {
+					sigCh := make(chan os.Signal, 1)
+					signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
+					defer signal.Stop(sigCh)
+					if err := claimJob(directory, request); err != nil {
+						return nil, err
+					}
+					t.leaveExecutionWindow()
+					return executeRequest(directory, request, sigCh)
+				}()
 				if err != nil {
 					return nil, err
 				}

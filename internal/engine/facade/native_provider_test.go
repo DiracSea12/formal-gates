@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -68,7 +69,27 @@ func (r *nativeProviderRunner) RunRaw(dir, command string, input []byte, args ..
 		args = append(prefix, args...)
 	}
 	start := time.Now()
-	body, err := (vcs.ExecRunner{}).RunRaw(dir, command, input, args...)
+	var body []byte
+	var err error
+	if command == "p4" {
+		absolute, pathErr := filepath.Abs(dir)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		cmd := exec.Command(command, append([]string{"-d", absolute}, args...)...)
+		cmd.Dir, cmd.Stdin = dir, bytes.NewReader(input)
+		cmd.Env = append(os.Environ(), "P4PORT="+r.port)
+		body, err = cmd.Output()
+		if err != nil {
+			detail := err.Error()
+			if exit, ok := err.(*exec.ExitError); ok && len(exit.Stderr) != 0 {
+				detail = strings.TrimSpace(string(exit.Stderr))
+			}
+			err = fmt.Errorf("%s: cwd=%q argv=%q: %s", command, dir, cmd.Args, detail)
+		}
+	} else {
+		body, err = (vcs.ExecRunner{}).RunRaw(dir, command, input, args...)
+	}
 	fmt.Fprintf(r.log, "%s %q dir=%q stdin=%q elapsed=%s error=%v\nstdout=%q\n", command, args, dir, input, time.Since(start), err, body)
 	if command == "svn" && len(args) > 0 && args[0] == "update" || command == "p4" && slices.Contains(args, "sync") {
 		r.synchronizations++

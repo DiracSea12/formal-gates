@@ -180,7 +180,7 @@ func TestDevelopmentFailedCheckRetainsIssuedObligation(t *testing.T) {
 	d := nativeMasterDriver(t)
 	plan := commandPlan()
 	plan.Batches[0].Artifacts = []string{"app.go", "handoff.txt"}
-	plan.Batches[0].Checks = []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: "printf 'build: actual source check\\n'; grep -q '^// ready$' app.go"}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: "printf 'tests: actual source check\\n'; grep -q '^// ready$' app.go"}}
+	plan.Batches[0].Checks = []protocol.DevelopmentCheck{{ID: "build", Purpose: protocol.CheckFullBuild, Command: nativeFixtureCommand("printf 'build: actual source check\\n'; grep -q '^// ready$' app.go", "[Console]::WriteLine('build: actual source check'); if (-not ([IO.File]::ReadAllLines('app.go') -ccontains '// ready')) { exit 1 }")}, {ID: "tests", Purpose: protocol.CheckFullTests, Command: nativeFixtureCommand("printf 'tests: actual source check\\n'; grep -q '^// ready$' app.go", "[Console]::WriteLine('tests: actual source check'); if (-not ([IO.File]::ReadAllLines('app.go') -ccontains '// ready')) { exit 1 }")}}
 	passPreDevelopmentReviews(t, d, plan)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one declared artifact"}})
 	d.confirmRoute(routeDecisionForGates([]string{"quality"}))

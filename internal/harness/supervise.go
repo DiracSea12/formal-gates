@@ -83,6 +83,9 @@ func Supervise(directory string, services ...ExecutionServices) int {
 			}
 		}()
 	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigCh)
 
 	// Owner lock: O_CREAT|O_EXCL|O_WRONLY, mode 0600. A pre-existing owner means
 	// another supervisor already owns this job, so back off without writing
@@ -99,7 +102,7 @@ func Supervise(directory string, services ...ExecutionServices) int {
 		release = nil
 	}
 
-	if _, err := executeRequest(dir, request); err != nil {
+	if _, err := executeRequest(dir, request, sigCh); err != nil {
 		fmt.Fprintf(os.Stderr, "supervise: %v\n", err)
 		return 1
 	}
@@ -107,7 +110,7 @@ func Supervise(directory string, services ...ExecutionServices) int {
 }
 
 // executeRequest uses the native runner and writes its request-bound exit facts.
-func executeRequest(dir string, request map[string]any) (map[string]any, error) {
+func executeRequest(dir string, request map[string]any, sigCh <-chan os.Signal) (map[string]any, error) {
 	started := float64(time.Now().UnixNano()) / 1e9
 	code := 127
 	errorMsg := ""
@@ -123,7 +126,7 @@ func executeRequest(dir string, request map[string]any) (map[string]any, error) 
 		ensureEmptyStream(filepath.Join(dir, "stdout.log"))
 		ensureEmptyStream(filepath.Join(dir, "stderr.log"))
 	} else {
-		code, errorMsg = runChild(dir, candidates, argv, cwd, stdin, request, executionFacts)
+		code, errorMsg = runChild(dir, candidates, argv, cwd, stdin, request, executionFacts, sigCh)
 	}
 
 	digest, err := CanonicalDigest(request)
@@ -236,7 +239,7 @@ func resolveSpawn(argv []string, cwd string, request map[string]any) (string, []
 // candidate records the first such error and is skipped; the first candidate that
 // actually executes wins. The child's merged environment is the parent environment
 // updated with the request's environment.
-func runChild(dir string, candidates []string, argv []string, cwd, stdin string, request map[string]any, facts map[string]string) (int, string) {
+func runChild(dir string, candidates []string, argv []string, cwd, stdin string, request map[string]any, facts map[string]string, sigCh <-chan os.Signal) (int, string) {
 	outF, err := os.OpenFile(filepath.Join(dir, "stdout.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return 127, spawnErr("OSError", 0, argv[0])
@@ -252,12 +255,6 @@ func runChild(dir string, candidates []string, argv []string, cwd, stdin string,
 		outF.Close()
 		errF.Close()
 	}()
-
-	// Install the cancellation handler before starting a child. Cancellation
-	// terminates the child's isolated process group on POSIX or process on Windows.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
-	defer signal.Stop(sigCh)
 
 	var firstErr string
 	for _, candidate := range candidates {
@@ -301,7 +298,7 @@ func executionEnvironmentDigest(request map[string]any) (string, error) {
 // exec did not happen (ENOENT, or a recorded EACCES/ENOEXEC error that should let
 // the caller continue to the next candidate) and ran=true once a child has been
 // started and reaped, in which case code/errorMsg are the receipt values.
-func tryExec(candidate string, argv []string, cwd, stdin string, request map[string]any, outF, errF *os.File, sigCh chan os.Signal) (int, string, bool) {
+func tryExec(candidate string, argv []string, cwd, stdin string, request map[string]any, outF, errF *os.File, sigCh <-chan os.Signal) (int, string, bool) {
 	cmd := &exec.Cmd{
 		Path:   candidate,
 		Args:   argv,
@@ -332,7 +329,7 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 // waitChild reaps the started child and settles its receipt. The supervisor
 // forwards cancellation to the isolated child and records 130 with the
 // cancellation error. Independent child exits retain their exit or signal code.
-func waitChild(cmd *exec.Cmd, sigCh chan os.Signal) (int, string) {
+func waitChild(cmd *exec.Cmd, sigCh <-chan os.Signal) (int, string) {
 	type status struct {
 		signaled bool
 		sig      int

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -638,7 +639,11 @@ func (d *validationDriver) materialize() {
 }
 func simpleManifest(input protocol.ValidationInput) coverage.AcceptanceManifest {
 	m := input.Manifest
-	m.Cases = []coverage.AcceptanceCase{{Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", "run", "valid"}}}, CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"./app", "run", "invalid"}}}, CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
+	app := []string{"./app"}
+	if goruntime.GOOS == "windows" {
+		app = coverage.ShellCommand(`.\app.cmd`)
+	}
+	m.Cases = []coverage.AcceptanceCase{{Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: append(slices.Clone(app), "run", "valid")}}, CaseID: "normal", Mode: coverage.CaseBlackbox, Scenario: "SUCCESS", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with valid input", Oracle: "exits zero"}, {Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: append(slices.Clone(app), "run", "invalid")}}, CaseID: "invalid", Mode: coverage.CaseBlackbox, Scenario: "FAILURE", PublicEntry: "app run", Preconditions: "clean project", Steps: "run with invalid input", Oracle: "rejects invalid input"}}
 	for _, c := range m.Cases {
 		m.Edges = append(m.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: c.CaseID})
 	}
@@ -1409,7 +1414,7 @@ func (d *validationDriver) observeFixtureAdapter() bool {
 				}
 				evidence.Tool, evidence.Environment = d.fixtureTool, d.fixtureEnvironment
 				if evidence.Tool == "" {
-					if argv[0] == "app" || argv[0] == "./app" {
+					if argv[0] == "app" || argv[0] == "./app" || goruntime.GOOS == "windows" && len(argv) == 7 && argv[4] == `.\app.cmd` {
 						evidence.Tool = "app-v1"
 					} else {
 						evidence.Tool = "fixture-executable:" + fixtureDigest(argv[0])

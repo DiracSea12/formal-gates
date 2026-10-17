@@ -52,7 +52,27 @@ func (r *nativeTestRunner) RunRaw(dir, command string, input []byte, args ...str
 		args = append(prefix, args...)
 	}
 	start := time.Now()
-	body, err := (ExecRunner{}).RunRaw(dir, command, input, args...)
+	var body []byte
+	var err error
+	if command == "p4" {
+		absolute, pathErr := filepath.Abs(dir)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		cmd := exec.Command(command, append([]string{"-d", absolute}, args...)...)
+		cmd.Dir, cmd.Stdin = dir, bytes.NewReader(input)
+		cmd.Env = append(os.Environ(), "P4PORT="+r.port)
+		body, err = cmd.Output()
+		if err != nil {
+			detail := err.Error()
+			if exit, ok := err.(*exec.ExitError); ok && len(exit.Stderr) != 0 {
+				detail = strings.TrimSpace(string(exit.Stderr))
+			}
+			err = fmt.Errorf("%s: cwd=%q argv=%q: %s", command, dir, cmd.Args, detail)
+		}
+	} else {
+		body, err = (ExecRunner{}).RunRaw(dir, command, input, args...)
+	}
 	if r.log != nil {
 		fmt.Fprintf(r.log, "%s %q stdin=%q elapsed=%s error=%v\nstdout=%q\n", command, args, input, time.Since(start), err, body)
 	}
@@ -299,6 +319,20 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 	nativeCommand(t, runner, wc, "p4", "add", "-t", "text+x", "body.txt")
 	nativeCommand(t, runner, wc, "p4", "submit", "-d", "fixture values")
 	return NewNative(wc, "p4", runner).At(wc, WorkspaceHandle{Client: "main"}), runner
+}
+
+func TestP4ConnectionBindingSurvivesReopen(t *testing.T) {
+	t.Parallel()
+	p, runner := p4Fixture(t)
+	base := nativeIdentityAt(t, p)
+	id, err := decodeNative(base)
+	if err != nil || id.Address != runner.port {
+		t.Fatalf("bound address differs from actual connection: %q %v", id.Address, err)
+	}
+	reopened := NewNative(p.Root(), "p4", nil).At(p.Root(), WorkspaceHandle{Client: id.Client, Source: base})
+	if current, err := reopened.Resolve(); err != nil || current != base {
+		t.Fatalf("reopened native binding differs: %q %v", current, err)
+	}
 }
 
 func TestP4RunnerUsesDeclaredWorkingDirectory(t *testing.T) {

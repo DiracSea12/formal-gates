@@ -35,7 +35,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 				if m.Cases[i].CaseID == "invalid" {
 					argument = "invalid"
 				}
-				m.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "go build -o tested-app .; ./tested-app " + argument}}
+				m.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("go build -o tested-app . && ./tested-app "+argument, "go build -o tested-app.exe .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\tested-app.exe "+argument+"; exit $LASTEXITCODE")}}
 			}
 			d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &m})
 			d.drive()
@@ -109,7 +109,7 @@ func TestRepairCompleteVerificationUsesApprovedCommands(t *testing.T) {
 					var request struct {
 						Argv []string `json:"argv"`
 					}
-					if readCheckDocument(filepath.Join(evidence.Directory, "request.json"), &request) == nil && len(request.Argv) == 3 && request.Argv[2] == plan.Batches[0].Checks[1].Command {
+					if readCheckDocument(filepath.Join(evidence.Directory, "request.json"), &request) == nil && slices.Equal(request.Argv, coverage.ShellCommand(plan.Batches[0].Checks[1].Command)) {
 						foundTest, actual = true, evidence
 					}
 				}

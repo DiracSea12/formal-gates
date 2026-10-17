@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// supervisorBinary links the completed source build to a private executable path.
+// supervisorBinary copies the completed source build to a private executable file.
 // Process ownership and SIGTERM cancellation require a separate process.
 func supervisorBinary(t *testing.T) string {
 	t.Helper()
@@ -28,7 +28,7 @@ func supervisorBinary(t *testing.T) string {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), filepath.Base(binary))
-	if err := os.Link(binary, out); err != nil {
+	if err := os.WriteFile(out, readBytes(t, binary), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -140,10 +140,7 @@ func newJob(t *testing.T, bin string, req map[string]any) (jobDir, workDir strin
 
 // waitForFile blocks until path exists or 15s elapse, then fails the test. It is
 // used to obtain POSITIVE proof that a child process actually started (the child
-// touches path before entering its long sleep), which is strictly stronger than
-// observing process.json: process.json is written before the supervisor arms its
-// SIGTERM handler, so a signal sent on the latter's heels can kill the supervisor
-// with no receipt. A running child can only exist after the handler is installed.
+// touches path before entering its long sleep).
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)

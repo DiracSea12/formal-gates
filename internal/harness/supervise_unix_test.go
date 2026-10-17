@@ -61,11 +61,7 @@ func TestSuperviseCancel(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	// Wait for POSITIVE proof the supervisor is past SIGTERM-handler installation:
-	// the child touches child-started before exec'ing the long sleep, and handler
-	// arming strictly precedes the first spawn. Waiting for process.json alone is
-	// racy because it is written before the handler is armed; a signal landing in
-	// that window kills the supervisor outright with no receipt (signal: terminated).
+	// Observe cancellation of a command that has started its original work.
 	waitForFile(t, marker)
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal: %v", err)
@@ -114,8 +110,7 @@ func TestSuperviseCancelGroup(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("round %d: start: %v", round, err)
 		}
-		// A running child proves the cancellation handler is installed;
-		// process.json is written before the handler is armed.
+		// Observe cancellation of a command that has started its original work.
 		waitForFile(t, marker)
 		pgid, err := syscall.Getpgid(cmd.Process.Pid)
 		if err != nil {

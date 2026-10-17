@@ -138,6 +138,9 @@ func mainlineReady(t *testing.T, conflict string, identical bool, supplied ...*p
 			if err := os.WriteFile(filepath.Join(in.Workspace.Path, "tool"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := runner.Run(in.Workspace.Path, "git", "update-index", "--add", "--chmod=+x", "tool"); err != nil {
+				t.Fatal(err)
+			}
 			evidence.Paths = append(evidence.Paths, "tool")
 		}
 		child.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: evidence})

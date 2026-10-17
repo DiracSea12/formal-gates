@@ -64,13 +64,7 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app, appBody := "app", "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"
-	if goruntime.GOOS == "windows" {
-		app, appBody = "app.cmd", "@echo off\r\nif \"%~1\"==\"run\" if \"%~2\"==\"valid\" exit /b 0\r\nexit /b 1\r\n"
-	}
-	if err := os.WriteFile(filepath.Join(root, app), []byte(appBody), 0700); err != nil {
-		t.Fatal(err)
-	}
+	writeSnapshotCommand(t, root)
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +86,17 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 		identities = append(identities, identity)
 	}
 	return identities
+}
+
+func writeSnapshotCommand(t *testing.T, root string) {
+	t.Helper()
+	app, body := "app", "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"
+	if goruntime.GOOS == "windows" {
+		app, body = "app.cmd", "@echo off\r\nif \"%~1\"==\"run\" if \"%~2\"==\"valid\" exit /b 0\r\nexit /b 1\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(root, app), []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // snapshotCommitOne 在已建仓库上追加一个提交并返回新身份。
@@ -633,9 +638,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "app"), []byte("#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = valid ]\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	writeSnapshotCommand(t, root)
 	run("add", "--all")
 	run("commit", "-m", "base")
 	base, err := vcs.New(root, nil).Resolve()

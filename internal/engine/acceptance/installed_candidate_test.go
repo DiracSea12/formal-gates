@@ -534,6 +534,7 @@ func (d *candidateDriver) designResult(input protocol.ValidationInput) protocol.
 		if err := os.Chmod(filepath.Join(d.authoring, "mode_test.go"), 0755); err != nil {
 			d.t.Fatal(err)
 		}
+		d.p.git(d.t, "-C", d.authoring, "update-index", "--chmod=+x", "mode_test.go")
 		result.Development = &protocol.DevelopmentEvidence{Paths: []string{"candidate_test.go", "remove_test.go", "old_test.go", "renamed_test.go", "mode_test.go"}, Summary: "Structural input cases and owned test changes"}
 	}
 	for i, scenario := range []string{"SUCCESS", "FAILURE"} {
@@ -546,7 +547,8 @@ func (d *candidateDriver) designResult(input protocol.ValidationInput) protocol.
 			item.PublicEntry = "app"
 			item.Preconditions = "Command built"
 			item.Steps = "Invoke command with input"
-			item.Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"go", "build", "-o", ".gates-command", "."}}, {Kind: coverage.OperationArgv, Argv: []string{"./.gates-command", []string{"ok", ""}[i]}}}
+			command := executablePath(".gates-command")
+			item.Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"go", "build", "-o", command, "."}}, {Kind: coverage.OperationArgv, Argv: []string{"./" + command, []string{"ok", ""}[i]}}}
 			item.Oracle = []string{"Valid input exits zero", "Empty input returns a nonzero exit"}[i]
 		}
 		manifest.Cases = append(manifest.Cases, item)
@@ -583,6 +585,7 @@ func (d *candidateDriver) caseReview(id string, input protocol.ValidationInput) 
 		if err := os.Chmod(filepath.Join(d.authoring, "mode_test.go"), 0644); err != nil {
 			d.t.Fatal(err)
 		}
+		d.p.git(d.t, "-C", d.authoring, "update-index", "--chmod=-x", "mode_test.go")
 		d.write(d.authoring, "remove_test.go", "package main\n", 0644)
 	}
 }

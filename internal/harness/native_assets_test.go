@@ -151,7 +151,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 				}
 				var installReceipt validate.InstallReport
 				if err := json.Unmarshal(artifact, &installReceipt); err != nil || len(installReceipt.Targets) != 1 ||
-					installReceipt.PackageDigest != record.PackageDigest || installReceipt.Targets[0].TargetPath != record.Target ||
+					installReceipt.PackageDigest != record.PackageDigest || filepath.FromSlash(installReceipt.Targets[0].TargetPath) != record.Target ||
 					installReceipt.Targets[0].InstalledDigest != record.InstalledDigest || installReceipt.Targets[0].Smoke != "PASS" {
 					t.Fatalf("install artifact does not bind registered target: %+v err=%v", installReceipt, err)
 				}

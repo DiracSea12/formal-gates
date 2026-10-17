@@ -47,6 +47,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 				}
 			}
 			p.git(t, "add", "--all")
+			p.git(t, "update-index", "--chmod=+x", "tools/check.sh")
 			p.git(t, "commit", "-qm", "Existing project content")
 			head := p.git(t, "rev-parse", "HEAD")
 			if !ancestor {

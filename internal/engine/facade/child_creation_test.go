@@ -518,6 +518,9 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := actual.State
+		if filepath.Dir(c.NativeRoot) != filepath.Join(root, ".gates", "qa-isolation") || !executionInEngineWorkspace(c.NativeRoot, map[string]any{"workspace": c.NativeRoot}) {
+			t.Fatal("child native root lost its shared isolation directory or engine classification", c.NativeRoot)
+		}
 		if paths[c.NativeRoot] || c.BaseSnapshot != base || c.InitialSnapshot != h || c.Phase != runtime.PhaseTopologyAndRoute || child.root != root || child.admission.Root != root || child.vcs.Root() != c.NativeRoot || child.envelope != d.f.envelope {
 			t.Fatalf("child root/identity carrier: %+v", c.SliceChild)
 		}

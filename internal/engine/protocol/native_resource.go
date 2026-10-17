@@ -116,7 +116,22 @@ func (s *State) validateResourceObservation(intent HostActionIntent, o ResourceO
 
 func (s *State) resource(role, source, scope string) NativeResource {
 	id := strings.TrimPrefix(digestOfCanonical(struct{ Role, Source, Scope string }{role, source, scope}), "sha256:")
-	resource := NativeResource{ID: id, Owner: s.RunID, Role: role, Path: filepath.Join(s.NativeRoot, ".gates", "qa-isolation", s.RunID, id), Ref: "refs/formal-gates/" + s.RunID + "/" + id, Source: source, Status: "PLANNED"}
+	path := s.NativeResources[id].Path
+	if path == "" {
+		isolation := filepath.Join(s.NativeRoot, ".gates", "qa-isolation")
+		// Slice children share the project's isolation directory with their master.
+		if s.SliceChild != nil {
+			for parent := s.NativeRoot; parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+				if filepath.Base(parent) == "qa-isolation" && filepath.Base(filepath.Dir(parent)) == ".gates" {
+					isolation = parent
+					break
+				}
+			}
+		}
+		location := strings.TrimPrefix(digestOfCanonical(struct{ Owner, Resource string }{s.RunID, id}), "sha256:")
+		path = filepath.Join(isolation, location)
+	}
+	resource := NativeResource{ID: id, Owner: s.RunID, Role: role, Path: path, Ref: "refs/formal-gates/" + s.RunID + "/" + id, Source: source, Status: "PLANNED"}
 	if s.NativeVCS() != "git" {
 		resource.Ref = ""
 		resource.Handle = vcs.PlanWorkspace(s.NativeVCS(), source, s.RunID, id)

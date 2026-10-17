@@ -20,6 +20,7 @@ func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload := readBytes(t, native)
 	for _, provider := range []string{"claude", "codex", "cursor", "dsh", "zcode"} {
 		t.Run(provider, func(t *testing.T) {
 			root := resolveNativePath(t.TempDir())
@@ -27,7 +28,7 @@ func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
 			if runtime.GOOS == "windows" {
 				executable += ".exe"
 			}
-			if err := os.Link(native, executable); err != nil {
+			if err := os.WriteFile(executable, payload, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			home := filepath.Join(root, "native-home")

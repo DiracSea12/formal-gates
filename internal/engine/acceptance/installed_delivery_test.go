@@ -322,7 +322,7 @@ func TestInstalledCheckpointDeliversTheCompletePlan(t *testing.T) {
 			d.write(input.Workspace.Path, "extension.go", "package main\nfunc extended(s string) bool {return len(s)>0}\n", 0644)
 			d.implementation = "package main\nimport \"os\"\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\" && extended(s)}\n"
 			d.develop(action, input, "extension.go")
-			binary := filepath.Join(t.TempDir(), "command")
+			binary := executablePath(filepath.Join(t.TempDir(), "command"))
 			build := exec.Command("go", "build", "-o", binary, "./...")
 			build.Dir = input.Workspace.Path
 			if out, err := build.CombinedOutput(); err != nil {

@@ -2,12 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/harness"
@@ -128,7 +128,11 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		if err != nil {
 			return nil, err
 		}
-		args = []string{"--root", root, "--run-id", "run-" + strconv.FormatInt(time.Now().UnixNano(), 36), "--intake", strconv.Itoa(input.Intake), "--route", input.Route}
+		var identity [16]byte
+		if _, err := rand.Read(identity[:]); err != nil {
+			return nil, err
+		}
+		args = []string{"--root", root, "--run-id", fmt.Sprintf("run-%x", identity), "--intake", strconv.Itoa(input.Intake), "--route", input.Route}
 		if input.BaseSnapshot != "" {
 			args = append(args, "--base-snapshot", input.BaseSnapshot)
 		}

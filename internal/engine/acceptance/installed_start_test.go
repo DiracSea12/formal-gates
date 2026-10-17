@@ -63,7 +63,7 @@ func newInstalledStartProject(t *testing.T) installedStartProject {
 	write("design.md", "# Design\nUse the admitted installation and the native Git provider.\n")
 	write("app.go", "package main\nfunc main() {}\n")
 	write(".gitignore", ".gates/\n.formal-gates-resources/\n.zcode/\n.codex/\nAGENTS.md\n")
-	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"add", "."}, {"commit", "-qm", "Application"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"config", "core.autocrlf", "false"}, {"add", "."}, {"commit", "-qm", "Application"}} {
 		p.git(t, args...)
 	}
 	p.base = p.git(t, "rev-parse", "HEAD")

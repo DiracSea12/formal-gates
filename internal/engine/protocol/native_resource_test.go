@@ -3,7 +3,9 @@ package protocol
 import (
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
@@ -14,6 +16,52 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
+
+func TestNativeResourcesShareProjectIsolation(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	master := &State{RunID: "validation", NativeRoot: root}
+	target := master.resource("child-target", "source", "slice")
+	pool := filepath.Join(root, ".gates", "qa-isolation")
+	for _, nativeRoot := range []string{
+		target.Path,
+		filepath.Join(pool, master.RunID, target.ID),
+	} {
+		child := &State{RunID: "child-" + strings.Repeat("c", 64), NativeRoot: nativeRoot, SliceChild: &SliceChildBinding{MasterRunID: master.RunID, SliceID: "slice"}}
+		resource := child.resource("development", "source", "scope")
+		if filepath.Dir(target.Path) != pool || filepath.Dir(resource.Path) != pool || len(filepath.Base(resource.Path)) != sha256.Size*2 {
+			t.Fatalf("resource paths do not share one project isolation directory: target=%s resource=%s", target.Path, resource.Path)
+		}
+		if got := child.resource("development", "source", "scope"); got != resource {
+			t.Fatal("repeated planning changed the resource identity or location")
+		}
+		other := *child
+		other.RunID += "-other"
+		separate := other.resource("development", "source", "scope")
+		if separate.ID != resource.ID || separate.Ref == resource.Ref || separate.Path == resource.Path || resource.Path == target.Path {
+			t.Fatalf("different owners do not retain independent native resources: %+v %+v", resource, separate)
+		}
+		if got := master.resource("development", "source", "scope"); got.ID != resource.ID {
+			t.Fatal("native location changed the resource's complete business identity")
+		}
+		independent := *child
+		independent.SliceChild = nil
+		if got := independent.resource("development", "source", "scope"); filepath.Dir(got.Path) != filepath.Join(nativeRoot, ".gates", "qa-isolation") {
+			t.Fatal("independent project lost its own native isolation root", got.Path)
+		}
+	}
+}
+
+func TestNativeResourcePlanningUsesRegisteredPath(t *testing.T) {
+	t.Parallel()
+	s := &State{RunID: "validation", NativeRoot: t.TempDir(), NativeResources: map[string]NativeResource{}}
+	resource := s.resource("candidate", "source", "scope")
+	resource.Path = filepath.Join(s.NativeRoot, ".gates", "qa-isolation", s.RunID, resource.ID)
+	s.NativeResources[resource.ID] = resource
+	if got := s.resource("candidate", "source", "scope"); got != resource {
+		t.Fatalf("resource planning replaced its registered path: %+v", got)
+	}
+}
 
 // An unresolved requirement Ask freezes new writes while the original cleanup
 // intent and its exact resource receipt retain the native responsibility.

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/facade"
@@ -348,6 +349,57 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, displayedID, "request.json"))
 	if err != nil || json.Unmarshal(body, &request) != nil || request.Route != "lightweight" || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 		t.Fatal("started run lost its exact displayed inputs", request, err)
+	}
+}
+
+func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, position, err := facade.SaveOriginalPayload(workflowPayloadDirectory(root, "", "intake"), mustJSON(t, preview.IntakeCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := mustJSON(t, map[string]any{"root": root, "intake": position, "route": "lightweight"})
+	var starts [2]struct {
+		id  string
+		err error
+	}
+	ready := make(chan struct{})
+	var workers sync.WaitGroup
+	for i := range starts {
+		workers.Add(1)
+		go func(i int) {
+			defer workers.Done()
+			<-ready
+			_, starts[i].err = callConfirmationTool("confirm_start", arguments, IO{}, func(value any) error {
+				starts[i].id = value.(map[string]any)["runId"].(string)
+				return nil
+			})
+		}(i)
+	}
+	close(ready)
+	workers.Wait()
+	if starts[0].id == "" || starts[1].id == "" || starts[0].id == starts[1].id {
+		t.Fatalf("independent confirmations did not bind independent run identities: %+v", starts)
+	}
+	for _, start := range starts {
+		if start.err != nil {
+			t.Fatal("independent confirmation could not start its displayed run", start.err)
+		}
+		var request facade.StartRequest
+		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, start.id, "request.json"), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.RunID != start.id || request.Route != "lightweight" || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+			t.Fatal("started run lost its exact displayed identity or intake", request, start.id)
+		}
 	}
 }
 

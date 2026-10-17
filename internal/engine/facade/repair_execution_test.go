@@ -146,7 +146,7 @@ func nativeRepairReady(t *testing.T, severity string) (*validationDriver, protoc
 		if manifest.Cases[i].CaseID == "invalid" {
 			argument = "invalid"
 		}
-		manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: "go build -o tested-app . && ./tested-app " + argument}}
+		manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: nativeFixtureCommand("go build -o tested-app . && ./tested-app "+argument, "go build -o tested-app.exe .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\tested-app.exe "+argument+"; exit $LASTEXITCODE")}}
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Manifest: &manifest})
 	d.drive()

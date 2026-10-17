@@ -174,11 +174,13 @@ func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 	client := spec["Client"]
 	view := p4List(spec, "View")
 	canonical := normalizeP4View(view, client, p.handle)
+	address := "perforce:1666"
 	if p.handle.Source != "" {
 		source, err := decodeNative(p.handle.Source)
 		if err != nil {
 			return "", err
 		}
+		address = source.Address
 		if spec["Stream"] != "" {
 			for i, row := range canonical {
 				fields := viewFields(row)
@@ -186,6 +188,18 @@ func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 					fields[0] = strings.Replace(fields[0], spec["Stream"]+"/", source.Stream+"/", 1)
 					canonical[i] = viewRow(fields[0], fields[1])
 				}
+			}
+		}
+	} else {
+		setting, err := p.p4Raw(nil, "set", "-q", "P4PORT")
+		if err != nil {
+			return "", err
+		}
+		if value := strings.TrimSpace(string(setting)); value != "" {
+			var found bool
+			address, found = strings.CutPrefix(value, "P4PORT=")
+			if !found || address == "" {
+				return "", fmt.Errorf("P4 connection setting is incomplete")
 			}
 		}
 	}
@@ -221,7 +235,7 @@ func (p *Provider) p4ResolveAt(revision, workspace string) (string, error) {
 	if repository == "" {
 		repository = info[0]["serverAddress"]
 	}
-	identity := nativeIdentity{Provider: "p4", Repository: repository, Scope: hashValue(view), Revision: rev, Address: info[0]["serverAddress"], User: info[0]["userName"], Client: client, View: canonical, ActualView: view, LineEnd: spec["LineEnd"], Charset: info[0]["clientCharset"], Stream: spec["Stream"], Depot: p.handle.Depot}
+	identity := nativeIdentity{Provider: "p4", Repository: repository, Scope: hashValue(view), Revision: rev, Address: address, User: info[0]["userName"], Client: client, View: canonical, ActualView: view, LineEnd: spec["LineEnd"], Charset: info[0]["clientCharset"], Stream: spec["Stream"], Depot: p.handle.Depot}
 	if identity.Stream != "" {
 		stream, err := p.p4JSON("stream", "-o", identity.Stream)
 		if err != nil {

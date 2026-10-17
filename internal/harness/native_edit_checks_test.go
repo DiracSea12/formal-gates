@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -312,10 +313,13 @@ func TestNativeEditCheckProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigCh)
 	if err := claimJob(directory, objectOrEmpty(request)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeRequest(directory, objectOrEmpty(request)); err != nil {
+	if _, err := executeRequest(directory, objectOrEmpty(request), sigCh); err != nil {
 		t.Fatal(err)
 	}
 }

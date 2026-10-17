@@ -158,17 +158,22 @@ func TestSuperviseWindowsCancellationSettlesOriginalReceipt(t *testing.T) {
 	ready := filepath.Join(directory, "ready")
 	request := map[string]any{"kind": "approved-development-check", "argv": []string{executable, "-test.run=^TestSupervisedWindowsPeer$"}, "cwd": directory, "environment": map[string]any{"SUPERVISED_WINDOWS_PEER": "wait", "SUPERVISED_WINDOWS_READY": ready}}
 	writeRequest(t, directory, request)
+	digest, err := digestOf(t, request)
+	if err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command(supervisorBinary(t), "harness", "supervise", directory)
 	command.SysProcAttr = supervisorSysProcAttr()
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = command.Process.Kill() })
+	t.Cleanup(func() {
+		if command.ProcessState == nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
 	waitForFile(t, ready)
-	digest, err := CanonicalDigest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if alive, err := observeSupervisor(directory, digest, true); err != nil || !alive {
 		t.Fatal("original live supervisor could not receive cancellation", alive, err)
 	}

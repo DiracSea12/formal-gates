@@ -555,6 +555,13 @@ func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 	t.Parallel()
 	p, _ := p4Fixture(t)
 	base := nativeIdentityAt(t, p)
+	if err := p.Synchronize(base); err != nil {
+		t.Fatal(err)
+	}
+	originalBody, err := os.ReadFile(filepath.Join(p.root, "body.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(p.root, "temporary.txt")
 	if err := os.WriteFile(path, []byte("temporary contents\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -593,9 +600,12 @@ func TestP4WorkspaceMaterialSurvivesAbsentPathHistory(t *testing.T) {
 	if err := json.Unmarshal([]byte(originalEntries["body.txt"]), &value); err != nil {
 		t.Fatal(err)
 	}
+	if string(value.Content) != " leading\ntrailing\n\n" {
+		t.Fatalf("immutable repository content differs from submitted material: %q", value.Content)
+	}
 	body, err := os.ReadFile(filepath.Join(p.root, "body.txt"))
-	if err != nil || !bytes.Equal(body, value.Content) {
-		t.Fatalf("workspace content differs from bound material: %q %v", body, err)
+	if err != nil || !bytes.Equal(body, originalBody) {
+		t.Fatalf("workspace content differs from its original native material: %q %v", body, err)
 	}
 	info, err := os.Stat(filepath.Join(p.root, "body.txt"))
 	if err != nil || value.Filetype != "text+x" || runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
