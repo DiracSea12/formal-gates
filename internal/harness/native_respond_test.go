@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -60,9 +59,16 @@ func respondWithHost(t *testing.T, args ...string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, client := io.Pipe()
-	host, output := io.Pipe()
-	t.Cleanup(func() { input.Close(); client.Close(); host.Close(); output.Close() })
+	input, client, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { input.Close(); client.Close() })
+	host, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close(); output.Close() })
 	var errors, transportErrors bytes.Buffer
 	code := -1
 	done := make(chan int, 1)
@@ -178,6 +184,38 @@ func TestNativeRespondPreparesAndConfirmsOriginalAnswer(t *testing.T) {
 		t.Fatal("duplicate vote", code, errors)
 	}
 }
+
+func TestNativeRespondHostStreamPreservesJSONReadBoundary(t *testing.T) {
+	for _, size := range []int{511, 1535} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			requestID := ""
+			frame, err := json.Marshal(map[string]any{"id": 2, "method": "tools/call", "params": map[string]any{"name": "answer", "arguments": requestID}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID = strings.Repeat("q", size-len(frame))
+			frame, err = json.Marshal(map[string]any{"id": 2, "method": "tools/call", "params": map[string]any{"name": "answer", "arguments": requestID}})
+			if err != nil || len(frame) != size {
+				t.Fatal(len(frame), err)
+			}
+			job := t.TempDir()
+			pending := objectOrEmpty(decodeTestJSON(t, cliPendingPermission))
+			pending["request_id"] = requestID
+			if err := writeAtomicJSON(nativePendingPath(job), []any{pending}); err != nil {
+				t.Fatal(err)
+			}
+			var errors bytes.Buffer
+			if code := confirmHeldQuestion(t, job, 1, nativeSelection{Choice: 1}, &errors); code != 0 {
+				t.Fatal(code, errors.String())
+			}
+			answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+			if answer["request_id"] != requestID || answer["option"] != "allow-once" || answer["cancel"] != false || answer["written_at"] == nil {
+				t.Fatal(answer)
+			}
+		})
+	}
+}
+
 func TestNativeRespondCancelAndChangedQuestion(t *testing.T) {
 	job := t.TempDir()
 	writePendingsFile(t, job, cliPendingPermission)

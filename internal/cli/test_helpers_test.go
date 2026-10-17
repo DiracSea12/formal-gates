@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,9 +48,16 @@ func withHostConfirmation(t *testing.T, arguments any, execute func(func(any) er
 	if err != nil {
 		t.Fatal(err)
 	}
-	in, client := io.Pipe()
-	host, out := io.Pipe()
-	t.Cleanup(func() { in.Close(); client.Close(); host.Close(); out.Close() })
+	in, client, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); client.Close() })
+	host, out, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close(); out.Close() })
 	var transportErrors bytes.Buffer
 	var displayed []byte
 	done := make(chan int, 1)

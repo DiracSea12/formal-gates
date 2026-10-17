@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,9 +21,16 @@ import (
 // request before responding; it does not stand in for a real host UI test.
 func confirmationCall(t *testing.T, name string, arguments any, capability bool, action string, display func(map[string]any), metadata ...any) map[string]any {
 	t.Helper()
-	in, client := io.Pipe()
-	host, out := io.Pipe()
-	t.Cleanup(func() { in.Close(); client.Close(); host.Close(); out.Close() })
+	in, client, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { in.Close(); client.Close() })
+	host, out, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close(); out.Close() })
 	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
@@ -93,6 +99,30 @@ func confirmationCall(t *testing.T, name string, arguments any, capability bool,
 		t.Fatal(code, stderr.String())
 	}
 	return result
+}
+
+func TestHostConfirmationPreservesCompleteJSONFrames(t *testing.T) {
+	arguments := []string{"workflow", "control", "--root", ""}
+	request := map[string]any{"id": 2, "method": "tools/call", "params": map[string]any{"name": "invoke", "arguments": arguments}}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments[3] = strings.Repeat("x", 1535-len(body))
+	body, err = json.Marshal(request)
+	if err != nil || len(body) != 1535 {
+		t.Fatal("request does not end at the JSON read boundary", len(body), err)
+	}
+	candidate := map[string]any{"operation": "confirm exact original", "text": strings.Repeat("原始确认内容\n", 1024)}
+	confirmed := false
+	var confirmationErr error
+	withHostConfirmation(t, arguments, func(confirm func(any) error) {
+		confirmationErr = confirm(candidate)
+		confirmed = confirmationErr == nil
+	})
+	if !confirmed || confirmationErr != nil {
+		t.Fatal("host did not confirm the complete original frame", confirmationErr)
+	}
 }
 
 func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {

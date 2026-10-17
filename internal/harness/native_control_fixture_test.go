@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -175,10 +176,18 @@ func confirmInstalledFixtureStart(t *testing.T, command *exec.Cmd, root, documen
 
 func confirmFacadeFixtureControl(t *testing.T, f *facade.Facade, candidate facade.ControlCandidate) (protocol.Acceptance, facade.Run, error) {
 	t.Helper()
-	serverInput, hostOutput := io.Pipe()
-	hostInput, serverOutput := io.Pipe()
-	defer hostInput.Close()
+	serverInput, hostOutput, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverInput.Close()
 	defer hostOutput.Close()
+	hostInput, serverOutput, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hostInput.Close()
+	defer serverOutput.Close()
 	var acceptance protocol.Acceptance
 	var run facade.Run
 	var submitErr error
