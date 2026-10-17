@@ -3,17 +3,91 @@
 package harness
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
+}
+
+// Owned children enter their job before running. When the command exits, the
+// job stops its descendants and Cmd.Wait drains their inherited output handles.
+func startChild(cmd *exec.Cmd, owned bool) (settle func() error, err error) {
+	if !owned {
+		return nil, cmd.Start()
+	}
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var process windows.Handle
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, windows.TerminateJobObject(job, 1))
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+			if process != 0 {
+				err = errors.Join(err, windows.CloseHandle(process))
+			}
+			err = errors.Join(err, windows.CloseHandle(job))
+		}
+	}()
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	cmd.Stdout, cmd.Stderr = struct{ io.Writer }{cmd.Stdout}, struct{ io.Writer }{cmd.Stderr}
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
+	process, err = windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
+	if err != nil {
+		return nil, err
+	}
+	if err = windows.AssignProcessToJobObject(job, process); err != nil {
+		return nil, err
+	}
+	if err = resumeChild(uint32(cmd.Process.Pid)); err != nil {
+		return nil, err
+	}
+	finished := make(chan error, 1)
+	go func() {
+		_, waitErr := windows.WaitForSingleObject(process, windows.INFINITE)
+		finished <- errors.Join(waitErr, windows.TerminateJobObject(job, 1))
+	}()
+	return func() error {
+		return errors.Join(<-finished, windows.CloseHandle(process), windows.CloseHandle(job))
+	}, nil
+}
+
+func resumeChild(pid uint32) error {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(snapshot)
+	thread := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	for err = windows.Thread32First(snapshot, &thread); err == nil; err = windows.Thread32Next(snapshot, &thread) {
+		if thread.OwnerProcessID != pid {
+			continue
+		}
+		handle, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, thread.ThreadID)
+		if err != nil {
+			return err
+		}
+		_, err = windows.ResumeThread(handle)
+		return errors.Join(err, windows.CloseHandle(handle))
+	}
+	return fmt.Errorf("supervised child has no primary thread: %w", err)
 }
 
 // ApplyNativeCommandLine preserves approved CMD text through its native parser.

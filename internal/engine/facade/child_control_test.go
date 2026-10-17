@@ -16,7 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +119,35 @@ func retainResetState(t *testing.T, d *validationDriver, authority string) {
 	}
 }
 
+func assertPreservedTool(t *testing.T, native *vcs.Provider) {
+	t.Helper()
+	path := filepath.Join(native.Root(), "tool")
+	tool, err := os.ReadFile(path)
+	if err != nil || string(tool) != "#!/bin/sh\nexit 0\n" {
+		t.Fatalf("accepted executable content changed: %q (%v)", tool, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goruntime.GOOS != "windows" && info.Mode().Perm() != 0755 {
+		t.Fatalf("accepted executable permissions changed: %o", info.Mode().Perm())
+	}
+	entry, err := native.Entry("HEAD", "tool")
+	if err != nil || !strings.HasPrefix(entry, "100755 ") {
+		t.Fatalf("accepted executable snapshot mode changed: %q (%v)", entry, err)
+	}
+	entries, err := native.IndexEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(entries, func(e vcs.IndexEntry) bool {
+		return e.Path == "tool" && e.Mode == "100755" && e.Stage == 0
+	}) {
+		t.Fatal("accepted executable index mode changed", entries)
+	}
+}
+
 func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	t.Parallel()
 	master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
@@ -173,11 +204,7 @@ func TestResetPreservesNativeAndScopedAuthority(t *testing.T) {
 	if parent.SliceReceipts[child.f.runID].Digest != ready.Digest || parent.SliceReceiptCurrent(ready) || parent.SliceResetAuthorities[child.f.runID].Decision.RequestID != string(reset.Decide.Request) {
 		t.Fatal("child reset changed immutable evidence or retained its successful qualification")
 	}
-	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
-	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
-	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
-		t.Fatal("reset changed accepted executable content or mode", err, modeErr)
-	}
+	assertPreservedTool(t, child.f.vcs)
 	if _, _, err = child.f.Submit(reset); err != nil {
 		t.Fatal("reset replay was not stable", err)
 	}
@@ -824,11 +851,7 @@ func TestTopologyRebuildPreservesCarriedChildOrigin(t *testing.T) {
 			}
 		}
 	}
-	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
-	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
-	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
-		t.Fatal("topology cleanup changed carried executable bytes or mode", err, modeErr)
-	}
+	assertPreservedTool(t, child.f.vcs)
 	carried := driverState(t, child)
 	if carried.SliceChild.RequirementRevision != ready.Receipt.RequirementRevision || carried.SliceReceipt.Digest != ready.Digest {
 		t.Fatal("topology carry rewrote frozen child evidence")
@@ -946,11 +969,7 @@ func TestParentRequirementRedoRequalifiesChildReceipt(t *testing.T) {
 	if observed, err := child.f.vcs.Resolve(); err != nil || observed != physical.AcceptedNativeSnapshot() {
 		t.Fatal("child redo changed accepted native identity", observed, err)
 	}
-	tool, err := os.ReadFile(filepath.Join(child.f.vcs.Root(), "tool"))
-	mode, modeErr := os.Stat(filepath.Join(child.f.vcs.Root(), "tool"))
-	if err != nil || modeErr != nil || string(tool) != "#!/bin/sh\nexit 0\n" || mode.Mode().Perm() != 0755 {
-		t.Fatal("child redo changed accepted executable bytes or mode", err, modeErr)
-	}
+	assertPreservedTool(t, child.f.vcs)
 	child.reopen()
 	child.drive()
 	completeSliceGates(t, child)

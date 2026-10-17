@@ -11,10 +11,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"formal-gates/internal/engine/coverage"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestSupervisedWindowsPeer(t *testing.T) {
@@ -183,5 +187,121 @@ func TestSuperviseWindowsCancellationSettlesOriginalReceipt(t *testing.T) {
 	receipt := readReceipt(t, directory)
 	if receipt["exit_code"] != float64(130) || receipt["error"] != "owned job was cancelled" || receipt["request_digest"] != digest {
 		t.Fatal("original cancellation receipt changed", receipt)
+	}
+}
+
+func TestSuperviseWindowsSettlesOwnedDescendants(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"completed", "cancelled", "ordinary"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			directory := t.TempDir()
+			eventName := fmt.Sprintf(`Local\formal-gates-%d-%s`, os.Getpid(), strings.ReplaceAll(t.Name(), "/", "-"))
+			name, err := windows.UTF16PtrFromString(eventName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, err := windows.CreateEvent(nil, 1, 0, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer windows.CloseHandle(event)
+			ready, pidfile := filepath.Join(directory, "ready"), filepath.Join(directory, "child.pid")
+			script := `$child=[Diagnostics.ProcessStartInfo]::new($env:SUPERVISED_WINDOWS_EXECUTABLE,'-test.run=^TestSupervisedWindowsPeer$'); $child.UseShellExecute=$false; $process=[Diagnostics.Process]::Start($child); [Console]::Error.Write('original diagnostic'); $pidfile=$env:SUPERVISED_WINDOWS_PID; [IO.File]::WriteAllText($pidfile+'.tmp',[string]$process.Id); [IO.File]::Move($pidfile+'.tmp',$pidfile); $gate=[Threading.EventWaitHandle]::OpenExisting($env:SUPERVISED_WINDOWS_EVENT); $null=$gate.WaitOne(); [Console]::Write('completed')`
+			request := map[string]any{
+				"kind": "approved-development-check", "argv": coverage.ShellCommand(`powershell -NoProfile -NonInteractive -Command "` + script + `"`), "cwd": directory,
+				"environment": map[string]any{"SUPERVISED_WINDOWS_EXECUTABLE": executable, "SUPERVISED_WINDOWS_PEER": "wait", "SUPERVISED_WINDOWS_READY": ready, "SUPERVISED_WINDOWS_PID": pidfile, "SUPERVISED_WINDOWS_EVENT": eventName},
+			}
+			if mode == "ordinary" {
+				request["kind"] = "check"
+			}
+			writeRequest(t, directory, request)
+			original := readBytes(t, filepath.Join(directory, "request.json"))
+			digest, err := digestOf(t, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(supervisorBinary(t), "harness", "supervise", directory)
+			command.SysProcAttr = supervisorSysProcAttr()
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if command.ProcessState == nil {
+					_ = command.Process.Kill()
+					_ = command.Wait()
+				}
+			})
+			waitForFile(t, ready)
+			waitForFile(t, pidfile)
+			pid, err := strconv.Atoi(string(readBytes(t, pidfile)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE, false, uint32(pid))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = windows.TerminateProcess(child, 1)
+				_, _ = windows.WaitForSingleObject(child, windows.INFINITE)
+				_ = windows.CloseHandle(child)
+			})
+			if mode == "cancelled" {
+				if err := terminateJob(command, command.Process.Pid); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := windows.SetEvent(event); err != nil {
+				t.Fatal(err)
+			}
+			if err := command.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			receipt := readReceipt(t, directory)
+			code, errorText := float64(0), ""
+			if mode == "cancelled" {
+				code, errorText = 130, "owned job was cancelled"
+			}
+			if receipt["exit_code"] != code || receipt["error"] != errorText || receipt["request_digest"] != digest || !bytes.Equal(original, readBytes(t, filepath.Join(directory, "request.json"))) {
+				t.Fatal("original command or receipt changed", receipt)
+			}
+			streams := receipt["streams"].(map[string]any)
+			for _, stream := range []string{"stdout.log", "stderr.log"} {
+				proof, refusal := FileProof(filepath.Join(directory, stream))
+				recorded := streams[stream].(map[string]any)
+				if refusal != "" || proof.SHA256 != recorded["sha256"] || float64(proof.Size) != recorded["size"] {
+					t.Fatal("original stream proof changed", stream, proof, streams[stream], refusal)
+				}
+			}
+			if diagnostic := string(readBytes(t, filepath.Join(directory, "stderr.log"))); diagnostic != "original diagnostic" {
+				t.Fatalf("original diagnostic changed: %q", diagnostic)
+			}
+			output := "completed"
+			if mode == "cancelled" {
+				output = ""
+			}
+			if actual := string(readBytes(t, filepath.Join(directory, "stdout.log"))); actual != output {
+				t.Fatalf("original output changed: %q want %q", actual, output)
+			}
+			status, err := windows.WaitForSingleObject(child, 0)
+			expected := uint32(windows.WAIT_OBJECT_0)
+			if mode == "ordinary" {
+				expected = uint32(windows.WAIT_TIMEOUT)
+			}
+			if err != nil || status != expected {
+				t.Fatalf("descendant %d state=%d want=%d: %v", pid, status, expected, err)
+			}
+			if mode != "ordinary" {
+				for _, stream := range []string{"stdout.log", "stderr.log"} {
+					if err := os.Remove(filepath.Join(directory, stream)); err != nil {
+						t.Fatal("completed owned stream still has a process holder", err)
+					}
+				}
+			}
+		})
 	}
 }

@@ -95,7 +95,6 @@ func developmentCheckFixture(t *testing.T, checks ...protocol.DevelopmentCheck) 
 					if receipt.RequestDigest != digest || receipt.ExitCode == nil {
 						t.Error("original check exit does not match its request")
 					}
-					break
 				}
 				var process struct {
 					Alive bool `json:"alive"`

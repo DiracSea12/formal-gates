@@ -18,6 +18,19 @@ func supervisorSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }
 
+func startChild(cmd *exec.Cmd, owned bool) (func() error, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, nil
+	}
+	return func() error {
+		signalSupervisedChild(cmd, true)
+		return nil
+	}, nil
+}
+
 func ApplyNativeCommandLine(cmd *exec.Cmd) {}
 
 // terminateJob signals the supervisor's whole process group with SIGTERM —

@@ -298,7 +298,7 @@ func executionEnvironmentDigest(request map[string]any) (string, error) {
 // exec did not happen (ENOENT, or a recorded EACCES/ENOEXEC error that should let
 // the caller continue to the next candidate) and ran=true once a child has been
 // started and reaped, in which case code/errorMsg are the receipt values.
-func tryExec(candidate string, argv []string, cwd, stdin string, request map[string]any, outF, errF *os.File, sigCh <-chan os.Signal) (int, string, bool) {
+func tryExec(candidate string, argv []string, cwd, stdin string, request map[string]any, outF, errF *os.File, sigCh <-chan os.Signal) (code int, errorMsg string, ran bool) {
 	cmd := &exec.Cmd{
 		Path:   candidate,
 		Args:   argv,
@@ -310,7 +310,8 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 	}
 	cmd.SysProcAttr = supervisorSysProcAttr()
 	ApplyNativeCommandLine(cmd)
-	if startErr := cmd.Start(); startErr != nil {
+	settle, startErr := startChild(cmd, supervisedOwnedJob(request))
+	if startErr != nil {
 		var errno syscall.Errno
 		if errors.As(startErr, &errno) && errno == syscall.ENOENT {
 			// Nothing recorded for ENOENT; the caller continues the PATH walk.
@@ -319,10 +320,14 @@ func tryExec(candidate string, argv []string, cwd, stdin string, request map[str
 		// EACCES, ENOEXEC, and any other errno: record the first and continue.
 		return 0, mapExecError(startErr, argv[0]), false
 	}
-	if supervisedOwnedJob(request) {
-		defer signalSupervisedChild(cmd, true)
+	if settle != nil {
+		defer func() {
+			if err := settle(); err != nil {
+				code, errorMsg = 127, err.Error()
+			}
+		}()
 	}
-	code, errorMsg := waitChild(cmd, sigCh)
+	code, errorMsg = waitChild(cmd, sigCh)
 	return code, errorMsg, true
 }
 
@@ -334,12 +339,17 @@ func waitChild(cmd *exec.Cmd, sigCh <-chan os.Signal) (int, string) {
 		signaled bool
 		sig      int
 		exitCode int
+		err      error
 	}
 	resCh := make(chan status, 1)
 	go func() {
-		cmd.Wait()
+		waitErr := cmd.Wait()
 		ws := cmd.ProcessState.Sys().(syscall.WaitStatus)
 		var s status
+		var exitErr *exec.ExitError
+		if waitErr != nil && !errors.As(waitErr, &exitErr) {
+			s.err = waitErr
+		}
 		if ws.Signaled() {
 			s.signaled = true
 			s.sig = int(ws.Signal())
@@ -364,6 +374,9 @@ func waitChild(cmd *exec.Cmd, sigCh <-chan os.Signal) (int, string) {
 		terminate()
 		return 130, "owned job was cancelled"
 	case s := <-resCh:
+		if s.err != nil {
+			return 127, s.err.Error()
+		}
 		if s.signaled {
 			return -s.sig, ""
 		}
