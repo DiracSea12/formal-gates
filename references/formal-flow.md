@@ -28,7 +28,9 @@ workflow 的当前入口以 `workflow --help` 和各子命令帮助为准：
 安装、卸载、hook、lifecycle、canary 和脱离 run 的 gate 检查属于维护/诊断面，
 不能推进业务或改写 workflow 状态。正常 loader 要求版本、definition/package 摘要和
 installed-target 身份精确匹配；不匹配返回 `UNSUPPORTED_RUN_VERSION`。原始文件保留
-供 diagnose，当前版本使用新 run ID，不提供兼容、迁移或第二 writer。
+供 diagnose；不支持的 run 版本须使用新 run ID，不提供绕过准入的兼容入口或第二 writer。
+不支持旧格式 run 或跨安装重装、升级接管；当前版本同安装身份内的正常恢复与精确事件重放不变。
+配置绑定与完整历史见[用户与项目设置](user-configuration.md#绑定与运行中生效)。
 
 ## 启动前受理
 
@@ -54,7 +56,7 @@ formal-gates requirement edit --root <repo> --item <原需求序号> \
 不代表用户确认。全部改变产品/流程行为及需要 QA 保证的义务须进入需求点；纯实现位置、
 代码边界与未来约束留在方案正文，不伪装为 QA 的 AC。
 
-**次序固定为：结构预检 → 展示完整文件与精确 revision → 原生真人确认 → start。**
+**次序固定为：材料预检与结构投影 → 展示完整文件与精确 revision → 校验配置与材料 → 原生真人确认 → start。**
 启动前预检使用 start 的材料准备模式，保存载荷，不创建 run：
 
 ```bash
@@ -63,7 +65,7 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 
 输出 `content` 全文、`revision` 精确内容摘要、`requirementDocument` 结构投影，以及
 程序准备的 `intakeCandidate`。在项目目录执行时 root 缺省为当前目录，不做项目发现。
-regular 的 `--document` 复用 requirement show 发布的原需求文档序号；lightweight 复用
+`--document` 可复用 requirement show 发布的原需求文档序号，或
 `--precheck --materials` 发布的普通材料序号。唯一候选可自动选取。
 `start --precheck --materials` 只读发布项目普通文件的材料序号，`--solution-document <序号>`
 选择独立方案，缺省使用正式文件；可重复 `--artifact-document <序号>` 添加确认材料。
@@ -72,15 +74,31 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 `.gates/tmp/intake` 载荷目录，返回 `intake` 序号；保存候选不代表确认，不创建 run，
 不读取或写入 admission/registry。材料选择 flags 仅供 precheck；正常 start 只接收
 由原生真人确认通道接纳的原载荷。精确 `--requirement/--solution/--artifact` 与
-`--save-candidate` 文件接口仅供人工或程序集成。预检只核结构、字段、唯一性与边界；失败先修同一文件，不请求确认。修改后重新预检、
-展示和确认。确认前不启动开发 run、不确定拆分拓扑或派发后续代理。结构预检的通过
+`--save-candidate` 文件接口仅供人工或程序集成。预检不按 `--route` 分流，总是尝试解析 REQ/AC 结构；
+普通材料也可形成候选，不能把候选已保存当作正式路线材料合格。正式路线在启动确认前严格校验需求结构。
+材料或配置校验失败先修正，不请求确认；材料修改后重新预检、展示和确认。确认前不启动开发 run、不确定拆分拓扑或派发后续代理。预检的通过
 不是产品审、技术审或 QA 的 PASS。
+
+### 面板选择流程
+
+需要用户选择流程时，先说明图形面板现在和运行中都可打开：可以让代理调用
+`configure`，也可以在终端运行 `formal-gates config`；关闭 `panelSelection` 可改用对话。
+随后用原 `intake` 序号调用 `configure`。已有 run 不妨碍新受理候选打开面板。
+面板中的“选好了”只返回已保存配置与推导路线，不代表用户批准启动。
+`selected` 或 `timeout` 结果沿原 `confirm_start` 确认；结果含校验错误时先处理错误。
+`cancelled` 或 `superseded` 不得启动，候选失效先重新预检与展示。
+`disabled` 或 `unavailable` 时说明原因，用 `settings` 与对话完成同等选择；
+用户明确要求打开可传 `force`。终端 `formal-gates config` 不受选择模式开关限制，
+也不携带受理候选。
 
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
 精确 revisions。预检已由程序保存完整原对象；调用当前主宿主 MCP 工具 `confirm_start`，
-传入原 `intake` 序号与已选择的 `route`。服务生成 run ID，原生弹窗展示原材料与完整启动操作；
+传入原 `intake` 序号、保存配置的 `configuration` 名称或原序号及推导出的 `route`。
+程序按该配置的启用节点推导路线并核对入参，不一致拒绝；route 不是用户手选档位。
+全部节点关闭为 lightweight，任一节点启用为 regular；不开发却启用 QA、门或返修的组合拒绝。
+服务生成 run ID，原生弹窗展示原材料、所选配置与完整启动操作；
 只有用户亲自确认才直接启动。`root` 缺省为当前目录，无需模型抄写 run ID、摘要或全文。
 普通 CLI `start --intake` / `--intake-receipt` 不接受自报批准。保存候选不会启动 run。
 
@@ -93,14 +111,11 @@ regular 的 `--document` 复用 requirement show 发布的原需求文档序号�
 内容 revision 将 CRLF 规范化为 LF 后计算。路径不能重复或越出项目；start 重算实际
 材料内容，拒绝与 receipt 不符的文件。首次 drive 把确认与 intake digest 恰好登记一次，
 后续步骤消费该确认 revision，不再询问同一全文确认。lightweight 不要求 REQ/AC 案，
-但仍使用真实已确认需求/方案材料的 typed receipt；其准备使用同一命令加
-`--route lightweight`，展示完整材料而不要求 REQ/AC 结构。
+但仍使用同一预检与真实已确认需求/方案材料的 typed receipt，展示完整材料；路线由全关的保存配置推导。
 
 ## 启动与 run 控制
 
 ```bash
-formal-gates workflow start --nodes
-
 formal-gates workflow drive
 formal-gates workflow show
 formal-gates workflow status
@@ -119,7 +134,11 @@ formal-gates workflow diagnose --path <state-or-summary.json>
 `confirm_control` 接纳当前操作并返回下一边界；完成后沿既有 `workflow drive` 消费已授权工作，
 不在确认工具调用内启动模型，也不为连续机械推进增加逐步确认。
 
-`start --nodes` 只读展示产品审、技术审、初始开发、整组 QA、质量门审查和业务返修六项主要职责。用户自由组合，保留原相对顺序与并行关系；关闭职责通过 `confirm_start.disabledNodes` 的原展示序号提交，由程序从定义目录取原身份并随 run 持久化。QA 启用后按原设计→独立审查→执行链运行，黑盒、白盒在路线阶段各按整组选择，模式只归原 SelectedGates；关闭 QA 也关闭 merge QA。未选择关闭时保留默认流程，不暗跑关闭职责或伪造 PASS。恢复和节点继续不改变选择。关闭质量门审查同时不派普通门、合并门和返修成员门；child 继承同一决定，receipt 保留真实路线和原结果，主线仅在门职责启用时准备 child 补门目标。
+流程职责及黑盒/白盒 QA 组通过 `settings show` 查看、在保存配置中修改，保留原相对顺序与并行关系。
+QA 启用后按原设计→独立审查→执行链运行；QA 关闭也关闭 merge QA。
+质量门职责关闭时不派普通门、分片门、合并门和返修成员门；不暗跑关闭职责或伪造 PASS。
+child 继承 master 的绑定名，主线仅在门职责启用时准备 child 补门目标。配置权威与执行选择见
+[用户与项目设置](user-configuration.md)。
 
 show/status/next/drive/submit/progress/message/handoff/replan 从原 engine state 或终态摘要选择当前顶层 run。只有一个时程序自动使用；多个时只读展示程序序号，以 `--run <序号>` 选择实际目标，不按最新时间猜测，也不保存第二个当前 run 指针。程序集成可显式传 `--run-id`；它不能与 `--run` 同用。确认载荷仅从所选原项目/run 的 payloads/control 取出，接纳继续核原候选的项目、run、revision 和 request。`confirm_control` 从原候选自动绑定目标，普通 `submit --confirmation` 不接纳自报批准。
 
@@ -132,7 +151,8 @@ start/show/status/next/drive/submit 默认展示当前语义问题、短选择�
 
 regular 未显式提供 `--base-snapshot` 时，由原 VCS provider Resolve 取得实际不可变基线，
 再交既有 Start 强校验；显式精确 base 仍供人工或程序集成。regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
-单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。实际 start 必须显式传入用户已选择的 regular/lightweight；未明确时先取得用户选择。预检缺省核正式需求结构，不因此选择启动路线。
+单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。实际 start 按保存配置推导路线；
+显式 `--route` 或 `confirm_start.route` 只核对推导结果，不能覆盖配置。预检不选择启动路线。
 lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
 在开发中降为 lightweight。
 
@@ -145,16 +165,20 @@ Event、原 request/token、当前 revision 和展示材料。`confirm_control` 
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
-`confirm_start.configuration` 只为本次启动选取保存的配置，不改启用默认。
-运行中 `submit --configuration <名称或原序号>` 读取保存配置的实际副本；省略名称时，
-`--flow-node <节点或序号> --enabled true|false`、`--qa-mode <blackbox|whitebox或序号> --enabled true|false`
-只改本次当前选择。`--all-gates`/`--no-gates` 选择全部/空普通门；首次门确认可在原 Ask 用 `--gate <原序号>` 组合任意候选，`--gate none` 明确空集合；
-后续更改在 `submit --request SELECT_ROUTE --gate <原序号>` 请求阶段指定，完整配置钉住后按原值确认。组合 `--execution-node --platform --model --effort`
-时把组选择加入同一完整配置；单独执行组 tuple 仍走原临时执行选择。
-这些请求复用 SELECT_ROUTE Ask，程序钉住配置原值、候选全集和原 continuation 影响预览，
-用户确认后才改变本次配置，不改默认文件。产品/技术审在途、初次拓扑或路线未确认时也可改配置，
-但不代替所需拓扑与精确开发计划确认。已 claim 且仍启用的调用保留原 tuple 与恢复绑定；
-关闭职责按原生命周期停止和失效，晚到结果不成为有效完成。启用过去或跳过的职责后，可从原节点继续。
+`confirm_start.configuration` 只选择启动绑定名，不改启用指针；省略时取指针目标。
+run 不能换绑，运行中编辑该名的保存配置，在下一次派发评估生效，不生成配置或执行选择 Ask。
+初始路线 Ask 仍确认精确开发计划与拓扑，不选门子集；门、QA、节点从库当前值取，批准时重算。
+待决 Ask 的配置字段按批准时库值计算；因配置变化失效的候选作废重发。
+应用值历史记录实际变化及未完成工作的复用/重做处置，不伪造用户批准决定。
+未领取的派发改绑新值；已领取调用及其恢复保留原执行与费用归属，关闭职责只记“关闭中”，
+原调用跑完后停止后续派发，不撤回。需要回退时仍用原节点继续、reset 或需求变更确认路径，
+保存或启用节点本身不授予回退权限。完整生效与故障恢复规则见
+[绑定与运行中生效](user-configuration.md#绑定与运行中生效)。
+
+运行中可让代理调用 `configure`，或在自己的终端运行 `formal-gates config`。
+面板不提供换绑或回退；回退通过对话提出，沿原 reset/需求变更确认路径处理。
+代理在已有的授权、确认、异常、进度和结束汇报中顺带提醒这两个打开入口，
+不为提醒面板单独发消息。窗口不可用时继续用对话与 `settings`，不削减配置能力。
 
 运行中的 `businessNodes` 按当前 run 与已建立 child 的同一顺序编号真实职责。
 `next --node <序号>` 只准备从该职责继续的原请求；提交保存的候选，或以
@@ -163,10 +187,10 @@ Event、原 request/token、当前 revision 和展示材料。`confirm_control` 
 revision 和 freshness，用户不抄 run ID 或工作清单。缺少的输入仍由原职责准备，
 终止选择仍走统一 cleanup；节点继续不会授权跳过必做门。
 
-路线的候选门全集、计划绑定、审查候选和 finding、reset 保留与清理范围、需求变更的
+配置库的门目录、计划绑定、审查候选和 finding、reset 保留与清理范围、需求变更的
 原工作身份与 child 原材料、验证摘要与 revision 均由程序读取同一权威状态。模型仅
 选择短序号或业务枚举、解释语义变化，不复述身份、摘要、路径前缀或原对象。
-`gates`、review/candidate/finding、QA cases/obligations 均是一基序号；split 的 `owners`
+配置门选项、review/candidate/finding、QA cases/obligations 均是一基序号；split 的 `owners`
 按当前确认需求中 AC 的原顺序选择，0 表示 master-merge，正整数选择分片。开发提案、
 需求与所有必须展示的原文由候选对象完整提供；不得把预览或保存当作用户批准。
 
@@ -200,7 +224,7 @@ spawn、result、lifecycle 和 HostAction receipt 绑定同一 action、provider
 
 已释放的分片沿各自原 run 消费同一条程序路径，父流程收取原分片收据，合并后集中 QA。
 子流程的实际 Ask 连同原 requestId、选项和原因展示在父输出 children 中，用户仍决定
-子流程路线或实际无法推进的处置。技术准备审的已接受原计划直接展示在 review.readinessProposal，
+子流程精确开发计划或实际无法推进的处置。技术准备审的已接受原计划直接展示在 review.readinessProposal，
 确认时审阅该完整计划及原 revision，不重新抄写计划摘要。拆分计划的 batch.owner
 明确提出分片标识或主线合并职责；拓扑确认采用这些原标识，程序逐片验证其完整检查和
 片内依赖，再从原已确认计划投影 child 的路线确认载荷。子计划摘要与确认字段由程序
@@ -229,11 +253,10 @@ P2/P3 逐项处置并修订，不因级别本身复审。审查修订先生成�
 
 技术审形成 `granularityReview`：Batch→Subtask、依赖、接口、状态边界、DoD、验证、
 恢复与交接。审查者只选择既有检查调用或提出验证目标，不填写 command/parts；缺少调用由开发者准备，程序绑定并执行。
-用户确认精确 split 拓扑或 no-split 理由之后，确认所选门与精确开发计划。
-启动时冻结启用的命名流程配置：流程节点选择及各执行组的平台、模型、推理强度；黑盒与白盒各为一组。
-初始仅有“默认”配置，启用主流程节点、不选普通 QA、选全部普通门，执行选择继承宿主。
-路线 Ask 保留当前候选全集，按冻结配置预选普通门与 QA；可显式改选任意子集（含空集）或全集。
-每个 child 独立确认，候选不含普通 QA；合并验证由 master 按启用职责执行。
+用户确认精确 split 拓扑或 no-split 理由之后，确认精确开发计划。
+门集合、QA、节点与执行选择由绑定配置的库内当前值决定，不逐 run 或分片选门。
+配置默认值与编辑方式见[用户与项目设置](user-configuration.md)。
+每个 child 独立确认自己的精确开发计划，不执行普通 QA；合并验证由 master 按启用职责执行。
 Batch 是现有任务的分组，不新增生命周期；程序为每个开发 Batch 派发全新的零上下文代理，开发会话不跨批复用，Subtask 不能独立派发。
 批次任务书只写仓库无法恢复的决策理由、已知问题/债务及下一任务，不复制可由 VCS、代码或测试推导的内容。TaskKey、Attempt、语义审查轮与业务返修轮分别计数。
 
@@ -274,7 +297,8 @@ RETRY_EXHAUSTED 进入对应 Ask，授权只增加当前精确动作的一轮或
 门审 P2 修复以真实构建、测试和 carry 凭据保留门 PASS，不增加门复审轮；门审 P3 仅
 Seal advisory。QA Review 可选 P2/P3 在 FROZEN 前按 suggestion ID 与理由处置。
 
-三次连续 QA FAIL/长期不可用进入 qa-recovery Ask；可选 fresh review、重新设计、需求
+QA 设计审查连续 FAIL 达到配置上限或 QA 长期不可用时进入 qa-recovery Ask；
+上限见[自动轮数上限](user-configuration.md#自动轮数上限)。可选 fresh review、重新设计、需求
 变化、精确 skip/waiver 或 abort。额外 repair 绑定完整当前摘要、义务和授权，不能积累
 未来授权或为兄弟任务增加额度。
 

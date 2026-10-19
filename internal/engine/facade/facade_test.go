@@ -41,6 +41,7 @@ func testReceipt() IntakeConfirmationReceipt {
 func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	request := StartRequest{
 		RunID: "lightweight-replay", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
@@ -114,6 +115,7 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	receipt := testReceipt()
 	receipt.RequirementRevision = ""
 	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
@@ -129,21 +131,22 @@ func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 	}
 }
 
-func TestStartRequiresExplicitRouteBeforeRunWrite(t *testing.T) {
+func TestStartRejectsInconsistentRouteBeforeRunWrite(t *testing.T) {
 	t.Parallel()
-	for _, route := range []string{"", " "} {
+	for _, route := range []string{"regular", " ", "unsupported"} {
 		t.Run(fmt.Sprintf("route=%q", route), func(t *testing.T) {
 			root := t.TempDir()
+			configureLightweight(t, root)
 			admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
 			for attempt := 0; attempt < 2; attempt++ {
 				f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
 					RunID: "explicit-route", Route: route, IntakeConfirmationReceipt: testReceipt(),
 				}, Admission: admission})
-				if err == nil || !strings.Contains(err.Error(), "route is required; choose regular or lightweight") || f != nil || run.RunID != "" {
-					t.Fatalf("missing route started a run: %+v %v", run, err)
+				if err == nil || !strings.Contains(err.Error(), "differs from configuration route") || f != nil || run.RunID != "" {
+					t.Fatalf("inconsistent route started a run: %+v %v", run, err)
 				}
 				if _, err := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(err) {
-					t.Fatalf("missing route wrote run files: %v", err)
+					t.Fatalf("inconsistent route wrote run files: %v", err)
 				}
 			}
 		})
@@ -153,6 +156,7 @@ func TestStartRequiresExplicitRouteBeforeRunWrite(t *testing.T) {
 func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	request := StartRequest{
 		RunID: "concurrent-start", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
@@ -208,6 +212,7 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	runID := "recover-start-intent"
 	stateDir := filepath.Join(root, EngineNamespace, runID)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -238,6 +243,7 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	options := StartOptions{Root: root, Request: StartRequest{
 		RunID: "summary-retention", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
@@ -279,6 +285,7 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
 	unlock, err := coordination.AcquirePath(admission.RegistryPath+".lock", "admission")
 	if err != nil {
@@ -329,6 +336,7 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	runID := "recover-terminal-intent"
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
 		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
@@ -445,6 +453,7 @@ func TestIntakeDigestCanonicalizesArtifactOrderAndBindsAuthorityAndTransport(t *
 func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	requirement := []byte("# requirement\n")
 	solution := []byte("# solution\n")
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), requirement, 0o600); err != nil {
@@ -498,6 +507,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	}
 
 	badRoot := t.TempDir()
+	configureLightweight(t, badRoot)
 	if err := os.WriteFile(filepath.Join(badRoot, "requirements.md"), requirement, 0o600); err != nil {
 		t.Fatal(err)
 	}

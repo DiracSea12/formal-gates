@@ -112,6 +112,41 @@ func (r *nativeProviderRunner) RunRaw(dir, command string, input []byte, args ..
 	}
 	return body, err
 }
+
+const nativeInputCallerSource = "package main\nimport(\"command\";\"os\")\nfunc main(){if len(os.Args)!=2 || !command.Valid(os.Args[1]){os.Exit(2)}}\n"
+
+func nativeInputCommand(argument string) []string {
+	return []string{"go", "run", "-buildvcs=false", "./.gates/input-call", argument}
+}
+
+func TestNativeProviderInputCommandPreservesInputIdentity(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"go.mod":                    "module command\n\ngo 1.22\n",
+		"app.go":                    "package command\nfunc Valid(s string) bool { return s != \"\" }\n",
+		".gates/input-call/main.go": nativeInputCallerSource,
+	} {
+		target := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, argument := range []string{"valid", ""} {
+		command := nativeInputCommand(argument)
+		body, err := (vcs.ExecRunner{}).RunRaw(root, command[0], nil, command[1:]...)
+		t.Logf("argv=%q stdout=%q error=%v", command, body, err)
+		if argument == "valid" && err != nil {
+			t.Fatal("public caller rejected valid input", err)
+		}
+		if argument == "" && (err == nil || !strings.Contains(err.Error(), "exit status 2")) {
+			t.Fatal("public caller did not reject the actual empty argument", err)
+		}
+	}
+}
+
 func nativeProviderFixture(t *testing.T, name string) (string, string, *nativeProviderRunner) {
 	t.Helper()
 	directory := os.Getenv("NATIVE_VCS_EVIDENCE")
@@ -173,7 +208,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 			t.Fatal(err)
 		}
 	}
-	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package command\nfunc Valid(s string) bool { return s != \"\" }\n", ".gates/requirements.md": validationDocument} {
+	for path, body := range map[string]string{"go.mod": "module command\n\ngo 1.22\n", "app.go": "package command\nfunc Valid(s string) bool { return s != \"\" }\n", ".gates/requirements.md": validationDocument, ".gates/input-call/main.go": nativeInputCallerSource} {
 		target := filepath.Join(root, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			t.Fatal(err)
@@ -183,8 +218,11 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 		}
 	}
 	p := vcs.NewNative(root, name, runner)
-	if err := p.Track([]string{"go.mod", "app.go", ".gates/requirements.md"}); err != nil {
+	if err := p.Track([]string{"go.mod", "app.go", ".gates/requirements.md", ".gates/input-call/main.go"}); err != nil {
 		t.Fatal(err)
+	}
+	if name == "svn" {
+		command(root, "svn", "propset", "svn:ignore", "config.json\nconfig.json.lock", ".gates")
 	}
 	if err := p.Commit("fixture project"); err != nil {
 		t.Fatal(err)
@@ -198,6 +236,7 @@ func nativeProviderFixture(t *testing.T, name string) (string, string, *nativePr
 func startNativeProviderDriver(t *testing.T, name string) (*validationDriver, *nativeProviderRunner) {
 	t.Helper()
 	root, base, runner := nativeProviderFixture(t, name)
+	ensureEditableConfiguration(t, root)
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(validationDocument)))
 	receipt := testReceipt()
 	receipt.RequirementSource, receipt.Artifacts[0].Path = ".gates/requirements.md", ".gates/requirements.md"
@@ -305,6 +344,7 @@ func TestRegularStartPersistsSelectedVCS(t *testing.T) {
 func TestLightweightStartDoesNotSelectNativeVCS(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	f, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "SVN", RunID: "lightweight", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}})
 	if err != nil {
 		t.Fatal(err)
@@ -645,6 +685,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 		t.Run(fmt.Sprintf("lost=%t", lost), func(t *testing.T) {
 			t.Parallel()
 			root, _, runner := nativeProviderFixture(t, "p4")
+			ensureEditableConfiguration(t, root)
 			path := filepath.Join(root, "unused.txt")
 			if err := os.WriteFile(path, []byte("retired command notes\n"), 0644); err != nil {
 				t.Fatal(err)
@@ -774,6 +815,8 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				t.Parallel()
 				master, runner := startNativeProviderDriver(t, name)
 				passPreDevelopmentReviews(t, master, splitCommandPlan("core", "tooling"))
+				route := routeDecisionForGates([]string{"blackbox", "quality", "security"})
+				master.configureRoute(&route)
 
 				topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"core", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 2, Parallel: "independent command modules"}
 				master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
@@ -835,8 +878,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					}
 					manifest.Cases[i].PublicEntry = "public Valid input function"
 					manifest.Cases[i].Steps = "invoke the public input function through its isolated caller"
-					command := "mkdir -p .gates/input-call; cat > .gates/input-call/main.go <<'GO'\npackage main\nimport(\"command\";\"os\")\nfunc main(){if len(os.Args)!=2 || !command.Valid(os.Args[1]){os.Exit(2)}}\nGO\ngo run -buildvcs=false ./.gates/input-call " + fmt.Sprintf("%q", argument)
-					manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationShell, Command: command}}
+					manifest.Cases[i].Operations = []coverage.Operation{{Kind: coverage.OperationArgv, Argv: nativeInputCommand(argument)}}
 				}
 				master.business(design, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Manifest: &manifest})
 				master.drive()
@@ -846,7 +888,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				master.drive()
 				receipts := make(map[string]protocol.SliceReceipt)
 				entries := make(map[string]string)
-				for index, plan := range parent.ChildCreation.Children {
+				for _, plan := range parent.ChildCreation.Children {
 					f, err := Open(master.f.root, plan.RunID)
 					if err != nil {
 						t.Fatal(err)
@@ -858,9 +900,6 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 					child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 					reopenNativeProviderDriver(t, child, name, runner)
 					route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
-					if index == 1 {
-						route.Selected = []string{"quality"}
-					}
 					development := sliceLanePlan()
 					path := plan.SliceID + ".go"
 					development.Batches[0].Artifacts = []string{path}
@@ -905,7 +944,7 @@ func TestNativeProviderSplitDeliveryPreservesWorkspaceProofs(t *testing.T) {
 				}
 				master.drive()
 				state := driverState(t, master)
-				if state.Validation.Candidate == nil || len(state.Validation.Waves) != 1 || len(state.Validation.Waves[0].Targets) != 5 {
+				if state.Validation.Candidate == nil || len(state.Validation.Waves) != 1 || len(state.Validation.Waves[0].Targets) != 6 {
 					t.Fatal("common final candidate did not include merge QA/gate and all selected slice gates")
 				}
 				candidate := state.Validation.Candidate

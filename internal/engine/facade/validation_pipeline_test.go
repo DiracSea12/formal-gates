@@ -399,6 +399,12 @@ func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 		d.drive()
 	}
 }
+func (d *validationDriver) routeAskIndex(kind protocol.ControlKind, gates []string) int {
+	return slices.IndexFunc(d.run.PendingAsks, func(pending PendingAskFace) bool {
+		return kind == protocol.ControlSelectRoute && pending.Control == kind && slices.Equal(pending.RouteGates, gates)
+	})
+}
+
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
 	if p.Topology != nil && p.Topology.Decision == "split" && p.Topology.DevelopmentPlan == nil {
@@ -413,16 +419,17 @@ func (d *validationDriver) control(kind protocol.ControlKind, choice string, p p
 	var err error
 	if kind == protocol.ControlSelectRoute && p.Route != nil {
 		e, err = protocol.NewRouteRequestEvent(id, p.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		if err == nil {
-			e.Request.Configuration = p.Route.Configuration
-		}
 	} else {
 		e, err = protocol.NewRequestEvent(id, kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
 	}
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	d.submit(e)
+	if i := d.routeAskIndex(kind, e.Request.RouteGates); i >= 0 {
+		id = protocol.EventID(d.run.PendingAsks[i].RequestID)
+	} else {
+		d.submit(e)
+	}
 	var token string
 	for _, a := range d.run.PendingAsks {
 		if a.RequestID == string(id) {
@@ -471,6 +478,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	if mocked {
 		f, r, err = abstractValidationFacade(t, root, provider, runner, base, receipt)
 	} else {
+		ensureEditableConfiguration(t, root)
 		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	}
 	if err != nil {
@@ -1239,16 +1247,17 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err := os.WriteFile(filepath.Join(root, req.IntakeConfirmationReceipt.RequirementSource), []byte(validationDocument), 0600); err != nil {
 		return nil, Run{}, err
 	}
-	engine, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID)})
-	if err != nil {
-		return nil, Run{}, err
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, Run{}, err
 	}
+	ensureEditableConfiguration(t, root)
 	effective, err := settings.Load(root, home)
 	tokenCap := effective.Values.TokenCap
+	if err != nil {
+		return nil, Run{}, err
+	}
+	engine, err := protocol.New(store, protocol.Config{Settings: &effective, NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admitted.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, Run{}, err
 	}

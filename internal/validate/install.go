@@ -1746,12 +1746,13 @@ type installPathResolver func(home, project, scope string) (base, hookConfig, ma
 // the declarative host.PathLayout. Ordinary hosts use the descriptor paths;
 // a new host should need this registry only when its installer has a custom
 // home/config convention.
-var installPathResolvers = map[host.HookKind]installPathResolver{
-	host.HookDSH: dshInstallTargetPaths,
+var installPathResolvers = map[string]installPathResolver{
+	host.DeepSeek: dshInstallTargetPaths,
+	host.Devin:    devinInstallTargetPaths,
 }
 
 func installTargetPaths(descriptor host.Descriptor, home, project, scope string) (string, string, string, error) {
-	if resolver, ok := installPathResolvers[descriptor.Hook.Kind]; ok {
+	if resolver, ok := installPathResolvers[descriptor.ID]; ok {
 		return resolver(home, project, scope)
 	}
 	if scope == "global" {
@@ -1897,9 +1898,9 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
-	// Metered hosts must bind their transcript parser even when their hook
-	// response uses the generic protocol (Claude Code).
-	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil {
+	// Bind the provider when hooks need its protocol, transcript parser or
+	// native project context.
+	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil || descriptor.ID == host.Devin {
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
@@ -2155,7 +2156,7 @@ func installerHookCommands(target installTarget) map[string]bool {
 		}
 	}
 	gateArgs := []string{"hook", "decide"}
-	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil) {
+	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil || descriptor.ID == host.Devin) {
 		add("hook", "decide")
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}

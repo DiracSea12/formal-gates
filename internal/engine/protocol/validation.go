@@ -40,6 +40,7 @@ func (s *State) validationRequirementCurrent() bool {
 
 // DesignTask refers to the accepted design result supplying the artifact inputs.
 type CaseSet struct {
+	LimitHistory  []review.LimitInterval      `json:"limitHistory"`
 	DesignTask    runtime.TaskKey             `json:"designTask"`
 	AffectedCases []string                    `json:"affectedCases,omitempty"`
 	Paths         []string                    `json:"paths,omitempty"`
@@ -105,9 +106,11 @@ type ValidationResult struct {
 	Findings           []review.Finding             `json:"findings,omitempty"`
 }
 
-// WorkBinding accompanies every issued business task and its result. Revision
-// is the confirmed content identity; Generation distinguishes its occurrence.
+// WorkBinding accompanies every issued business task and its result.
+// RequirementRevision identifies confirmed content; Generation distinguishes
+// its occurrence. Optional round fields retain the logical admission.
 type WorkBinding struct {
+	review.RoundExecution
 	PureP2              bool            `json:"pureP2,omitempty"`
 	VerificationSource  string          `json:"verificationSource,omitempty"`
 	WorkspaceID         string          `json:"workspaceId,omitempty"`
@@ -123,6 +126,7 @@ type WorkBinding struct {
 }
 
 type ValidationWave struct {
+	LimitHistory         []review.LimitInterval         `json:"limitHistory"`
 	CheckpointTasks      []runtime.TaskKey              `json:"checkpointTasks,omitempty"`
 	AuthorizationRequest string                         `json:"authorizationRequest,omitempty"`
 	Coverage             coverage.CoverageContract      `json:"coverage"`
@@ -433,11 +437,7 @@ func (s *State) qaReviewTarget(mode coverage.ReviewKind) string {
 // through receipt pairing, retries and an explicitly carried requirement change.
 func (s *State) prewaveBlocked(mode coverage.ReviewKind, role string, cd *compiler.CompiledDefinition) bool {
 	set := s.Validation.Sets[mode]
-	failures := 0
-	for i := len(set.ReviewHistory) - 1; i >= 0 && set.ReviewHistory[i].Review.Verdict() == coverage.StatusFail; i-- {
-		failures++
-	}
-	if failures < 3 {
+	if qaFailureStreak(set) < s.qaRoundLimit(mode) {
 		return false
 	}
 	for action, binding := range s.DispatchBindings {
@@ -452,33 +452,34 @@ func (s *State) prewaveBlocked(mode coverage.ReviewKind, role string, cd *compil
 	}
 	for id, d := range s.Decisions {
 		r := s.PendingAsks[id].Validation
-		if r == nil || r.Mode != mode {
-			continue
-		}
-		original := requestCaseSet(r)
-		if original == nil || len(original.ReviewHistory) != len(set.ReviewHistory) {
-			continue
-		}
-		switch r.Kind {
-		case "QA_REVIEW":
-			if r.Target == s.qaReviewTarget(mode) && (d.Choice == "redesign" || d.Choice == "approve" && role == "engine.qa.review.rationale.v2") {
-				return false
-			}
-		case "RETRY":
-			if d.Choice == "redesign" {
-				return false
-			}
-		case "THAW", "QA_ARTIFACT_REPAIR":
-			if d.Choice == "approve" {
-				return false
-			}
-		case "VALIDATION_DETAIL_DISPOSITION":
-			if d.Choice == "approve" && d.Validation != nil && d.Validation.Remedy == "QA_ARTIFACT_REPAIR" {
-				return false
-			}
+		if s.requirementWorkRevisionCurrent(d.Revision) && qaDecisionAuthorizesRound(r, d, mode, role, len(set.ReviewHistory), s.qaReviewTarget(mode)) {
+			return false
 		}
 	}
 	return true
+}
+
+// Decisions authorize one review-history boundary, not the current failure
+// streak or a later boundary with the same number of failures.
+func qaDecisionAuthorizesRound(r *ValidationRequest, d RecordedDecision, mode coverage.ReviewKind, role string, reviews int, target string) bool {
+	if r == nil || r.Mode != mode {
+		return false
+	}
+	original := requestCaseSet(r)
+	if original == nil || len(original.ReviewHistory) != reviews {
+		return false
+	}
+	switch r.Kind {
+	case "QA_REVIEW":
+		return r.Target == target && (d.Choice == "redesign" || d.Choice == "approve" && role == "engine.qa.review.rationale.v2")
+	case "RETRY":
+		return d.Choice == "redesign"
+	case "THAW", "QA_ARTIFACT_REPAIR":
+		return d.Choice == "approve"
+	case "VALIDATION_DETAIL_DISPOSITION":
+		return d.Choice == "approve" && d.Validation != nil && d.Validation.Remedy == "QA_ARTIFACT_REPAIR"
+	}
+	return false
 }
 
 func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefinition) WorkBinding {
@@ -671,7 +672,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 			continue
 		}
 		work := &member
-		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2
+		blocked := !s.workspaceReady(work.task, cd) || !s.repairReady(work) || s.validationDispositionBlocked(work.wave) || s.repairRoundBlocked(work)
 		reason := decision.WaitReason("")
 		if blocked {
 			reason = decision.WaitDependencies
@@ -716,11 +717,6 @@ func (s *State) validationRouteDigest() string {
 		Disabled  []string
 	}{s.RouteConfirmed, gates, s.Topology, disabled})
 }
-
-// automaticValidationWaveLimit 是不经逐次授权的返修轮数上限：计满后每轮
-// 返修都需 REPAIR Ask 显式授权（授权闸与 REPAIR Ask 摘要的剩余轮数共用
-// 本常量）。
-const automaticValidationWaveLimit = 3
 
 func (s *State) completedValidationWaves() int {
 	n := 0

@@ -231,6 +231,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	transcript := filepath.Join(root, "owner.jsonl")
 	writeTranscript(t, transcript, []string{
 		`{"type":"assistant","uuid":"base-1","message":{"usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":10}}}`,
@@ -282,6 +283,7 @@ func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 func TestOwnerMissingBaselineMarksUnavailable(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, Request: StartRequest{RunID: "owner-missing", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)

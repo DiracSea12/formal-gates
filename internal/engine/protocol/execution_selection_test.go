@@ -1,48 +1,101 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
-	"strconv"
+	"slices"
 	"testing"
 
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/host"
 	"formal-gates/internal/requirement"
 	"formal-gates/internal/settings"
 )
 
-func selectExecution(t *testing.T, e *Engine, id string, selection ExecutionSelection) (Event, Event) {
-	t.Helper()
-	request := Event{ID: EventID(id), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
-	accepted, err := e.Submit(request, Observation{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := e.Freshness(RequestID(accepted.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision := Event{ID: EventID(id + ":decision"), Kind: KindDecide, Decide: &DecidePayload{Request: RequestID(accepted.RequestID), Token: token, Choice: "approve", Execution: &ExecutionSelectionDecision{Digest: selection.CanonicalDigest()}}}
-	if _, err := e.Submit(decision, Observation{}); err != nil {
-		t.Fatal(err)
-	}
-	return request, decision
+// boundLibrary serves one named configuration and records each requested name.
+type boundLibrary struct {
+	name  string
+	value settings.Configuration
+	err   error
+	reads []string
 }
 
-func TestExecutionSelectionChangesReadyOnlyBeforeNativeClaim(t *testing.T) {
+func (l *boundLibrary) read(name string) (settings.Configuration, error) {
+	l.reads = append(l.reads, name)
+	if l.err != nil {
+		return settings.Configuration{}, l.err
+	}
+	if name != l.name {
+		return settings.Configuration{}, &ConfigurationUnavailable{Reason: "bound configuration " + name + " does not exist"}
+	}
+	return settings.CloneConfiguration(l.value), nil
+}
+
+// bindLibrary records the initial applied value of the built-in default name.
+func bindLibrary(t *testing.T, e *Engine, value settings.Configuration) *boundLibrary {
+	t.Helper()
+	library := &boundLibrary{name: settings.DefaultConfigurationName, value: value}
+	e.cfg.Configuration = library.read
+	reconcile(t, e)
+	return library
+}
+
+func reconcile(t *testing.T, e *Engine) {
+	t.Helper()
+	snapshot := e.LoadMustSucceed(t)
+	if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func executionLibrary(node string, choice ExecutionChoice) settings.Configuration {
+	return settings.Configuration{QAModes: []string{}, Execution: map[string]ExecutionChoice{node: choice}}
+}
+
+func readyReviewEngine(t *testing.T) (*Engine, string) {
+	t.Helper()
+	e, dir := selectedReviewEngine(t, nil)
+	snapshot := e.LoadMustSucceed(t)
+	snapshot.State.Validation = &Validation{RequirementRevision: snapshot.State.RequirementRevision(), Generation: snapshot.State.requirementGeneration(), Document: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}}
+	if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	return e, dir
+}
+
+func TestRunCreationWritesConfigurationAndLimitHistory(t *testing.T) {
+	e, dir := readyReviewEngine(t)
+	before := stateBytesOf(t, dir)
+	state := e.LoadMustSucceed(t).State
+	if len(state.AppliedConfigurations) != 1 || state.ConfigurationName() != settings.DefaultConfigurationName {
+		t.Fatal("a run was created without its initial configuration history")
+	}
+	entry := state.AppliedConfigurations[0]
+	if entry.Revision != 1 || entry.Preview == nil || entry.Effect == nil || entry.Effect.AppliedRevision != 1 || entry.Changed != nil {
+		t.Fatal("initial configuration facts were not recorded at creation", entry)
+	}
+	for _, series := range []review.Series{state.ReviewSeries.ProductReview, state.ReviewSeries.StartReadiness} {
+		if !reflect.DeepEqual(series.LimitHistory, []review.LimitInterval{{Value: settings.DefaultRoundLimit, Revision: 1}}) {
+			t.Fatal("initial round limit history was not recorded at creation", series.LimitHistory)
+		}
+	}
+	if !slices.Equal(before, stateBytesOf(t, dir)) || len(state.Decisions) != 0 {
+		t.Fatal("loading backfilled run facts or fabricated a user decision")
+	}
+}
+
+func TestLibraryExecutionRebindsOnlyUnclaimedDispatch(t *testing.T) {
 	t.Parallel()
 	for _, claimed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unclaimed", true: "claimed"}[claimed], func(t *testing.T) {
-			e, dir := selectedReviewEngine(t, nil)
-			snapshot := e.LoadMustSucceed(t)
-			snapshot.State.Validation = &Validation{RequirementRevision: snapshot.State.RequirementRevision(), Generation: snapshot.State.requirementGeneration(), Document: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}}
-			if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
-				t.Fatal(err)
-			}
+			e, dir := readyReviewEngine(t)
+			library := bindLibrary(t, e, settings.Configuration{QAModes: []string{}})
 			action := issueReady(t, e)[0]
 			before := e.LoadMustSucceed(t).State
 			pending := before.PendingActions[action]
@@ -56,41 +109,187 @@ func TestExecutionSelectionChangesReadyOnlyBeforeNativeClaim(t *testing.T) {
 				}
 				return nil, nil
 			}
-			selection := ExecutionSelection{Node: "product-review", Choice: ExecutionChoice{Provider: host.Claude, Model: "chosen-native-model", ReasoningEffort: "high"}}
-			request, decision := selectExecution(t, e, "choose-product", selection)
+			saved := ExecutionChoice{Provider: host.Claude, Model: "chosen-native-model", ReasoningEffort: "high"}
+			library.value = executionLibrary("product-review", saved)
+			if _, _, err := e.Drive(Observation{}); err != nil {
+				t.Fatal(err)
+			}
 			after := e.LoadMustSucceed(t).State
-			want := selection.Choice
+			want := saved
 			if claimed {
 				want = before.executionChoice(original.Bindings)
 			}
 			if got, ok := after.ActionExecutionChoice(action); !ok || got != want {
 				t.Fatalf("execution binding = %+v/%t, want %+v", got, ok, want)
 			}
-			if after.EffectiveExecutionChoice(selection.Node) != selection.Choice || after.PendingActions[action] != pending || after.Attempts[pending.Task].ID != original.ID || after.Attempts[pending.Task].Attempts != original.Attempts || after.RunProvider != before.RunProvider || !reflect.DeepEqual(after.FlowSelection, before.FlowSelection) {
-				t.Fatal("choice changed execution identity, policy, controller or flow selection")
+			if after.EffectiveExecutionChoice("product-review") != saved || after.PendingActions[action] != pending || after.Attempts[pending.Task].ID != original.ID || after.Attempts[pending.Task].Attempts != original.Attempts || after.RunProvider != before.RunProvider || !reflect.DeepEqual(after.FlowSelection, before.FlowSelection) {
+				t.Fatal("library value changed execution identity, policy, controller or flow selection")
 			}
-			input, ok := after.WorkerInput(action, e.cfg.Definition)
-			if !ok || input.Execution != want || input.Provider != want.Provider {
+			if input, ok := after.WorkerInput(action, e.cfg.Definition); !ok || input.Execution != want || input.Provider != want.Provider {
 				t.Fatal("native material did not project its action's execution choice", input)
 			}
-			persisted := stateBytesOf(t, dir)
-			for _, event := range []Event{request, decision} {
-				if _, err := e.Submit(event, Observation{}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !bytes.Equal(persisted, stateBytesOf(t, dir)) {
-				t.Fatal("accepted replay changed the durable decision or binding")
+			history := after.AppliedConfigurations
+			if len(history) != 2 || !slices.Equal(history[1].Changed, []string{"execution.product-review"}) || !reflect.DeepEqual(history[1].Configuration, library.value) {
+				t.Fatalf("applied history = %+v", history)
 			}
 			reopened, err := New(mustStore(t, dir), e.cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			recovered := reopened.LoadMustSucceed(t).State
-			if got, _ := recovered.ActionExecutionChoice(action); got != want || recovered.EffectiveExecutionChoice(selection.Node) != selection.Choice {
+			if got, _ := recovered.ActionExecutionChoice(action); got != want || recovered.EffectiveExecutionChoice("product-review") != saved {
 				t.Fatal("restart changed original or future execution choice")
 			}
 		})
+	}
+}
+
+func TestSavedLibraryValueReachesNextDispatch(t *testing.T) {
+	t.Parallel()
+	e, _ := readyReviewEngine(t)
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{}})
+	revision := e.LoadMustSucceed(t).Revision
+	if _, _, err := e.Plan(Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.LoadMustSucceed(t).Revision != revision {
+		t.Fatal("a read-only plan wrote the library value")
+	}
+	saved := ExecutionChoice{Provider: host.Claude, Model: "saved-model", ReasoningEffort: "low"}
+	library.value = executionLibrary("product-review", saved)
+	if _, _, err := e.Drive(Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	state := e.LoadMustSucceed(t).State
+	if len(state.PendingActions) != 1 {
+		t.Fatal("drive did not issue the next dispatch", state.PendingActions)
+	}
+	for _, pending := range state.PendingActions {
+		bindings := state.Attempts[pending.Task].Bindings
+		if bindings.Responsibility != saved.Provider || *bindings.Model != saved.Model || *bindings.ReasoningEffort != saved.ReasoningEffort {
+			t.Fatal("dispatch record does not carry the saved library value", bindings)
+		}
+	}
+	settled := e.LoadMustSucceed(t).Revision
+	if _, _, err := e.Drive(Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.LoadMustSucceed(t).Revision != settled || len(e.LoadMustSucceed(t).State.AppliedConfigurations) != 2 {
+		t.Fatal("an unchanged library produced a commit or history entry")
+	}
+}
+
+func TestInitialSnapshotAndFieldLevelHistory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cd := compiledCanonicalWorkflow(t)
+	initial := settings.Configuration{QAModes: []string{"blackbox"}, Execution: map[string]ExecutionChoice{"development": {Model: "dev-model"}}}
+	library := &boundLibrary{name: "甲", value: initial}
+	effective := &settings.Effective{ConfigurationName: "甲", Configuration: initial, ConfigurationSource: "/project/.gates/config.json"}
+	e, err := New(mustStore(t, dir), Config{Settings: effective, Configuration: library.read, Definition: cd, Registry: definition.Registry(), Capacity: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseIntakeRegistered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.InitWithMetadata(view, testProvider, Observation{}, "bound-run", "regular", reviewConfirmation(), "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	state := e.LoadMustSucceed(t).State
+	if len(state.AppliedConfigurations) != 1 || state.AppliedConfigurations[0].Revision != 1 || state.AppliedConfigurations[0].Changed != nil || !reflect.DeepEqual(state.AppliedConfigurations[0].Configuration, initial) {
+		t.Fatalf("initial applied snapshot = %+v", state.AppliedConfigurations)
+	}
+	if state.ConfigurationName() != "甲" || !reflect.DeepEqual(state.Settings.Configuration, settings.Configuration{}) || state.Settings.ConfigurationSource != "" {
+		t.Fatal("run kept a frozen configuration beside its binding", state.Settings)
+	}
+	gates := []string{"security"}
+	library.value = settings.Configuration{
+		FlowSelection: &settings.FlowSelection{Disabled: []string{"repair"}},
+		QAModes:       []string{"blackbox", "whitebox"},
+		Gates:         &gates,
+		Execution:     map[string]ExecutionChoice{"development": {Model: "dev-model"}, "qa-whitebox": {Provider: host.Claude}},
+	}
+	reconcile(t, e)
+	state = e.LoadMustSucceed(t).State
+	latest := state.AppliedConfigurations[len(state.AppliedConfigurations)-1]
+	want := []string{"execution.qa-whitebox", "flowSelection", "gates", "qaModes"}
+	if len(state.AppliedConfigurations) != 2 || !slices.Equal(latest.Changed, want) || !reflect.DeepEqual(latest.Configuration, library.value) || latest.Revision != e.LoadMustSucceed(t).Revision {
+		t.Fatalf("field-level history = %+v, want changed %v", latest, want)
+	}
+	if !slices.Equal(library.reads[len(library.reads)-1:], []string{"甲"}) {
+		t.Fatal("reconciliation did not read the bound name", library.reads)
+	}
+}
+
+func TestUnavailableConfigurationHoldsNewDispatchUntilResolved(t *testing.T) {
+	t.Parallel()
+	e, _ := readyReviewEngine(t)
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{}})
+	assertHeld := func(detail string) {
+		t.Helper()
+		revision := e.LoadMustSucceed(t).Revision
+		for _, plan := range []func() (*decision.Plan, uint64, error){func() (*decision.Plan, uint64, error) { return e.Plan(Observation{}) }, func() (*decision.Plan, uint64, error) { return e.Drive(Observation{}) }} {
+			got, _, err := plan()
+			if err != nil || got.Next.Kind != decision.KindWait || got.Next.Wait.Reason != decision.WaitConfigurationUnavailable || got.Next.Wait.Detail != detail {
+				t.Fatalf("unavailable configuration plan = %+v %v", got, err)
+			}
+		}
+		if state := e.LoadMustSucceed(t); state.Revision != revision || len(state.State.PendingActions) != 0 {
+			t.Fatal("an unavailable configuration issued work or persisted a stop")
+		}
+	}
+	library.err = &ConfigurationUnavailable{Reason: "config.json: expected a JSON object"}
+	assertHeld("config.json: expected a JSON object")
+	library.err, library.name = nil, "renamed"
+	assertHeld("bound configuration 默认 does not exist")
+
+	library.name, library.err = settings.DefaultConfigurationName, errors.New("config.json: file is being replaced")
+	library.value = executionLibrary("product-review", ExecutionChoice{Provider: host.Claude, Model: "unread-model"})
+	plan, _, err := e.Plan(Observation{})
+	if err != nil || plan.Next.Kind != decision.KindReady {
+		t.Fatal("a transient read stopped dispatch", plan, err)
+	}
+	reconcile(t, e)
+	if state := e.LoadMustSucceed(t).State; len(state.AppliedConfigurations) != 1 || state.EffectiveExecutionChoice("product-review") != (ExecutionChoice{Provider: testProvider}) {
+		t.Fatal("a transient read replaced the applied value", state.AppliedConfigurations)
+	}
+
+	library.err = nil
+	library.value = executionLibrary("product-review", ExecutionChoice{Provider: host.Claude, Model: "restored-model"})
+	if _, _, err := e.Drive(Observation{}); err != nil {
+		t.Fatal(err)
+	}
+	state := e.LoadMustSucceed(t).State
+	if len(state.PendingActions) != 1 {
+		t.Fatal("resolved configuration did not resume dispatch")
+	}
+	for id := range state.PendingActions {
+		if got, _ := state.ActionExecutionChoice(id); got.Model != "restored-model" {
+			t.Fatal("resumed dispatch did not use the restored value", got)
+		}
+	}
+}
+
+func TestMergeQAExecutionFollowsSelectedQAModes(t *testing.T) {
+	t.Parallel()
+	black := ExecutionChoice{Provider: host.Codex, Model: "black-model", ReasoningEffort: "medium"}
+	white := ExecutionChoice{Provider: host.Claude, Model: "white-model"}
+	cd := compiledCanonicalWorkflow(t)
+	for _, sample := range []struct {
+		modes []string
+		want  ExecutionChoice
+	}{{[]string{"whitebox"}, white}, {[]string{"blackbox", "whitebox"}, white}, {[]string{"blackbox"}, black}} {
+		state := &State{RunProvider: host.Codex, SliceChild: &SliceChildBinding{MasterRunID: "master", SliceID: "core"}, SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Generation: 1}}
+		state.AppliedConfigurations = []AppliedConfiguration{{Configuration: settings.Configuration{QAModes: sample.modes, Execution: map[string]ExecutionChoice{"qa-blackbox": black, "qa-whitebox": white}}}}
+		task := pipelineTask(cd, "engine.qa.design.v6", state.nextDesignScope(coverage.ReviewMerge, cd))
+		if node := state.ExecutionNode(task, cd); state.EffectiveExecutionChoice(node) != sample.want {
+			t.Fatalf("merge QA with modes %v used %q %+v", sample.modes, node, state.EffectiveExecutionChoice(node))
+		}
+	}
+	if (&State{}).ExecutionNode(runtime.TaskKey{}, cd) != "" {
+		t.Fatal("unknown task invented a major node")
 	}
 }
 
@@ -112,7 +311,7 @@ func TestExecutionBindingsPreserveFieldPresence(t *testing.T) {
 			}
 			s := richState(t)
 			s.Settings = &settings.Effective{Values: settings.Values{Model: "gpt-6.1-sol", ReasoningEffort: "high"}}
-			s.Decisions["future-review"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 99, Execution: &ExecutionSelection{Node: "product-review", Choice: ExecutionChoice{Provider: host.Codex, Model: "future-model", ReasoningEffort: "low"}}}
+			s.AppliedConfigurations = []AppliedConfiguration{{Configuration: executionLibrary("product-review", ExecutionChoice{Provider: host.Codex, Model: "future-model", ReasoningEffort: "low"})}}
 			pending := s.PendingActions[reviewAction]
 			bindings.Task, bindings.Responsibility = pending.Task, host.Claude
 			attempt := s.Attempts[pending.Task]
@@ -145,15 +344,16 @@ func TestExecutionBindingsPreserveFieldPresence(t *testing.T) {
 
 func TestPlatformSelectionPreservesNativeOmissionAfterRestart(t *testing.T) {
 	t.Parallel()
-	e, dir := selectedReviewEngine(t, nil)
+	e, dir := readyReviewEngine(t)
 	snapshot := e.LoadMustSucceed(t)
-	snapshot.State.Settings = &settings.Effective{Values: settings.Values{Model: "gpt-6.1-sol", ReasoningEffort: "high"}}
-	snapshot.State.Validation = &Validation{RequirementRevision: snapshot.State.RequirementRevision(), Generation: snapshot.State.requirementGeneration(), Document: requirement.FrozenRequirementProjection{Content: "confirmed requirement"}}
+	snapshot.State.Settings = &settings.Effective{ConfigurationName: settings.DefaultConfigurationName, Values: settings.Values{Model: "gpt-6.1-sol", ReasoningEffort: "high"}}
 	if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
 		t.Fatal(err)
 	}
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{}})
 	action := issueReady(t, e)[0]
-	selectExecution(t, e, "native-platform-defaults", ExecutionSelection{Node: "product-review", Choice: ExecutionChoice{Provider: host.Claude}})
+	library.value = executionLibrary("product-review", ExecutionChoice{Provider: host.Claude})
+	reconcile(t, e)
 	reopened, err := New(mustStore(t, dir), e.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -168,18 +368,20 @@ func TestPlatformSelectionPreservesNativeOmissionAfterRestart(t *testing.T) {
 	}
 }
 
-func TestExecutionSelectionPreservesParallelAndAuxiliaryResponsibilities(t *testing.T) {
+func TestLibraryExecutionPreservesParallelAndAuxiliaryResponsibilities(t *testing.T) {
 	t.Parallel()
 	e, before, issued := parallelValidationInputState(t)
-	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model", ReasoningEffort: "off"}}
-	selectExecution(t, e, "choose-qa", selection)
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{"blackbox", "whitebox"}})
+	saved := ExecutionChoice{Provider: host.Claude, Model: "qa-model", ReasoningEffort: "off"}
+	library.value = settings.Configuration{QAModes: []string{"blackbox", "whitebox"}, Execution: map[string]ExecutionChoice{"qa-blackbox": saved}}
+	reconcile(t, e)
 	after := e.LoadMustSucceed(t).State
 	qa, other := 0, 0
 	for _, action := range issued {
 		original, _ := before.ActionExecutionChoice(action.ActionID)
 		want := original
 		if after.ExecutionNode(action.Task, e.cfg.Definition) == "qa-blackbox" {
-			want = selection.Choice
+			want = saved
 			qa++
 		} else {
 			other++
@@ -200,31 +402,12 @@ func TestExecutionSelectionPreservesParallelAndAuxiliaryResponsibilities(t *test
 	}
 }
 
-func TestExecutionSelectionRejectsWrongDecisionWithoutChangingChoice(t *testing.T) {
-	t.Parallel()
-	e, dir := selectedReviewEngine(t, nil)
-	selection := ExecutionSelection{Node: "development", Choice: ExecutionChoice{Provider: host.Codex, Model: "native-model"}}
-	request := Event{ID: "execution-offer", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
-	accepted, err := e.Submit(request, Observation{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := stateBytesOf(t, dir)
-	decision := Event{ID: "wrong-execution", Kind: KindDecide, Decide: &DecidePayload{Request: RequestID(accepted.RequestID), Token: accepted.FreshnessToken, Choice: "approve", Execution: &ExecutionSelectionDecision{Digest: "different-choice"}}}
-	if _, err := e.Submit(decision, Observation{}); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
-		t.Fatal("wrong selection digest changed durable state", err)
-	}
-	request.ID, request.Request.Execution = "invalid-node", &ExecutionSelection{Node: "invented-node", Choice: selection.Choice}
-	if _, err := e.Submit(request, Observation{}); err == nil || !bytes.Equal(before, stateBytesOf(t, dir)) {
-		t.Fatal("unknown node changed durable state", err)
-	}
-}
-
 func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
 	t.Parallel()
 	e, _, issued := parallelValidationInputState(t)
-	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "qa-model"}}
-	selectExecution(t, e, "qa-provider", selection)
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{"blackbox", "whitebox"}})
+	library.value = settings.Configuration{QAModes: []string{"blackbox", "whitebox"}, Execution: map[string]ExecutionChoice{"qa-blackbox": {Provider: host.Claude, Model: "qa-model"}}}
+	reconcile(t, e)
 	var action string
 	for _, item := range issued {
 		if e.LoadMustSucceed(t).State.ExecutionNode(item.Task, e.cfg.Definition) == "qa-blackbox" {
@@ -284,38 +467,6 @@ func TestMixedProviderEvidenceUsesOriginalActionAndLifecyclePair(t *testing.T) {
 	}
 }
 
-func TestChildExecutionChoiceIsCreationSnapshot(t *testing.T) {
-	t.Parallel()
-	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"chosen": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "parent-model"}}}}}
-	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
-	start := parent.ChildStart(ChildPreparation{SliceID: "core"})
-	parent.Decisions["later"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Codex, Model: "later-model"}}}
-	retried := parent.ChildStart(ChildPreparation{SliceID: "core"})
-	if !reflect.DeepEqual(start.Binding.InheritedExecution, retried.Binding.InheritedExecution) {
-		t.Fatal("retrying child creation changed the inherited execution choices")
-	}
-	child := &State{RunProvider: host.Codex, SliceChild: &start.Binding, Decisions: map[string]RecordedDecision{}}
-	want := ExecutionChoice{Provider: host.Claude, Model: "parent-model"}
-	if child.EffectiveExecutionChoice("qa-blackbox") != want || len(child.Decisions) != 0 {
-		t.Fatal("child lost its inherited value or forged a user decision")
-	}
-	body, err := json.Marshal(child)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var recovered State
-	if err := json.Unmarshal(body, &recovered); err != nil || recovered.EffectiveExecutionChoice("qa-blackbox") != want {
-		t.Fatal("restart changed inherited execution choice", err)
-	}
-	start.Binding.InheritedExecution[0].Choice.Model = "local-change"
-	if reflect.DeepEqual(parent.ChildCreation.Execution, start.Binding.InheritedExecution) {
-		t.Fatal("child binding shared the parent's immutable creation plan")
-	}
-	if parent.ExecutionNode(runtime.TaskKey{}, compiledCanonicalWorkflow(t)) != "" {
-		t.Fatal("unknown task invented a major node")
-	}
-}
-
 func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
 	t.Parallel()
 	e, s, pending := unfinishedDevelopmentState(t, "engine.development.batch.v6")
@@ -348,7 +499,7 @@ func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
 	s.ReconciledEffects[resume.ActionID] = ReconciledEffect{Intent: &resume, Status: "FULFILLED"}
 	s.HostActionReceipts[resume.ActionID] = HostActionReceipt{ActionID: resume.ActionID, Operation: HostActionResumeAgent, Provider: choice.Provider, Status: HostActionStatusExecuted}
 	delete(s.PendingHostActions, resume.ActionID)
-	s.Decisions["future-development"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 4, Execution: &ExecutionSelection{Node: "development", Choice: ExecutionChoice{Provider: host.Codex, Model: "future-model"}}}
+	s.AppliedConfigurations = append(s.AppliedConfigurations, AppliedConfiguration{Revision: 4, Configuration: executionLibrary("development", ExecutionChoice{Provider: host.Codex, Model: "future-model"})})
 	input, nativeIdentity, err := s.WorkerExecutionIdentity(pending.ActionID, pending.AttemptID, resume.ActionID, e.cfg.Definition)
 	if err != nil || nativeIdentity != identity || input.Execution != choice {
 		t.Fatal("settled resume lost its original execution selection", input.Execution, nativeIdentity, err)
@@ -372,46 +523,7 @@ func TestResumedWorkerKeepsOriginalChoiceAndExactStop(t *testing.T) {
 	}
 }
 
-func TestQAExecutionSelectionsUseLatestApplicableDecision(t *testing.T) {
-	t.Parallel()
-	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-model", ReasoningEffort: "high"}
-	black := ExecutionChoice{Provider: host.Codex, Model: "black-model", ReasoningEffort: "medium"}
-	white := ExecutionChoice{Provider: host.Claude, Model: "white-model"}
-	state := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{}}
-	for _, selection := range []ExecutionSelection{{Node: "qa", Choice: shared}, {Node: "qa-blackbox", Choice: black}, {Node: "qa-whitebox", Choice: white}, {Node: "qa", Choice: shared}} {
-		revision := uint64(len(state.Decisions) + 1)
-		state.Decisions[strconv.FormatUint(revision, 10)] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: revision, Execution: &selection}
-		body, err := json.Marshal(state)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var recovered State
-		if err := json.Unmarshal(body, &recovered); err != nil {
-			t.Fatal(err)
-		}
-		wantBlack, wantWhite := shared, shared
-		if revision == 2 || revision == 3 {
-			wantBlack = black
-		}
-		if revision == 3 {
-			wantWhite = white
-		}
-		if recovered.EffectiveExecutionChoice("qa-blackbox") != wantBlack || recovered.EffectiveExecutionChoice("qa-whitebox") != wantWhite || recovered.EffectiveExecutionChoice("qa") != shared {
-			t.Fatal("saved QA choices did not use their original applicable revisions", revision, recovered.ExecutionSelections())
-		}
-	}
-	state.SliceChild = &SliceChildBinding{InheritedExecution: []ExecutionSelection{{Node: "qa-whitebox", Choice: white}, {Node: "qa", Choice: shared}}}
-	state.Decisions = nil
-	if state.EffectiveExecutionChoice("qa-blackbox") != shared || state.EffectiveExecutionChoice("qa-whitebox") != white {
-		t.Fatal("shared child snapshot replaced its specific group value")
-	}
-	state.SliceChild.InheritedExecution = []ExecutionSelection{{Node: "qa", Choice: shared}}
-	if state.EffectiveExecutionChoice("qa-blackbox") != shared || state.EffectiveExecutionChoice("qa-whitebox") != shared {
-		t.Fatal("shared child snapshot lost either QA group")
-	}
-}
-
-func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
+func TestQALibraryExecutionRefreshesOnlyUnclaimedGroup(t *testing.T) {
 	t.Parallel()
 	e, before, issued := parallelValidationInputState(t)
 	var claimed string
@@ -423,30 +535,31 @@ func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
 	if claimed == "" {
 		t.Fatal("fixture did not issue real blackbox work")
 	}
+	library := bindLibrary(t, e, settings.Configuration{QAModes: []string{"blackbox", "whitebox"}})
 	e.cfg.WorkerExecution = func(p PendingAction, a Attempt) (*SpawnReceiptPayload, error) {
 		if p.ActionID == claimed {
 			return &SpawnReceiptPayload{ActionID: claimed, Provider: a.Bindings.Responsibility, Correlation: "original-owner", Status: SpawnStatusUnknown}, nil
 		}
 		return nil, nil
 	}
-	black := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "black-model", ReasoningEffort: "off"}}
-	white := ExecutionSelection{Node: "qa-whitebox", Choice: ExecutionChoice{Provider: host.Codex, Model: "white-model", ReasoningEffort: "high"}}
-	selectExecution(t, e, "black-group", black)
-	selectExecution(t, e, "white-group", white)
+	black := ExecutionChoice{Provider: host.Claude, Model: "black-model", ReasoningEffort: "off"}
+	white := ExecutionChoice{Provider: host.Codex, Model: "white-model", ReasoningEffort: "high"}
+	library.value = settings.Configuration{QAModes: []string{"blackbox", "whitebox"}, Execution: map[string]ExecutionChoice{"qa-blackbox": black, "qa-whitebox": white}}
+	reconcile(t, e)
 	after := e.LoadMustSucceed(t).State
 	whiteCount := 0
 	for _, action := range issued {
 		want, _ := before.ActionExecutionChoice(action.ActionID)
 		if before.validationMode(action.Task) == coverage.ReviewWhitebox {
-			want = white.Choice
+			want = white
 			whiteCount++
 		}
 		if got, ok := after.ActionExecutionChoice(action.ActionID); !ok || got != want {
-			t.Fatal("group selection changed another group or native-owned call", action.Task, got, want)
+			t.Fatal("group value changed another group or native-owned call", action.Task, got, want)
 		}
 	}
-	if whiteCount == 0 || after.EffectiveExecutionChoice(black.Node) != black.Choice || after.EffectiveExecutionChoice(white.Node) != white.Choice {
-		t.Fatal("QA group choices were not independent")
+	if whiteCount == 0 || after.EffectiveExecutionChoice("qa-blackbox") != black || after.EffectiveExecutionChoice("qa-whitebox") != white {
+		t.Fatal("QA group values were not independent")
 	}
 	entry := ConfirmedRevision{StateRevision: 100, Revision: "revised-requirement"}
 	for _, action := range issued {
@@ -457,84 +570,6 @@ func TestQAExecutionSelectionRefreshesOnlyUnclaimedGroup(t *testing.T) {
 		if got, want := after.ExecutionNode(replacementWorkTask(entry, index), e.cfg.Definition), before.ExecutionNode(action.Task, e.cfg.Definition); got != want {
 			t.Fatal("authorized replacement lost its source QA group", got, want)
 		}
-	}
-}
-
-func TestSharedQARequestReplaysAndCompletesOriginalAsk(t *testing.T) {
-	t.Parallel()
-	e, before, issued := parallelValidationInputState(t)
-	selection := ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Claude, Model: "shared-native-model"}}
-	request := Event{ID: "saved-shared-request", Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectExecution, Execution: &selection, Options: []AskOption{{ID: "approve", Label: "Apply"}}}}
-	accepted, err := e.Submit(request, Observation{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The saved request and Ask carry the shared QA format.
-	snapshot := e.LoadMustSucceed(t)
-	selection.Node = "qa"
-	ask := snapshot.State.PendingAsks[accepted.RequestID]
-	ask.Execution = &selection
-	snapshot.State.PendingAsks[accepted.RequestID] = ask
-	record := snapshot.State.Events[string(request.ID)]
-	record.Digest, err = request.Digest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot.State.Events[string(request.ID)] = record
-	if _, err := e.commit(snapshot.State, snapshot.Revision, Observation{}); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := New(e.store, e.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := reopened.Submit(request, Observation{}); err != nil {
-		t.Fatal("saved shared request was not replayable", err)
-	}
-	token, err := reopened.Freshness(RequestID(accepted.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision := Event{ID: "saved-shared-decision", Kind: KindDecide, Decide: &DecidePayload{Request: RequestID(accepted.RequestID), Token: token, Choice: "approve", Execution: &ExecutionSelectionDecision{Digest: selection.CanonicalDigest()}}}
-	if _, err := reopened.Submit(decision, Observation{}); err != nil {
-		t.Fatal("saved shared Ask did not complete", err)
-	}
-	after := reopened.LoadMustSucceed(t).State
-	for _, action := range issued {
-		want, _ := before.ActionExecutionChoice(action.ActionID)
-		if before.validationMode(action.Task) == coverage.ReviewBlackbox || before.validationMode(action.Task) == coverage.ReviewWhitebox {
-			want = selection.Choice
-		}
-		if got, _ := after.ActionExecutionChoice(action.ActionID); got != want {
-			t.Fatal("shared Ask lost its original QA scope", action.Task, got, want)
-		}
-	}
-	request.ID = "new-shared-request"
-	if _, err := reopened.Submit(request, Observation{}); err == nil {
-		t.Fatal("new request accepted an ambiguous shared QA node")
-	}
-}
-
-func TestSharedQACreationSnapshotPreservesMergeExecution(t *testing.T) {
-	t.Parallel()
-	shared := ExecutionChoice{Provider: host.Claude, Model: "shared-qa-model", ReasoningEffort: "high"}
-	parent := &State{RunProvider: host.Codex, Decisions: map[string]RecordedDecision{"shared": {Control: ControlSelectExecution, Choice: "approve", Revision: 1, Execution: &ExecutionSelection{Node: "qa", Choice: shared}}}}
-	parent.ChildCreation = &ChildCreation{Execution: parent.ExecutionSelections()}
-	start := parent.ChildStart(ChildPreparation{SliceID: "core"})
-	parent.Decisions["later"] = RecordedDecision{Control: ControlSelectExecution, Choice: "approve", Revision: 2, Execution: &ExecutionSelection{Node: "qa-blackbox", Choice: ExecutionChoice{Provider: host.Codex, Model: "black-model"}}}
-	child := &State{RunProvider: host.Codex, SliceChild: &start.Binding, SelectedGates: []string{mergeQAGateID}, Validation: &Validation{Generation: 1}}
-	body, err := json.Marshal(child)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var recovered State
-	if err := json.Unmarshal(body, &recovered); err != nil {
-		t.Fatal(err)
-	}
-	cd := compiledCanonicalWorkflow(t)
-	task := pipelineTask(cd, "engine.qa.design.v6", recovered.nextDesignScope(coverage.ReviewMerge, cd))
-	if recovered.ExecutionNode(task, cd) != "qa" || recovered.EffectiveExecutionChoice(recovered.ExecutionNode(task, cd)) != shared || recovered.EffectiveExecutionChoice("qa-blackbox") != shared || recovered.EffectiveExecutionChoice("qa-whitebox") != shared {
-		t.Fatal("child creation lost shared QA's original modes or merge execution")
 	}
 }
 
@@ -553,14 +588,8 @@ func TestConfigurationExecutionInheritsOnlyTheSelectedPlatformDefaults(t *testin
 		{"different-effort", ExecutionChoice{Provider: host.Claude, ReasoningEffort: "low"}, ExecutionChoice{Provider: host.Claude, ReasoningEffort: "low"}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
-			state := State{RunProvider: host.Codex, Settings: &settings.Effective{Values: settings.Values{Model: "run-model", ReasoningEffort: "high"}, Configuration: settings.Configuration{Execution: map[string]ExecutionChoice{"qa-blackbox": sample.configured}}}}
-			if got := state.EffectiveExecutionChoice("qa-blackbox"); got != sample.want {
-				t.Fatalf("configuration choice = %+v, want %+v", got, sample.want)
-			}
-			inherited := state.ExecutionSelections()
-			state.Settings.Configuration.Execution["qa-blackbox"] = ExecutionChoice{Provider: host.ZCode, Model: "future-model"}
-			child := State{RunProvider: host.Codex, Settings: state.Settings, SliceChild: &SliceChildBinding{InheritedExecution: inherited}}
-			body, err := json.Marshal(child)
+			state := State{RunProvider: host.Codex, Settings: &settings.Effective{Values: settings.Values{Model: "run-model", ReasoningEffort: "high"}}, AppliedConfigurations: []AppliedConfiguration{{Configuration: executionLibrary("qa-blackbox", sample.configured)}}}
+			body, err := json.Marshal(state)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -569,7 +598,7 @@ func TestConfigurationExecutionInheritsOnlyTheSelectedPlatformDefaults(t *testin
 				t.Fatal(err)
 			}
 			if got := recovered.EffectiveExecutionChoice("qa-blackbox"); got != sample.want {
-				t.Fatalf("recovered child choice = %+v, want creation snapshot %+v", got, sample.want)
+				t.Fatalf("configuration choice = %+v, want %+v", got, sample.want)
 			}
 		})
 	}

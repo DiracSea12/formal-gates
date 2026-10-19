@@ -235,6 +235,7 @@ func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	configureLightweight(t, root)
 	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "ordinary-material-change", Route: "lightweight", IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "ordinary-intake", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)

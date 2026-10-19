@@ -21,7 +21,11 @@ import (
 
 func nativeQACheckDriver(t *testing.T, configure func(*coverage.AcceptanceManifest)) (*validationDriver, coverage.AcceptanceManifest) {
 	t.Helper()
-	root := t.TempDir()
+	return nativeQACheckDriverAt(t, t.TempDir(), configure)
+}
+
+func nativeQACheckDriverAt(t *testing.T, root string, configure func(*coverage.AcceptanceManifest)) (*validationDriver, coverage.AcceptanceManifest) {
+	t.Helper()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
 	plan := commandPlan()
@@ -640,9 +644,7 @@ func TestQACommandCheckpointExecutesEveryBoundCase(t *testing.T) {
 
 func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is unavailable")
-	}
+	python := nativePython(t)
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
 	d := nativeMasterAt(t, root, base, nil)
@@ -664,7 +666,7 @@ func TestWhiteboxRecipeFreezesTestMaterialAndRetainsNativeExecution(t *testing.T
 		if i == 1 {
 			id, scenario = "invalid", "FAILURE"
 		}
-		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: id, Mode: coverage.CaseWhitebox, Scenario: scenario, Files: []string{"test_recipe.py"}, Oracle: "Python unittest runs one test, passes its assertion and reports OK", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{"python3", "-m", "unittest", "test_recipe.Behavior." + name}}}})
+		manifest.Cases = append(manifest.Cases, coverage.AcceptanceCase{CaseID: id, Mode: coverage.CaseWhitebox, Scenario: scenario, Files: []string{"test_recipe.py"}, Oracle: "Python unittest runs one test, passes its assertion and reports OK", Operations: []coverage.Operation{{Kind: coverage.OperationArgv, Argv: []string{python, "-m", "unittest", "test_recipe.Behavior." + name}}}})
 		manifest.Edges = append(manifest.Edges, coverage.CoverageEdge{SourceID: "REQ-001", PointID: "AC-001", CaseID: id})
 	}
 	paths, err := vcs.New(qi.Workspace.Path, nil).ChangedPaths()
@@ -713,7 +715,7 @@ func TestSharedInvocationCheckpointExecutesApprovedPrefixAndDeclaredCase(t *test
 		{"same-source commands run in order", nativeFixtureCommand("printf re > prepared-input", "[IO.File]::WriteAllText('prepared-input','re')"), nativeFixtureCommand("sleep 0.1; printf ady >> prepared-input", "Start-Sleep -Milliseconds 100; [IO.File]::AppendAllText('prepared-input','ady')")},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			d, manifest := nativeQACheckDriver(t, func(m *coverage.AcceptanceManifest) {
+			d, manifest := nativeQACheckDriverAt(t, testkit.ShortRoot(t), func(m *coverage.AcceptanceManifest) {
 				m.SharedSteps = []coverage.SharedStep{{ID: "prepare-input", Procedure: "Create prepared-input with exact content ready", Artifacts: []string{"prepared-input"}}, {ID: "prepare-marker", Procedure: "Create prepared-marker with content checked", Artifacts: []string{"prepared-marker"}}}
 				for i := range m.Cases {
 					m.Cases[i].SharedSteps = []string{"prepare-input", "prepare-marker"}

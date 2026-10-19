@@ -32,7 +32,7 @@ import (
 const (
 	artifactSchema           = "https://formal-gates.dev/schema/workflow-definition-v2.json"
 	ArtifactID               = "formal-gates.workflow"
-	StateSchemaVersion       = "2"
+	StateSchemaVersion       = "3"
 	artifactWriter           = "engine"
 	artifactTransactionOwner = "engine"
 )

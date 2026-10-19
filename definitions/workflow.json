@@ -1,8 +1,8 @@
 {
   "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "27",
-  "stateSchemaVersion": "2",
+  "version": "28",
+  "stateSchemaVersion": "3",
   "writer": "engine",
   "transactionOwner": "engine",
   "entrypoints": [
@@ -22,7 +22,7 @@
       "nodeId": "children",
       "ordinal": 4,
       "kind": "LOCAL",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -41,7 +41,7 @@
       "nodeId": "children",
       "ordinal": 5,
       "kind": "HOST_ACTION",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "children.prepare"
       ],
@@ -64,7 +64,7 @@
       "nodeId": "children",
       "ordinal": 6,
       "kind": "LOCAL",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "children.workspace"
       ],
@@ -83,7 +83,7 @@
       "nodeId": "development",
       "ordinal": 3,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "review.readiness"
       ],
@@ -112,7 +112,7 @@
       "nodeId": "entry",
       "ordinal": 0,
       "kind": "LOCAL",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "authority": "ENGINE",
       "runner": "ENGINE_LOCAL",
       "io": {
@@ -128,7 +128,7 @@
       "nodeId": "review",
       "ordinal": 1,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "entry.registered"
       ],
@@ -155,7 +155,7 @@
       "nodeId": "review",
       "ordinal": 2,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "review.worker"
       ],
@@ -182,7 +182,7 @@
       "nodeId": "validation",
       "ordinal": 7,
       "kind": "HOST_ACTION",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -205,7 +205,7 @@
       "nodeId": "validation",
       "ordinal": 8,
       "kind": "HOST_ACTION",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -228,7 +228,7 @@
       "nodeId": "validation",
       "ordinal": 9,
       "kind": "HOST_ACTION",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -251,7 +251,7 @@
       "nodeId": "validation",
       "ordinal": 10,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -280,7 +280,7 @@
       "nodeId": "validation",
       "ordinal": 11,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -309,7 +309,7 @@
       "nodeId": "validation",
       "ordinal": 12,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -338,7 +338,7 @@
       "nodeId": "validation",
       "ordinal": 13,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -367,7 +367,7 @@
       "nodeId": "validation",
       "ordinal": 14,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -396,7 +396,7 @@
       "nodeId": "validation",
       "ordinal": 15,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -426,7 +426,7 @@
       "nodeId": "validation",
       "ordinal": 16,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -455,7 +455,7 @@
       "nodeId": "validation",
       "ordinal": 17,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -485,7 +485,7 @@
       "nodeId": "validation",
       "ordinal": 18,
       "kind": "AGENT",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],
@@ -514,7 +514,7 @@
       "nodeId": "validation",
       "ordinal": 19,
       "kind": "HOST_ACTION",
-      "definitionVersion": "27",
+      "definitionVersion": "28",
       "dependencies": [
         "development.plan"
       ],

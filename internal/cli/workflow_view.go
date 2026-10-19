@@ -21,8 +21,12 @@ func workflowRunView(run facade.Run) map[string]any {
 	}
 	if run.Next.Wait != nil {
 		next["reason"] = run.Next.Wait.Reason
+		if run.Next.Wait.Detail != "" {
+			next["detail"] = run.Next.Wait.Detail
+		}
 	}
 	view := map[string]any{"runId": run.RunID, "status": run.Status, "route": run.Route, "revision": run.Revision, "next": next, "unverified": run.Unverified}
+	view["nodeStates"] = run.NodeStates
 	if run.SummaryPath != "" {
 		view["summaryPath"] = run.SummaryPath
 	}
@@ -99,12 +103,6 @@ func workflowRunView(run facade.Run) map[string]any {
 			options = append(options, map[string]any{"choice": choice, "label": option.Label})
 		}
 		question := map[string]any{"ask": index + 1, "control": ask.Control, "options": options}
-		if ask.Configuration != nil {
-			question["configuration"] = ask.Configuration
-		}
-		if ask.Execution != nil {
-			question["execution"] = ask.Execution
-		}
 		if ask.Continuation != nil {
 			p := ask.Continuation
 			question["continuation"] = map[string]any{"from": p.FromPhase, "to": p.To, "missing": p.To.Missing, "work": p.Work, "effects": p.Effects}
@@ -301,18 +299,9 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 	if candidate.Event.Request != nil && len(candidate.Event.Request.RouteGates) != 0 {
 		view["gates"] = numberedChoices(candidate.Event.Request.RouteGates)
 	}
-	if candidate.Event.Request != nil && candidate.Event.Request.Configuration != nil {
-		view["configuration"] = candidate.Event.Request.Configuration
-	}
-	if candidate.Event.Request != nil && candidate.Event.Request.Execution != nil {
-		view["execution"] = candidate.Event.Request.Execution
-	}
 	if candidate.Event.Decide != nil && candidate.Event.Decide.Review != nil && candidate.Event.Decide.Review.Route != nil {
 		route := candidate.Event.Decide.Review.Route
 		view["selectedGates"] = route.Selected
-		if route.Configuration != nil {
-			view["configuration"] = route.Configuration
-		}
 	}
 	if candidate.ReviewDelta != nil {
 		view["reviewDelta"] = candidate.ReviewDelta

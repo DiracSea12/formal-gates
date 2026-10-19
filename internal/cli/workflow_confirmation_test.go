@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/settings"
 )
 
 // confirmationCall is a protocol fixture. It verifies the actual displayed
@@ -131,6 +132,7 @@ func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveLightweightConfiguration(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -327,6 +329,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveLightweightConfiguration(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +342,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "unconfirmed", "--route", "lightweight", "--intake", "1"}, IO{Stdout: &output, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") {
 		t.Fatal("start accepted an agent's confirmation", code, stderr.String())
 	}
-	arguments := map[string]any{"root": root, "intake": position, "route": "lightweight", "disabledNodes": []int{1}}
+	arguments := map[string]any{"root": root, "intake": position, "route": "lightweight"}
 	var displayedID string
 	check := func(value map[string]any) {
 		materials := value["materials"].(map[string]any)
@@ -388,6 +391,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveLightweightConfiguration(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -439,6 +443,7 @@ func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveLightweightConfiguration(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -491,6 +496,7 @@ func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) 
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveLightweightConfiguration(t, root)
 	cliGit(t, root, "init", "-q")
 	cliGit(t, root, "config", "user.email", "test@example.test")
 	cliGit(t, root, "config", "user.name", "Test User")
@@ -531,6 +537,9 @@ func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) 
 				t.Fatal(err)
 			}
 			arguments := map[string]any{"root": root, "intake": position, "route": test.route}
+			if test.route == "regular" {
+				arguments["configuration"] = settings.DefaultConfigurationName
+			}
 			if test.base != "" {
 				arguments["baseSnapshot"] = test.base
 			}

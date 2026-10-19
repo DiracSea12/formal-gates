@@ -102,7 +102,7 @@ func (e *Engine) invalidateValidationWork(s *State, entry ConfirmedRevision) {
 	}
 	v := s.Validation
 	invalidated := false
-	candidateChanged := s.Decisions[entry.RequestID].Control != ControlSelectRoute
+	candidateChanged := !strings.HasPrefix(entry.RequestID, "configuration:")
 	for _, choice := range entry.WorkDecisions {
 		if choice.Disposition != RequirementWorkRedo {
 			continue

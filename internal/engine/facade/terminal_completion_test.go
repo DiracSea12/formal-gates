@@ -9,6 +9,7 @@ import (
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 )
 
 // 本文件验证 regular run 的终态完成机制：终态收口以「终 wave COMPLETE＋候选
@@ -83,7 +84,7 @@ func TestTerminalCompletionConvergesAfterWaveConclusionAndPromotion(t *testing.T
 func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 	t.Parallel()
 	t.Run("promotion rejected before wave conclusion", func(t *testing.T) {
-		root := t.TempDir()
+		root := testkit.ShortRoot(t)
 		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
 		d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 		d.reviewReady()
@@ -110,7 +111,7 @@ func TestTerminalCompletionRequiresWaveConclusionAndPromotion(t *testing.T) {
 		}
 	})
 	t.Run("wave conclusion without promotion", func(t *testing.T) {
-		root := t.TempDir()
+		root := testkit.ShortRoot(t)
 		base := snapshotRepoCommits(t, root, "implementation", "reviewed changes")[0]
 		d := plannedValidationDriverAtVCS(t, root, DefaultProvider, nil, base, nil, commandPlan(), "blackbox", "quality")
 		d.reviewReady()

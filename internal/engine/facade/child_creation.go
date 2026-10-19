@@ -45,7 +45,11 @@ func (f *Facade) prepareChild(parent *protocol.State, plan protocol.ChildPrepara
 		req.RunID, req.MasterRunID, req.SliceID = plan.RunID, parent.RunID, plan.SliceID
 		start := parent.ChildStart(plan)
 		req.FlowSelection = start.FlowSelection
-		options := StartOptions{Root: f.root, Request: req, Admission: &f.admission, Settings: stateSettings(parent), VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}
+		// The child inherits the master's binding name; startRun reads its
+		// current library value when committing the child.
+		inherited := stateSettings(parent)
+		inherited.Configuration = parent.AppliedConfiguration()
+		options := StartOptions{Root: f.root, Request: req, Admission: &f.admission, Settings: inherited, VCSRunner: f.vcsRunner, Owner: owner, RuntimeFiles: f.runtimeFiles}
 		child, _, err = startRun(options, start, parent.NativeResources[plan.ResourceID].Path)
 		if err != nil {
 			return nil, err

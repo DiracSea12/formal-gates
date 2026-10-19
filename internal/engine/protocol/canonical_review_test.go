@@ -221,6 +221,10 @@ func TestCanonicalExhaustionThenGrantEndorsesTheFourthRound(t *testing.T) {
 	if series := snap.State.ReviewSeries.ProductReview; series.Completed != 3 || series.RemainingCapacity != 0 || len(snap.State.PendingActions) != 0 {
 		t.Fatalf("series at exhaustion = %+v, pending=%+v", series, snap.State.PendingActions)
 	}
+	nodes, err := engine.executionNodeStates(snap.State)
+	if err != nil || !nodes[0].Owed || !nodes[0].Editable || nodes[0].Completed || nodes[0].Running {
+		t.Fatal("a round authorization hid the current review obligation", nodes, err)
+	}
 	askAndDecide(t, engine, ControlReviewRoundGrant, "canonical-grant", grantOptions(), "grant", &ReviewDecisionPayload{RoundGrant: &RoundGrantDecision{
 		Action: review.ProductReview, Reason: "reserve capacity for the corrected requirement",
 	}})

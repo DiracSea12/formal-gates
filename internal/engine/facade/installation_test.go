@@ -94,6 +94,7 @@ func installationFiles(t *testing.T, root string) map[string]string {
 func TestStartRecoveryKeepsAdmissionThroughRootAlias(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	alias := filepath.Join(t.TempDir(), "project")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
@@ -183,6 +184,7 @@ func TestRetainedInstallationKeepsNamespaceAndReadOnlyReplay(t *testing.T) {
 func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	for _, missing := range []string{"namespace", "generation", "lease", "token", "target", "provider"} {
 		t.Run(missing, func(t *testing.T) {
@@ -219,6 +221,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	id := "interrupted-start"
 	dir := filepath.Join(root, EngineNamespace, id)
@@ -248,6 +251,7 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 		for _, fenced := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fenced=%t", point, fenced), func(t *testing.T) {
 				root := t.TempDir()
+				configureLightweight(t, root)
 				a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 				f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "recovery", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: a})
 				if err != nil {
@@ -505,6 +509,7 @@ func TestFencedTerminalWindowsRetainEvidenceAndAllowPureReplay(t *testing.T) {
 	for _, window := range []string{"intent", "cleanup", "summary", "remove-intent", "end-lifecycle", "complete"} {
 		t.Run(window, func(t *testing.T) {
 			root := t.TempDir()
+			configureLightweight(t, root)
 			f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 			if err != nil {
 				t.Fatal(err)
@@ -618,6 +623,7 @@ func TestInstallationSubprocess(t *testing.T) {
 func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
@@ -678,6 +684,7 @@ func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	// A holder from the current generation exits without releasing its lock.
 	// Use the newly admitted run to check both process/state order and crash release.
 	currentRoot := t.TempDir()
+	configureLightweight(t, currentRoot)
 	currentAdmission := testAdmission(t, currentRoot, "current", "sha256:package", DefaultProvider)
 	current, _, err := Start(StartOptions{Root: currentRoot, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: currentAdmission})
 	if err != nil {
@@ -916,7 +923,7 @@ func TestSliceReceiptUsesOriginalRunAdmissions(t *testing.T) {
 	for _, window := range []string{"publish", "handoff", "discovery", "replay"} {
 		t.Run(window, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "child", "lane-core", "selected")
+			child := receiptChild(t, master, "child", "lane-core")
 			for _, f := range []*Facade{master.f, child.f} {
 				req, err := f.request()
 				if err != nil {

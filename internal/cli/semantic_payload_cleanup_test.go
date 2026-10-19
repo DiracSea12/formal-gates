@@ -46,6 +46,7 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 			}
 			if status == "COMPLETE" {
 				root, runID = t.TempDir(), "payload-seal"
+				saveLightweightConfiguration(t, root)
 				testkit.ConfigureNativePaths(t, root, "zcode")
 				mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Save the original progress before terminal cleanup."))
 				intake := candidate(call("start", "--precheck", "--route", "lightweight", "--document", "1"), "intake")

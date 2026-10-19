@@ -7,10 +7,8 @@ import (
 	"strings"
 
 	"formal-gates/internal/engine/coverage"
-	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/prompts"
 )
 
 type controlChildArguments struct {
@@ -27,14 +25,9 @@ type controlArguments struct {
 	value                 facade.ControlInput
 	requirement           facade.RequirementChangeInput
 	validation            facade.ValidationControlInput
-	execution             facade.ExecutionSelectionInput
-	configurationName     string
-	flowNode, qaMode      string
-	enabled               string
-	allGates, noGates     bool
 	request               string
 	validationMode        string
-	gates, owners         stringListFlag
+	owners                stringListFlag
 	redo                  stringListFlag
 	changedItems          stringListFlag
 	transitiveImpact      stringListFlag
@@ -100,23 +93,11 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 		a.selectedReviewFinding.SeverityRationale = value
 		return nil
 	})
-	text("configuration", &a.configurationName, "configuration", "saved configuration name or displayed position for this run")
-	text("flow-node", &a.flowNode, "configuration", "flow-node name or displayed position for this run")
-	text("qa-mode", &a.qaMode, "configuration", "blackbox or whitebox group name or displayed position")
-	text("enabled", &a.enabled, "configuration", "true or false for the selected node or QA group")
-	fs.BoolVar(&a.allGates, "all-gates", false, "select all ordinary gates for this run")
-	fs.BoolVar(&a.noGates, "no-gates", false, "select no ordinary gates for this run")
-	a.groups["all-gates"], a.groups["no-gates"] = "configuration", "configuration"
 	text("request", &a.request, "control", "semantic control request")
 	number("ask", &a.value.Ask, "control", "current Ask number")
 	number("node", &a.value.Node, "control", "current business node number to continue from")
-	text("execution-node", &a.execution.Node, "execution", "execution group name or displayed execution-node number for temporary execution selection")
-	text("platform", &a.execution.Platform, "execution", "native platform name or displayed platform number")
-	text("model", &a.execution.Model, "execution", "native model name, label or displayed model number")
-	text("effort", &a.execution.Effort, "execution", "native reasoning effort value or displayed effort number")
 	text("choice", &a.value.Choice, "control", "offered semantic choice")
 	text("reason", &a.value.Reason, "control", "decision reason")
-	list("gate", &a.gates, "control", "current gate number; use none for an empty selection")
 	text("parallel", &a.value.Parallel, "control", "parallelization choice")
 	list("owner", &a.owners, "control", "current owner number; zero selects master merge")
 	number("review", &a.value.Review, "control", "current review number")
@@ -239,15 +220,13 @@ func registerControlArguments(fs *flag.FlagSet) *controlArguments {
 }
 
 func (a *controlArguments) input() (facade.ControlInput, bool, error) {
-	provided, requirementProvided, validationProvided, reviewProvided, executionProvided, configurationProvided := false, false, false, false, false, false
+	provided, requirementProvided, validationProvided, reviewProvided := false, false, false, false
 	a.fs.Visit(func(f *flag.Flag) {
 		group, ok := a.groups[f.Name]
 		provided = provided || ok
 		reviewProvided = reviewProvided || group == "review-verification"
 		requirementProvided = requirementProvided || group == "requirement"
 		validationProvided = validationProvided || group == "validation"
-		executionProvided = executionProvided || group == "execution"
-		configurationProvided = configurationProvided || group == "configuration"
 	})
 	out := a.value
 	if reviewProvided {
@@ -256,60 +235,10 @@ func (a *controlArguments) input() (facade.ControlInput, bool, error) {
 		out.ReviewVerification = &v
 	}
 	out.Request = protocol.ControlKind(a.request)
-	if configurationProvided || executionProvided && out.Request == protocol.ControlSelectRoute {
-		configuration := &facade.ConfigurationInput{Name: a.configurationName}
-		if a.flowNode != "" {
-			node, err := settingsNode(definition.MainFlowNodes(), a.flowNode)
-			if err != nil {
-				return out, provided, err
-			}
-			configuration.FlowNode = node.ID
-		}
-		if a.qaMode != "" {
-			mode, err := settingsChoice([]string{prompts.BlackboxQAID, prompts.WhiteboxQAID}, a.qaMode, "QA group")
-			if err != nil {
-				return out, provided, err
-			}
-			configuration.QAMode = mode
-		}
-		if a.flowNode != "" || a.qaMode != "" || a.enabled != "" {
-			enabled, err := strconv.ParseBool(a.enabled)
-			if err != nil || a.flowNode == "" && a.qaMode == "" {
-				return out, provided, fmt.Errorf("--enabled true or false requires a selected flow node or QA group")
-			}
-			configuration.Enabled = &enabled
-		}
-		if a.allGates && a.noGates {
-			return out, provided, fmt.Errorf("select --all-gates or --no-gates")
-		}
-		if a.allGates || a.noGates {
-			all := a.allGates
-			configuration.AllGates = &all
-		}
-		if executionProvided {
-			value := a.execution
-			configuration.Execution = &value
-		}
-		out.Configuration = configuration
-		if out.Request == "" {
-			out.Request = protocol.ControlSelectRoute
-		}
-	} else if executionProvided {
-		value := a.execution
-		out.Execution = &value
-		if out.Request == "" {
-			out.Request = protocol.ControlSelectExecution
-		}
-	}
 	if out.Node != 0 && out.Request == "" {
 		out.Request = protocol.ControlContinueNode
 	}
 	var err error
-	if len(a.gates) == 1 && a.gates[0] == "none" {
-		out.Gates = []int{}
-	} else if out.Gates, err = controlNumbers(a.gates); err != nil {
-		return out, provided, fmt.Errorf("--gate: %w", err)
-	}
 	if out.Owners, err = controlNumbers(a.owners); err != nil {
 		return out, provided, fmt.Errorf("--owner: %w", err)
 	}

@@ -13,7 +13,6 @@ import (
 
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
-	"formal-gates/internal/settings"
 )
 
 // 审查状态的持久化词汇（与 review 内核的封闭字符串同值）。
@@ -168,11 +167,6 @@ func sameGateSet(a, b []string) bool {
 
 // validateRouteDecision checks an explicit subset of the candidate gates.
 func validateRouteDecision(route *RouteDecision) error {
-	if route.Configuration != nil {
-		if err := settings.ValidateConfiguration(route.Configuration.Configuration); err != nil {
-			return validationError(err.Error())
-		}
-	}
 	seen := make(map[string]bool, len(route.Selected))
 	for _, gate := range route.Selected {
 		if seen[gate] {
@@ -257,8 +251,13 @@ func (s *State) reviewAdmission(evidence *ReviewResultEvidence, actionID string,
 		}
 	}
 	series, _ := s.ReviewSeries.Series(evidence.Action)
-	if evidence.AuthorizationID != review.AuthorizationOfDispatch(series, actionID) && (evidence.AuthorizationID != "" || series.Completed >= series.AutomaticLimit) {
+	execution, issued := series.DispatchRounds[actionID]
+	limit, known := review.LimitAt(series.LimitHistory, execution.Revision)
+	if evidence.AuthorizationID != review.AuthorizationOfDispatch(series, actionID) && (evidence.AuthorizationID != "" || !known || series.Completed >= limit) {
 		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review authorization differs from its signed dispatch"}
+	}
+	if !issued {
+		return &RejectedError{Code: CodeReviewEvidenceRejected, Detail: "review result has no signed round admission"}
 	}
 	if seriesInRedoStale(series) {
 		if evidence.RequirementRevision != s.RequirementRevision() {
@@ -378,7 +377,7 @@ func (e *Engine) prepareReviewResult(state *State, evidence *ReviewResultEvidenc
 // 控制↔分支配对与选项一致性，再做对应变换。任一拒绝都发生在 state 变
 // 更之前（零状态变化）。授权者身份固定：DECIDE 本身就是用户决定，
 // UserAuthorized 恒真，Source 形如 engine-decide:<requestID>。
-func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, parent *Snapshot) error {
+func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID string, decide *DecidePayload, parent *Snapshot, nextRevision uint64) error {
 	payload := decide.Review
 	if !reviewControl(ask.Control) {
 		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("control %s does not take a review decision payload", ask.Control)}
@@ -545,9 +544,7 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 		if decide.Choice != "approve" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "SELECT_ROUTE requires approval of the explicit gate selection"}
 		}
-		// Merge duties remain owned by the split topology; configuration changes
-		// still select the enabled responsibilities and execution choices.
-		if state.mergeMaster() && payload.Route.Configuration == nil {
+		if !state.RouteConfirmationDue(e.cfg.Definition) {
 			return reviewReject(fmt.Errorf("route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"))
 		}
 		// 候选表必须与 Ask 钉住的全集集合相等（顺序无关）：少列或多列任一
@@ -565,70 +562,25 @@ func (e *Engine) admitReviewDecision(state *State, ask PendingAsk, requestID str
 			}
 		}
 		route := payload.Route
-		if route.Configuration != nil {
-			if ask.Configuration == nil || digestOfCanonical(route.Configuration) != digestOfCanonical(ask.Configuration) || ask.Continuation == nil {
-				return validationError("configuration decision differs from the complete suite shown on its Ask")
-			}
-			if !sameGateSet(route.Selected, route.Configuration.SelectedGates(route.Gates)) {
-				return validationError("selected gates differ from the confirmed configuration")
-			}
-			if err := e.validateRequirementWork(state, ask.Continuation.Work, false); err != nil {
-				return err
-			}
-			projected := state.routeConfigurationState(*route)
-			projected.SelectedGates = route.Selected
-			if state.mergeMaster() {
-				projected.SelectedGates = mergeRouteGates()
-			}
-			changes := projected.validationRouteDigest() != state.validationRouteDigest() || slices.ContainsFunc(ask.Continuation.Work, func(w RequirementWorkDecision) bool { return w.Disposition == RequirementWorkRedo })
-			if err := state.validateContinuationParent(*ask.Continuation, changes, parent); err != nil {
-				return err
-			}
-		} else {
-			if ask.Configuration != nil || state.RouteConfigurationRequired() {
-				return validationError("route changes require the complete configuration and its impact preview")
-			}
-			if state.Topology == nil {
-				return reviewReject(fmt.Errorf("route selection requires a bound topology (start-readiness PASS is not yet confirmed as topology)"))
-			}
-			if !state.PreDevelopmentReviewsSatisfied() || !state.readinessPreparationReady() {
-				return reviewReject(fmt.Errorf("route selection requires selected pre-development reviews and current development preparation"))
-			}
+		if state.Topology == nil {
+			return reviewReject(fmt.Errorf("route selection requires a bound topology"))
 		}
-		if route.Configuration == nil || route.DevelopmentPlan != nil {
-			if err := e.validatePlanConfirmation(state, route); err != nil {
-				return err
-			}
+		if !state.PreDevelopmentReviewsSatisfied() || !state.readinessPreparationReady() {
+			return reviewReject(fmt.Errorf("route selection requires selected pre-development reviews and current development preparation"))
 		}
-		var selected []string
-		for _, gate := range route.Gates {
-			if slices.Contains(route.Selected, gate) {
-				selected = append(selected, gate)
-			}
+		if _, err := e.reconcileConfiguration(state, nextRevision); err != nil {
+			return err
+		}
+		configuration := state.AppliedConfiguration()
+		selected := (ConfigurationSelection{Configuration: configuration}).SelectedGates(ask.RouteGates)
+		route.Selected = slices.Clone(selected)
+		if err := e.validatePlanConfirmation(state, route); err != nil {
+			return err
 		}
 		before := state.validationRouteDigest()
-		if route.Configuration != nil {
-			state.retireContinuationWork(*ask.Continuation, ask.Continuation.Work, requestID)
-			selection := route.Configuration.Configuration.FlowSelection
-			if selection == nil {
-				state.FlowSelection = nil
-			} else {
-				state.FlowSelection = &FlowSelection{Disabled: slices.Clone(selection.Disabled)}
-			}
-		}
-		if route.Configuration == nil || state.Topology != nil && state.PreDevelopmentReviewsSatisfied() && state.readinessPreparationReady() &&
-			(route.DevelopmentPlan != nil || !state.FlowNodeEnabled("development") || !pipelineEnabled(state, e.cfg.Definition)) {
-			state.RouteConfirmed = true
-		}
-		if state.mergeMaster() {
-			selected = mergeRouteGates()
-		}
-		state.SelectedGates = selected
-		// 最终路线不含黑盒时清空隔离工作区登记；host 重建工作区时重新登记。
-		if !slices.Contains(selected, "blackbox") {
-			state.QAWorktree = ""
-		}
-		if route.Configuration == nil && before != state.validationRouteDigest() {
+		state.selectConfiguration(configuration, ask.RouteGates)
+		state.RouteConfirmed = true
+		if before != state.validationRouteDigest() {
 			e.rebindValidationRoute(state)
 		}
 		return nil
@@ -751,7 +703,7 @@ func (s *State) topologyRouteConfirmed() bool {
 		case ControlConfirmTopology:
 			topology = true
 		case ControlSelectRoute:
-			route = true
+			route = decision.Choice == "approve" && decision.Review != nil && decision.Review.Route != nil || route
 		}
 	}
 	return topology && route
@@ -1009,9 +961,6 @@ func (s *State) reviewDispositionPending(series review.Series) bool {
 func (s *State) PendingAskCurrent(ask PendingAsk) bool {
 	if ask.Resolved {
 		return false
-	}
-	if ask.Control == ControlSelectRoute && ask.Configuration != nil {
-		return true
 	}
 	if s.Route == "regular" && (ask.Control == ControlConfirmTopology || ask.Control == ControlSelectRoute) {
 		return s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()

@@ -68,6 +68,7 @@ func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t 
 				}
 			}
 			// This fixture supplies the displayed material's explicit user confirmation.
+			configureLightweight(t, root)
 			_, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "prepared-intake", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)})
 			if changed != "" {
 				if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) || !strings.Contains(err.Error(), "artifact "+changed+" revision mismatch") {
@@ -143,6 +144,7 @@ func TestRegularStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testin
 		}
 	}
 	options.Request.Route = "lightweight"
+	configureLightweight(t, root)
 	f, run, err := Start(options)
 	if err != nil || f == nil || run.Status != "ACTIVE" || run.RequirementGuarantee != nil || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
 		t.Fatalf("lightweight rejected its ordinary confirmed material: %+v %v", run, err)
@@ -257,7 +259,7 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 	for _, explicit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("explicit-settings=%v", explicit), func(t *testing.T) {
 			selected.calls = 0
-			root := t.TempDir()
+			root := testkit.ShortRoot(t)
 			base := snapshotRepoCommits(t, root)[0]
 			preview, err := PrepareIntake(root, "requirements.md", "", nil, true)
 			if err != nil {
@@ -278,7 +280,7 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 			options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "native-parent", Route: "regular", Provider: selected.ID, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-path-runtime", "sha256:package", selected.ID)}
 			if explicit {
 				options.Settings = &loaded
-				if err := os.WriteFile(config, []byte("invalid config not read by explicit settings"), 0600); err != nil {
+				if err := os.WriteFile(config, []byte(`{"capacity":9,"qaCapacity":5,"model":"later-model","reasoningEffort":"low","tokenCap":5}`), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -301,6 +303,8 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 			want.Sources = maps.Clone(loaded.Sources)
 			want.Values.Native["intakeNativeRoot"], want.Sources["intakeNativeRoot"] = "native-A", "INTAKE_NATIVE_ROOT"
 			want.Values.TokenCap = nil
+			want.Configuration, want.ConfigurationSource = settings.Configuration{}, ""
+			want.Revisions = nil
 			if !reflect.DeepEqual(snapshot.State.Settings, &want) || snapshot.State.TokenCapMaxTokens == nil || *snapshot.State.TokenCapMaxTokens != 77 || run.Settings.Values.TokenCap == nil || *run.Settings.Values.TokenCap != 77 {
 				t.Fatalf("persistent settings/common/sources/cap differ: %+v", snapshot.State.Settings)
 			}
@@ -309,7 +313,7 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 				t.Fatal(err)
 			}
 			t.Setenv("INTAKE_NATIVE_ROOT", "native-B")
-			if err := os.WriteFile(config, []byte("invalid config not read by Open or children"), 0600); err != nil {
+			if err := os.WriteFile(config, []byte(`{"capacity":9,"qaCapacity":5,"model":"later-model","reasoningEffort":"low","tokenCap":5}`), 0600); err != nil {
 				t.Fatal(err)
 			}
 			f, err = Open(root, run.RunID)
@@ -492,6 +496,8 @@ func main() {
 		want.Sources[key] = source
 	}
 	want.Values.TokenCap = nil
+	want.Configuration, want.ConfigurationSource = settings.Configuration{}, ""
+	want.Revisions = nil
 	state, err := f.engine.Load()
 	if err != nil || !reflect.DeepEqual(state.State.Settings, &want) {
 		t.Fatalf("Start did not persist complete native/common/sources/files: %v %+v", err, state.State.Settings)
@@ -519,7 +525,7 @@ func main() {
 	t.Setenv("USERPROFILE", homeB)
 	t.Setenv("PATH", binB+string(os.PathListSeparator)+originalPath)
 	t.Setenv("WORKBUDDY_CONFIG_DIR", nativeB)
-	if err := os.WriteFile(config, []byte("invalid edit ignored by Open and invocation"), 0600); err != nil {
+	if err := os.WriteFile(config, []byte(`{"capacity":9,"qaCapacity":5,"model":"later-model","reasoningEffort":"low","tokenCap":5,"workbuddyExecutable":"missing-later-workbuddy"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	f, err = Open(root, run.RunID)

@@ -70,6 +70,7 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 		t.Fatal("explicit global and automatic project admissions are indistinguishable")
 	}
 	candidate := writerIntakeReceipt(t, root)
+	saveLightweightConfiguration(t, root)
 	candidatePath := filepath.Join(t.TempDir(), "intake.json")
 	if err := saveWorkflowCandidate(candidatePath, candidate); err != nil {
 		t.Fatal(err)
@@ -110,7 +111,7 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 	}
 }
 
-func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
+func TestWorkflowStartDerivesRouteAfterStructuredPrecheck(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
@@ -141,8 +142,8 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 	} {
 		out.Reset()
 		stderr.Reset()
-		if code := Run("formal-gates", args, streams); code == 0 || !strings.Contains(stderr.String(), "requires --route regular or lightweight") || out.Len() != 0 {
-			t.Fatalf("route was implicitly selected: %d %s %s", code, &out, &stderr)
+		if code := Run("formal-gates", args, streams); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") || out.Len() != 0 {
+			t.Fatalf("derived route bypassed native confirmation: %d %s %s", code, &out, &stderr)
 		}
 		if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "missing-route")); !os.IsNotExist(err) {
 			t.Fatal("missing route wrote run files", err)
@@ -151,7 +152,14 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
 		t.Fatal("precheck or rejected start changed existing authority")
 	}
-	for _, route := range []string{"regular", "lightweight"} {
+	for _, route := range []string{"", "regular", "lightweight"} {
+		expectedRoute := route
+		if expectedRoute == "" {
+			expectedRoute = "regular"
+		}
+		if route == "lightweight" {
+			saveLightweightConfiguration(t, root)
+		}
 		out.Reset()
 		stderr.Reset()
 		args := []string{"workflow", "start", "--root", root, "--run-id", "selected-" + route, "--intake-receipt", candidatePath, "--route", route, "--vcs", "git", "--machine"}
@@ -159,12 +167,12 @@ func TestWorkflowStartRequiresRouteAfterStructuredPrecheck(t *testing.T) {
 			t.Fatalf("explicit %s start: %d %s", route, code, &stderr)
 		}
 		var run facade.Run
-		if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.Route != route || run.Unverified != (route == "lightweight") || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &candidate) {
+		if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.Route != expectedRoute || run.Unverified != (expectedRoute == "lightweight") || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &candidate) {
 			t.Fatalf("explicit mode or material changed: %+v %v", run, err)
 		}
 		body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, run.RunID, "request.json"))
 		var request facade.StartRequest
-		if err != nil || json.Unmarshal(body, &request) != nil || request.Route != route || !reflect.DeepEqual(request.IntakeConfirmationReceipt, candidate) {
+		if err != nil || json.Unmarshal(body, &request) != nil || request.Route != expectedRoute || !reflect.DeepEqual(request.IntakeConfirmationReceipt, candidate) {
 			t.Fatal("persisted route or confirmed binding changed", err)
 		}
 	}

@@ -27,9 +27,9 @@ type RequirementWork struct {
 	ResultDigest        string          `json:"resultDigest,omitempty"`
 }
 
-// RequirementWorkDecision is the user's disposition of exactly one dispatch.
+// RequirementWorkDecision is the recorded disposition of exactly one dispatch.
 // An empty result digest authorizes its in-flight result by dispatch identity.
-// The authorization binds that work to confirmed content and its original Ask.
+// Its owning confirmation or configuration application binds the work to content.
 type RequirementWorkDecision struct {
 	Work        RequirementWork `json:"work"`
 	Disposition string          `json:"disposition"`

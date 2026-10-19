@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/review"
 )
 
 func TestSameHostHandoffPreservesWorkAndDoesNotConsumeFailureBudget(t *testing.T) {
@@ -259,7 +260,10 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
-			disabled := []string{"product-review", "start-readiness"}
+			disabled := []string{"start-readiness", "qa", "gate", "repair"}
+			if development {
+				disabled = append(disabled, "product-review")
+			}
 			if !development {
 				disabled = append(disabled, "development")
 			}
@@ -267,17 +271,21 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
+			configureFlowNodes(t, root, disabled...)
 			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
 				RunID: "selected-replan", Route: "regular", BaseSnapshot: base,
-				FlowSelection: &protocol.FlowSelection{Disabled: disabled}, IntakeConfirmationReceipt: intake.IntakeCandidate,
+				IntakeConfirmationReceipt: intake.IntakeCandidate,
 			}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			d := &validationDriver{t: t, f: f, run: run}
+			d := &validationDriver{t: t, f: f, run: run, revision: intake.Revision}
 			d.drive()
 			var oldAction string
 			var oldBinding protocol.WorkBinding
+			if !development {
+				passPreDevelopmentReviews(t, d, commandPlan(), review.ProductReview)
+			}
 			if development {
 				action, input := d.action("engine.development.plan.v1")
 				oldAction, oldBinding = action, input.Binding

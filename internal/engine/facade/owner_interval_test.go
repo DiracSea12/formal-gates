@@ -24,6 +24,7 @@ const intervalLaterLine = `{"type":"assistant","uuid":"later","message":{"usage"
 
 func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 	t.Helper()
+	configureLightweight(t, root)
 	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start %s: %v", id, err)
@@ -37,6 +38,7 @@ func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	type entry struct {
 		id         string
 		transcript string

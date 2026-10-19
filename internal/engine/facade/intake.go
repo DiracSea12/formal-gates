@@ -82,12 +82,11 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 		if path == requirementPath {
 			preview.Content, preview.Revision = content, revision
 			preview.IntakeCandidate.RequirementRevision = revision
-			if structured {
-				document, err := requirement.ParseRequirementProjection(path, data)
-				if err != nil {
-					return IntakePreview{}, err
-				}
+			document, err := requirement.ParseRequirementProjection(path, data)
+			if err == nil {
 				preview.RequirementDocument = &document
+			} else if structured {
+				return IntakePreview{}, err
 			}
 		}
 		if path == solutionPath {
@@ -96,6 +95,16 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 	}
 	preview.IntakeCandidate.Digest, err = IntakeDigest(preview.IntakeCandidate)
 	return preview, err
+}
+
+// CheckIntakeCandidate revalidates a saved confirmation candidate's pinned
+// artifact bindings and reloads its materials for preview. It records no
+// binding, intake, or run.
+func CheckIntakeCandidate(root string, receipt IntakeConfirmationReceipt, structured bool) (IntakePreview, error) {
+	if err := validateArtifactBindings(root, receipt); err != nil {
+		return IntakePreview{}, err
+	}
+	return prepareConfirmedIntake(root, &receipt, structured)
 }
 
 // prepareConfirmedIntake reuses the selected paths of the current confirmation.

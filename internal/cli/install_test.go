@@ -977,14 +977,15 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n"+testManagedRuleBlock(testManagedRuleLatest))
 	mustWriteCLI(t, filepath.Join(source, "README.md"), "readme\n")
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
-	// manifest 登记五个可安装 host target：install 会拒绝 manifest 未登记为
+	// install 会拒绝 manifest 未登记为
 	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
 	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[`+
 		`{"name":"Claude Code","support":"host-target"},`+
 		`{"name":"Codex","support":"host-target"},`+
 		`{"name":"Cursor","support":"host-target"},`+
 		`{"name":"DeepSeek Harness","support":"host-target"},`+
-		`{"name":"ZCode","support":"host-target"}]}`+"\n")
+		`{"name":"ZCode","support":"host-target"},`+
+		`{"name":"Devin","support":"host-target"}]}`+"\n")
 	mustWriteCLI(t, filepath.Join(source, "go.mod"), "module formal-gates\n")
 	mustWriteCLI(t, filepath.Join(source, ".github", "workflows", "portable-validation.yml"), "portable validation\n")
 	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), string(payload))

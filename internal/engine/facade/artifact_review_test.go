@@ -18,10 +18,7 @@ import (
 // its isolated artifact can affect the final candidate or production view.
 func TestExistingTestArtifactRequiresBoundIndependentReview(t *testing.T) {
 	t.Parallel()
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatal(err)
-	}
+	python := nativePython(t)
 	for _, judgment := range []string{"test", "production", "unknown"} {
 		t.Run(judgment, func(t *testing.T) {
 			root := t.TempDir()

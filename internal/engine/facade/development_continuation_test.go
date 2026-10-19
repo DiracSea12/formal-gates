@@ -15,6 +15,7 @@ import (
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
@@ -28,7 +29,9 @@ func TestReadOnlyDevelopmentPreparationRetainsNativeContinuation(t *testing.T) {
 			name = "result-before-receipt-reopen"
 		}
 		t.Run(name, func(t *testing.T) {
-			d := nativeMasterDriver(t)
+			root := testkit.ShortRoot(t)
+			base := snapshotRepoCommits(t, root)[0]
+			d := nativeMasterAt(t, root, base, nil)
 			plan := commandPlan()
 			plan.Batches[0].Checks = []protocol.DevelopmentCheck{
 				{ID: "edit", Purpose: protocol.CheckEdit, Goal: "Check the declared source after every edit"},

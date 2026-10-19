@@ -55,6 +55,7 @@ func TestNativeDeliveryPreservesStartupContent(t *testing.T) {
 			}
 			p.prepareIntake(t, p.intake.RequirementSource)
 			p.install(t, "codex", "global")
+			saveCandidateConfiguration(t, p, "none")
 			runID := p.start(t, "regular")
 			d := &candidateDriver{p: p, t: t, mode: "none", runID: runID}
 			d.drive()

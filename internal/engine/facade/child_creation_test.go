@@ -27,6 +27,7 @@ import (
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/settings"
 )
 
 func nativeMasterDriver(t *testing.T) *validationDriver {
@@ -183,12 +184,16 @@ func TestChildCreationInheritsConfirmedRequirementAndCoverage(t *testing.T) {
 	if master.run.Status != "ABORTING" {
 		t.Fatal("parent ignored the child's outstanding worker responsibility")
 	}
+	masterCost, siblingCost := master.run.Cost, driverState(t, sibling).Cost
 	master.reopen()
 	master.drive()
 	sibling.reopen()
 	state = driverState(t, sibling)
-	if master.run.Status != "ABORTING" || state.PendingActions[siblingID] != pending || state.SpawnReceipts[siblingID] != spawn {
+	if master.run.Status != "ABORTING" || state.PendingActions[siblingID] != pending || !reflect.DeepEqual(state.SpawnReceipts[siblingID], spawn) {
 		t.Fatal("recovery changed the child's outstanding worker identity or responsibility")
+	}
+	if !reflect.DeepEqual(master.run.Cost, masterCost) || !reflect.DeepEqual(state.Cost, siblingCost) {
+		t.Fatal("recovery changed parent or child cumulative costs")
 	}
 	sibling.completeWorkerTerminations()
 	master.drive()
@@ -202,7 +207,14 @@ func TestChildCancellationUsesFrozenMembersAcrossRequirementControls(t *testing.
 	for _, released := range []bool{false, true} {
 		for _, withdrawn := range []bool{false, true} {
 			t.Run(fmt.Sprintf("released=%t/topology-withdrawn=%t", released, withdrawn), func(t *testing.T) {
-				master := splitMaster(t)
+				root := testkit.ShortRoot(t)
+				base := snapshotRepoCommits(t, root)[0]
+				master := nativeMasterAt(t, root, base, nil)
+				passPreDevelopmentReviews(t, master, splitCommandPlan())
+				master.drive()
+				master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{
+					Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}),
+				})
 				var original *protocol.State
 				if released {
 					master.drive()
@@ -350,7 +362,18 @@ func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.Coverag
 	if len(selections) > 0 {
 		selection = selections[0]
 	}
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt, FlowSelection: selection}})
+	admission := testAdmission(t, root, "candidate", "sha256:package", host.Default)
+	ensureEditableConfiguration(t, root)
+	if selection != nil {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.EditConfiguration(root, home, "project", "", nil, func(configuration *settings.Configuration) error { configuration.FlowSelection = selection; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: admission, Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1170,6 +1193,7 @@ func TestChildCreationPreservesPreparedMaterialConfirmation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			ensureEditableConfiguration(t, root)
 			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
 			if err != nil {
 				t.Fatal(err)

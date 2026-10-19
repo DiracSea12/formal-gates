@@ -16,6 +16,7 @@ const (
 	DeepSeek  = "deepseek-harness"
 	ZCode     = "zcode"
 	WorkBuddy = "workbuddy"
+	Devin     = "devin"
 	Default   = "default"
 )
 
@@ -141,6 +142,14 @@ var descriptors = []*Descriptor{
 		Paths:             PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
 		LifecycleRequired: true,
 		Configuration:     []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
+	},
+	{
+		ID: Devin, InstallName: "devin", ManifestName: "Devin",
+		Aliases: []string{"devin"}, Installable: true,
+		Paths: PathLayout{
+			ProjectBase: ".devin/skills", ProjectHookConfig: ".devin/config.json", ProjectManaged: "AGENTS.md",
+		},
+		Hook: HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: ".*"},
 	},
 	{
 		ID:                Default,

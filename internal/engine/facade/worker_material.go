@@ -554,10 +554,6 @@ func (f *Facade) RequestWorkflowChoice() (bool, error) {
 			return false, loadErr
 		}
 		event, err = protocol.NewRouteRequestEvent(id, request.RouteGates, request.Options...)
-		if err == nil && snap.State.RouteConfigurationRequired() {
-			configuration := snap.State.EffectiveConfiguration()
-			event.Request.Configuration = &configuration
-		}
 	}
 	if err != nil {
 		return false, err

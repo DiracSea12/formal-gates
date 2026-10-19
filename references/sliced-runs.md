@@ -17,12 +17,16 @@ reset/rebuild 或 abort 的 typed Ask。引擎机械验证已确认图，不从�
 
 engine 从 master 的确认拓扑创建独立 child 工作区和 run，持久化 sliceID→childRunID。
 child 继承整体产品/技术审和需求 revision，不重做受理与整体双审；每个 child 独立确认
-所选普通门与精确开发计划；从创建时继承的命名配置预选普通门，可改选任意子集（含空集）或全集。
+精确开发计划，不单独选择门子集。child 继承 master 绑定的配置名，按名现读同一配置库；
+各批次、分片的同一职责共用节点开关、门集合、执行选择和轮数上限。
 child 的候选不含普通黑盒/白盒 QA，不选择也不执行；master 按启用职责执行
 merge QA 与 merge gate。容量允许时并行派发独立 child，依赖边等待由 engine 管理。
 
-运行中明确选择配置或修改节点时，master 与每个 child 分别通过自己的原 SELECT_ROUTE Ask 确认；
-修改保存默认或父流程的后续选择不自动改变已有 child，过去或跳过节点仍按原 continuation 继续。
+运行中编辑绑定配置，保存后 master 与尚未进入主线的 child 在下一次派发评估读取新值，
+不换绑、不生成改配置 Ask。未领取的派发改用新值；已领取调用按原配置跑完，关闭不撤回。
+父流程正在对账分片输入、claims 未定时，改变验证路线的配置推迟评估；分片已进入主线后，
+变化只在该片应用值历史中记为“已越过”，不再实际应用，剩余工作由 master 的合并 QA/门/返修承接。
+配置与存量迁移的完整规则见[用户与项目设置](user-configuration.md#绑定与运行中生效)。
 
 child 完整候选、适用门结果、成本和 durable receipt 固定后形成 SLICE_READY。
 VCS adapter 集成 child，只有精确冲突需要语义选择时才派窄主线开发动作；adapter 核验

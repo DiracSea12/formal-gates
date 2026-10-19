@@ -18,15 +18,15 @@ import (
 // one-based in the current Show projection; zero owner denotes master-merge.
 // It carries no event identity, freshness token, original digest or work binding.
 type ControlInput struct {
-	Configuration      *ConfigurationInput      `json:"configuration,omitempty"`
-	Execution          *ExecutionSelectionInput `json:"execution,omitempty"`
+	// Gates retains the saved confirmation-candidate schema for exact replay.
+	// New controls cannot use it to select a per-run subset.
+	Gates              []int                    `json:"gates,omitempty"`
 	ReviewVerification *ReviewVerificationInput `json:"reviewVerification,omitempty"`
 	Node               int                      `json:"node,omitempty"`
 	Request            protocol.ControlKind     `json:"request,omitempty"`
 	Ask                int                      `json:"ask,omitempty"`
 	Choice             string                   `json:"choice,omitempty"`
 	Reason             string                   `json:"reason,omitempty"`
-	Gates              []int                    `json:"gates"`
 	Parallel           string                   `json:"parallel,omitempty"`
 	Owners             []int                    `json:"owners,omitempty"`
 	Review             int                      `json:"review,omitempty"`
@@ -116,12 +116,6 @@ func selectStrings(values []string, positions []int, label string) ([]string, er
 }
 
 func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
-	if input.Configuration != nil && input.Request == "" {
-		input.Request = protocol.ControlSelectRoute
-	}
-	if input.Execution != nil && input.Request == "" {
-		input.Request = protocol.ControlSelectExecution
-	}
 	if input.Node != 0 && input.Request == "" {
 		input.Request = protocol.ControlContinueNode
 	}
@@ -139,8 +133,8 @@ func (f *Facade) PrepareControl(input ControlInput) (ControlCandidate, error) {
 
 func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, error) {
 	candidate := ControlCandidate{Root: f.root, Input: input, Run: run}
-	if input.Execution != nil && (input.Request != protocol.ControlSelectExecution || input.Node != 0 || input.Ask != 0) {
-		return candidate, fmt.Errorf("execution selection cannot be combined with another control or Ask")
+	if input.Gates != nil {
+		return candidate, fmt.Errorf("per-run gate subsets are not supported; edit the bound configuration")
 	}
 	if input.ReviewVerification != nil {
 		if input.Request != "" || input.Ask != 0 {
@@ -177,16 +171,6 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		event.Kind = protocol.KindRequestControl
 		event.Request = &protocol.RequestPayload{Control: input.Request}
 		switch input.Request {
-		case protocol.ControlSelectExecution:
-			if input.Execution == nil {
-				return candidate, fmt.Errorf("execution selection requires a node and the user's platform, model or effort choice")
-			}
-			selection, err := f.prepareExecutionSelection(*input.Execution)
-			if err != nil {
-				return candidate, err
-			}
-			event.Request.Execution = selection
-			event.Request.Options = []protocol.AskOption{{ID: "approve", Label: "采用所选节点的临时执行选择"}, {ID: "decline", Label: "保留当前选择"}}
 		case protocol.ControlAbort:
 			event.Request.Options = []protocol.AskOption{{ID: "abort", Label: "Abort the run"}, {ID: "decline", Label: "Keep the run"}}
 		case protocol.ControlContinueNode:
@@ -232,37 +216,12 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 			if e != nil {
 				return candidate, e
 			}
-			configurationRequested := input.Configuration != nil || input.Gates != nil || snapshot.State.RouteConfigurationRequired()
-			if !configurationRequested {
-				if run.Route != "regular" || run.Review.Topology == nil || run.MasterRunID == "" && run.Review.Topology.Decision == "split" {
-					return candidate, fmt.Errorf("route selection requires a regular or slice run with selectable confirmed topology")
-				}
-				if !run.Review.RouteConfirmed {
-					if snapshot.State.NextWorkflowChoice(f.definition) != protocol.ControlSelectRoute {
-						return candidate, fmt.Errorf("initial route selection is not due")
-					}
-				}
+			if !snapshot.State.RouteConfirmationDue(f.definition) || snapshot.State.NextWorkflowChoice(f.definition) != protocol.ControlSelectRoute {
+				return candidate, fmt.Errorf("initial route confirmation is not due")
 			}
 			request, e := f.routeRequestPayload(run.MasterRunID != "")
 			if e != nil {
 				return candidate, e
-			}
-			if configurationRequested {
-				configuration := ConfigurationInput{}
-				if input.Configuration != nil {
-					configuration = *input.Configuration
-				}
-				request.Configuration, e = f.prepareConfiguration(configuration, run)
-				if e != nil {
-					return candidate, e
-				}
-				if input.Gates != nil {
-					selected, err := selectStrings(request.RouteGates, input.Gates, "gate")
-					if err != nil {
-						return candidate, err
-					}
-					request.Configuration.SetSelectedGates(selected)
-				}
 			}
 			event.Request = request
 		case protocol.ControlReviewFindingDecision:
@@ -336,13 +295,6 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 		}
 		event.Decide.Request, event.Decide.Token, event.Decide.Choice = protocol.RequestID(ask.RequestID), ask.Token, choice
 		switch ask.Control {
-		case protocol.ControlSelectExecution:
-			if choice == "approve" {
-				if ask.Execution == nil {
-					return candidate, fmt.Errorf("execution Ask has no original selection")
-				}
-				event.Decide.Execution = &protocol.ExecutionSelectionDecision{Digest: ask.Execution.CanonicalDigest()}
-			}
 		case protocol.ControlContinueNode:
 			if choice == "approve" {
 				p := ask.Continuation
@@ -410,21 +362,16 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 			}
 			event.Decide.Review = &protocol.ReviewDecisionPayload{Topology: &topology}
 		case protocol.ControlSelectRoute:
-			route := protocol.RouteDecision{Gates: append([]string{}, ask.RouteGates...), Configuration: ask.Configuration}
-			selection := run
-			if ask.Configuration != nil {
-				selection.Configuration = *ask.Configuration
+			route := protocol.RouteDecision{Gates: append([]string{}, ask.RouteGates...)}
+			snapshot, err := f.engine.Load()
+			if err != nil {
+				return candidate, err
 			}
-			route.Selected = selection.Configuration.SelectedGates(route.Gates)
-			if input.Gates != nil {
-				if ask.Configuration != nil {
-					return candidate, fmt.Errorf("gate changes to a pinned configuration require a new configuration request before confirmation")
-				}
-				route.Selected, e = selectStrings(route.Gates, input.Gates, "gate")
-				if e != nil {
-					return candidate, e
-				}
+			configuration, err := configurationLibrary(f.root)(snapshot.State.ConfigurationName())
+			if err != nil {
+				return candidate, err
 			}
+			route.Selected = (protocol.ConfigurationSelection{Configuration: configuration}).SelectedGates(route.Gates)
 			plan, e := f.DevelopmentPlan(route)
 			if e != nil {
 				return candidate, e
@@ -511,12 +458,10 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 	}{run.RunID, run.Revision, event}))
 	if event.Request != nil && event.Request.Control == protocol.ControlSelectRoute {
 		var err error
-		configuration := event.Request.Configuration
 		event, err = protocol.NewRouteRequestEvent(event.ID, event.Request.RouteGates, event.Request.Options...)
 		if err != nil {
 			return candidate, err
 		}
-		event.Request.Configuration = configuration
 	} else if err := event.Validate(); err != nil {
 		return candidate, err
 	}

@@ -32,8 +32,8 @@ type NodeContinuationRequest struct {
 	PreviewDigest string `json:"previewDigest"`
 }
 
-// The pending Ask owns the original from/to and execution impact preview.
-// The decision owns authorization and its application, like the reset receipt.
+// An Ask or configuration application owns its from/to and execution preview.
+// Its decision or application effect records the resulting work dispositions.
 type NodeContinuationPreview struct {
 	ParentRunID         string                    `json:"parentRunId,omitempty"`
 	ParentRevision      uint64                    `json:"parentRevision,omitempty"`
@@ -321,18 +321,18 @@ type NodeContinuationView struct {
 }
 
 func (s *State) NodeContinuation(cd *compiler.CompiledDefinition) *NodeContinuationView {
-	d, ok := s.nodeContinuationDecision()
-	if !ok {
+	d, ok := s.userNodeContinuationDecision()
+	if !ok || d.Decision == nil {
 		return nil
 	}
-	preview := *s.PendingAsks[d.RequestID].Continuation
+	preview := *d.Preview
 	status := "RECONCILING"
 	if d.Continuation.AppliedRevision != 0 {
 		status = "APPLIED"
 	} else if !s.nodeInputsReady(preview.To, cd) {
 		status = "PREPARING"
 	}
-	return &NodeContinuationView{Preview: preview, Receipt: d, Status: status}
+	return &NodeContinuationView{Preview: preview, Receipt: *d.Decision, Status: status}
 }
 
 func (s *State) nodeAffectsIntent(p NodeContinuationPreview, intent HostActionIntent) bool {
@@ -419,37 +419,66 @@ func (s *State) retireContinuationWork(preview NodeContinuationPreview, work []R
 	}
 }
 
-func (s *State) nodeContinuationDecisions() []RecordedDecision {
-	var decisions []RecordedDecision
+// continuationFact reads the two owners without adding configuration values to
+// the user decision ledger.
+type continuationFact struct {
+	RequestID    string
+	Revision     uint64
+	Preview      *NodeContinuationPreview
+	Continuation *NodeContinuationDecision
+	Decision     *RecordedDecision
+}
+
+func (s *State) nodeContinuationDecisions() []continuationFact {
+	var decisions []continuationFact
 	for _, d := range s.Decisions {
-		if (d.Control != ControlContinueNode && d.Control != ControlSelectRoute) || d.Choice != "approve" || d.Continuation == nil {
+		if d.Control != ControlContinueNode || d.Choice != "approve" || d.Continuation == nil {
 			continue
 		}
 		if len(s.RequirementRevisions) > 1 && s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision > d.Revision {
 			continue
 		}
-		decisions = append(decisions, d)
+		decision := d
+		decisions = append(decisions, continuationFact{RequestID: d.RequestID, Revision: d.Revision, Preview: s.PendingAsks[d.RequestID].Continuation, Continuation: d.Continuation, Decision: &decision})
 	}
-	slices.SortFunc(decisions, func(a, b RecordedDecision) int { return cmp.Compare(a.Revision, b.Revision) })
+	for index, applied := range s.AppliedConfigurations {
+		if applied.Bypassed || applied.Preview == nil || applied.Effect == nil {
+			continue
+		}
+		if applied.Effect.AppliedRevision == 0 && index != len(s.AppliedConfigurations)-1 {
+			continue
+		}
+		revision := applied.Effect.AppliedRevision
+		if revision == 0 {
+			revision = applied.Revision
+		}
+		if len(s.RequirementRevisions) > 1 && s.RequirementRevisions[len(s.RequirementRevisions)-1].StateRevision > revision && applied.Effect.AppliedRevision != 0 {
+			continue
+		}
+		decisions = append(decisions, continuationFact{RequestID: configurationRequest(applied.Revision), Revision: revision, Preview: applied.Preview, Continuation: applied.Effect})
+	}
+	slices.SortFunc(decisions, func(a, b continuationFact) int { return cmp.Compare(a.Revision, b.Revision) })
 	return decisions
 }
 
-func (s *State) nodeContinuationDecision() (RecordedDecision, bool) {
-	decisions := s.nodeContinuationDecisions()
-	if len(decisions) == 0 {
-		return RecordedDecision{}, false
+func (s *State) userNodeContinuationDecision() (continuationFact, bool) {
+	entries := s.nodeContinuationDecisions()
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Decision != nil && entries[i].Decision.Control == ControlContinueNode {
+			return entries[i], true
+		}
 	}
-	return decisions[len(decisions)-1], true
+	return continuationFact{}, false
 }
 
 // Withdrawal is authorized only by recorded user decisions. A proposal or
 // pending Ask never withdraws a signed native responsibility.
 func (s *State) NodeContinuationWithdraws(intent HostActionIntent) bool {
 	for _, d := range s.nodeContinuationDecisions() {
-		if d.Continuation.AppliedRevision != 0 {
+		if d.Decision == nil || d.Continuation.AppliedRevision != 0 {
 			continue
 		}
-		p := *s.PendingAsks[d.RequestID].Continuation
+		p := *d.Preview
 		p.Work = d.Continuation.Work
 		if s.nodeAffectsIntent(p, intent) {
 			return true
@@ -462,16 +491,16 @@ func (s *State) NodeContinuationWithdraws(intent HostActionIntent) bool {
 // Node continuation does not append a fictitious requirement confirmation.
 func (s *State) workAuthorizations() []ConfirmedRevision {
 	entries := slices.Clone(s.RequirementRevisions)
-	for id, d := range s.Decisions {
-		if d.Continuation == nil || d.Continuation.AppliedRevision == 0 || d.Choice != "approve" {
+	for _, d := range s.nodeContinuationDecisions() {
+		if d.Continuation.AppliedRevision == 0 {
 			continue
 		}
-		p := s.PendingAsks[id].Continuation
+		p := d.Preview
 		scope := []string{}
 		if p.To.Kind == "product-review" || p.To.Kind == "start-readiness" {
 			scope = append(scope, p.To.Kind)
 		}
-		entries = append(entries, ConfirmedRevision{Revision: p.RequirementRevision, DecidedScope: scope, WorkDecisions: d.Continuation.Work, RequestID: id, Reason: d.Continuation.Reason, StateRevision: d.Revision})
+		entries = append(entries, ConfirmedRevision{Revision: p.RequirementRevision, DecidedScope: scope, WorkDecisions: d.Continuation.Work, RequestID: d.RequestID, Reason: d.Continuation.Reason, StateRevision: d.Revision})
 	}
 	slices.SortFunc(entries, func(a, b ConfirmedRevision) int { return cmp.Compare(a.StateRevision, b.StateRevision) })
 	return entries
@@ -483,12 +512,13 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 		return false, nil
 	}
 	changed := false
+	latestUser, _ := s.userNodeContinuationDecision()
 	for _, d := range decisions {
-		if d.Continuation.AppliedRevision != 0 {
+		if d.Decision == nil || d.Continuation.AppliedRevision != 0 {
 			continue
 		}
-		current := d.RequestID == decisions[len(decisions)-1].RequestID
-		p := s.PendingAsks[d.RequestID].Continuation
+		current := d.RequestID == latestUser.RequestID
+		p := d.Preview
 		if current && !s.nodeInputsReady(p.To, e.cfg.Definition) {
 			return changed, nil
 		}
@@ -517,21 +547,11 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 		authorization := *d.Continuation
 		d.Continuation = &authorization
 		d.Continuation.AppliedRevision = nextRevision
-		s.Decisions[d.RequestID] = d
-		if s.Validation != nil && d.Continuation.changesExecutionEpoch(p.To) {
-			s.Validation.Generation = nextRevision
-		}
-		entry := ConfirmedRevision{Revision: p.RequirementRevision, WorkDecisions: d.Continuation.Work, RequestID: d.RequestID, Reason: d.Continuation.Reason, StateRevision: d.Revision}
-		if err := e.applyWorkAuthorization(s, entry); err != nil {
+		recorded := *d.Decision
+		recorded.Continuation = d.Continuation
+		s.Decisions[d.RequestID] = recorded
+		if err := e.applyContinuationWork(s, *p, *d.Continuation, d.RequestID, d.Revision, nextRevision); err != nil {
 			return changed, err
-		}
-		if p.To.Kind == "configuration" {
-			e.rebindValidationRoute(s)
-		}
-		if d.Continuation.changesExecutionEpoch(p.To) || current && p.To.Kind == "route" || p.To.Kind == "configuration" && s.SliceReceipt != nil && s.SliceReceipt.Receipt.Validation.RouteDigest != s.validationRouteDigest() {
-			if err := s.reopenSliceCheckpoint(); err != nil {
-				return changed, err
-			}
 		}
 		switch p.To.Kind {
 		case "product-review", "start-readiness":
@@ -554,12 +574,7 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 				}
 				if original.Review != nil {
 					request := "continuation-route:" + d.RequestID
-					selected := s.EffectiveConfiguration()
-					preview, err := e.configurationPreview(s, selected, original.Review.Route.Gates, nextRevision)
-					if err != nil {
-						return changed, err
-					}
-					s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlSelectRoute, RouteGates: slices.Clone(original.Review.Route.Gates), Configuration: &selected, Continuation: &preview, Options: []AskOption{{ID: "approve", Label: "确认门选择"}}}
+					s.PendingAsks[request] = PendingAsk{RequestID: request, Control: ControlSelectRoute, RouteGates: slices.Clone(original.Review.Route.Gates), Options: []AskOption{{ID: "approve", Label: "确认开发计划及路线"}}}
 				}
 			case "intake":
 				request := "continuation-intake:" + d.RequestID
@@ -573,13 +588,35 @@ func (e *Engine) advanceNodeContinuation(s *State, nextRevision uint64) (bool, e
 	return changed, nil
 }
 
+func (e *Engine) applyContinuationWork(s *State, preview NodeContinuationPreview, effect NodeContinuationDecision, request string, revision, nextRevision uint64) error {
+	// Library changes replace work within the current confirmed requirement generation.
+	if s.Validation != nil && preview.To.Kind != "configuration" && effect.changesExecutionEpoch(preview.To) {
+		s.Validation.Generation = nextRevision
+	}
+	entry := ConfirmedRevision{Revision: preview.RequirementRevision, WorkDecisions: effect.Work, RequestID: request, Reason: effect.Reason, StateRevision: revision}
+	if err := e.applyWorkAuthorization(s, entry); err != nil {
+		return err
+	}
+	if preview.To.Kind == "configuration" {
+		e.rebindValidationRoute(s)
+	}
+	if effect.changesExecutionEpoch(preview.To) || preview.To.Kind == "route" || preview.To.Kind == "configuration" && s.SliceReceipt != nil && s.SliceReceipt.Receipt.Validation.RouteDigest != s.validationRouteDigest() {
+		return s.reopenSliceCheckpoint()
+	}
+	return nil
+}
+
 func (d NodeContinuationDecision) changesExecutionEpoch(target BusinessNode) bool {
 	return target.Kind == "product-review" || target.Kind == "start-readiness" || slices.ContainsFunc(d.Work, func(w RequirementWorkDecision) bool { return w.Disposition == RequirementWorkRedo })
 }
 
 func (s *State) nodeContinuationPending() bool {
-	d, ok := s.nodeContinuationDecision()
-	return ok && d.Continuation.AppliedRevision == 0 && s.PendingAsks[d.RequestID].Continuation.To.Kind != "abort" && s.PendingAsks[d.RequestID].Continuation.To.Kind != "cleanup"
+	for _, d := range s.nodeContinuationDecisions() {
+		if d.Continuation.AppliedRevision == 0 && d.Preview.To.Kind != "abort" && d.Preview.To.Kind != "cleanup" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *State) nodeFlowEnabled(kind string) bool {

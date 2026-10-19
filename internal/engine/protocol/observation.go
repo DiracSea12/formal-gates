@@ -35,6 +35,7 @@ func (e *Engine) observing(input Observation) *Engine {
 	if e.observation != nil {
 		return e
 	}
+	e = e.evaluatingConfiguration()
 	local := *e
 	local.sourceFacts = input.Facts
 	input.Facts.Facts = append([]decision.Fact(nil), input.Facts.Facts...)

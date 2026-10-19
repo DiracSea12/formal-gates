@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,22 +56,23 @@ func controlError(t *testing.T, d *validationDriver, control protocol.ControlKin
 	var err error
 	if control == protocol.ControlSelectRoute && payload.Route != nil {
 		ask, err = protocol.NewRouteRequestEvent(id, payload.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		if err == nil {
-			ask.Request.Configuration = payload.Route.Configuration
-		}
 	} else {
 		ask, err = protocol.NewRequestEvent(id, control, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, askErr := d.f.Submit(ask)
-	if askErr != nil {
-		return askErr
+	if i := d.routeAskIndex(control, ask.Request.RouteGates); i >= 0 {
+		id = protocol.EventID(d.run.PendingAsks[i].RequestID)
+	} else {
+		_, run, askErr := d.f.Submit(ask)
+		if askErr != nil {
+			return askErr
+		}
+		d.run = run
 	}
-	d.run = run
 	token := ""
-	for _, pending := range run.PendingAsks {
+	for _, pending := range d.run.PendingAsks {
 		if pending.RequestID == string(id) {
 			token = pending.Token
 		}
@@ -82,7 +84,7 @@ func controlError(t *testing.T, d *validationDriver, control protocol.ControlKin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, run, err = d.f.Submit(decide)
+	_, run, err := d.f.Submit(decide)
 	if err != nil {
 		return err
 	}
@@ -99,19 +101,20 @@ func decideRaw(t *testing.T, d *validationDriver, control protocol.ControlKind, 
 	var err error
 	if control == protocol.ControlSelectRoute && payload.Route != nil {
 		ask, err = protocol.NewRouteRequestEvent(id, payload.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		if err == nil {
-			ask.Request.Configuration = payload.Route.Configuration
-		}
 	} else {
 		ask, err = protocol.NewRequestEvent(id, control, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, run, askErr := d.f.Submit(ask); askErr != nil {
-		return askErr
+	if i := d.routeAskIndex(control, ask.Request.RouteGates); i >= 0 {
+		id = protocol.EventID(d.run.PendingAsks[i].RequestID)
 	} else {
-		d.run = run
+		if _, run, askErr := d.f.Submit(ask); askErr != nil {
+			return askErr
+		} else {
+			d.run = run
+		}
 	}
 	token := ""
 	for _, pending := range d.run.PendingAsks {
@@ -177,6 +180,9 @@ func (d *validationDriver) confirmSliceRoute(route protocol.RouteDecision, plan 
 	d.configureRoute(&route)
 	d.drive()
 	state := driverState(d.t, d)
+	if !state.RouteConfirmationDue(d.f.definition) {
+		return
+	}
 	master, err := Open(d.f.root, state.SliceChild.MasterRunID)
 	if err != nil {
 		d.t.Fatal(err)
@@ -278,7 +284,7 @@ func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 	if len(state.Topology.ACOwners) != 1 || state.Topology.ACOwners["AC-001"] != "lane-core" {
 		t.Fatalf("AC owner map = %v", state.Topology.ACOwners)
 	}
-	if !state.RouteConfirmed || len(state.SelectedGates) != 2 || state.SelectedGates[0] != "merge-qa" || state.SelectedGates[1] != "merge-gate" {
+	if !state.RouteConfirmed || !slices.Equal(state.SelectedGates, []string{"merge-gate"}) {
 		t.Fatalf("merge route lock = %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 	if state.Phase != runtime.PhaseTopologyAndRoute {
@@ -296,25 +302,31 @@ func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 	}
 }
 
-// TestSplitBindingRequiresNoPendingRouteAsk：未决 SELECT_ROUTE Ask 存在时不
-// 绑定 split——绑定后的 run 不携带不可能再决定的路线 Ask。
-func TestSplitBindingRequiresNoPendingRouteAsk(t *testing.T) {
+// Route confirmation cannot precede topology or leave an unresolvable Ask on
+// a split master.
+func TestRouteConfirmationCannotPrecedeSplitTopology(t *testing.T) {
 	t.Parallel()
 	d := splitMasterDriver(t)
-	ask, err := protocol.NewRouteRequestEvent(d.eventID(), []string{"blackbox", "whitebox", "gate.quality"}, protocol.AskOption{ID: "approve", Label: "全部门"})
+	request, err := d.f.routeRequestPayload(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.submit(ask)
-	if err := controlError(t, d, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{
-		Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}),
-	}); err == nil {
-		t.Fatal("split binding accepted with a pending route ask")
-	} else if !strings.Contains(err.Error(), "route selection ask") {
-		t.Fatalf("pending-ask rejection = %v", err)
+	ask, err := protocol.NewRouteRequestEvent(d.eventID(), request.RouteGates, protocol.AskOption{ID: "approve", Label: "Confirm plan"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if state := driverState(t, d); state.Topology != nil || state.RouteConfirmed {
-		t.Fatalf("rejected split binding changed state: %+v", state.Topology)
+	before := driverState(t, d)
+	if _, _, err := d.f.Submit(ask); err == nil || !strings.Contains(err.Error(), "only the initial route") {
+		t.Fatalf("route request before topology was not rejected: %v", err)
+	}
+	if after := driverState(t, d); !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected route request changed authority")
+	}
+	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{
+		Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}),
+	})
+	if state := driverState(t, d); state.Topology == nil || state.Topology.Decision != "split" || !state.RouteConfirmed || len(d.run.PendingAsks) != 0 {
+		t.Fatalf("split binding retained a route Ask or lost its topology: %+v", state.Topology)
 	}
 }
 
@@ -349,7 +361,7 @@ func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	if len(state.PendingActions) != 0 {
 		t.Fatalf("child dispatched work before its route was selected: %+v", state.PendingActions)
 	}
-	if err := controlError(t, child, protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "re-cut"}}); err == nil {
+	if _, err := child.f.PrepareControl(ControlInput{Request: protocol.ControlConfirmTopology}); err == nil {
 		t.Fatal("child topology confirmation accepted")
 	}
 	// 候选含 QA 的 Ask 拒绝；缺片内计划的决定拒绝（计划随路线内联确认）。
@@ -358,9 +370,9 @@ func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 	}}); err == nil {
 		t.Fatal("QA-carrying child route ask accepted")
 	}
-	if err := controlError(t, child, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &protocol.RouteDecision{
-		Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.security"},
-	}}); err == nil {
+	route := protocol.RouteDecision{Selected: []string{"security"}}
+	child.configureRoute(&route)
+	if err := controlError(t, child, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err == nil {
 		t.Fatal("child route decision without its slice plan accepted")
 	} else if !strings.Contains(err.Error(), "slice development plan") {
 		t.Fatalf("plan-less child route error = %v", err)
@@ -369,11 +381,9 @@ func TestSliceChildInheritsAndSelectsRoute(t *testing.T) {
 		t.Fatalf("rejected plan-less decision bound a route: %t", state.RouteConfirmed)
 	}
 	// 携片内计划的 QA-free 路线照常绑定并推进。
-	child.confirmSliceRoute(protocol.RouteDecision{
-		Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.security"},
-	}, sliceLanePlan())
+	child.confirmSliceRoute(route, sliceLanePlan())
 	state = driverState(t, child)
-	if !state.RouteConfirmed || len(state.SelectedGates) != 1 || state.SelectedGates[0] != "gate.security" {
+	if !state.RouteConfirmed || len(state.SelectedGates) != 1 || state.SelectedGates[0] != "security" {
 		t.Fatalf("child route binding = %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 	if state.Phase != runtime.PhaseDevelopmentParallel {
@@ -404,7 +414,7 @@ func TestSliceChildBoundaryFollowsRouteSelection(t *testing.T) {
 		t.Fatalf("child boundary carries a development-plan prompt: %q", boundary)
 	}
 	child.confirmSliceRoute(protocol.RouteDecision{
-		Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality"},
+		Selected: []string{"quality"},
 	}, sliceLanePlan())
 	child.drive()
 	if child.run.Validation == nil || child.run.Validation.Document.Content != validationDocument || child.run.Validation.RequirementRevision != master.revision {
@@ -432,7 +442,7 @@ func TestSliceChildConfirmsInheritedPlanIntoDevelopmentDispatch(t *testing.T) {
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, provider: master.host(), git: f.vcs}
 	child.drive()
-	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Selected: []string{"quality"}}
 	plan := sliceLanePlan()
 	child.confirmSliceRoute(route, plan)
 
@@ -465,8 +475,9 @@ func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
 	}
 	child := &validationDriver{t: t, f: f, run: run, provider: master.host(), git: f.vcs}
 	child.drive()
+	route := protocol.RouteDecision{Selected: []string{"quality"}}
+	child.configureRoute(&route)
 	before := driverState(t, child)
-	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
 	if err := controlError(t, child, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err == nil {
 		t.Fatal("child route decision without a slice plan accepted")
 	} else if !strings.Contains(err.Error(), "slice development plan") {
@@ -481,7 +492,7 @@ func TestSliceChildRouteWithoutPlanIsRejected(t *testing.T) {
 		t.Fatalf("mismatched digest error = %v", err)
 	}
 	after := driverState(t, child)
-	if after.RouteConfirmed || after.SelectedGates != nil || len(after.Decisions) != len(before.Decisions) {
+	if after.RouteConfirmed || !reflect.DeepEqual(after.SelectedGates, before.SelectedGates) || len(after.Decisions) != len(before.Decisions) {
 		t.Fatalf("rejected plan-less child route changed state: %t %v", after.RouteConfirmed, after.SelectedGates)
 	}
 }
@@ -539,19 +550,16 @@ func TestSplitTopologyRequiresDistinctSliceNames(t *testing.T) {
 	}
 }
 
-// TestSliceChildPlanSwapRequiresPerBatchUserDecisions：片内计划的换约纪律
-// 与普通 run 同一条规则——开发已启动后，路线重选携带内容不同的片内计划
-// 时，逐批变更须有用户工作决定授权：无决定可区分拒绝、零写；带齐决定的
-// 换约接纳并切换执行契约（换约后派发批次来自新计划）。开发前的同集同计
-// 划重选照常（用户决定本身即确认）。
+// Slice plan replacement cannot use a runtime route Ask. Explicit requirement
+// work decisions authorize the replacement without losing the original batch.
 func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	t.Parallel()
 	master, child := controlChildren(t)
 	child.drive()
 	first := sliceLanePlan()
-	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Selected: []string{"quality"}}
 	child.confirmSliceRoute(route, first)
-	// 开发前同集同计划重选：决定本身即再确认，无额外要求。
+	// Reapplying the same library value keeps the initial plan confirmation.
 	child.confirmSliceRoute(route, first)
 	if state := driverState(t, child); !state.RouteConfirmed || len(state.SelectedGates) != 1 {
 		t.Fatalf("pre-development same-plan reselection = %t %v", state.RouteConfirmed, state.SelectedGates)
@@ -566,7 +574,7 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	swapped := sliceLanePlan()
 	swapped.Batches[0].RequirementPoints = append([]string{}, first.Batches[0].RequirementPoints...)
 	swapped.Batches[0].Deliverable = swapped.Batches[0].Deliverable + " (swapped execution contract)"
-	swapRoute := protocol.RouteDecision{Gates: []string{"gate.quality", "gate.security"}, Selected: []string{"gate.quality", "gate.security"}, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: swapped}}
+	swapRoute := protocol.RouteDecision{Selected: []string{"quality", "security"}, DevelopmentPlan: &protocol.DevelopmentPlanConfirmation{Proposal: swapped}}
 	child.configureRoute(&swapRoute)
 	preview, err := child.f.DevelopmentPlan(swapRoute)
 	if err != nil {
@@ -576,7 +584,7 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 	before := driverState(t, child)
 	if err := controlError(t, child, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &swapRoute}); err == nil {
 		t.Fatal("plan swap after development start accepted without per-batch user decisions")
-	} else if !strings.Contains(err.Error(), "changed plan requires a matching explicit work disposition for batch command") {
+	} else if !strings.Contains(err.Error(), "only the initial route") {
 		t.Fatalf("plan swap rejection = %v", err)
 	}
 	after := driverState(t, child)
@@ -595,6 +603,8 @@ func TestSliceChildPlanSwapRequiresPerBatchUserDecisions(t *testing.T) {
 		if children[i].ChildRunID != child.f.runID {
 			continue
 		}
+		children[i].RouteDisposition = protocol.RequirementWorkRedo
+		children[i].Reason = "the changed slice plan requires a fresh exact plan confirmation"
 		for j := range children[i].WorkDecisions {
 			work := &children[i].WorkDecisions[j]
 			if work.Work.ActionID == old {

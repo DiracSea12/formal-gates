@@ -122,6 +122,11 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | DeepSeek Harness | `~/.dsh/skills/formal-gates`（`$DSH_HOME` 下） | 所选项目 `.dsh/skills/formal-gates` |
 | ZCode | `~/.zcode/skills/formal-gates` | 所选项目 `.zcode/skills/formal-gates` |
 | WorkBuddy | `~/.codebuddy/skills/formal-gates` | 所选项目 `.codebuddy/skills/formal-gates` |
+| Devin（宿主接入） | 原生配置目录下的 `skills/formal-gates` | 所选项目 `.devin/skills/formal-gates` |
+
+Devin 当前仅接入宿主安装、规则、hook 与控制 MCP，不包含原生执行、模型目录和用量解析。
+原生审批往返尚未实测，带注释的 JSONC 配置暂时拒写；具体路径和能力边界见
+[安装与 Hook](references/install-and-hooks.md)。
 
 安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装写入 skill、`AGENTS.md` 指令与 `.zcode/config.json` 中的 MCP 配置（当前 ZCode 忽略项目级 hook 配置）。WorkBuddy 只安装 skill 与 CODEBUDDY.md，原生工具/生命周期由 engine 接入，不写 global hook。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
 

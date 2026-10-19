@@ -11,6 +11,8 @@ package review
 import (
 	"fmt"
 	"slices"
+
+	"formal-gates/internal/settings"
 )
 
 // Action 是开发前审查动作的封闭枚举，恰两值；Controller 按 run 与动作各自
@@ -70,10 +72,6 @@ const (
 	nextRequirementAutomatic  = "AUTOMATIC_CAPACITY"
 	nextRequirementAuthorized = "AUTHORIZED_EXTRA_ROUND"
 	nextRequirementUser       = "USER_DECISION_REQUIRED"
-
-	// automaticRoundLimit 是 workflow policy 预授权的自动语义轮上限；越过
-	// 它的每一轮都必须由用户逐次授权。
-	automaticRoundLimit = 3
 )
 
 // Set 是一个 run 的两条审查 series 的封闭容器：恰 product-review 与
@@ -84,12 +82,17 @@ type Set struct {
 	StartReadiness Series `json:"startReadiness"`
 }
 
-// NewSet 建立两条 series 的初始态：PENDING、自动上限 3、四个账本非 nil、
+// NewSet 建立两条 series 的初始态：PENDING、配置默认上限、账本非 nil、
 // 容量投影齐平。
 func NewSet() Set {
+	return NewSetWithLimits(settings.DefaultRoundLimit, settings.DefaultRoundLimit, 0)
+}
+
+// NewSetWithLimits records each series' effective value at creation.
+func NewSetWithLimits(product, technical int, revision uint64) Set {
 	return Set{
-		ProductReview:  newSeries(ProductReview),
-		StartReadiness: newSeries(StartReadiness),
+		ProductReview:  newSeries(ProductReview, product, revision),
+		StartReadiness: newSeries(StartReadiness, technical, revision),
 	}
 }
 
@@ -116,14 +119,16 @@ func (s *Set) seriesFor(action Action) (*Series, error) {
 	return nil, fmt.Errorf("review: unknown pre-development review action %q", action)
 }
 
-func newSeries(action Action) Series {
+func newSeries(action Action, limit int, revision uint64) Series {
 	return Series{
 		Action:               action,
 		ActivationSource:     activationWorkflowStart,
-		AutomaticLimit:       automaticRoundLimit,
-		CurrentLimit:         automaticRoundLimit,
-		RemainingAutomatic:   automaticRoundLimit,
-		RemainingCapacity:    automaticRoundLimit,
+		AutomaticLimit:       limit,
+		LimitHistory:         []LimitInterval{{Value: limit, Revision: revision}},
+		DispatchRounds:       map[string]RoundExecution{},
+		CurrentLimit:         limit,
+		RemainingAutomatic:   limit,
+		RemainingCapacity:    limit,
 		NextRoundRequirement: nextRequirementAutomatic,
 		Authorizations:       []RoundAuthorization{},
 		RawCandidates:        []RawCandidate{},
@@ -143,16 +148,20 @@ func newSeries(action Action) Series {
 // Corrections 与 Authorizations 投影出的缓存，每次接纳 candidate 或
 // correction 后由 refresh 重算；防篡改校验会强制它们与账本一致。
 type Series struct {
-	Action               Action `json:"action"`
-	ActivationSource     string `json:"activationSource"`
-	AutomaticLimit       int    `json:"automaticLimit"`
-	Completed            int    `json:"completed"`
-	CurrentLimit         int    `json:"currentLimit"`
-	RemainingAutomatic   int    `json:"remainingAutomatic"`
-	RemainingCapacity    int    `json:"remainingCapacity"`
-	NextRoundRequirement string `json:"nextRoundRequirement"`
-	ExtraAuthorized      int    `json:"extraAuthorized"`
-	ExtraConsumed        int    `json:"extraConsumed"`
+	LimitHistory []LimitInterval `json:"limitHistory"`
+	// DispatchRounds keeps the logical admission when a replacement receives
+	// a newer dispatch revision. Candidates still own completed-round counts.
+	DispatchRounds       map[string]RoundExecution `json:"dispatchRounds"`
+	Action               Action                    `json:"action"`
+	ActivationSource     string                    `json:"activationSource"`
+	AutomaticLimit       int                       `json:"automaticLimit"`
+	Completed            int                       `json:"completed"`
+	CurrentLimit         int                       `json:"currentLimit"`
+	RemainingAutomatic   int                       `json:"remainingAutomatic"`
+	RemainingCapacity    int                       `json:"remainingCapacity"`
+	NextRoundRequirement string                    `json:"nextRoundRequirement"`
+	ExtraAuthorized      int                       `json:"extraAuthorized"`
+	ExtraConsumed        int                       `json:"extraConsumed"`
 	// UpstreamVoid 持久标记"本 series 的 PASS 建立其上的上游结论已不成立"
 	// （product-review 的纠正把 PASS 变阻塞时置位，仅 start-readiness 会被
 	// 置位）：置位期间任何重投影都把 effective 保持在 PENDING，直到新一轮

@@ -11,11 +11,13 @@ import (
 )
 
 func TestControlServerConfigurationOwnership(t *testing.T) {
-	for _, platform := range []string{"codex", "zcode"} {
+	for _, platform := range []string{"codex", "zcode", "devin"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(platform+"_"+scope, func(t *testing.T) {
 				home, project := t.TempDir(), t.TempDir()
 				t.Setenv("HOME", home)
+				t.Setenv("APPDATA", home)
+				t.Setenv("XDG_CONFIG_HOME", home)
 				targets, err := installTargets(platform, scope, project)
 				if err != nil {
 					t.Fatal(err)
@@ -26,6 +28,9 @@ func TestControlServerConfigurationOwnership(t *testing.T) {
 				original := "model = \"user-choice\"\n[mcp_servers.other]\ncommand = \"other\"\n"
 				if platform == "zcode" {
 					original = "{\"theme\":\"dark\",\"mcp\":{\"servers\":{\"other\":{\"command\":\"other\"}}}}\n"
+				}
+				if platform == "devin" {
+					original = "{\"theme\":\"dark\",\"mcpServers\":{\"other\":{\"command\":\"other\"}}}\n"
 				}
 				mustWriteValidateTest(t, path, original)
 				if changed, err := configureControlServer(target, false); err != nil || !changed {
@@ -51,7 +56,7 @@ func TestControlServerConfigurationOwnership(t *testing.T) {
 				if platform == "codex" && string(after) != original {
 					t.Fatalf("uninstall changed unrelated TOML: %s", after)
 				}
-				if platform == "zcode" {
+				if platform == "zcode" || platform == "devin" {
 					var want, got any
 					_ = json.Unmarshal([]byte(original), &want)
 					_ = json.Unmarshal(after, &got)
@@ -80,7 +85,7 @@ func TestControlServerConfigurationOwnership(t *testing.T) {
 
 func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
 	t.Parallel()
-	for _, platform := range []string{"codex", "zcode"} {
+	for _, platform := range []string{"codex", "zcode", "devin"} {
 		t.Run(platform, func(t *testing.T) {
 			root := t.TempDir()
 			target := installTarget{host: platform, targetPath: filepath.Join(root, "."+platform, "skills", "formal-gates"), launcherPath: filepath.Join(root, "launcher")}
@@ -88,6 +93,9 @@ func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
 			original := "[mcp_servers.\"formal-gates\"]\ncommand = \"user-owned\"\n"
 			if platform == "zcode" {
 				original = "{\"mcp\":{\"servers\":{\"formal-gates\":{\"command\":\"user-owned\"}}}}\n"
+			}
+			if platform == "devin" {
+				original = "{\"mcpServers\":{\"formal-gates\":{\"command\":\"user-owned\"}}}\n"
 			}
 			mustWriteValidateTest(t, path, original)
 			if _, err := configureControlServer(target, false); err == nil {
@@ -100,6 +108,42 @@ func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
 			if err != nil || string(after) != original {
 				t.Fatalf("unrelated entry changed: %v %s", err, after)
 			}
+		})
+	}
+}
+
+func TestControlServerNativeShapeSnapshots(t *testing.T) {
+	for _, platform := range []string{"codex", "zcode"} {
+		t.Run(platform, func(t *testing.T) {
+			root := t.TempDir()
+			target := installTarget{host: platform, targetPath: filepath.Join(root, "skills", "formal-gates"), launcherPath: filepath.FromSlash("stable/formal-gates")}
+			path := controlConfigPath(target)
+			original := "model = \"user-choice\"\n"
+			want := original + controlTOMLStart + "\n[mcp_servers.formal-gates]\ncommand = \"stable/formal-gates\"\nargs = [\"workflow\", \"serve\"]\n" + controlTOMLEnd + "\n"
+			if platform == "zcode" {
+				original = "{\"theme\":\"dark\",\"mcp\":{\"custom\":true,\"servers\":{\"other\":{\"command\":\"other\"}}}}\n"
+				want = "{\n  \"mcp\": {\n    \"custom\": true,\n    \"servers\": {\n      \"formal-gates\": {\n        \"args\": [\n          \"workflow\",\n          \"serve\"\n        ],\n        \"command\": \"stable/formal-gates\",\n        \"type\": \"stdio\"\n      },\n      \"other\": {\n        \"command\": \"other\"\n      }\n    }\n  },\n  \"theme\": \"dark\"\n}\n"
+			}
+			mustWriteValidateTest(t, path, original)
+			if _, err := configureControlServer(target, false); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil || string(body) != want {
+				t.Fatalf("native configuration changed: %v\nwant=%s\ngot=%s", err, want, body)
+			}
+			t.Logf("installed snapshot: %q", body)
+			if _, err := configureControlServer(target, true); err != nil {
+				t.Fatal(err)
+			}
+			if platform == "zcode" {
+				original = "{\n  \"mcp\": {\n    \"custom\": true,\n    \"servers\": {\n      \"other\": {\n        \"command\": \"other\"\n      }\n    }\n  },\n  \"theme\": \"dark\"\n}\n"
+			}
+			body, err = os.ReadFile(path)
+			if err != nil || string(body) != original {
+				t.Fatalf("native uninstall changed: %v %s", err, body)
+			}
+			t.Logf("uninstalled snapshot: %q", body)
 		})
 	}
 }

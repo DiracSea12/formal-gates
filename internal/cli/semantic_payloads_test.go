@@ -72,7 +72,7 @@ func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
 	t.Log("document position 1 and material positions 1/3 preserved full original intake; repeated preparation reused the same payload without run/registry")
 }
 
-func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
+func TestIntakePrecheckPreservesOrdinaryMaterialAcrossRoutes(t *testing.T) {
 	t.Parallel()
 	for _, multiple := range []bool{false, true} {
 		t.Run(strconv.FormatBool(multiple), func(t *testing.T) {
@@ -138,11 +138,24 @@ func TestLightweightIntakeSelectsOrdinaryMaterialPositions(t *testing.T) {
 				}
 				assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 			}
-			if invoke("--route", "regular", "--document", "1") == 0 || !strings.Contains(stderr.String(), "select an original displayed requirement document") {
-				t.Fatal("regular document selection admitted ordinary material", out.String(), stderr.String())
+			for _, selection := range [][]string{{"--document", strconv.Itoa(positions["request.md"])}, {"--requirement", "request.md"}} {
+				flags := append([]string{"--route", "regular"}, selection...)
+				if multiple {
+					flags = append(flags, "--solution-document", strconv.Itoa(positions["design.txt"]), "--artifact-document", strconv.Itoa(positions["reference.txt"]))
+				}
+				if invoke(flags...) != 0 {
+					t.Fatal("precheck incorrectly enforced a route's material format", out.String(), stderr.String())
+				}
+				var preview facade.IntakePreview
+				if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.RequirementDocument != nil ||
+					preview.Content != strings.ReplaceAll(originals["request.md"], "\r\n", "\n") ||
+					preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.RequirementRevision != preview.Revision {
+					t.Fatal("precheck changed the ordinary source or its exact revision", preview, err)
+				}
+				assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 			}
-			if invoke("--route", "regular", "--requirement", "request.md") == 0 || !strings.Contains(stderr.String(), "document must contain exactly one ## 需求点 section") {
-				t.Fatal("regular precheck stopped requiring structured requirements", out.String(), stderr.String())
+			if _, err := facade.PrepareIntake(root, "request.md", "", nil, true); err == nil || !strings.Contains(err.Error(), "document must contain exactly one ## 需求点 section") {
+				t.Fatal("regular confirmation stopped requiring structured requirements", err)
 			}
 			for path, content := range originals {
 				actual, err := os.ReadFile(filepath.Join(root, path))

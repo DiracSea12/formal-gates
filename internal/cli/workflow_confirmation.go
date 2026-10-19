@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,16 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(flags, args, streams.Stdout); done {
 		return code, err
 	}
-	return harness.ServeTools(streams.Stdin, streams.Stdout, streams.Stderr, confirmationTools(), func(name string, raw json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
+	controller, err := newPanelController()
+	if err != nil {
+		return 1, err
+	}
+	defer controller.Close()
+	ctx := streams.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return harness.ServeToolsWithContext(ctx, streams.Stdin, streams.Stdout, streams.Stderr, confirmationTools(), func(callCtx context.Context, name string, raw json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
 		var context struct {
 			Owner *facade.OwnerBinding `json:"formal-gates/owner"`
 		}
@@ -62,6 +72,8 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 		}
 		current := streams
 		current.owner = context.Owner
+		current.Context = callCtx
+		current.panelCtl = controller
 		return callConfirmationTool(name, raw, current, confirm)
 	}, nil), nil
 }
@@ -81,8 +93,7 @@ func confirmationTools() []any {
 			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for a regular run; the program validates and displays it. Omitted uses the current native snapshot; lightweight ignores it."},
 			"vcs":           map[string]any{"type": "string", "description": "Native VCS name, using the existing workflow start selection when omitted."},
 			"configuration": map[string]any{"type": "string", "description": "Saved configuration name or displayed position"},
-			"disabledNodes": map[string]any{"type": "array", "items": position("Original node position published by workflow start --nodes")},
-		}, "intake", "route"),
+		}, "intake"),
 		tool("confirm_control", "Request native confirmation of an original saved control candidate. The host directly submits that exact candidate; no approval is returned for the agent to submit.", map[string]any{
 			"root": root, "run": position("Original top-level run position; may be omitted when only one run exists"),
 			"candidate": position("Original confirmationCandidate position published by workflow next or replan"),
@@ -93,6 +104,11 @@ func confirmationTools() []any {
 			"question": position("Original pending question position published by native show"),
 			"decision": position("Original saved decision position published by native respond"),
 		}, "question", "decision"),
+		tool("configure", "Open the flow configuration panel and wait for its result. Before intake selection, tell the user that this graphical panel is available now and later: ask the agent to call configure, or run formal-gates config in a terminal; disabling panelSelection switches selection to conversation. With intake, selected/timeout returns a saved configuration and derived route for confirm_start; the panel does not approve startup. Never call confirm_start after cancelled or superseded. If disabled/unavailable, explain the reason and offer equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
+			"root":   map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory."},
+			"intake": position("Original intake position published by workflow start --precheck"),
+			"force":  map[string]any{"type": "boolean", "description": "Open the panel even when panelSelection is disabled"},
+		}),
 	}
 }
 
@@ -108,6 +124,40 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 	var args []string
 	var execute func([]string, IO) (int, error)
 	switch name {
+	case "configure":
+		var input struct {
+			Root   string `json:"root"`
+			Intake *int   `json:"intake"`
+			Force  bool   `json:"force"`
+		}
+		if err := harness.StrictDecode(raw, &input); err != nil {
+			return nil, err
+		}
+		intake := 0
+		if input.Intake != nil {
+			// Positions are 1-based; an explicit zero is an invalid selection,
+			// not an omitted library open.
+			if *input.Intake < 1 {
+				return nil, fmt.Errorf("select an original intake position")
+			}
+			intake = *input.Intake
+		}
+		root, err := rootPath(input.Root)
+		if err != nil {
+			return nil, err
+		}
+		if streams.panelCtl == nil {
+			return nil, fmt.Errorf("panel controller unavailable")
+		}
+		callCtx := invocation.Context
+		if callCtx == nil {
+			callCtx = context.Background()
+		}
+		result, err := streams.panelCtl.configure(callCtx, root, intake, input.Force)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
 	case "confirm_start":
 		var input struct {
 			Root          string `json:"root"`
@@ -116,7 +166,6 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 			BaseSnapshot  string `json:"baseSnapshot"`
 			VCS           string `json:"vcs"`
 			Configuration string `json:"configuration"`
-			DisabledNodes []int  `json:"disabledNodes"`
 		}
 		if err := harness.StrictDecode(raw, &input); err != nil {
 			return nil, err
@@ -141,9 +190,6 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		}
 		if input.Configuration != "" {
 			args = append(args, "--configuration", input.Configuration)
-		}
-		for _, node := range input.DisabledNodes {
-			args = append(args, "--disable-node", strconv.Itoa(node))
 		}
 		execute = runWorkflowStart
 	case "confirm_control":

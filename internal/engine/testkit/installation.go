@@ -10,6 +10,21 @@ import (
 	"formal-gates/internal/coordination"
 )
 
+// ShortRoot keeps native worktree paths independent of test names.
+func ShortRoot(t testing.TB) string {
+	t.Helper()
+	root, err := os.MkdirTemp(os.TempDir(), "engine-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	return root
+}
+
 // Installation supplies the registry identity and accepted bootstrap material
 // for an isolated project. Its files live outside the project so native VCS
 // fixtures see only the files their business scenarios create.

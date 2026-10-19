@@ -103,7 +103,7 @@ var runtimeStatusDirs = []string{
 }
 
 // Status 返回排除运行期未跟踪产物后的 porcelain 状态（git status
-// --porcelain=v1 --untracked-files=all）。只剔运行期目录下的 "?? " 行；这些
+// --porcelain=v1 --untracked-files=all）。只剔运行期路径的 "?? " 行；这些
 // 路径被跟踪后出现修改（非 "??" 行）仍照常作为未提交变更报告。
 func (p *Provider) Status() (string, error) {
 	if p.name != "git" {
@@ -318,7 +318,7 @@ func (p *Provider) verifyRoot() error {
 	return nil
 }
 
-// excludeRuntimeUntracked 移除 porcelain 输出中位于保留运行期目录下的
+// excludeRuntimeUntracked 移除 porcelain 输出中属于运行期路径的
 // "?? <path>" 行；其余行（含运行期路径被跟踪后的修改）原样保留。
 func (p *Provider) excludeRuntimeUntracked(status string) string {
 	lines := strings.Split(status, "\n")
@@ -342,9 +342,14 @@ func normalizeStatusPath(path string) string {
 	return strings.ReplaceAll(path, `\`, "/")
 }
 
-// RuntimePath reports engine-owned runtime directories and their descendants.
+// RuntimePath reports tool-managed project settings, their lock, and runtime
+// directories and descendants. Status callers exclude only untracked paths.
 func RuntimePath(path string) bool {
 	path = filepath.ToSlash(filepath.Clean(path))
+	if path == ".gates/config.json" || path == ".gates/config.json.lock" ||
+		path == ".gates/panel-instance.json" || path == ".gates/panel-instance.lock" {
+		return true
+	}
 	for _, dir := range runtimeStatusDirs {
 		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
 			return true

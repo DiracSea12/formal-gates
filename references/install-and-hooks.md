@@ -50,6 +50,23 @@ ZCode 全局写 `.zcode/cli/config.json`、项目写 `.zcode/config.json` 的 `m
 无关配置与服务器保留；名称已被其他命令占用时安装拒绝覆盖。`--skip-hooks` 同时跳过此注册。
 卸载删除自有项及只由安装器创建的空配置文件，故障恢复沿同一安装 journal，不留下配置备份。
 
+同一 `workflow serve` 服务还发布 `configure` 工具，不新增独立 MCP 配置。
+安装后须通过宿主实际的工具发现确认它可见；已有连接可能需要重新连接才能刷新工具列表。
+`configure` 只打开配置面板并返回选择，不能代替 `confirm_start`、`confirm_control`
+或 `confirm_native` 的真人确认。无桌面时使用同一配置库的 `settings` 与对话入口。
+
+Devin 3000.3 及以上版本的宿主薄适配复用同一安装事务、通用写入拦截 hook 和 `workflow serve`，
+不新增审批界面。项目 skill 位于 `.devin/skills/formal-gates`，规则位于 `AGENTS.md`；
+全局使用 Devin 原生配置目录（Windows 为 `%APPDATA%/devin`，其他系统为
+`$XDG_CONFIG_HOME/devin` 或 `~/.config/devin`）。hook 合并到 `config.json`，
+控制 MCP 写入独立 `mcp_config.json` 的 `mcpServers`，由 Devin 展示原生审批。
+Devin 原生配置按 local、project、user 的优先级逐层覆盖；项目
+`.devin/mcp_config.local.json` 的同名服务器会覆盖 project/user 项，安装器不改这些用户自有覆盖项。
+当前只接受严格 JSON；带注释的 JSONC 配置会拒写并保持原字节。
+本轮尚未接入 Devin 原生执行、模型目录和用量解析，也未实测当前平台原生审批往返；
+安装、工具发现、审批操作及原生执行是不同能力，不得用安装成功代替后面几项。
+在 Devin 中控制流程时，各执行节点须选择已有原生执行适配的平台；Devin 本身尚不进入执行平台列表。
+
 DSH global 的既有 Cordis 插件从同一控制服务发现工具合同，使用当前根代理的
 `ctx.userQuestions.ask` 显示原生问题；只有实际选择“确认并执行”才回应原请求。
 无默认预选、自定义文字不充当批准，取消后不接纳迟到回答。DSH project 仍不加载 home 插件，

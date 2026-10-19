@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>formal-gates 流程配置面板</title>
+<link rel="stylesheet" href="/style.css">
+<script>window.__PANEL__=__PANEL_BOOTSTRAP__;</script>
+</head>
+<body>
+<div class="win" id="win">
+  <div class="titlebar"><span class="logo"></span>formal-gates · 流程配置<button class="iconbtn" id="winClose" title="关闭面板">✕</button></div>
+  <div class="header">
+    <button class="iconbtn" id="libBtn">☰ 配置库</button>
+    <div class="cfgname"><span id="cfgTitle"></span><span class="badge cur" id="curBadge" style="display:none">当前配置</span><span class="badge dirty" id="dirtyBadge" style="display:none">未保存</span></div>
+    <div class="runinfo" id="runinfo"></div>
+    <select id="runSel" class="runsel" style="display:none"></select>
+  </div>
+  <div class="banner" id="banner"></div>
+  <div class="body">
+    <div class="canvas" id="canvas" tabindex="-1">
+      <div class="world" id="world">
+        <svg id="edges"><defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3d4a6b"/></marker>
+          <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#55618a"/></marker>
+        </defs></svg>
+      </div>
+      <div class="legend"><span><i style="background:#14171e;border:1px solid #2a3142"></i>已完成（只读）</span><span><i style="background:#1f6b53"></i>正在运行</span><span><i style="border:1px dashed #555;background:none"></i>已关闭</span><span><i style="background:var(--accent)"></i>当前选中</span></div>
+    </div>
+    <div class="inspector" id="insp"></div>
+    <div class="scrim" id="scrim"></div>
+    <div class="drawer" id="drawer">
+      <div class="hd"><b>配置库</b><button class="iconbtn" id="newCfg">＋ 新建</button></div>
+      <div id="saveBar"></div>
+      <div class="list" id="cfgList"></div>
+      <div class="setrow" id="setrow"></div>
+      <div class="ft" id="drawerFt"></div>
+    </div>
+  </div>
+  <div class="footer">
+    <div class="msg" id="msg"></div>
+    <div class="sp"></div>
+    <button class="b" id="save">保存</button>
+    <button class="b pri" id="apply">应用</button>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

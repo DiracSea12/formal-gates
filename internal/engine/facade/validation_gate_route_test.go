@@ -97,12 +97,13 @@ func TestGateSelectionRequiresConfirmedDevelopmentPlan(t *testing.T) {
 	passPreDevelopmentReviews(t, d, commandPlan())
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality"}, Selected: []string{"quality"}}
+	d.configureRoute(&route)
 	if err := controlError(t, d, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &route}); err == nil || !strings.Contains(err.Error(), "plan") {
 		t.Fatalf("unconfirmed development plan = %v", err)
 	}
 	d.reopen()
 	state := driverState(t, d)
-	if state.RouteConfirmed || len(state.SelectedGates) != 0 {
+	if state.RouteConfirmed || !slices.Equal(state.SelectedGates, []string{"quality"}) {
 		t.Fatalf("unconfirmed plan bound gate selection: %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 }

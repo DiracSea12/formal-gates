@@ -53,6 +53,7 @@ func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
 	for _, status := range []string{"COMPLETE", "ABORTED"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
+			saveLightweightConfiguration(t, root)
 			f, _, err := facade.Start(facade.StartOptions{Root: root, Request: facade.StartRequest{RunID: "terminal-consumer", Route: "lightweight", DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: writerIntakeReceipt(t, root)}, Admission: engineWriterAdmission(t, root)})
 			if err != nil {
 				t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/settings"
 )
 
 // guardPipelineFixture 构造一个验证管线就位的权威状态（拓扑、路线、确认计
@@ -80,10 +82,11 @@ func guardPipelineFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 	gateTask := pipelineTask(cd, "engine.gate.v3", "wave-1:quality")
 	state.Validation = &Validation{
 		RequirementRevision: "rev-1", Generation: 0,
-		Sets:     map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Version: "case-v1", Status: "FROZEN"}},
+		Sets:     map[coverage.ReviewKind]*CaseSet{coverage.ReviewBlackbox: {Version: "case-v1", Status: "FROZEN", LimitHistory: []review.LimitInterval{{Value: settings.DefaultRoundLimit, Revision: 1}}}},
 		Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{},
 		Waves: []ValidationWave{{
 			ID: "wave-1", Status: "COLLECTING", Scope: coverage.ScopeFull,
+			LimitHistory:        []review.LimitInterval{{Value: settings.DefaultRoundLimit, Revision: 1}},
 			Candidate:           coverage.ValidationCandidate{Identity: "native-1", Digest: "sha256:native-1"},
 			RequirementRevision: "rev-1", Generation: 0, RouteDigest: state.validationRouteDigest(),
 			Versions:       map[coverage.ReviewKind]string{coverage.ReviewBlackbox: "case-v1"},
@@ -718,10 +721,14 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	if !ready {
 		t.Fatalf("fixture did not reach a governed Ready candidate: %+v", plan.Next)
 	}
-	_, _, err = reopened.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
+	beforeIssue := reopened.LoadMustSucceed(t)
+	issued, _, err := reopened.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput)
 	var rejected *RejectedError
 	if !errors.As(err, &rejected) || rejected.Code != CodeGuardBlockedBug {
 		t.Fatalf("issue = %v, want BLOCKED_BUG", err)
+	}
+	if len(issued) != 0 {
+		t.Fatalf("refused issue returned dispatches: %+v", issued)
 	}
 	after, err := os.ReadFile(statePath)
 	if err != nil {
@@ -732,6 +739,11 @@ func TestIssueFromPlanRefusalLeavesPersistedStateUnchanged(t *testing.T) {
 	}
 	if snap, err := reopened.Load(); err != nil || snap.Revision != revision.Revision {
 		t.Fatalf("reload after refusal = %v revision=%d want %d", err, snap.Revision, revision.Revision)
+	} else if !reflect.DeepEqual(snap.State.PendingActions, beforeIssue.State.PendingActions) ||
+		!reflect.DeepEqual(snap.State.SpawnReceipts, beforeIssue.State.SpawnReceipts) ||
+		!reflect.DeepEqual(snap.State.HostActionReceipts, beforeIssue.State.HostActionReceipts) ||
+		!reflect.DeepEqual(snap.State.Cost, beforeIssue.State.Cost) {
+		t.Fatal("refused issue changed dispatches, receipts or cost")
 	}
 }
 
@@ -841,6 +853,7 @@ func guardedFunnelFixture(t *testing.T) (*Engine, *State, runtime.TaskKey) {
 			},
 		}},
 	}
+	state.applyRoundLimits(state.AppliedConfiguration(), 1)
 	state.DispatchBindings["act:qa-1"] = WorkBinding{Task: qaTask, WaveID: "wave-1", Candidate: "native-1", RequirementRevision: "rev-1", Generation: state.requirementGeneration()}
 	manifest := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: coverage.SourceBinding{RunID: state.RunID, RequirementRevision: "rev-1", SolutionRevision: "solution"}, ReviewKind: coverage.ReviewBlackbox}, Cases: []coverage.AcceptanceCase{{CaseID: "governed", Mode: coverage.CaseBlackbox, Operations: []coverage.Operation{{Kind: coverage.OperationShell, Command: "printf governed"}}}}, Edges: []coverage.CoverageEdge{{SourceID: "source", PointID: "point", CaseID: "governed"}}}
 	w := &state.Validation.Waves[0]

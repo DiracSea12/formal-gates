@@ -342,6 +342,11 @@ func runAutomaticNativeFlow(t *testing.T, packageRoot, provider, topology string
 	if err := c.captureBinding(); err != nil {
 		t.Fatal(err)
 	}
+	f.command(nil, "settings", "save", "--root", c.project, "--scope", "project", "--configuration", "默认", "--name", "命令")
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		f.command(nil, "settings", "set", "--root", c.project, "--scope", "project", "--configuration", "命令", "--qa-mode", mode, "--enabled", "true")
+	}
+	f.command(nil, "settings", "use", "--root", c.project, "--scope", "project", "--configuration", "命令")
 	intakePath := filepath.Join(c.jobs, "intake.json")
 	var preview facade.IntakePreview
 	f.decode(f.command(nil, "workflow", "start", "--precheck", "--root", c.project, "--requirement", "requirements.md", "--save-candidate", intakePath), &preview)
@@ -498,25 +503,7 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 			input.Owners = f.splitOwners(run)
 		}
 	case protocol.ControlSelectRoute:
-		input.Choice = "full"
-		if run.MasterRunID != "" {
-			master := f.run
-			f.decode(f.command(nil, "workflow", "show", "--root", f.project, "--run-id", run.MasterRunID), &master)
-			var slice string
-			for name, id := range master.SliceChildren {
-				if id == run.RunID {
-					slice = name
-				}
-			}
-			if master.Review.Topology != nil && slice == master.Review.Topology.ACOwners["AC-002"] {
-				input.Choice = "custom"
-				gate := slices.Index(ask.RouteGates, "implementation-quality-gate")
-				if gate < 0 {
-					f.t.Fatal("declared custom gate is absent from original route candidates")
-				}
-				input.Gates = []int{gate + 1}
-			}
-		}
+		input.Choice = "approve"
 	default:
 		f.t.Fatalf("actual typed Ask needs Root's semantic disposition beyond declared test choices: %s", textOf(ask))
 	}
@@ -531,6 +518,13 @@ func (f *automaticNativeFlow) decide(run facade.Run) {
 	f.decode(f.command(draft, "workflow", "next", "--root", f.project, "--run-id", run.RunID, "--decision", "-", "--save-candidate", path), &candidate)
 	if candidate.Run.RunID != run.RunID || !canaryValuesEqual(candidate.Input, input) {
 		f.t.Fatal("program candidate differs from declared participant choices")
+	}
+	if ask.Control == protocol.ControlSelectRoute {
+		if candidate.Run.Configuration.Name != "命令" || candidate.Event.Decide.Request != protocol.RequestID(ask.RequestID) || candidate.Event.Decide.Token != ask.Token ||
+			candidate.DevelopmentPlan == nil || !slices.Contains(candidate.Event.Decide.Review.Route.Selected, "implementation-quality-gate") ||
+			!slices.Equal(candidate.Event.Decide.Review.Route.Selected, run.Configuration.SelectedGates(ask.RouteGates)) {
+			f.t.Fatal("initial route lost its original Ask, plan or shared bound configuration")
+		}
 	}
 	f.save(fmt.Sprintf("control-participant-%d.json", f.sequence), map[string]any{"authority": "authorized isolated test participant", "displayed": candidate, "decision": "confirm complete original candidate for these predeclared choices"})
 	var response automaticNativeBoundary

@@ -143,6 +143,12 @@ On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only 
 | DeepSeek Harness | `~/.dsh/skills/formal-gates` (under `$DSH_HOME`) | `.dsh/skills/formal-gates` under the selected project |
 | ZCode | `~/.zcode/skills/formal-gates` | `.zcode/skills/formal-gates` under the selected project |
 | WorkBuddy | `~/.codebuddy/skills/formal-gates` | `.codebuddy/skills/formal-gates` under the selected project |
+| Devin (host integration) | `skills/formal-gates` under its native config directory | `.devin/skills/formal-gates` under the selected project |
+
+Devin currently integrates host installation, rules, hooks, and control MCP only;
+native execution, model discovery, and usage parsing are not implemented.
+Native approval round trips remain untested, and commented JSONC is rejected
+without modification. See [installation and hooks](references/install-and-hooks.md).
 
 Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch); a ZCode global install writes `~/.zcode/cli/config.json`, while a project install writes the skill, `AGENTS.md` instructions, and MCP configuration in `.zcode/config.json` (current ZCode ignores project-level hook configuration). WorkBuddy installs its skill and CODEBUDDY.md instructions without global hooks; native actions use the engine tool and lifecycle boundary. Existing non-formal-gates hooks and plugin rows are preserved; when multiple hosts share a project `AGENTS.md`, the managed marker is cleaned only after the last active owner is uninstalled.
 

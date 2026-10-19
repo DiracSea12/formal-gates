@@ -18,7 +18,28 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/settings"
 )
+
+func configureLightweight(t *testing.T, root string) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.SaveConfiguration(root, home, "project", "记录", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(root, home, "project", "记录", nil, func(configuration *settings.Configuration) error {
+		configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", "记录", nil); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // workflowIntakeReceipt is intentionally independent of the façade package's test
 // fixture.  The revisions are opaque bindings here because this test does not
@@ -57,6 +78,7 @@ func verticalStartRequest(runID string, receipt facade.IntakeConfirmationReceipt
 // engine namespace is created.
 func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	root := t.TempDir()
+	configureLightweight(t, root)
 	admission := fixtureAdmission(t, root, "sha256:admitted", "target-qa")
 	_, run, err := facade.Start(facade.StartOptions{
 		Root: root, Request: verticalStartRequest("admission-ok", workflowIntakeReceipt()), Admission: admission,
@@ -92,7 +114,7 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 		{name: "unsupported route", mutate: func(req facade.StartRequest, _ *facade.StartOptions) facade.StartRequest {
 			req.Route = "unrecognized"
 			return req
-		}, want: "unsupported"},
+		}, want: "differs from configuration route"},
 		{name: "negative capacity", mutate: func(req facade.StartRequest, options *facade.StartOptions) facade.StartRequest {
 			options.Capacity = -1
 			return req
@@ -101,6 +123,7 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			caseRoot := t.TempDir()
+			configureLightweight(t, caseRoot)
 			options := facade.StartOptions{Root: caseRoot, Admission: fixtureAdmission(t, caseRoot, admission.PackageDigest, admission.InstalledTargetIdentity)}
 			request := row.mutate(verticalStartRequest("reject-"+strings.ReplaceAll(row.name, " ", "-"), workflowIntakeReceipt()), &options)
 			options.Request = request
@@ -200,6 +223,7 @@ func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 // summary, and that Show/Status/Next do not rewrite terminal bytes.
 func TestFacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	root := t.TempDir()
+	configureLightweight(t, root)
 	runID := "terminal-open-replay"
 	f, _, err := facade.Start(facade.StartOptions{
 		Root: root, Request: verticalStartRequest(runID, workflowIntakeReceipt()),

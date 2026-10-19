@@ -417,6 +417,7 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 func TestLightweightRunCarriesReviewFace(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	configureLightweight(t, root)
 	request := StartRequest{
 		RunID: "lightweight-review-face", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
@@ -434,8 +435,20 @@ func TestLightweightRunCarriesReviewFace(t *testing.T) {
 			t.Fatalf("initial series face = %+v", face)
 		}
 	}
-	if run.Review.Topology != nil || run.Review.RouteConfirmed || run.Review.SelectedGates != nil {
-		t.Fatalf("lightweight run must not carry topology or route: %+v", run.Review)
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates, err := configurationGates(f.admission.Target)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Review.Topology != nil || run.Review.RouteConfirmed ||
+		!reflect.DeepEqual(run.Review.SelectedGates, run.Configuration.SelectedGates(gates)) ||
+		!reflect.DeepEqual(run.Review.SelectedGates, snapshot.State.AppliedConfigurations[0].SelectedGates) ||
+		!reflect.DeepEqual(run.FlowSelection.Disabled, protocol.FlowNodeIDs()) ||
+		len(run.PendingActions) != 0 {
+		t.Fatalf("lightweight must retain configuration facts without confirming or dispatching a route: %+v", run.Review)
 	}
 	completed, err := f.Drive()
 	if err != nil {

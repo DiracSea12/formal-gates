@@ -29,6 +29,7 @@ import (
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/requirement"
+	"formal-gates/internal/settings"
 )
 
 // The controlled supervisor records actual execution ownership and a native
@@ -185,11 +186,25 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	var selection *protocol.FlowSelection
 	if len(selections) > 0 {
-		selection = selections[0]
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.SaveConfiguration(root, home, "project", "开发", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.EditConfiguration(root, home, "project", "开发", nil, func(configuration *settings.Configuration) error {
+			configuration.FlowSelection = selections[0]
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.UseConfiguration(root, home, "project", "开发", nil); err != nil {
+			t.Fatal(err)
+		}
 	}
-	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", Route: "regular", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt, FlowSelection: selection}})
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", Route: "regular", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +344,7 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 				if invocation == "controller" {
 					controller = provider
 				}
-				f, _, ready, _ := workflowStartPlatformFixture(t, controller, native)
+				f, root, ready, _ := workflowStartPlatformFixture(t, controller, native)
 				before, err := f.Show()
 				if err != nil {
 					t.Fatal(err)
@@ -362,25 +377,13 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 				}
 				t.Setenv("WORKFLOW_SELECTION_PROVIDER_ID", platform.descriptor.ID)
 				t.Setenv("WORKFLOW_SELECTION_INSTALL_NAME", provider)
-				candidate, err := f.PrepareControl(facade.ControlInput{Execution: &facade.ExecutionSelectionInput{Node: "product-review", Platform: platform.descriptor.ID, Model: "target-model", Effort: "high"}})
-				if err != nil {
+				if _, err := settings.EditConfiguration(root, os.Getenv("HOME"), "project", before.Configuration.Name, nil, func(configuration *settings.Configuration) error {
+					configuration.Execution = map[string]settings.ExecutionChoice{"product-review": {Provider: platform.descriptor.ID, Model: "target-model", ReasoningEffort: "high"}}
+					return nil
+				}); err != nil {
 					t.Fatal(err)
 				}
-				_, pending, err := submitCLIControlWithHost(t, f, candidate)
-				if err != nil {
-					t.Fatal(err)
-				}
-				ask := 0
-				for index, value := range pending.PendingAsks {
-					if value.Control == protocol.ControlSelectExecution {
-						ask = index + 1
-					}
-				}
-				confirmation, err := f.PrepareControl(facade.ControlInput{Ask: ask, Choice: "approve"})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, _, err := submitCLIControlWithHost(t, f, confirmation); err != nil {
+				if _, err := f.Drive(); err != nil {
 					t.Fatal(err)
 				}
 				issued, _, directory, selected, err := f.WorkerExecutionRequest(ready, "")

@@ -16,9 +16,9 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 新对话检查：主代理执行 `workflow diagnose` 读取程序枚举工作区 `.gates/engine/*/state.json` 与 `.gates/tmp/*/state.json` 的原诊断报告，判断其是否对应当前用户会话。发现无法对应当前用户会话的残留状态时，告知报告中的原文件路径、run 状态及可能影响写入，并说明若需走 formal-gates 流程可直接提出。由用户决定推进完成、通过当前 typed Ask 授权的 reset/abort 及 engine 清理结束或删除对应状态文件；不得自行处置，也不得把残留状态解释为用户已启动正式流程。
 
-用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做确定性结构预检，通过后展示该文件全文与精确 revision。自然语言只提出申请；调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run。模型不能填写批准值、制作确认收据或用 CLI 自报确认。确认前不派发后续子代理。修订时更新同一文件并重新预检、展示和原生确认。
+用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择，能由事实和既有决定解决的自行处理；无待澄清问题时也明确说明。提出方案不等于确认。把完整需求与方案直接写入唯一正式需求文件；先做材料预检并读取结构投影，再展示该文件全文与精确 revision。正式路线的 REQ/AC 结构须在启动确认前通过校验。自然语言只提出申请；调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run。模型不能填写批准值、制作确认收据或用 CLI 自报确认。确认前不派发后续子代理。修订时更新同一文件并重新预检、展示和原生确认。
 
-确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。启动申请未明确路线时先取得用户对 lightweight 或 regular 的选择；regular 在拆分决定之后确认所选门与精确开发计划，每个 child 独立决定；启动冻结所选命名流程配置。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
+确认后：在已授权范围内继续，不逐步重复请求许可；只有影响范围、公开行为、验收或主要架构的未决事项才补充澄清，流程规定的确认节点仍须完成。路线由保存配置的启用节点推导，不让用户手选 regular/lightweight；regular 保留精确拆分拓扑与开发计划确认，child 也确认自己的精确开发计划，不逐 run 或分片选门。run 绑定配置名，后续按名读取库内当前值，不能运行中换绑。engine/CLI 是下一步、派发、恢复和结果接纳的权威，主代理提交事实与明确用户决定。
 当前 typed Ask 的候选通过主宿主 confirm_control 原生确认，受管原生问题通过 confirm_native 原生确认；同一宿主连接把真人响应直接送入引擎。没有真人交互能力时明确不可执行，不以模型回包、自动批准 hook 或 NativeRespond 代替。
 <formal-gates:host-instructions:end>
 
@@ -28,13 +28,16 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 formal-gates workflow start --precheck --document <原文档序号>
 ```
 
-在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，明确启动路线后调用主宿主 `confirm_start`，传入 `intake` 原序号与 `route`，由原生弹窗确认完整启动操作。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。lightweight 使用同一预检加 `--route lightweight`，`--document` 复用 `--precheck --materials` 发布的普通材料序号，记录 unverified；不把它当验证通过。
+在项目目录执行，root 缺省为当前目录。预检自动保存完整 intake 载荷并公布 `intake` 序号；展示全部 materials 全文及精确 revisions，通过 `settings` 查看并保存用户选定的配置，调用主宿主 `confirm_start`，传入 `intake` 原序号、`configuration` 与推导出的 `route`，程序核对路线后由原生弹窗确认完整启动操作。不抄取或重拼已知路径、身份、摘要、全文和收据。完整调用参数见[受理公共合同](references/formal-flow.md#启动前受理)。预检不按 route 分流；普通材料序号由 `--precheck --materials` 发布。全部节点关闭时走 lightweight，记录 unverified；不把它当验证通过。
 
-主流程节点选择由用户拥有：`start --nodes` 展示原序号，启动时只按用户明确决定提交
-`confirm_start.disabledNodes`，或以 `confirm_start.configuration` 选择本次配置。未执行的职责不得宣称已通过。
-运行中以 `submit --configuration <名称或原序号>` 或 `--flow-node <节点> --enabled true|false` 请求更改本次配置，
-QA 组选取使用 `--qa-mode`；同一请求可带执行组与 tuple。展示程序钉住的配置、候选门和影响预览，等待原 Ask 确认。
-保存默认的变化不自动传播；启用过去或跳过的职责后，可按原 `--node` 继续。
+节点开关、QA、门集合与执行选择只通过保存配置修改，未启用开发却启用 QA、门或返修的启动组合拒绝。
+保存后在下一次派发评估生效，已领取调用按原配置跑完，不因关闭节点撤回；未执行的职责不得宣称已通过。
+启用已完成或跳过的职责不等于回退，仍沿原节点继续或 reset/需求变更确认路径处理。
+配置字段、轮数与恢复规则见[用户与项目设置](references/user-configuration.md)。
+
+受理材料预检并展示后，需要用户选择流程时，先说明：“可以用图形面板配置流程，之后也随时能打开；可以让我调用 configure，也可以自己在终端运行 formal-gates config。关闭 panelSelection 后可改用对话选择。”然后调用 `configure`，传入原 `intake` 序号。面板只是配置编辑器，不是启动确认；返回 `selected` 或 `timeout` 且带有有效的已保存配置名与推导路线时，经原 `confirm_start` 完成真人确认。结果含校验错误或缺少选择时先处理错误，不猜配置或路线。返回 `cancelled` 或 `superseded` 时不得调用 `confirm_start`；候选失效先重新预检和展示。返回 `disabled` 或 `unavailable` 时说明原因，列出当前配置与可选操作，通过对话和 `settings` 完成同等选择。用户明确要求打开时可用 `force`，终端 `formal-gates config` 不受选择模式开关限制。
+
+运行中只编辑 run 绑定的配置，不换绑。原本就要向用户请求授权、确认候选、报告阻塞或失败、汇报进度及结束结果时，顺带提醒可让代理调用 `configure` 或自行运行 `formal-gates config`；不要为提醒面板单独发消息。需要回退时仍在对话中提出，沿既有 reset 或需求变更确认路径处理，不能把保存配置当作回退授权。
 
 需求与方案使用 `requirement` 的语义编辑入口；字段省略保留原文，章节与编号由程序生成。配置使用 `settings` 保存和启用用户命名套件，标量沿原字段序号入口；不编写固定 JSON 外壳。
 

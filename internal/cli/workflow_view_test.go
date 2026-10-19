@@ -25,6 +25,14 @@ import (
 	"formal-gates/internal/requirement"
 )
 
+func TestWorkflowViewReportsConfigurationStopDetails(t *testing.T) {
+	run := facade.Run{Next: decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitConfigurationUnavailable, Detail: "bound configuration 工作 does not exist"}}}
+	next := workflowRunView(run)["next"].(map[string]any)
+	if next["reason"] != decision.WaitConfigurationUnavailable || next["detail"] != "bound configuration 工作 does not exist" {
+		t.Fatal("next/show hid the configuration failure", next)
+	}
+}
+
 func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
 	t.Parallel()
 	run := facade.Run{RunID: "run", Status: "ACTIVE", Next: decision.NextResult{Kind: decision.KindAsk}, PendingAsks: []facade.PendingAskFace{{RequestID: "opaque-request", Token: "opaque-token", Control: protocol.ControlReviewFindingDecision, Options: []protocol.AskOption{{ID: "confirm:opaque-finding", Label: "Confirm the finding"}}}}, WorkerMaterials: map[string]facade.WorkerMaterial{"opaque-action": {Path: "other-role-material"}}}

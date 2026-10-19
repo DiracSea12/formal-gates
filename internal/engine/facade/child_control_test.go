@@ -58,7 +58,18 @@ func resetControl(t *testing.T, d *validationDriver) protocol.Event {
 		t.Fatal(err)
 	}
 	event := protocol.Event{ID: protocol.EventID(d.eventID()), Kind: protocol.KindDecide, Decide: &protocol.DecidePayload{Request: protocol.RequestID(ask.RequestID), Token: token, Choice: "proceed", Reset: &protocol.ResetDecision{PreviewDigest: ask.Reset.Digest, Reason: "explicitly reset the flow and preserve development"}}}
+	original, err := event.CanonicalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.submit(event)
+	submitted, err := event.CanonicalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, submitted) {
+		t.Fatalf("submit changed the caller's reset event:\noriginal %s\nsubmitted %s", original, submitted)
+	}
 	return event
 }
 func confirmResetControl(t *testing.T, d *validationDriver) {
@@ -565,7 +576,7 @@ func TestAbortedSliceSupersedesReadyReceipt(t *testing.T) {
 	owner := filepath.Join(t.TempDir(), "owner.jsonl")
 	writeTranscript(t, owner, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: owner, Provider: meteredProvider})
-	child := receiptChild(t, master, "core", "lane-core", "selected")
+	child := receiptChild(t, master, "core", "lane-core")
 	promoteReceiptChild(t, child)
 	writeTranscript(t, owner, []string{intervalBaseLine, intervalDuringLine})
 	ready := publishReceiptChild(t, child)
@@ -1001,6 +1012,7 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 		t.Fatal("fixture must have two original children")
 	}
 	var children []*validationDriver
+	developmentResources := map[string]protocol.NativeResource{}
 	for _, plan := range parent.ChildCreation.Children {
 		f, err := Open(master.f.root, plan.RunID, master.f.runtimeFiles)
 		if err != nil {
@@ -1021,9 +1033,19 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 		}
 		child.business(id, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
 		child.drive()
+		state := driverState(t, child)
+		if state.Validation == nil || state.Validation.DevelopmentSnapshot == "" {
+			t.Fatal("child development must pass its approved checks and freeze before reset")
+		}
+		resource := state.NativeResources[input.Binding.WorkspaceID]
+		if resource.Role != "development" || resource.Status != "READY" || resource.Identity != state.Validation.DevelopmentSnapshot {
+			t.Fatal("accepted development lost its signed workspace", resource)
+		}
+		developmentResources[child.f.runID] = resource
 		for id := range child.run.PendingActions {
 			child.receipt(id)
 		}
+		retainResetState(t, child, plan.SliceID+"-development-complete")
 		children = append(children, child)
 	}
 	for id := range master.run.PendingActions {
@@ -1044,8 +1066,13 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 	}
 	for _, child := range children {
 		state := driverState(t, child)
+		retainResetState(t, child, state.SliceChild.SliceID+"-reset-applied")
 		if state.SliceChild.ParentReset == nil || !state.ResetPending() || state.SliceChild.ParentChange == nil || !state.SliceChild.ParentChange.Pending {
 			t.Fatal("original child did not retain its unconfirmed parent reset")
+		}
+		original := developmentResources[child.f.runID]
+		if !reflect.DeepEqual(state.NativeResources[original.ID], original) {
+			t.Fatal("unconfirmed reset changed the original development resource", original, state.NativeResources[original.ID])
 		}
 		retainedDevelopment := false
 		for _, resource := range state.NativeResources {
@@ -1085,8 +1112,12 @@ func TestParentAbortAfterUnconfirmedResetCleansBothChildren(t *testing.T) {
 			}
 		}
 	}
-	if _, _, err := master.f.Submit(reset); err != nil {
+	replayed, replayRun, err := master.f.Submit(reset)
+	if err != nil {
 		t.Fatal("original reset confirmation could not replay after abort", err)
+	}
+	if !reflect.DeepEqual(replayed, terminal.Events[string(reset.ID)].Acceptance) || !reflect.DeepEqual(replayRun.Termination, terminal) {
+		t.Fatal("terminal replay changed the original acceptance or abort summary")
 	}
 	master.reopen()
 	master.drive()

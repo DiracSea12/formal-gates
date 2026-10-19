@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
@@ -512,9 +514,24 @@ func TestDevelopedRouteAcceptsConfirmedGateAndQAChanges(t *testing.T) {
 			d.reviewReady()
 			before := driverState(t, d)
 			route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "quality", "security"}, Selected: selected}
-			d.confirmRoute(route)
+			d.configureRoute(&route)
 			d.reopen()
 			after := driverState(t, d)
+			if len(selected) == 0 {
+				if !after.RouteConfirmed || !slices.Equal(after.SelectedGates, before.SelectedGates) ||
+					!reflect.DeepEqual(after.RequirementRevisions, before.RequirementRevisions) ||
+					d.run.Next.Kind != decision.KindWait || d.run.Next.Wait.Reason != decision.WaitConfigurationUnavailable ||
+					d.run.Next.Ready != nil {
+					t.Fatal("empty saved obligations must stop dispatch without discarding the confirmed requirement or route")
+				}
+				restored := routeDecisionForGates(before.SelectedGates)
+				d.configureRoute(&restored)
+				d.reopen()
+				if !slices.Equal(d.run.Review.SelectedGates, before.SelectedGates) || d.run.Next.Kind == decision.KindWait && d.run.Next.Wait.Reason == decision.WaitConfigurationUnavailable {
+					t.Fatal("restoring a dispatchable configuration did not recover the route")
+				}
+				return
+			}
 			if !after.RouteConfirmed || !slices.Equal(after.SelectedGates, selected) || !reflect.DeepEqual(after.RequirementRevisions, before.RequirementRevisions) {
 				t.Fatal("confirmed selection did not preserve the requirement or exact selected obligations", after.SelectedGates)
 			}
@@ -553,8 +570,8 @@ func TestGateReselectionCanAddQAAfterDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 	withQA.DevelopmentPlan = &preview.Confirmation
-	if err := controlError(t, d, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &withQA}); err != nil {
-		t.Fatalf("confirmed QA addition after development: %v", err)
+	if err := controlError(t, d, protocol.ControlSelectRoute, "approve", protocol.ReviewDecisionPayload{Route: &withQA}); err == nil || !strings.Contains(err.Error(), "only the initial route") {
+		t.Fatalf("runtime route confirmation was not rejected: %v", err)
 	}
 	d.reopen()
 	if !d.run.Review.RouteConfirmed || !slices.Equal(d.run.Review.SelectedGates, withQA.Selected) {
@@ -670,10 +687,9 @@ func TestRouteAdditionCompletesWithApprovedAffectedEvidence(t *testing.T) {
 	d.assertRequiredValidationComplete(coverage.ScopeAffected)
 }
 
-// TestRouteReselectionBeforeDevelopmentReconfirmsPlan：§6.3.1 开发前可重选
-// ——绑定后同集重选经一次路线再确认（确认随载荷重取）重新落账，决定台账
-// 记两次选择，开发照常派发计划任务。
-func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
+// Reapplying a saved configuration preserves the confirmed plan and records no
+// additional user decision.
+func TestConfigurationReapplicationBeforeDevelopmentPreservesPlan(t *testing.T) {
 	t.Parallel()
 	d := startValidationDriver(t, nil)
 	passPreDevelopmentReviews(t, d, commandPlan())
@@ -684,14 +700,17 @@ func TestRouteReselectionBeforeDevelopmentReconfirmsPlan(t *testing.T) {
 		t.Fatalf("re-selected route = %t %v", d.run.Review.RouteConfirmed, d.run.Review.SelectedGates)
 	}
 	state := driverState(t, d)
+	if len(state.AppliedConfigurations) != 2 || state.ReadinessProposal() == nil {
+		t.Fatal("configuration reapplication changed the applied-value history or confirmed plan")
+	}
 	selections := 0
 	for _, decision := range state.Decisions {
 		if decision.Control == protocol.ControlSelectRoute {
 			selections++
 		}
 	}
-	if selections != 2 {
-		t.Fatalf("route selections recorded = %d, want 2", selections)
+	if selections != 1 {
+		t.Fatalf("route selections recorded = %d, want only the initial confirmation", selections)
 	}
 	d.drive()
 	id, in := planBatchAction(d, "command")

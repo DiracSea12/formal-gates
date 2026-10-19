@@ -37,6 +37,7 @@ type repairAskFace struct {
 	Targets             []repairAskTarget
 	WavesUsed           int
 	RemainingAutomatic  int
+	AutomaticLimit      int
 	TaskKey             string
 	DispatchActionID    string
 }
@@ -146,7 +147,7 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 	if work == nil || work.wave.ID != r.Target {
 		return nil
 	}
-	remaining := automaticValidationWaveLimit - s.completedValidationWaves()
+	remaining := s.repairRoundLimit(work) - s.completedValidationWaves()
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -157,6 +158,7 @@ func (s *State) repairAskDetail(r ValidationRequest) *repairAskFace {
 		Repair:              s.repairInput(work.task),
 		WavesUsed:           s.completedValidationWaves(),
 		RemainingAutomatic:  remaining,
+		AutomaticLimit:      s.repairRoundLimit(work),
 		TaskKey:             work.task.String(),
 	}
 	for _, member := range s.repairWork() {
@@ -292,10 +294,29 @@ func (s *State) reconcileValidationRemedyAsks(revision uint64) bool {
 	changed := false
 	for id, ask := range s.PendingAsks {
 		r := ask.Validation
-		if ask.Resolved || r == nil || r.Kind != "REPAIR" && r.Kind != "QA_RETRY" {
+		if ask.Resolved || r == nil || r.Kind != "REPAIR" && r.Kind != "QA_RETRY" && r.Kind != "QA_REVIEW" {
 			continue
 		}
 		current := work != nil && r.Target == work.wave.ID && r.Binding.Task == work.task && !s.repairExtraAuthorized(work)
+		if r.Kind == "REPAIR" && current {
+			var basis struct{ Detail repairAskFace }
+			if json.Unmarshal(r.Summary, &basis) == nil {
+				limit := basis.Detail.AutomaticLimit
+				if limit != s.repairRoundLimit(work) && !s.repairRoundBlocked(work) {
+					current = false
+				}
+			}
+		}
+		if r.Kind == "QA_REVIEW" {
+			current = true
+			if s.Validation != nil {
+				set := s.Validation.Sets[r.Mode]
+				original := requestCaseSet(r)
+				if set != nil && original != nil && lastRoundLimit(original.LimitHistory) != s.qaRoundLimit(r.Mode) && qaFailureStreak(set) < s.qaRoundLimit(r.Mode) {
+					current = false
+				}
+			}
+		}
 		if r.Kind == "QA_RETRY" {
 			current = wave != nil && r.Target == wave.ID && r.Binding.WaveID == wave.ID && wave.Status != "INVALIDATED" && wave.Status != "REPAIRED"
 		}

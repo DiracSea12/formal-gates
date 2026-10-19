@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -21,7 +22,7 @@ func TestChildConfirmedParentDocumentPreservesRecoveryAndReviewBoundary(t *testi
 	t.Parallel()
 	for _, reviewPending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("parent-review-pending-%t", reviewPending), func(t *testing.T) {
-			master, child, _, ready := deliveredChildCheckpoint(t, validationDocument)
+			master, child, _, ready := deliveredChildCheckpointAt(t, testkit.ShortRoot(t), validationDocument)
 			physical := driverState(t, child)
 			document := validationDocument + "\n\n"
 			if err := os.WriteFile(filepath.Join(master.f.root, "requirements.md"), []byte(document), 0600); err != nil {

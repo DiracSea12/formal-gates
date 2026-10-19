@@ -95,6 +95,8 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	NodeStates           []protocol.ExecutionNodeState        `json:"nodeStates,omitempty"`
+	FlowProgress         protocol.FlowProgress                `json:"flowProgress,omitempty"`
 	Configuration        protocol.ConfigurationSelection      `json:"configuration"`
 	FlowSelection        *protocol.FlowSelection              `json:"flowSelection,omitempty"`
 	FlowNodes            []FlowNodeFace                       `json:"flowNodes,omitempty"`
@@ -186,14 +188,12 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
-	Configuration *protocol.ConfigurationSelection  `json:"configuration,omitempty"`
-	Execution     *protocol.ExecutionSelection      `json:"execution,omitempty"`
-	Continuation  *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
-	Validation    *protocol.ValidationRequest       `json:"validation,omitempty"`
-	RoundGrant    *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
-	RequestID     string                            `json:"requestId"`
-	Control       protocol.ControlKind              `json:"control"`
-	Options       []protocol.AskOption              `json:"options"`
+	Continuation *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
+	Validation   *protocol.ValidationRequest       `json:"validation,omitempty"`
+	RoundGrant   *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
+	RequestID    string                            `json:"requestId"`
+	Control      protocol.ControlKind              `json:"control"`
+	Options      []protocol.AskOption              `json:"options"`
 	// RouteGates 是 SELECT_ROUTE Ask 钉住的候选门全集的只读投影（其余
 	// 控制为空）：用户据此所见全集提交决定。
 	RouteGates []string `json:"routeGates,omitempty"`
@@ -499,14 +499,29 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if !validRunID(req.RunID) {
 		return nil, Run{}, fmt.Errorf("engine start: run id %q is invalid", req.RunID)
 	}
-	if strings.TrimSpace(req.Route) == "" {
-		return nil, Run{}, fmt.Errorf("engine start: route is required; choose regular or lightweight")
+	effective := options.Settings
+	if effective == nil {
+		if sliceStart != nil {
+			return nil, Run{}, fmt.Errorf("child requires inherited settings")
+		}
+		loaded, err := StartConfiguration(root, options.Configuration)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		effective = &loaded
 	}
-	if req.Route != "lightweight" && req.Route != "regular" {
-		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
-	}
-	if err := protocol.ValidateFlowSelection(req.FlowSelection); err != nil {
-		return nil, Run{}, err
+	if sliceStart == nil {
+		if req.FlowSelection != nil {
+			return nil, Run{}, fmt.Errorf("start node overrides are not supported; edit the selected configuration")
+		}
+		derived, err := ConfigurationRoute(effective.Configuration)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		if req.Route != "" && req.Route != derived {
+			return nil, Run{}, fmt.Errorf("route %q differs from configuration route %q", req.Route, derived)
+		}
+		req.Route = derived
 	}
 	runUnlock, err := coordination.AcquireRun(root, req.RunID)
 	if err != nil {
@@ -623,28 +638,6 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if options.Capacity < 0 {
 		return nil, Run{}, fmt.Errorf("engine start: capacity must be non-negative")
 	}
-	effective := options.Settings
-	if effective == nil && sliceStart != nil {
-		return nil, Run{}, fmt.Errorf("engine start: child requires inherited settings")
-	}
-	if effective == nil {
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return nil, Run{}, homeErr
-		}
-		loaded, configurations, loadErr := settings.LoadConfigurations(root, home)
-		if loadErr != nil {
-			return nil, Run{}, loadErr
-		}
-		if options.Configuration != "" {
-			selected, err := settings.SelectConfiguration(configurations, options.Configuration)
-			if err != nil {
-				return nil, Run{}, err
-			}
-			loaded.ConfigurationName, loaded.Configuration, loaded.ConfigurationSource = selected.Name, selected.Configuration, selected.Source
-		}
-		effective = &loaded
-	}
 	if options.Capacity != 0 {
 		copy := *effective
 		copy.Values.Capacity = options.Capacity
@@ -652,7 +645,8 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		copy.Sources["capacity"] = "start option"
 		effective = &copy
 	}
-	if req.FlowSelection == nil {
+	// A child carries the master's flow selection in its start binding.
+	if req.FlowSelection == nil && sliceStart == nil {
 		req.FlowSelection = effective.Configuration.FlowSelection
 	}
 	options.Capacity = effective.Values.Capacity
@@ -717,6 +711,35 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 			return nil, Run{}, err
 		}
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, Run{}, err
+	}
+	releaseConfigurations, err := settings.LockConfigurations(root, home)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	defer releaseConfigurations()
+	// Confirmation carries the selected name and route, not a library lease.
+	// Keep the exact name resolvable through the binding's durable commit.
+	if strings.TrimSpace(frozen.ConfigurationName) == "" {
+		return nil, Run{}, fmt.Errorf("engine start: configuration binding name is required")
+	}
+	currentConfiguration, err := configurationLibrary(root)(frozen.ConfigurationName)
+	if err != nil {
+		return nil, Run{}, fmt.Errorf("engine start: %w", err)
+	}
+	if sliceStart == nil {
+		route, err := ConfigurationRoute(currentConfiguration)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		if route != req.Route {
+			return nil, Run{}, fmt.Errorf("engine start: configuration %q route changed from %q to %q; retry startup confirmation", frozen.ConfigurationName, req.Route, route)
+		}
+		req.FlowSelection = currentConfiguration.FlowSelection
+	}
+	frozen.Configuration = currentConfiguration
 	intentPath := startIntentPath(root, req.RunID)
 	// The admitted prefix is one bounded local write window. The intent carries
 	// its own binding so recovery and failed-start cleanup cannot adopt a caller.
@@ -776,7 +799,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{FlowSelection: req.FlowSelection, Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)})
+	eng, err := protocol.New(store, protocol.Config{FlowSelection: req.FlowSelection, Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admission.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -953,7 +976,7 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: capacity, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID)})
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: capacity, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admission.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, err
 	}
@@ -1436,22 +1459,6 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return accepted, run, err
 	}
 	var observation protocol.Observation
-	if event.Request != nil && event.Request.Execution != nil {
-		if err := f.validateExecutionSelection(event.Request.Execution); err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
-	}
-	if event.Decide != nil && event.Decide.Execution != nil {
-		snap, err := f.engine.Load()
-		if err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
-		if selection := snap.State.PendingAsks[string(event.Decide.Request)].Execution; selection != nil {
-			if err := f.validateExecutionSelection(selection); err != nil {
-				return protocol.Acceptance{}, Run{}, err
-			}
-		}
-	}
 	if event.Request != nil && event.Request.Control == protocol.ControlReset {
 		snap, err := f.engine.Load()
 		if err != nil {
@@ -1512,7 +1519,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			}
 		}
 	}
-	if event.Request != nil && (event.Request.Control == protocol.ControlContinueNode || event.Request.Configuration != nil) || event.Decide != nil && (event.Decide.Continuation != nil || event.Decide.Review != nil && event.Decide.Review.Route != nil && event.Decide.Review.Route.Configuration != nil) {
+	if event.Request != nil && event.Request.Control == protocol.ControlContinueNode || event.Decide != nil && event.Decide.Continuation != nil {
 		parent, err := f.nodeParentSnapshot()
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -1678,6 +1685,8 @@ func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
 		return Run{}, err
 	}
 	run := Run{
+		NodeStates:                 projection.ExecutionNodes,
+		FlowProgress:               projection.FlowProgress,
 		FlowSelection:              snap.State.FlowSelection,
 		FlowNodes:                  flowNodeFaces(snap.State),
 		ExecutionNodes:             executionNodeFaces(snap.State),
@@ -1836,16 +1845,14 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
-			Execution:     ask.Execution,
-			Continuation:  ask.Continuation,
-			Validation:    ask.Validation,
-			RequestID:     id,
-			RoundGrant:    ask.RoundGrant,
-			Control:       ask.Control,
-			Options:       append([]protocol.AskOption{}, ask.Options...),
-			RouteGates:    ask.RouteGates,
-			Configuration: ask.Configuration,
-			Token:         token,
+			Continuation: ask.Continuation,
+			Validation:   ask.Validation,
+			RequestID:    id,
+			RoundGrant:   ask.RoundGrant,
+			Control:      ask.Control,
+			Options:      append([]protocol.AskOption{}, ask.Options...),
+			RouteGates:   ask.RouteGates,
+			Token:        token,
 		})
 	}
 	return faces
@@ -2600,13 +2607,6 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...proto
 	if err != nil {
 		return nil, err
 	}
-	selection := snapshot.State.FlowSelection
-	if route.Configuration != nil {
-		selection = route.Configuration.Configuration.FlowSelection
-	}
-	if selection != nil && slices.Contains(selection.Disabled, "development") {
-		return nil, nil
-	}
 	if len(topology) == 0 && route.DevelopmentPlan == nil {
 		if child := snapshot.State.SliceChild; child != nil {
 			parent, err := Open(f.root, child.MasterRunID, f.runtimeFiles)
@@ -2639,7 +2639,7 @@ func reopenNativeProvider(configRoot, root string, req StartRequest) *vcs.Provid
 }
 
 // stateSettings adds the existing cost owner's cap only to disposable settings
-// views. The frozen state configuration never carries a second control value.
+// views. Frozen Values do not carry a second token-cap control value.
 func stateSettings(state *protocol.State) *settings.Effective {
 	if state.Settings == nil {
 		return nil

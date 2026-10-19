@@ -213,6 +213,7 @@ func (e *Engine) bindBusinessAttempt(s *State, key runtime.TaskKey) {
 	a.Business = e.businessTask(key)
 	if s.validationRole(key, e.cfg.Definition) != "" && a.Work == nil {
 		b := s.validationBinding(key, e.cfg.Definition)
+		b.RoundExecution = s.roundExecution(s.validationRole(key, e.cfg.Definition), s.validationMode(key), s.DispatchIssueRevisions[a.ActionID])
 		a.Work = &b
 	}
 	s.Attempts[key] = a

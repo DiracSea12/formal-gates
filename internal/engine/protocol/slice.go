@@ -31,7 +31,6 @@ const (
 // 是 MasterRunID——child 沿用 master 的整体产品/技术审选择与已有结论，不自行增加 series。
 // InheritedIntake 保存创建时完整材料确认，不随后续 ParentChange 替换。
 type SliceChildBinding struct {
-	InheritedExecution  []ExecutionSelection        `json:"inheritedExecution,omitempty"`
 	MasterRunID         string                      `json:"masterRunId"`
 	SliceID             string                      `json:"sliceId"`
 	RequirementRevision string                      `json:"requirementRevision"`
@@ -43,9 +42,9 @@ type SliceChildBinding struct {
 	ParentAbort         *AbortAuthority             `json:"parentAbort,omitempty"`
 }
 
-// SliceRunStart 是 child run 启动（Init）一次落账的完整继承事实：身份绑定
-// 加上从 master 继承的主流程选择与拓扑确认（不可重切）。继承拓扑落账为 child 自身的
-// State.Topology——child 状态自含，引擎不跨 run 读账。
+// SliceRunStart binds the child's origin and topology at initialization.
+// FlowSelection supplies initialization without Config.Settings; a named
+// configuration supplies its own current selection.
 type SliceRunStart struct {
 	Binding       SliceChildBinding
 	Topology      TopologyBinding
@@ -54,9 +53,10 @@ type SliceRunStart struct {
 
 // SliceReceipt binds the frozen checkpoint to its canonical content digest.
 type SliceReceipt struct {
-	Continuation *NodeContinuationAuthority `json:"continuation,omitempty"`
-	Receipt      SliceTerminalReceipt       `json:"receipt"`
-	Digest       string                     `json:"digest"`
+	Configuration *AppliedConfiguration      `json:"configuration,omitempty"`
+	Continuation  *NodeContinuationAuthority `json:"continuation,omitempty"`
+	Receipt       SliceTerminalReceipt       `json:"receipt"`
+	Digest        string                     `json:"digest"`
 }
 
 type NodeContinuationAuthority struct {
@@ -66,11 +66,11 @@ type NodeContinuationAuthority struct {
 }
 
 func (s *State) nodeContinuationAuthority() *NodeContinuationAuthority {
-	d, ok := s.nodeContinuationDecision()
-	if !ok {
+	d, ok := s.userNodeContinuationDecision()
+	if !ok || d.Decision == nil {
 		return nil
 	}
-	return &NodeContinuationAuthority{Decision: d, Preview: *s.PendingAsks[d.RequestID].Continuation, Event: s.Events[d.EventID]}
+	return &NodeContinuationAuthority{Decision: *d.Decision, Preview: *d.Preview, Event: s.Events[d.Decision.EventID]}
 }
 
 // Reopening retains the frozen checkpoint as evidence and resumes the same
@@ -91,6 +91,7 @@ func (s *State) reopenSliceCheckpoint() error {
 // master. It contains final results rather than a second copy of run state.
 // Empty SelectedQA and ApprovedCases explicitly mean ordinary QA was not selected.
 type SliceTerminalReceipt struct {
+	ConfigurationRevision     uint64                                              `json:"configurationRevision,omitempty"`
 	OriginRequirementRevision string                                              `json:"originRequirementRevision,omitempty"`
 	ParentRequirement         *ParentRequirementAuthority                         `json:"parentRequirement,omitempty"`
 	ParentReset               *ResetAuthority                                     `json:"parentReset,omitempty"`
@@ -242,6 +243,9 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 		OwnerStartedAt:  state.OwnerStartedAt,
 		OwnerEndedAt:    endedAt,
 	}
+	if configuration := state.configurationAuthority(); configuration != nil {
+		r.ConfigurationRevision = configuration.Revision
+	}
 	keys := make([]string, 0, len(wave.Targets))
 	for key := range wave.Targets {
 		keys = append(keys, key)
@@ -273,7 +277,7 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if err := json.Unmarshal(data, &frozen); err != nil {
 		return err
 	}
-	state.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest(), Continuation: state.nodeContinuationAuthority()}
+	state.SliceReceipt = &SliceReceipt{Receipt: frozen, Digest: frozen.CanonicalDigest(), Continuation: state.nodeContinuationAuthority(), Configuration: state.configurationAuthority()}
 	if state.Phase == runtime.PhaseDevelopmentParallel {
 		if err := state.TransitionPhase(runtime.PhaseSnapshotReady); err != nil {
 			return err
@@ -345,6 +349,9 @@ func (e *Engine) AcceptSliceReceipt(receipt SliceReceipt, input Observation) err
 	}
 	r := receipt.Receipt
 	accepted, exists := state.SliceReceipts[r.ChildRunID]
+	if exists && accepted.Configuration != nil && (receipt.Configuration == nil || accepted.Configuration.Revision > receipt.Configuration.Revision) {
+		receipt.Configuration = accepted.Configuration
+	}
 	if exists && accepted.Continuation != nil && (receipt.Continuation == nil || accepted.Continuation.Decision.Revision >= receipt.Continuation.Decision.Revision) {
 		receipt.Continuation = accepted.Continuation
 	}
@@ -410,6 +417,9 @@ func (s *State) abortedSliceMember(receipt SliceReceipt) bool {
 // after the active write window has closed.
 func (s *State) SliceReceiptQualified(receipt SliceReceipt) bool {
 	r := receipt.Receipt
+	if receipt.Configuration != nil && r.ConfigurationRevision < receipt.Configuration.Revision {
+		return false
+	}
 	if authority := receipt.Continuation; authority != nil && (authority.Decision.Continuation.changesExecutionEpoch(authority.Preview.To) || authority.Preview.To.Kind == "route") {
 		if r.LastRequest == nil || r.LastRequest.Revision < authority.Decision.Revision {
 			return false

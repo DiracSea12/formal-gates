@@ -278,7 +278,30 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err != nil {
 		return err
 	}
-	configuration, err := settings.Load(root, root)
+	gates := []string{}
+	for _, gate := range catalog.Gates {
+		if gate.ID != prompts.MergeGateID {
+			gates = append(gates, gate.ID)
+		}
+	}
+	home, err := os.MkdirTemp("", "canary-home-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(home)
+	name, err := settings.SaveConfiguration(root, home, "project", "canary", settings.DefaultConfigurationName, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := settings.EditConfiguration(root, home, "project", name, nil, func(configuration *settings.Configuration) error {
+		configuration.FlowSelection = nil
+		configuration.QAModes = []string{"blackbox", "whitebox"}
+		configuration.Gates = &gates
+		return nil
+	}); err != nil {
+		return err
+	}
+	configuration, err := settings.UseConfiguration(root, home, "project", name, nil)
 	if err != nil {
 		return err
 	}
@@ -304,7 +327,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	f, run, err := facade.Start(facade.StartOptions{Settings: &configuration, RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Configuration: name, Settings: &configuration, RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		return err
 	}
@@ -350,12 +373,6 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 		}
 		return fmt.Errorf("portable control ask missing: %s", kind)
 	}
-	gates := []string{"blackbox", "whitebox"}
-	for _, gate := range catalog.Gates {
-		if gate.ID != prompts.MergeGateID {
-			gates = append(gates, gate.ID)
-		}
-	}
 	topology, routeConfirmed := false, false
 	checked := map[string]bool{}
 	for turns := 0; turns < 100; turns++ {
@@ -372,7 +389,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
 			}
-			for _, gate := range gates[2:] {
+			for _, gate := range gates {
 				if !checked["gate:"+gate] {
 					return fmt.Errorf("portable workflow omitted gate %s", gate)
 				}
@@ -421,7 +438,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			continue
 		}
 		if topology && !routeConfirmed {
-			route := protocol.RouteDecision{Gates: gates, Selected: gates}
+			route := protocol.RouteDecision{Gates: catalog.RouteCandidates()}
 			preview, err := f.DevelopmentPlan(route)
 			if err != nil {
 				return err

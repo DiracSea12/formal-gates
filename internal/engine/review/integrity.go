@@ -27,8 +27,19 @@ func (s Series) validate(runID string, action Action) error {
 	if s.ActivationSource != activationWorkflowStart {
 		return fail("activation source is %q, want %q", s.ActivationSource, activationWorkflowStart)
 	}
-	if s.AutomaticLimit != automaticRoundLimit {
-		return fail("automatic limit is %d, want %d", s.AutomaticLimit, automaticRoundLimit)
+	if err := ValidateLimits(s.LimitHistory); err != nil {
+		return fail("%v", err)
+	}
+	if s.AutomaticLimit != s.LimitHistory[len(s.LimitHistory)-1].Value {
+		return fail("automatic limit does not match the latest interval")
+	}
+	if s.DispatchRounds == nil {
+		return fail("dispatch round ledger is missing")
+	}
+	for id, execution := range s.DispatchRounds {
+		if _, known := LimitAt(s.LimitHistory, execution.Revision); id == "" || !known || execution.Completed < 0 {
+			return fail("dispatch round %s has invalid admission facts", id)
+		}
 	}
 	if s.Authorizations == nil || s.RawCandidates == nil || s.Adjudications == nil || s.Corrections == nil {
 		return fail("one of the four ledgers is missing")
@@ -243,11 +254,8 @@ func (s Series) validate(runID string, action Action) error {
 	if s.NextRoundRequirement != nextRoundRequirement(s) {
 		return fail("next-round requirement is %q, want %q", s.NextRoundRequirement, nextRoundRequirement(s))
 	}
-	if s.Completed > currentLimit {
-		return fail("completed rounds exceed the effective limit")
-	}
-	if occupiedExtraAuthorizations(s) < max(0, s.Completed-s.AutomaticLimit) {
-		return fail("completed extra rounds lack distinct action authorizations")
+	if err := s.validateRoundCapacity(); err != nil {
+		return fail("%v", err)
 	}
 	if err := validateEffectiveProjection(action, s); err != nil {
 		return fail("%v", err)

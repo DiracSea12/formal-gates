@@ -2,6 +2,7 @@ package review
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -79,6 +80,10 @@ func BindReplacementDispatch(set Set, runID string, action Action, oldDispatchID
 	if err != nil {
 		return set
 	}
+	if execution, exists := series.DispatchRounds[oldDispatchID]; exists {
+		series.DispatchRounds = maps.Clone(series.DispatchRounds)
+		series.DispatchRounds[newDispatchID] = execution
+	}
 	for index, authorization := range series.Authorizations {
 		if !slices.Contains(authorization.DispatchIDs, oldDispatchID) {
 			continue
@@ -131,7 +136,24 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 		}
 	}
 	authorizationID := dispatch.AuthorizationID
-	if series.Completed >= series.AutomaticLimit && authorizationID == "" {
+	execution, issued := series.DispatchRounds[dispatch.ID]
+	if !issued {
+		// A caller without a separate issuance step admits the round here.
+		revision := series.LimitHistory[len(series.LimitHistory)-1].Revision
+		set = AdmitRound(set, action, dispatch.ID, revision)
+		series, _ = set.seriesFor(action)
+		execution = series.DispatchRounds[dispatch.ID]
+	}
+	limit, known := LimitAt(series.LimitHistory, execution.Revision)
+	// Whole-result invalidation can free automatic capacity before a bound
+	// result arrives. It may use that capacity under its original limit; its
+	// authorization remains unoccupied unless the result explicitly uses it.
+	if authorizationID == "" && execution.Completed >= limit && series.Completed < limit {
+		execution.Completed = series.Completed
+		series.DispatchRounds = maps.Clone(series.DispatchRounds)
+		series.DispatchRounds[dispatch.ID] = execution
+	}
+	if !known || execution.Completed >= limit && authorizationID == "" {
 		return Set{}, EffectiveStatus{}, fmt.Errorf("review: %s result exceeds the automatic round limit without an action-specific authorization", action)
 	}
 	if authorizationID != "" {
@@ -168,6 +190,9 @@ func RecordCandidate(set Set, runID string, action Action, dispatch Dispatch, re
 	series.UpstreamVoid = false
 	series.Effective = Effective(*series, series.Effective.Revision+1)
 	refresh(series)
+	if err := series.validateRoundCapacity(); err != nil {
+		return Set{}, EffectiveStatus{}, err
+	}
 	carryDownstreamImpact(series, action, previousEffective)
 	return set, series.Effective, nil
 }

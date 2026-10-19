@@ -433,6 +433,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			return err
 		}
 		set := &CaseSet{DesignTask: b.Task, Manifest: manifest, Status: "REVIEW", Version: digestOfCanonical(manifest)}
+		set.LimitHistory = []review.LimitInterval{s.roundLimitInterval(qaLimitNode(mode))}
 		if p.Checkpoint {
 			set.Status = "DRAFT"
 		}
@@ -449,6 +450,7 @@ func (e *Engine) acceptValidationResult(s *State, record WorkerResult, nextRevis
 			set.AffectedCases = old.AffectedCases
 			set.Suggestions = old.Suggestions
 			set.ReviewHistory = old.ReviewHistory
+			set.LimitHistory = old.LimitHistory
 			if old.Status != "DRAFT" && old.Status != "THAWED" {
 				return validationError("case-set is not open for design")
 			}

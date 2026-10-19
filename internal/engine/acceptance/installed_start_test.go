@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"formal-gates/internal/engine/testkit"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	_ "formal-gates/internal/harness" // Register native adapters for trusted program Start recovery.
+	"formal-gates/internal/settings"
 	"formal-gates/internal/validate"
 )
 
@@ -263,6 +265,18 @@ func (p installedStartProject) start(t *testing.T, route string, base ...string)
 		expectedBase = base[0]
 	}
 	arguments := map[string]any{"root": p.project, "intake": p.intakePosition, "route": route, "baseSnapshot": p.base}
+	if route == "lightweight" {
+		if _, err := settings.SaveConfiguration(p.project, p.home, "project", "记录", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.EditConfiguration(p.project, p.home, "project", "记录", nil, func(configuration *settings.Configuration) error {
+			configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		arguments["configuration"] = "记录"
+	}
 	if len(base) != 0 {
 		arguments["baseSnapshot"] = base[0]
 	}
@@ -501,7 +515,14 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 	wrongBase := arguments("regular")
 	wrongBase["baseSnapshot"] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
-	assertRejected("missing-route", arguments(""), "workflow start requires --route regular or lightweight")
+	body, err := p.confirmation(t, "confirm_start", arguments(""), func(original map[string]any) {
+		if original["route"] != "regular" {
+			t.Fatal("omitted route was not derived from the default configuration")
+		}
+	})
+	if err != nil {
+		t.Fatalf("derived route could not cross native confirmation: %v %s", err, body)
+	}
 	assertRejected("unknown-route", arguments("unsupported"), "workflow start supports --route regular or lightweight")
 	for _, field := range []string{"split", "master", "retainedOverall", "fromSealedRun", "runId"} {
 		args := arguments("regular")
@@ -524,7 +545,7 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	// Lightweight is an explicit start choice and needs no native repository.
+	// An all-disabled saved configuration needs no native repository.
 	if err := os.RemoveAll(filepath.Join(p.project, ".git")); err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +583,14 @@ func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 		PackageDigest: partial.PackageDigest, InstalledTargetIdentity: partial.InstalledTargetIdentity,
 		Generation: partial.AdmissionGeneration, Lease: partial.AdmissionLease, Token: partial.AdmissionToken,
 	}
-	options := facade.StartOptions{Root: p.project, ArtifactRoot: p.project, Request: partial, Admission: &admission, Settings: referenceState.Settings}
+	effective, err := settings.Load(p.project, p.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective.Values = referenceState.Settings.Values
+	effective.Values.Native = maps.Clone(referenceState.Settings.Values.Native)
+	effective.Sources = maps.Clone(referenceState.Settings.Sources)
+	options := facade.StartOptions{Root: p.project, ArtifactRoot: p.project, Request: partial, Admission: &admission, Settings: &effective}
 	if partial.RuntimeFiles != nil {
 		options.RuntimeFiles = *partial.RuntimeFiles
 	}

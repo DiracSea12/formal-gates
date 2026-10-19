@@ -23,6 +23,7 @@ import (
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/requirement"
+	"formal-gates/internal/settings"
 	"sync"
 )
 
@@ -81,10 +82,36 @@ func newCandidateDriver(t *testing.T, mode string, requirementPath ...string) *c
 	p.base = p.git(t, "rev-parse", "HEAD")
 	p.prepareIntake(t, path)
 	p.install(t, "codex", "global")
+	saveCandidateConfiguration(t, p, mode)
 	runID := p.start(t, "regular")
 	d := &candidateDriver{p: p, t: t, mode: mode, runID: runID}
 	d.drive()
 	return d
+}
+
+func saveCandidateConfiguration(t *testing.T, p installedStartProject, mode string) {
+	t.Helper()
+	if _, err := settings.SaveConfiguration(p.project, p.home, "project", "验证", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(p.project, p.home, "project", "验证", nil, func(configuration *settings.Configuration) error {
+		gates := []string{"quality"}
+		configuration.Gates = &gates
+		configuration.QAModes = []string{}
+		switch mode {
+		case "blackbox", "whitebox":
+			configuration.QAModes = []string{mode}
+		case "both":
+			configuration.Gates = nil
+			configuration.QAModes = []string{"blackbox", "whitebox"}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(p.project, p.home, "project", "验证", nil); err != nil {
+		t.Fatal(err)
+	}
 }
 func (d *candidateDriver) id() protocol.EventID {
 	d.seq++
@@ -423,16 +450,20 @@ func (d *candidateDriver) reviews() {
 	if d.mode == "both" {
 		names = slices.Clone(catalog)
 	}
-	var gates []int
 	for _, name := range names {
 		index := slices.Index(catalog, name)
 		if index < 0 {
 			d.t.Fatalf("declared validation gate %s is not in the original route choices", name)
 		}
-		gates = append(gates, index+1)
 	}
-	d.control(facade.ControlInput{Request: protocol.ControlSelectRoute, Gates: gates, Reason: "Select the confirmed command validation gates"})
-	d.control(facade.ControlInput{Ask: d.ask(protocol.ControlSelectRoute), Choice: "approve", Reason: "Confirm the original selected gates and development plan"})
+	d.control(facade.ControlInput{Request: protocol.ControlSelectRoute})
+	d.control(facade.ControlInput{Ask: d.ask(protocol.ControlSelectRoute), Choice: "approve", Reason: "Confirm the original development plan with the bound configuration"})
+	actual, expected := slices.Clone(d.run.Review.SelectedGates), slices.Clone(names)
+	slices.Sort(actual)
+	slices.Sort(expected)
+	if !slices.Equal(actual, expected) {
+		d.t.Fatalf("confirmed validation differs from the saved configuration: got %v want %v", d.run.Review.SelectedGates, names)
+	}
 	d.drive()
 }
 func (d *candidateDriver) business(id string, result protocol.ValidationResult) {

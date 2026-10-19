@@ -5,7 +5,6 @@ package harness
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,6 +29,18 @@ func startChild(cmd *exec.Cmd, owned bool) (settle func() error, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// KILL_ON_JOB_CLOSE makes the kernel stop the whole tree when the last
+	// job handle dies with the owner process, so an orphaned panel service or
+	// browser cannot outlive its owner.
+	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+		},
+	}
+	if _, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
+		_ = windows.CloseHandle(job)
+		return nil, err
+	}
 	var process windows.Handle
 	defer func() {
 		if err != nil {
@@ -45,7 +56,6 @@ func startChild(cmd *exec.Cmd, owned bool) (settle func() error, err error) {
 		}
 	}()
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
-	cmd.Stdout, cmd.Stderr = struct{ io.Writer }{cmd.Stdout}, struct{ io.Writer }{cmd.Stderr}
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}

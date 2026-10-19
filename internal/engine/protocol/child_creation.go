@@ -12,7 +12,6 @@ import (
 // ChildCreation is the master's immutable preparation plan. SliceChildren
 // alone authorizes released children; this intent owns the preceding work.
 type ChildCreation struct {
-	Execution           []ExecutionSelection       `json:"execution,omitempty"`
 	RequestID           string                     `json:"requestId,omitempty"`
 	Previous            *ChildCreation             `json:"previous,omitempty"`
 	RequirementRevision string                     `json:"requirementRevision"`
@@ -46,7 +45,7 @@ func (s *State) ChildStart(child ChildPreparation) *SliceRunStart {
 			}
 		}
 	}
-	start := &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, InheritedIntake: s.ChildCreation.Intake, Coverage: s.ChildCreation.Coverage, InheritedExecution: slices.Clone(s.ChildCreation.Execution)}, Topology: copyTopology(s.ChildCreation.Topology)}
+	start := &SliceRunStart{Binding: SliceChildBinding{MasterRunID: s.RunID, SliceID: child.SliceID, RequirementRevision: s.ChildCreation.RequirementRevision, InheritedIntake: s.ChildCreation.Intake, Coverage: s.ChildCreation.Coverage}, Topology: copyTopology(s.ChildCreation.Topology)}
 	if s.FlowSelection != nil {
 		start.FlowSelection = &FlowSelection{Disabled: slices.Clone(s.FlowSelection.Disabled)}
 	}
@@ -102,7 +101,7 @@ func (e *Engine) PrepareChildren(sourceDigest string, input Observation) error {
 			return validationError("topology rebuild requires its confirmed topology request")
 		}
 	}
-	c := &ChildCreation{Execution: s.ExecutionSelections(), Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Intake: s.CurrentIntakeConfirmation(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
+	c := &ChildCreation{Previous: previous, RequestID: request, RequirementRevision: s.RequirementRevision(), Intake: s.CurrentIntakeConfirmation(), Coverage: s.confirmedCoverage(), Topology: copyTopology(*s.Topology), Source: s.AcceptedNativeSnapshot(), Digest: sourceDigest}
 	if s.NativeResources == nil {
 		s.NativeResources = map[string]NativeResource{}
 	}
@@ -139,12 +138,27 @@ sliceLoop:
 	return err
 }
 
+// preparedChild verifies creation origin and the configuration binding.
+// Applied library values do not identify a child.
 func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 	if actual == nil || actual.SliceChild == nil {
 		return false
 	}
 	expected := s.ChildStart(child)
-	return actual.NativeVCS() == s.NativeVCS() && actual.NativeHandle == s.NativeResources[child.ResourceID].Handle && actual.RunID == child.RunID && actual.Route == "regular" && actual.BaseSnapshot == s.BaseSnapshot && actual.NativeRoot == s.NativeResources[child.ResourceID].Path && actual.SliceChild.MasterRunID == expected.Binding.MasterRunID && actual.SliceChild.SliceID == expected.Binding.SliceID && actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision && digestOfCanonical(actual.SliceChild.InheritedIntake) == digestOfCanonical(expected.Binding.InheritedIntake) && digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) && digestOfCanonical(actual.SliceChild.InheritedExecution) == digestOfCanonical(expected.Binding.InheritedExecution) && digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) && digestOfCanonical(actual.FlowSelection) == digestOfCanonical(expected.FlowSelection) && actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil && sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
+	return actual.NativeVCS() == s.NativeVCS() &&
+		actual.NativeHandle == s.NativeResources[child.ResourceID].Handle &&
+		actual.RunID == child.RunID && actual.Route == "regular" &&
+		actual.BaseSnapshot == s.BaseSnapshot &&
+		actual.NativeRoot == s.NativeResources[child.ResourceID].Path &&
+		actual.SliceChild.MasterRunID == expected.Binding.MasterRunID &&
+		actual.SliceChild.SliceID == expected.Binding.SliceID &&
+		actual.SliceChild.RequirementRevision == expected.Binding.RequirementRevision &&
+		digestOfCanonical(actual.SliceChild.InheritedIntake) == digestOfCanonical(expected.Binding.InheritedIntake) &&
+		digestOfCanonical(actual.SliceChild.Coverage) == digestOfCanonical(expected.Binding.Coverage) &&
+		digestOfCanonical(actual.Topology) == digestOfCanonical(expected.Topology) &&
+		actual.ConfigurationName() == s.ConfigurationName() &&
+		actual.IntakeConfirmationReceipt != nil && s.IntakeConfirmationReceipt != nil &&
+		sameIntakeConfirmation(*actual.IntakeConfirmationReceipt, *s.IntakeConfirmationReceipt)
 }
 
 func (e *Engine) RecordPreparedChildren(children []*State, input Observation) error {

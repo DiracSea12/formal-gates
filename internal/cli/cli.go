@@ -31,6 +31,7 @@ type IO struct {
 	Context        context.Context
 	confirmation   func(any) error
 	owner          *facade.OwnerBinding
+	panelCtl       *panelController
 }
 
 func Run(program string, args []string, streams IO) int {
@@ -101,6 +102,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runNativeInteraction(args[1:], streams)
 	case "settings":
 		return runSettings(args[1:], streams)
+	case "config":
+		return runConfig(args[1:], streams)
 	case "workflow":
 		return runWorkflow(program, args[1:], streams)
 	case "hook":
@@ -361,9 +364,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs.Var(&artifactDocuments, "artifact-document", "original displayed confirmation material position; repeatable")
 	listMaterials := fs.Bool("materials", false, "list project confirmation materials without saving a candidate")
 	precheck := fs.Bool("precheck", false, "read and project the complete requirement before confirmation; creates no run")
-	listNodes := fs.Bool("nodes", false, "list user-selectable main-flow nodes without starting a run")
-	var disabledNodes positionListFlag
-	fs.Var(&disabledNodes, "disable-node", "user decision: disable an original --nodes position at start; repeatable")
 	saveCandidate := fs.String("save-candidate", "", "save the complete program-generated intake candidate; creates no run")
 	requirementPath := fs.String("requirement", "", "requirement document path for --precheck")
 	solutionPath := fs.String("solution", "", "solution material for --precheck; defaults to the requirement document")
@@ -372,31 +372,15 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	if *listNodes {
-		if len(disabledNodes) != 0 {
-			return 1, fmt.Errorf("--nodes lists choices; use --disable-node when starting the confirmed run")
-		}
-		if *machine {
-			return printJSON(streams.Stdout, map[string]any{"flowNodes": definition.MainFlowNodes(), "choiceOwner": "user"})
-		}
-		return printJSON(streams.Stdout, map[string]any{"flowNodes": workflowFlowNodeChoices(), "choiceOwner": "user"})
-	}
-	flowSelection, err := selectFlowNodes(disabledNodes)
-	if err != nil {
-		return 1, err
-	}
 	routeName := strings.ToLower(strings.TrimSpace(*route))
 	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
 		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
 	}
 	if *precheck {
-		if flowSelection != nil {
-			return 1, fmt.Errorf("--disable-node records the user's decision at start, after intake confirmation")
-		}
 		if *listMaterials {
 			return printIntakeMaterials(*root, streams.Stdout)
 		}
-		structured := routeName != "lightweight"
+		structured := false
 		selected, err := selectIntakeDocuments(*root, structured, requirementPath, *document, solutionPath, *solutionDocument, &artifacts, artifactDocuments, streams.Stdout)
 		if err != nil {
 			return 1, err
@@ -418,9 +402,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		return printPayloadValue(streams.Stdout, preview, "intake", position)
-	}
-	if routeName == "" {
-		return 1, fmt.Errorf("workflow start requires --route regular or lightweight")
 	}
 	if *requirementPath != "" || *solutionPath != "" || len(artifacts) != 0 || *saveCandidate != "" || *document != 0 || *solutionDocument != 0 || len(artifactDocuments) != 0 || *listMaterials {
 		return 1, fmt.Errorf("--requirement, --solution and --artifact are only available with --precheck; start requires the confirmed intake receipt")
@@ -463,6 +444,18 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	baseIdentity := ""
+	effective, err := facade.StartConfiguration(*root, *configuration)
+	if err != nil {
+		return 1, err
+	}
+	derivedRoute, err := facade.ConfigurationRoute(effective.Configuration)
+	if err != nil {
+		return 1, err
+	}
+	if routeName != "" && routeName != derivedRoute {
+		return 1, fmt.Errorf("route %q differs from configuration route %q", routeName, derivedRoute)
+	}
+	routeName = derivedRoute
 	if routeName == "regular" {
 		baseIdentity = *base
 		if baseIdentity == "" {
@@ -476,7 +469,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if streams.owner != nil {
 		owner = *streams.owner
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{FlowSelection: flowSelection, VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -803,7 +796,7 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if !*singleStep && workflowControlEvent(event) && (event.Request == nil || event.Request.Control != protocol.ControlSelectExecution) {
+	if !*singleStep && workflowControlEvent(event) {
 		value, executionErr := consumeWorkflow(streams, f, *root, *runID)
 		value.Acceptance = &acceptance
 		return printCurrentWorkflowConsumption(streams, f, value, *machine, executionErr)
@@ -1414,7 +1407,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview|serve\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|execution-options\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview|serve\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|rename|execution-options\n  config [--root DIR]  open the flow-configuration panel\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {

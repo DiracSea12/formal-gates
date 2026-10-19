@@ -252,15 +252,24 @@ func (s *State) NextWorkflowChoice(cd *compiler.CompiledDefinition) ControlKind 
 	if s.SliceChild == nil && s.Topology == nil {
 		return ControlConfirmTopology
 	}
-	if !s.RouteConfirmed {
+	if s.RouteConfirmationDue(cd) {
 		return ControlSelectRoute
 	}
-	if s.SliceChild == nil && !s.mergeMaster() && s.FlowNodeEnabled("development") {
-		if _, p, _ := s.confirmedDevelopmentPlan(); p == nil || !s.developmentPlanCurrent(p) {
-			return ControlSelectRoute
-		}
-	}
 	return ""
+}
+
+func (s *State) RouteConfirmationDue(cd *compiler.CompiledDefinition) bool {
+	if s.Topology == nil || s.mergeMaster() || !s.PreDevelopmentReviewsSatisfied() || !s.readinessPreparationReady() || s.abortRequested() || s.resetPending() {
+		return false
+	}
+	if !s.RouteConfirmed {
+		return true
+	}
+	if pipelineEnabled(s, cd) && s.SliceChild == nil && s.FlowNodeEnabled("development") {
+		_, plan, _ := s.confirmedDevelopmentPlan()
+		return plan == nil || !s.developmentPlanCurrent(plan)
+	}
+	return false
 }
 
 // FindingProblemID is the original adjudication owner's deterministic NEW identity.

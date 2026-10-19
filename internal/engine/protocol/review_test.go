@@ -246,7 +246,6 @@ func controlRequestEvent(t *testing.T, control ControlKind, requestID string, pa
 		if err != nil {
 			t.Fatalf("route request event: %v", err)
 		}
-		ev.Request.Configuration = payload.Route.Configuration
 		return ev
 	}
 	ev, err := NewRequestEvent(EventID(requestID), control, options...)
@@ -259,13 +258,13 @@ func controlRequestEvent(t *testing.T, control ControlKind, requestID string, pa
 func configureRouteChange(t *testing.T, e *Engine, route *RouteDecision) {
 	t.Helper()
 	state := e.LoadMustSucceed(t).State
-	if !state.RouteConfigurationRequired() || route.Configuration != nil {
-		return
-	}
-	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
+	selected := ConfigurationSelection{Configuration: state.AppliedConfiguration()}
 	selected.Configuration.FlowSelection = state.FlowSelection
 	selected.SetSelectedGates(route.Selected)
-	route.Configuration = &selected
+	saved := settings.CloneConfiguration(selected.Configuration)
+	e.cfg.Configuration = func(string) (settings.Configuration, error) { return settings.CloneConfiguration(saved), nil }
+	e.cfg.RouteGates = func() ([]string, error) { return slices.Clone(route.Gates), nil }
+	reconcile(t, e)
 	if route.DevelopmentPlan != nil {
 		preview, err := e.DevelopmentPlan(*route)
 		if err != nil {
@@ -339,12 +338,14 @@ func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
 	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, dir := reviewEngine(t, cd, reg)
+	pinned := []string{"blackbox", "gate.quality", "whitebox", "gate.delivery", "gate.security"}
+	engine.cfg.RouteGates = func() ([]string, error) { return slices.Clone(pinned), nil }
+	library := bindLibrary(t, engine, settings.Configuration{QAModes: []string{"blackbox", "whitebox"}})
 	product := issueReady(t, engine)[0]
 	submitVerifiedReviewResult(t, engine, "result-product", product, reviewEvidence(review.ProductReview, product, "", "PASS", "clean", nil))
 	readiness := pendingActionID(t, engine)
 	submitVerifiedReviewResult(t, engine, "result-readiness", readiness, reviewEvidence(review.StartReadiness, readiness, "", "PASS", "ready", nil))
 	askAndDecide(t, engine, ControlConfirmTopology, "req-topology", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{Decision: "no-split", Note: "one cohesive deliverable"}})
-	pinned := []string{"blackbox", "gate.quality", "whitebox", "gate.delivery", "gate.security"}
 	request, err := NewRouteRequestEvent("req-selection", pinned, routeOptions()...)
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +353,9 @@ func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
 	observedInput := Observation{}
 	if _, err := engine.Submit(request, observedInput); err != nil {
 		t.Fatal(err)
+	}
+	if state := engine.LoadMustSucceed(t).State; !slices.Equal(state.SelectedGates, pinned) {
+		t.Fatalf("initial library selection = %v, want %v", state.SelectedGates, pinned)
 	}
 	token, err := engine.Freshness("req-selection")
 	if err != nil {
@@ -375,7 +379,11 @@ func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
 			t.Fatalf("%s changed persisted state", name)
 		}
 	}
-	event, err := NewReviewDecideEvent("evt-selection", "req-selection", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: pinned, Selected: []string{"gate.security", "gate.quality", "gate.delivery"}}})
+	// The catalogue stays fixed, but approval must use the current library value.
+	library.value.QAModes = []string{}
+	selected := []string{"gate.security", "gate.quality", "gate.delivery"}
+	library.value.Gates = &selected
+	event, err := NewReviewDecideEvent("evt-selection", "req-selection", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: pinned, Selected: []string{"blackbox", "whitebox"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,8 +449,16 @@ func TestGateSelectionPersistsAcrossReplayAndConcurrentDecisions(t *testing.T) {
 		t.Fatalf("persisted gate selection = %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 	decision := state.Decisions["req-selection"]
-	if decision.Choice != "approve" || !slices.Equal(decision.Review.Route.Selected, []string{"gate.security", "gate.quality", "gate.delivery"}) || !slices.Equal(decision.Review.Route.Gates, pinned) {
+	if decision.Choice != "approve" || !slices.Equal(decision.Review.Route.Selected, want) || !slices.Equal(decision.Review.Route.Gates, pinned) {
 		t.Fatalf("persisted selection decision = %+v", decision)
+	}
+	applied := state.AppliedConfigurations[len(state.AppliedConfigurations)-1]
+	if len(state.AppliedConfigurations) != len(beforeConcurrent.State.AppliedConfigurations)+1 ||
+		!reflect.DeepEqual(applied.Configuration, library.value) || !slices.Equal(applied.SelectedGates, want) ||
+		len(state.validationKinds()) != 0 {
+		t.Fatalf("approval did not apply the current library selection: history %d -> %d, config equal=%t, QA=%v, applied=%+v, library=%+v",
+			len(beforeConcurrent.State.AppliedConfigurations), len(state.AppliedConfigurations),
+			reflect.DeepEqual(applied.Configuration, library.value), state.validationKinds(), applied, library.value)
 	}
 	if len(state.Decisions) != 2 || !state.PendingAsks["req-selection"].Resolved {
 		t.Fatalf("concurrent decision bookkeeping = %+v", state.Decisions)
@@ -629,11 +645,7 @@ func TestGateSelectionBindsAnySubset(t *testing.T) {
 	}
 }
 
-// TestRouteReselectionBeforeDevelopmentRebinds：§6.3.1 开发前可重选——绑定
-// 后第二次 SELECT_ROUTE 的 Ask 照常抬起；绑定前已并存的第二个 Ask 的决定
-// 在绑定后仍被各自接纳（候选表锚定各自 Ask），同集重选落账不变、缩集重
-// 选落账新绑定。
-func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
+func TestInitialRouteCannotBeReopenedAsARuntimeConfigurationAsk(t *testing.T) {
 	t.Parallel()
 	cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 	engine, _ := reviewEngine(t, cd, reg)
@@ -645,56 +657,19 @@ func TestRouteReselectionBeforeDevelopmentRebinds(t *testing.T) {
 		Decision: "no-split", Note: "one cohesive command",
 	}})
 	gates := []string{"blackbox", "whitebox", "gate.quality"}
-	// 绑定前两个 Ask 并存（PendingAsks 按 requestID 各自落账）。
 	observedInput := Observation{}
-	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
-	selected.SetSelectedGates(gates)
-	for _, requestID := range []string{"req-route-binding", "req-route-coexisting"} {
-		route := &RouteDecision{Gates: gates, Selected: gates}
-		if requestID == "req-route-coexisting" {
-			route.Configuration = &selected
-		}
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: route}, routeOptions()), observedInput); err != nil {
-			t.Fatalf("submit ask %s: %v", requestID, err)
-		}
-	}
-	token, err := engine.Freshness("req-route-binding")
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding, err := NewReviewDecideEvent("evt-route-binding", "req-route-binding", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Submit(binding, observedInput); err != nil {
-		t.Fatalf("submit binding decide: %v", err)
-	}
-	// 并存 Ask 的决定在绑定后被接纳：同集重选（候选表与自身 Ask 钉住的
-	// 全集相等）落账不变。
-	coexist, err := engine.Freshness("req-route-coexisting")
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := NewReviewDecideEvent("evt-route-coexisting", "req-route-coexisting", coexist, "approve", ReviewDecisionPayload{Route: &RouteDecision{Selected: gates, Gates: gates, Configuration: &selected}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Submit(decision, Observation{}); err != nil {
-		t.Fatalf("coexisting route decide after binding: %v", err)
-	}
+	route := &RouteDecision{Gates: gates, Selected: gates}
+	askAndDecide(t, engine, ControlSelectRoute, "initial-route", routeOptions(), "approve", &ReviewDecisionPayload{Route: route})
 	snap := engine.LoadMustSucceed(t)
 	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != len(gates) {
 		t.Fatalf("same-set reselection changed the binding: %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
-	if ask, pending := snap.State.PendingAsks["req-route-coexisting"]; !pending || !ask.Resolved {
-		t.Fatalf("coexisting ask did not settle: %+v", ask)
+	request := controlRequestEvent(t, ControlSelectRoute, "runtime-route", &ReviewDecisionPayload{Route: route}, routeOptions())
+	if _, err := engine.Submit(request, observedInput); err == nil {
+		t.Fatal("runtime route Ask was accepted")
 	}
-	// 绑定后的第二次 Ask 照常抬起，缩集重选落账新绑定。
-	subset := []string{"gate.quality"}
-	askAndDecide(t, engine, ControlSelectRoute, "req-route-second", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: subset, Selected: subset}})
-	snap = engine.LoadMustSucceed(t)
-	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.quality" {
-		t.Fatalf("re-selected route = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
+	if !reflect.DeepEqual(snap, engine.LoadMustSucceed(t)) {
+		t.Fatal("rejected runtime route changed state")
 	}
 }
 
@@ -708,6 +683,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 	t.Run("request without the gate list is rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
+		walkToTopologyAndRoute(t, engine)
 		observedInput := Observation{}
 		// 字面构造事件绕开构造器前置校验，让引擎在接纳处拒绝。
 		request := Event{ID: EventID("req-route-nogates"), Kind: KindRequestControl, Request: &RequestPayload{Control: ControlSelectRoute, Options: routeOptions()}}
@@ -725,6 +701,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 	t.Run("request gate list carrying merge or a duplicate is rejected without state writes", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
+		walkToTopologyAndRoute(t, engine)
 		observedInput := Observation{}
 		// 保留字全集（merge/merge-gate/merge-qa，命名权威 internal/validate/
 		// catalog.go:28-31）一律拒绝零写。
@@ -758,6 +735,7 @@ func TestRouteGateSetPinnedOnAskBindsRequestAndDecision(t *testing.T) {
 			Decision: "no-split", Note: "建议不拆",
 		}})
 		pinned := []string{"blackbox", "whitebox", "gate.security"}
+		configureRouteChange(t, engine, &RouteDecision{Selected: pinned, Gates: pinned})
 		request, err := NewRouteRequestEvent("req-route-diverging", pinned, routeOptions()...)
 		if err != nil {
 			t.Fatalf("route request: %v", err)
@@ -959,10 +937,53 @@ func TestReviewGatingNegatives(t *testing.T) {
 	t.Run("route before topology", func(t *testing.T) {
 		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
-		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-early", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
-			t.Fatal("route accepted before topology binding")
+		rejectRouteRequest(t, engine, dir, "req-route-early", []string{"blackbox", "whitebox", "gate.quality"})
+	})
+
+	t.Run("route approval after its product prerequisite is invalidated", func(t *testing.T) {
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
+		engine, dir := reviewEngine(t, cd, reg)
+		walkToTopologyAndRoute(t, engine)
+		gates := []string{"blackbox", "whitebox", "gate.quality"}
+		request, err := NewRouteRequestEvent("req-route-before-invalidation", gates, routeOptions()...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.Submit(request, Observation{}); err != nil {
+			t.Fatalf("legal initial route request: %v", err)
+		}
+		series := engine.LoadMustSucceed(t).State.ReviewSeries.ProductReview
+		candidate := series.RawCandidates[0]
+		invalidate := AskOption{ID: "INVALIDATE_RESULT", Label: "invalidate"}
+		askAndDecide(t, engine, ControlReviewFindingDecision, "req-invalidate-before-route", []AskOption{invalidate}, invalidate.ID, &ReviewDecisionPayload{Correction: &review.CorrectionInput{
+			Action: review.ProductReview, DispatchID: candidate.DispatchID, RequirementRevision: "rev-1",
+			ResultDigest: candidate.ResultDigest, Decision: "INVALIDATE_RESULT", Invalidity: "INVALID",
+			Reason: "the product round reviewed the wrong revision", ExpectedEffectiveRevision: series.Effective.Revision,
+		}})
+		state := engine.LoadMustSucceed(t).State
+		if state.RouteConfirmationDue(cd) || state.ReviewSeries.ProductReview.Effective.Status != "PENDING" {
+			t.Fatal("product invalidation did not close the route prerequisite")
+		}
+		token, err := engine.Freshness("req-route-before-invalidation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		approve, err := NewReviewDecideEvent("evt-route-after-invalidation", "req-route-before-invalidation", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: gates}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := stateBytesOf(t, dir)
+		if _, err := engine.Submit(approve, Observation{}); err == nil {
+			t.Fatal("route decision accepted after its product prerequisite was invalidated")
 		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-			t.Fatalf("early route code = %q", code)
+			t.Fatalf("invalidated-prerequisite decision code = %q (%v)", code, err)
+		}
+		if !bytes.Equal(before, stateBytesOf(t, dir)) {
+			t.Fatal("rejected route decision changed persisted state")
+		}
+		state = engine.LoadMustSucceed(t).State
+		if state.RouteConfirmed || state.PendingAsks["req-route-before-invalidation"].Resolved {
+			t.Fatal("rejected decision opened the route or consumed its Ask")
 		}
 	})
 
@@ -1437,13 +1458,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	}
 
 	// 重新阻塞期间选路线：可区分拒绝、零状态变化。
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-blocked", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
-		t.Fatal("route accepted while product-review is re-blocked")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("route-under-block code = %q", code)
-	} else if !strings.Contains(err.Error(), "selected pre-development reviews and current development preparation") {
-		t.Fatalf("route-under-block rejection does not name the pre-development prerequisites: %v", err)
-	}
+	rejectRouteRequest(t, engine, dir, "req-route-blocked", []string{"blackbox", "whitebox", "gate.quality"})
 
 	// 失效窗口内：技术审对自己的建议项升级 P1——合法落账，投影仍被失
 	// 效压住（下游自身纠正不解除上游失效）。
@@ -1486,9 +1501,7 @@ func TestUpstreamVoidReleaseReprojectsTheDownstreamLedger(t *testing.T) {
 	if released.Effective.Revision <= voided.Effective.Revision {
 		t.Fatalf("the released projection must keep the revision monotonic: %d <= %d", released.Effective.Revision, voided.Effective.Revision)
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-held", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality"}, Gates: []string{"blackbox", "whitebox", "gate.quality"}}}); err == nil {
-		t.Fatal("route accepted while the re-projected readiness conclusion blocks")
-	}
+	rejectRouteRequest(t, engine, dir, "req-route-held", []string{"blackbox", "whitebox", "gate.quality"})
 
 	// 驳回窗口内的升级项：技术审回 PASS，路线门打开并推进。
 	snap = engine.LoadMustSucceed(t)
@@ -1707,6 +1720,36 @@ func TestInvalidReviewEvidenceClosesAttemptAfterReceiptPairing(t *testing.T) {
 				t.Fatalf("correct result did not reach the ledger: completed=%d staged=%d", snap.State.ReviewSeries.ProductReview.Completed, len(snap.State.StagedResults))
 			}
 		})
+	}
+}
+
+// rejectRouteRequest checks the request boundary while initial route prerequisites
+// are unsatisfied. No Ask, decision, dispatch, receipt or cost may be written.
+func rejectRouteRequest(t *testing.T, engine *Engine, dir, requestID string, gates []string) {
+	t.Helper()
+	before := engine.LoadMustSucceed(t)
+	if before.State.RouteConfirmationDue(engine.cfg.Definition) || before.State.RouteConfirmed {
+		t.Fatal("fixture must have a closed, unconfirmed initial route")
+	}
+	request, err := NewRouteRequestEvent(EventID(requestID), gates, routeOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable := stateBytesOf(t, dir)
+	if _, err := engine.Submit(request, Observation{}); err == nil {
+		t.Fatal("route request accepted before its prerequisites")
+	} else if code := rejectionCode(t, err); code != CodeValidationEvidenceRejected {
+		t.Fatalf("route request rejection = %q (%v)", code, err)
+	}
+	if !bytes.Equal(durable, stateBytesOf(t, dir)) {
+		t.Fatal("rejected route request wrote workflow state")
+	}
+	after := engine.LoadMustSucceed(t)
+	if after.Revision != before.Revision || after.State.RouteConfirmed ||
+		after.State.RouteConfirmationDue(engine.cfg.Definition) ||
+		len(after.State.PendingAsks) != len(before.State.PendingAsks) ||
+		!reflect.DeepEqual(after.State.PendingActions, before.State.PendingActions) {
+		t.Fatal("rejected route request opened the gate, added an Ask or dispatched work")
 	}
 }
 

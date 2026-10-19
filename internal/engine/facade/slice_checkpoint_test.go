@@ -28,6 +28,11 @@ import (
 func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validationDriver {
 	t.Helper()
 	master := nativeMasterDriver(t)
+	gates := []string{"quality", "security"}
+	if mode == "selected" {
+		gates = []string{"security"}
+	}
+	saveVerificationRoute(t, master, gates...)
 	base := master.run.BaseSnapshot
 	passPreDevelopmentReviews(t, master, splitCommandPlan())
 
@@ -40,10 +45,7 @@ func reviewReadySlice(t *testing.T, mode string, owner OwnerBinding) *validation
 		t.Fatal(err)
 	}
 	child := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
-	route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
-	if mode == "selected" {
-		route.Selected = []string{"security"}
-	}
+	route := protocol.RouteDecision{Selected: gates}
 	child.confirmSliceRoute(route, sliceLanePlan())
 
 	child.drive()
@@ -124,13 +126,20 @@ func TestSliceDisabledQualityRoleKeepsRealRouteAndEmptyGateEvidence(t *testing.T
 		t.Fatal("aborted child lost its frozen receipt")
 	}
 	aborted := *child.run.Termination.SliceReceipt
+	applied := child.run.Termination.AppliedConfigurations
+	if len(applied) == 0 {
+		t.Fatal("aborted child lost its applied configuration history")
+	}
+	aborted.Configuration = &applied[len(applied)-1]
 	if aborted.Receipt.Status != "ABORTED" || !reflect.DeepEqual(aborted.Receipt.FlowSelection, selection) {
 		t.Fatal("aborted receipt lost the child's frozen workflow selection", aborted.Receipt.FlowSelection)
 	}
 	master.reopen()
 	master.drive()
 	if current := driverState(t, master).SliceReceipts[child.f.runID]; !reflect.DeepEqual(current, aborted) {
-		t.Fatal("master recovery changed the aborted receipt")
+		actual, _ := json.Marshal(current)
+		expected, _ := json.Marshal(aborted)
+		t.Fatalf("master recovery changed the aborted receipt:\nactual=%s\nchild=%s", actual, expected)
 	}
 }
 
