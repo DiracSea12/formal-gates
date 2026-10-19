@@ -17,7 +17,7 @@ func TestControlArgumentsPreserveAllSemanticFieldsAndSelectedPositions(t *testin
 	a := registerControlArguments(fs)
 	args := []string{
 		"--request", "REQUEST_REQUIREMENT_CHANGE", "--ask", "2", "--choice", "proceed", "--reason", "保留 \"原文\"\n和空格  ",
-		"--gate", "3", "--gate", "1", "--parallel", "parallel", "--owner", "0", "--owner", "2",
+		"--parallel", "parallel", "--owner", "0", "--owner", "2",
 		"--review", "4", "--candidate", "3", "--finding", "2", "--severity", "P2", "--severity-rationale", "可规避", "--invalidity", "wrong premise",
 		"--classification", "meaning-changed", "--redo", "route", "--redo", "product-review", "--changed-item", "new output", "--changed-item", "new command",
 		"--transitive-impact", "dependent caller", "--carry-reason", "unaffected UI", "--requirement-review", "2", "--requirement-candidate", "1", "--requirement-finding", "3",
@@ -36,7 +36,7 @@ func TestControlArgumentsPreserveAllSemanticFieldsAndSelectedPositions(t *testin
 	}
 	actual, provided, err := a.input()
 	expected := facade.ControlInput{
-		Request: protocol.ControlKind("REQUEST_REQUIREMENT_CHANGE"), Ask: 2, Choice: "proceed", Reason: "保留 \"原文\"\n和空格  ", Gates: []int{3, 1}, Parallel: "parallel", Owners: []int{0, 2}, Review: 4, Candidate: 3, Finding: 2, Severity: "P2", SeverityRationale: "可规避", Invalidity: "wrong premise",
+		Request: protocol.ControlKind("REQUEST_REQUIREMENT_CHANGE"), Ask: 2, Choice: "proceed", Reason: "保留 \"原文\"\n和空格  ", Parallel: "parallel", Owners: []int{0, 2}, Review: 4, Candidate: 3, Finding: 2, Severity: "P2", SeverityRationale: "可规避", Invalidity: "wrong premise",
 		Requirement: &facade.RequirementChangeInput{
 			Classification: "meaning-changed", Redo: []string{"route", "product-review"}, Review: 2, Candidate: 1, Finding: 3,
 			Impact: protocol.RequirementImpact{ChangedItems: []string{"new output", "new command"}, TransitiveImpacts: []string{"dependent caller"}, CarryReasons: []string{"unaffected UI"}},
@@ -53,23 +53,13 @@ func TestControlArgumentsPreserveAllSemanticFieldsAndSelectedPositions(t *testin
 	}
 }
 
-func TestControlArgumentsExecutionSelectionKeepsPartialSemanticChoices(t *testing.T) {
-	for _, test := range []struct {
-		args []string
-		want facade.ExecutionSelectionInput
-	}{
-		{[]string{"--execution-node", "development", "--model", "Careful"}, facade.ExecutionSelectionInput{Node: "development", Model: "Careful"}},
-		{[]string{"--execution-node", "3", "--effort", "2"}, facade.ExecutionSelectionInput{Node: "3", Effort: "2"}},
-		{[]string{"--execution-node", "development", "--platform", "workbuddy", "--model", "1"}, facade.ExecutionSelectionInput{Node: "development", Platform: "workbuddy", Model: "1"}},
-	} {
+func TestControlArgumentsRejectRunLocalExecutionChoices(t *testing.T) {
+	for _, flagName := range []string{"--execution-node", "--platform", "--model", "--effort", "--configuration", "--flow-node", "--qa-mode", "--enabled", "--gate", "--all-gates", "--no-gates"} {
 		fs := flag.NewFlagSet("execution selection", flag.ContinueOnError)
-		a := registerControlArguments(fs)
-		if err := fs.Parse(test.args); err != nil {
-			t.Fatal(err)
-		}
-		input, provided, err := a.input()
-		if err != nil || !provided || input.Request != protocol.ControlSelectExecution || input.Node != 0 || input.Execution == nil || *input.Execution != test.want {
-			t.Fatal("semantic execution choices became another control or gained invented fields", input, err)
+		fs.SetOutput(io.Discard)
+		registerControlArguments(fs)
+		if err := fs.Parse([]string{flagName, "development"}); err == nil {
+			t.Fatal("workflow control still accepts a run-local execution choice", flagName)
 		}
 	}
 }
@@ -82,7 +72,6 @@ func TestControlArgumentsDistinguishAbsentAndExplicitEmptyFields(t *testing.T) {
 	}{
 		{args: []string{"--root", "somewhere"}},
 		{args: []string{"--reason", ""}, provided: true},
-		{args: []string{"--gate", "none"}, provided: true, input: facade.ControlInput{Gates: []int{}}},
 		{args: []string{"--node", "3"}, provided: true, input: facade.ControlInput{Request: protocol.ControlContinueNode, Node: 3}},
 		{args: []string{"--classification", ""}, provided: true, input: facade.ControlInput{Requirement: &facade.RequirementChangeInput{}}},
 		{args: []string{"--validation-kind", ""}, provided: true, input: facade.ControlInput{Validation: &facade.ValidationControlInput{}}},
@@ -119,21 +108,5 @@ func TestControlArgumentsRejectUnselectedFieldsAndMissingPositions(t *testing.T)
 		if err == nil {
 			t.Fatal("unselected field or missing current position accepted", args)
 		}
-	}
-}
-
-func TestControlArgumentsConfigurationChangesKeepOneTypedRouteRequest(t *testing.T) {
-	fs := flag.NewFlagSet("configuration", flag.ContinueOnError)
-	a := registerControlArguments(fs)
-	if err := fs.Parse([]string{"--configuration", "2", "--flow-node", "repair", "--enabled", "false", "--execution-node", "qa-whitebox", "--platform", "codex", "--model", "2", "--effort", "high", "--no-gates"}); err != nil {
-		t.Fatal(err)
-	}
-	input, provided, err := a.input()
-	if err != nil || !provided || input.Request != protocol.ControlSelectRoute || input.Execution != nil || input.Configuration == nil {
-		t.Fatal("configuration edit left the shared typed route control", input, err)
-	}
-	configuration := input.Configuration
-	if configuration.Name != "2" || configuration.FlowNode != "repair" || configuration.Enabled == nil || *configuration.Enabled || configuration.AllGates == nil || *configuration.AllGates || configuration.Execution == nil || configuration.Execution.Node != "qa-whitebox" || configuration.Execution.Platform != "codex" || configuration.Execution.Model != "2" || configuration.Execution.Effort != "high" {
-		t.Fatal("configuration input changed the user's semantic fields", configuration)
 	}
 }

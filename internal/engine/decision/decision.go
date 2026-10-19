@@ -60,6 +60,9 @@ const (
 	WaitCapacity WaitReason = "CAPACITY"
 	// WaitDependencies reports an outstanding obligation held by its prerequisites.
 	WaitDependencies WaitReason = "DEPENDENCIES_UNSATISFIED"
+	// WaitConfigurationUnavailable reports a bound configuration that cannot be
+	// resolved; Detail names the cause and new dispatch resumes once it resolves.
+	WaitConfigurationUnavailable WaitReason = "CONFIGURATION_UNAVAILABLE"
 )
 
 // ReadyTask 是 Ready 集的单个待签发任务：薄指针（TaskKey + step），不携
@@ -85,9 +88,10 @@ type AskPayload struct {
 	Requests []string           `json:"requests,omitempty"`
 }
 
-// WaitPayload 是 Wait 的 payload：封闭原因。
+// WaitPayload 是 Wait 的 payload：封闭原因及其具体说明。
 type WaitPayload struct {
 	Reason WaitReason `json:"reason"`
+	Detail string     `json:"detail,omitempty"`
 }
 
 // OperatorPayload 是 Operator 的 payload：待核实的事实集合。
@@ -424,6 +428,7 @@ type askWire struct {
 
 type waitWire struct {
 	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type operatorWire struct {
@@ -463,7 +468,7 @@ func (p *Plan) CanonicalBytes() ([]byte, error) {
 		nw.Ask = &askWire{Steps: idStrings(p.Next.Ask.Steps), Requests: p.Next.Ask.Requests}
 	}
 	if p.Next.Wait != nil {
-		nw.Wait = &waitWire{Reason: string(p.Next.Wait.Reason)}
+		nw.Wait = &waitWire{Reason: string(p.Next.Wait.Reason), Detail: p.Next.Wait.Detail}
 	}
 	if p.Next.Operator != nil {
 		ow := &operatorWire{Facts: make([]factWire, 0, len(p.Next.Operator.Facts))}

@@ -21,13 +21,7 @@ import (
 	"formal-gates/internal/coordination"
 )
 
-func cursorCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := cursorResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return cursorConfiguredBinding(settings.Values{Native: native})
-}
+var cursorCaptureBinding = nativeCapture(cursorResolvePaths, cursorConfiguredBinding)
 
 func cursorResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}

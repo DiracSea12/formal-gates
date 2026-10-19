@@ -78,7 +78,7 @@ func respondWithHost(t *testing.T, args ...string) (int, string) {
 			if name != "answer" || json.Unmarshal(arguments, &identity) != nil || !valuesEqual(identity, candidate.Pending["request_id"]) {
 				return nil, fmt.Errorf("unexpected original answer call: %s %s", name, arguments)
 			}
-			code = NativeRespondWithConfirmation(args, &errors, confirm)
+			code = NativeRespondWithConfirmation(args, &errors, "", confirm)
 			return code, nil
 		}, nil)
 		output.Close()
@@ -229,7 +229,7 @@ func TestNativeRespondCancelAndChangedQuestion(t *testing.T) {
 	if err := writeAtomicJSON(nativePendingPath(job), records); err != nil {
 		t.Fatal(err)
 	}
-	if err := submitNativeAnswer(candidate); err != nil {
+	if err := submitNativeAnswer(candidate, ""); err != nil {
 		t.Fatal("reannouncement lost original binding", err)
 	}
 	answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
@@ -243,8 +243,33 @@ func TestNativeRespondCancelAndChangedQuestion(t *testing.T) {
 	if err := writeAtomicJSON(nativePendingPath(job), records); err != nil {
 		t.Fatal(err)
 	}
-	if err := submitNativeAnswer(candidate); err == nil {
+	if err := submitNativeAnswer(candidate, ""); err == nil {
 		t.Fatal("different connection accepted")
+	}
+}
+func TestNativeAnswerRecordsConfirmationChannel(t *testing.T) {
+	job := t.TempDir()
+	writePendingsFile(t, job, cliPendingPermission)
+	candidate, err := prepareHeldTest(t, job, 1, nativeSelection{Choice: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := submitNativeAnswer(candidate, "host-permission"); err != nil {
+		t.Fatal(err)
+	}
+	answer := objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+	if answer["request_id"] != "41" || answer["option"] != "allow-once" || answer["confirmation"] != "host-permission" {
+		t.Fatal(answer)
+	}
+	if err := os.Remove(nativeAnswerPath(job)); err != nil {
+		t.Fatal(err)
+	}
+	if err := submitNativeAnswer(candidate, ""); err != nil {
+		t.Fatal(err)
+	}
+	answer = objectOrEmpty(decodeTestJSON(t, readCLIFile(t, nativeAnswerPath(job))))
+	if answer["request_id"] != "41" || answer["option"] != "allow-once" || answer["confirmation"] != nil {
+		t.Fatal(answer)
 	}
 }
 func TestNativeRespondSelectsOnlyDisplayedOptions(t *testing.T) {

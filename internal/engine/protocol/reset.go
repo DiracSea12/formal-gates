@@ -334,7 +334,8 @@ func (e *Engine) advanceReset(s *State, nextRevision uint64) (bool, error) {
 			s.PendingAsks[id] = ask
 		}
 	}
-	s.ReviewSeries = review.NewSet()
+	configuration := s.AppliedConfiguration()
+	s.ReviewSeries = review.NewSetWithLimits(configuration.RoundLimit("product-review"), configuration.RoundLimit("tech-review"), nextRevision)
 	s.SliceReceipt = nil
 	s.PromotedSnapshot = ""
 	s.PromotedDigest = ""
@@ -436,7 +437,8 @@ func (e *Engine) RecordChildControl(child *State, input Observation) error {
 	e = e.observing(input)
 	d, reset := child.resetDecision()
 	authority := child.nodeContinuationAuthority()
-	if !reset && authority == nil {
+	configuration := child.configurationAuthority()
+	if !reset && authority == nil && configuration == nil {
 		return nil
 	}
 	revision, s, err := e.load()
@@ -447,6 +449,13 @@ func (e *Engine) RecordChildControl(child *State, input Observation) error {
 		return validationError("child control has no current master claim")
 	}
 	changed := false
+	if configuration != nil {
+		if receipt, known := s.SliceReceipts[child.RunID]; known && (receipt.Configuration == nil || receipt.Configuration.Revision < configuration.Revision) {
+			receipt.Configuration = configuration
+			s.SliceReceipts[child.RunID] = receipt
+			changed = true
+		}
+	}
 	if reset {
 		if prior := s.SliceResetAuthorities[child.RunID]; prior.Decision.RequestID != d.RequestID {
 			if s.SliceResetAuthorities == nil {

@@ -42,7 +42,7 @@ func TestNativeAdapterRegistrationRoutesExecutionAndRecovery(t *testing.T) {
 	}
 	directory := t.TempDir()
 	calls := []string{}
-	entry := nativePlatform{Descriptor: &host.Descriptor{ID: "native-peer", Installable: true, InstallName: "native-peer", Aliases: []string{"native-peer-alias"}}}
+	entry := nativePlatform{Descriptor: &host.Descriptor{ID: "native-peer", Installable: true, InstallName: "native-peer", Aliases: []string{"native-peer-alias"}, Configuration: []host.ConfigField{host.StringConfig("nativePeerExecutable", "x")}}}
 	binding := map[string]any{"identity": "binary-identity"}
 	source := map[string]any{"session": "session-identity"}
 	process := map[string]any{"attempt": "attempt-identity"}

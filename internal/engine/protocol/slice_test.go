@@ -11,7 +11,6 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/runtime"
 	definition "formal-gates/internal/engine/testkit/workflow"
-	"formal-gates/internal/settings"
 )
 
 func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
@@ -41,35 +40,26 @@ func TestSliceChildInheritsTopologyAndSelectsQAFreeRoute(t *testing.T) {
 	if snap.State.Phase != runtime.PhaseDevelopmentParallel {
 		t.Fatalf("phase after child route = %s, want DEVELOPMENT_PARALLEL", snap.State.Phase)
 	}
-	// §6.3.1 开发前可重选：绑定后的第二次路线选择 Ask 照常抬起，缩集重
-	// 选落账新绑定。
-	askAndDecide(t, engine, ControlSelectRoute, "req-child-route-again", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.security"}}})
+	configureRouteChange(t, engine, &RouteDecision{Gates: []string{"gate.quality", "gate.security", "gate.release"}, Selected: []string{"gate.security"}})
 	snap = engine.LoadMustSucceed(t)
 	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
 		t.Fatalf("child re-selected route = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
 }
 
-// TestSliceChildRouteDecisionRebindsCoexistingAsk：child 绑定前并存的第
-// 二个路线 Ask，其决定在绑定后仍被各自接纳（候选表锚定各自 Ask），缩集
-// 重选落账新绑定。
-func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
+func TestSliceChildPendingRouteUsesCurrentConfiguration(t *testing.T) {
 	t.Parallel()
 	engine, _ := sliceChildEngine(t)
 	gates := []string{"gate.quality", "gate.security"}
 	observedInput := Observation{}
-	selected := ConfigurationSelection{Configuration: settings.DefaultConfiguration()}
-	selected.SetSelectedGates([]string{"gate.security"})
-	for _, requestID := range []string{"req-child-bind", "req-child-coexist"} {
-		route := &RouteDecision{Gates: gates, Selected: []string{"gate.quality"}}
-		if requestID == "req-child-coexist" {
-			route.Configuration = &selected
-			route.Selected = []string{"gate.security"}
-		}
-		if _, err := engine.Submit(controlRequestEvent(t, ControlSelectRoute, requestID, &ReviewDecisionPayload{Route: route}, routeOptions()), observedInput); err != nil {
-			t.Fatalf("submit ask %s: %v", requestID, err)
-		}
+	route := &RouteDecision{Gates: gates, Selected: []string{"gate.quality"}}
+	configureRouteChange(t, engine, route)
+	request := controlRequestEvent(t, ControlSelectRoute, "req-child-bind", &ReviewDecisionPayload{Route: route}, routeOptions())
+	if _, err := engine.Submit(request, observedInput); err != nil {
+		t.Fatal(err)
 	}
+	route.Selected = []string{"gate.security"}
+	configureRouteChange(t, engine, route)
 	token, err := engine.Freshness("req-child-bind")
 	if err != nil {
 		t.Fatal(err)
@@ -81,23 +71,12 @@ func TestSliceChildRouteDecisionRebindsCoexistingAsk(t *testing.T) {
 	if _, err := engine.Submit(binding, observedInput); err != nil {
 		t.Fatalf("submit binding decide: %v", err)
 	}
-	coexist, err := engine.Freshness("req-child-coexist")
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := NewReviewDecideEvent("evt-child-coexist", "req-child-coexist", coexist, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: []string{"gate.security"}, Configuration: &selected}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Submit(decision, Observation{}); err != nil {
-		t.Fatalf("coexisting child route decide after binding: %v", err)
-	}
 	snap := engine.LoadMustSucceed(t)
 	if !snap.State.RouteConfirmed || len(snap.State.SelectedGates) != 1 || snap.State.SelectedGates[0] != "gate.security" {
-		t.Fatalf("child binding after the coexisting decide = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
+		t.Fatalf("child binding did not read current configuration = %t %v", snap.State.RouteConfirmed, snap.State.SelectedGates)
 	}
-	if ask, pending := snap.State.PendingAsks["req-child-coexist"]; !pending || !ask.Resolved {
-		t.Fatalf("coexisting child ask did not settle: %+v", ask)
+	if ask, pending := snap.State.PendingAsks["req-child-bind"]; !pending || !ask.Resolved {
+		t.Fatalf("child initial route ask did not settle: %+v", ask)
 	}
 }
 
@@ -140,7 +119,7 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 			ACOwners: map[string]string{"AC-001": "lane-core", "AC-002": "lane-tooling"},
 		},
 	}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-child", "", confirmation, "", "", sliceStart); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-child", confirmation, "", "", sliceStart); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {
@@ -167,7 +146,11 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 	if issued := issueReady(t, engine); len(issued) != 0 {
 		t.Fatalf("child dispatched review work: %v", issued)
 	}
-	// 继承绑定不可重切。
+	return engine, dir
+}
+
+func TestSliceChildInheritedTopologyRejectsRecut(t *testing.T) {
+	engine, dir := sliceChildEngine(t)
 	if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-child-topology", topologyOptions(), "split", &ReviewDecisionPayload{Topology: &TopologyDecision{
 		Decision: "split", SplitCount: 2, Slices: []string{"re-cut-a", "re-cut-b"}, Parallel: "re-cut",
 	}}); err == nil {
@@ -175,5 +158,4 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
 		t.Fatalf("child re-cut code = %q (%v)", code, err)
 	}
-	return engine, dir
 }

@@ -90,9 +90,12 @@ func TestCheckpointCancellationRetiresItsPublishedEvidence(t *testing.T) {
 					t.Fatal("child copied parent replay identity")
 				}
 				current := run.Termination.SliceReceipt
-				if current == nil || current.Receipt.Status != "ABORTED" || !reflect.DeepEqual(*current, terminal.SliceReceipts[plan.RunID]) || !reflect.DeepEqual(current.Receipt.Abort, abort) || run.Termination.SliceChild == nil || !reflect.DeepEqual(run.Termination.SliceChild.ParentAbort, abort) {
+				accepted := terminal.SliceReceipts[plan.RunID]
+				if current == nil || current.Receipt.Status != "ABORTED" || !reflect.DeepEqual(current.Receipt, accepted.Receipt) || current.Digest != accepted.Digest || !reflect.DeepEqual(current.Receipt.Abort, abort) || run.Termination.SliceChild == nil || !reflect.DeepEqual(run.Termination.SliceChild.ParentAbort, abort) {
 					t.Fatal("current child receipt lost the exact accepted abort authority")
 				}
+				assertReceiptQualification(t, run.Termination, accepted)
+				assertReceiptQualification(t, run.Termination, *current)
 				if plan.RunID == child.f.runID {
 					ready, aborted := receipt.Receipt, current.Receipt
 					if aborted.Snapshot != ready.Snapshot || aborted.Tree != ready.Tree || aborted.Digest != ready.Digest {

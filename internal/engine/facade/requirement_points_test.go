@@ -69,7 +69,8 @@ func TestCheckpointGateUsesCompletedRequirementPoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
+	ensureEditableConfiguration(t, root)
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "validation", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
 	if err != nil {
 		t.Fatal(err)
 	}

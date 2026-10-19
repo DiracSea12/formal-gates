@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "ask": ["mcp__git__git_status"]
+  }
+}

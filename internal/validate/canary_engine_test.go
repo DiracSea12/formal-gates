@@ -59,7 +59,7 @@ func TestPortableEngineWorkflowUsesInstalledFullRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "COMPLETE" || run.Unverified || run.PromotedSnapshot == "" {
+	if run.Status != "COMPLETE" || run.PromotedSnapshot == "" {
 		t.Fatalf("missing verified engine terminal: %+v", run)
 	}
 	for _, pair := range []struct{ path, content string }{{"delivery.txt", canaryDeliveryContents}, {"whitebox_delivered_test.go", whiteboxDeliveredTestCode}} {

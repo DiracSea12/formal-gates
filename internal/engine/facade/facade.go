@@ -72,7 +72,6 @@ type StartRequest struct {
 	NativeHandle              vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
 	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
-	Route                     string                    `json:"route"`
 	Provider                  string                    `json:"provider,omitempty"`
 	PackageDigest             string                    `json:"packageDigest"`
 	InstalledTargetIdentity   string                    `json:"installedTargetIdentity"`
@@ -95,6 +94,7 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	NodeStates           []protocol.ExecutionNodeState        `json:"nodeStates,omitempty"`
 	Configuration        protocol.ConfigurationSelection      `json:"configuration"`
 	FlowSelection        *protocol.FlowSelection              `json:"flowSelection,omitempty"`
 	FlowNodes            []FlowNodeFace                       `json:"flowNodes,omitempty"`
@@ -122,12 +122,10 @@ type Run struct {
 	EndedAttempts        map[runtime.TaskKey]protocol.Attempt `json:"endedAttempts,omitempty"`
 	RunID                string                               `json:"runId"`
 	Runtime              string                               `json:"runtime"`
-	Route                string                               `json:"route"`
 	Status               string                               `json:"status"`
 	Revision             uint64                               `json:"revision"`
 	Envelope             Envelope                             `json:"envelope"`
-	// BaseSnapshot 是 regular 路线经 Git provider 校验过的不可变基线；lightweight
-	// 恒空（无 VCS 语义）。
+	// BaseSnapshot 是经 Git provider 校验过的不可变基线。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
 	// PromotedSnapshot 是 validation 完成后由候选晋升收据绑定的交付快照。
 	PromotedSnapshot string `json:"promotedSnapshot,omitempty"`
@@ -166,7 +164,6 @@ type Run struct {
 	// 受理前（包络未就位）为 nil。
 	GuardBudget *protocol.GuardBudget `json:"guardBudget,omitempty"`
 	SummaryPath string                `json:"summaryPath,omitempty"`
-	Unverified  bool                  `json:"unverified,omitempty"`
 }
 
 // PendingRequirementAskFace 是未决需求变化 Ask 的公开面：请求身份、选项、
@@ -186,14 +183,12 @@ type PendingRequirementAskFace struct {
 // 选项与投影时按当前 revision 即时求值的 freshness token。PendingAsk 为
 // 唯一权威，本面只读投影。
 type PendingAskFace struct {
-	Configuration *protocol.ConfigurationSelection  `json:"configuration,omitempty"`
-	Execution     *protocol.ExecutionSelection      `json:"execution,omitempty"`
-	Continuation  *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
-	Validation    *protocol.ValidationRequest       `json:"validation,omitempty"`
-	RoundGrant    *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
-	RequestID     string                            `json:"requestId"`
-	Control       protocol.ControlKind              `json:"control"`
-	Options       []protocol.AskOption              `json:"options"`
+	Continuation *protocol.NodeContinuationPreview `json:"continuation,omitempty"`
+	Validation   *protocol.ValidationRequest       `json:"validation,omitempty"`
+	RoundGrant   *protocol.ReviewGrantRequest      `json:"roundGrant,omitempty"`
+	RequestID    string                            `json:"requestId"`
+	Control      protocol.ControlKind              `json:"control"`
+	Options      []protocol.AskOption              `json:"options"`
 	// RouteGates 是 SELECT_ROUTE Ask 钉住的候选门全集的只读投影（其余
 	// 控制为空）：用户据此所见全集提交决定。
 	RouteGates []string `json:"routeGates,omitempty"`
@@ -387,7 +382,6 @@ type TerminalSummary struct {
 	NotGuaranteed       bool                                 `json:"notGuaranteed,omitempty"`
 	RunID               string                               `json:"runId"`
 	Runtime             string                               `json:"runtime"`
-	Route               string                               `json:"route"`
 	Status              string                               `json:"status"`
 	Revision            uint64                               `json:"revision"`
 	Envelope            Envelope                             `json:"envelope"`
@@ -395,7 +389,6 @@ type TerminalSummary struct {
 	Next                decision.NextResult                  `json:"next"`
 	Cost                *cost.RunCost                        `json:"cost,omitempty"`
 	GuardBudget         *protocol.GuardBudget                `json:"guardBudget,omitempty"`
-	Unverified          bool                                 `json:"unverified,omitempty"`
 	CompletedAt         string                               `json:"completedAt"`
 	// Owner 区间端点随终态摘要留存，供 engine run 判定区间相交。
 	// endedAt 在终态 owner 协调锁段内与量取同时点盖下。
@@ -428,8 +421,7 @@ type StartOptions struct {
 	// Owner 是主代理（owner）计量来源声明（transcript＋provider，两者同
 	// 时非空才承诺 owner 计量；REQ-012）。
 	Owner OwnerBinding
-	// VCSRunner 注入 regular 路线快照校验用的 Git 命令 runner（测试替身；
-	// nil＝生产 exec）。lightweight 不消费它。
+	// VCSRunner 注入快照校验用的 Git 命令 runner（测试替身；nil＝生产 exec）。
 	VCSRunner    vcs.Runner
 	RuntimeFiles vcs.RuntimeFiles
 }
@@ -461,8 +453,7 @@ type Facade struct {
 	definition *compiler.CompiledDefinition
 	capacity   int
 	// vcsRunner 是注入的 Git 命令 runner（测试替身）；vcs 是绑定 run 根的
-	// provider，regular 路线启动校验、终态快照边界与登记制共用。lightweight
-	// 不引入 VCS 依赖，两者为 nil。
+	// provider，启动校验、终态快照边界与登记制共用。
 	vcsRunner    vcs.Runner
 	vcs          *vcs.Provider
 	runtimeFiles vcs.RuntimeFiles
@@ -499,14 +490,24 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if !validRunID(req.RunID) {
 		return nil, Run{}, fmt.Errorf("engine start: run id %q is invalid", req.RunID)
 	}
-	if strings.TrimSpace(req.Route) == "" {
-		return nil, Run{}, fmt.Errorf("engine start: route is required; choose regular or lightweight")
+	effective := options.Settings
+	if effective == nil {
+		if sliceStart != nil {
+			return nil, Run{}, fmt.Errorf("child requires inherited settings")
+		}
+		loaded, err := StartConfiguration(root, options.Configuration)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		effective = &loaded
 	}
-	if req.Route != "lightweight" && req.Route != "regular" {
-		return nil, Run{}, fmt.Errorf("engine start: unsupported route %q", req.Route)
-	}
-	if err := protocol.ValidateFlowSelection(req.FlowSelection); err != nil {
-		return nil, Run{}, err
+	if sliceStart == nil {
+		if req.FlowSelection != nil {
+			return nil, Run{}, fmt.Errorf("start node overrides are not supported; edit the selected configuration")
+		}
+		if err := ValidateStartConfiguration(effective.Configuration); err != nil {
+			return nil, Run{}, err
+		}
 	}
 	runUnlock, err := coordination.AcquireRun(root, req.RunID)
 	if err != nil {
@@ -528,17 +529,16 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	} else if !os.IsNotExist(statErr) {
 		return nil, Run{}, statErr
 	}
-	if req.Route == "regular" && strings.TrimSpace(req.BaseSnapshot) == "" {
-		return nil, Run{}, fmt.Errorf("engine start: regular route requires an immutable native base snapshot")
+	if strings.TrimSpace(req.BaseSnapshot) == "" {
+		return nil, Run{}, fmt.Errorf("engine start: an immutable native base snapshot is required")
 	}
-	// regular 路线要求 BaseSnapshot 可复现且是原生 HEAD 的祖先或相等。
-	// lightweight 不引入 VCS 依赖。
+	// BaseSnapshot 必须可复现且是原生 HEAD 的祖先或相等。
 	var vcsProvider *vcs.Provider
 	var initialSnapshot string
 	if nativeRoot == "" {
 		nativeRoot = root
 	}
-	if req.Route == "regular" && sliceStart == nil {
+	if sliceStart == nil {
 		vcsProvider = vcs.NewNative(root, req.VCS, options.VCSRunner).WithRuntimeFiles(options.RuntimeFiles).At(nativeRoot, req.NativeHandle)
 		current, err := vcsProvider.Resolve()
 		if err != nil {
@@ -623,28 +623,6 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if options.Capacity < 0 {
 		return nil, Run{}, fmt.Errorf("engine start: capacity must be non-negative")
 	}
-	effective := options.Settings
-	if effective == nil && sliceStart != nil {
-		return nil, Run{}, fmt.Errorf("engine start: child requires inherited settings")
-	}
-	if effective == nil {
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return nil, Run{}, homeErr
-		}
-		loaded, configurations, loadErr := settings.LoadConfigurations(root, home)
-		if loadErr != nil {
-			return nil, Run{}, loadErr
-		}
-		if options.Configuration != "" {
-			selected, err := settings.SelectConfiguration(configurations, options.Configuration)
-			if err != nil {
-				return nil, Run{}, err
-			}
-			loaded.ConfigurationName, loaded.Configuration, loaded.ConfigurationSource = selected.Name, selected.Configuration, selected.Source
-		}
-		effective = &loaded
-	}
 	if options.Capacity != 0 {
 		copy := *effective
 		copy.Values.Capacity = options.Capacity
@@ -652,7 +630,8 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		copy.Sources["capacity"] = "start option"
 		effective = &copy
 	}
-	if req.FlowSelection == nil {
+	// A child carries the master's flow selection in its start binding.
+	if req.FlowSelection == nil && sliceStart == nil {
 		req.FlowSelection = effective.Configuration.FlowSelection
 	}
 	options.Capacity = effective.Values.Capacity
@@ -697,7 +676,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if sliceStart != nil {
 		confirmation = *sliceStart.Binding.InheritedIntake
 	}
-	activation, err := initialGuarantee(root, req.Route, confirmation)
+	activation, err := initialGuarantee(root, confirmation)
 	if err != nil {
 		return nil, Run{}, err
 	}
@@ -710,13 +689,40 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 		}
 	}
 	if options.Confirm != nil {
-		if err := options.Confirm(map[string]any{"root": root, "runId": req.RunID, "route": req.Route, "vcs": req.VCS, "baseSnapshot": req.BaseSnapshot, "flowSelection": req.FlowSelection, "configuration": frozen.Configuration, "materials": initialMaterials}); err != nil {
+		if err := options.Confirm(map[string]any{"root": root, "runId": req.RunID, "vcs": req.VCS, "baseSnapshot": req.BaseSnapshot, "flowSelection": req.FlowSelection, "configuration": frozen.Configuration, "materials": initialMaterials}); err != nil {
 			return nil, Run{}, err
 		}
 		if err := validateArtifactBindings(options.ArtifactRoot, req.IntakeConfirmationReceipt); err != nil {
 			return nil, Run{}, err
 		}
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, Run{}, err
+	}
+	releaseConfigurations, err := settings.LockConfigurations(root, home)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	defer releaseConfigurations()
+	// Confirmation carries the selected name, not a library lease.
+	// Keep the exact name resolvable through the binding's durable commit.
+	if strings.TrimSpace(frozen.ConfigurationName) == "" {
+		return nil, Run{}, fmt.Errorf("engine start: configuration binding name is required")
+	}
+	currentConfiguration, err := configurationLibrary(root)(frozen.ConfigurationName)
+	if err != nil {
+		return nil, Run{}, fmt.Errorf("engine start: %w", err)
+	}
+	if sliceStart == nil {
+		// The library value is re-read and re-validated at commit so a stale
+		// confirmation cannot start a run the current selection cannot support.
+		if err := ValidateStartConfiguration(currentConfiguration); err != nil {
+			return nil, Run{}, err
+		}
+		req.FlowSelection = currentConfiguration.FlowSelection
+	}
+	frozen.Configuration = currentConfiguration
 	intentPath := startIntentPath(root, req.RunID)
 	// The admitted prefix is one bounded local write window. The intent carries
 	// its own binding so recovery and failed-start cleanup cannot adopt a caller.
@@ -776,7 +782,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
-	eng, err := protocol.New(store, protocol.Config{FlowSelection: req.FlowSelection, Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID)})
+	eng, err := protocol.New(store, protocol.Config{FlowSelection: req.FlowSelection, Settings: &frozen, VCSName: req.VCS, NativeHandle: req.NativeHandle, RequirementGuarantee: activation, NativeRoot: nativeRoot, Definition: cd, Registry: reg, Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admission), WorkerExecution: workerExecutionBridge(root, req.RunID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admission.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, Run{}, cleanupFailedStart(err)
 	}
@@ -824,7 +830,7 @@ func initializeRun(eng *protocol.Engine, root string, req StartRequest, initialS
 			return err
 		}
 	}
-	if err := eng.InitWithMetadata(view, req.Provider, protocol.Observation{}, req.RunID, req.Route, &req.IntakeConfirmationReceipt, req.BaseSnapshot, initialSnapshot, sliceStart); err != nil {
+	if err := eng.InitWithMetadata(view, req.Provider, protocol.Observation{}, req.RunID, &req.IntakeConfirmationReceipt, req.BaseSnapshot, initialSnapshot, sliceStart); err != nil {
 		return err
 	}
 	// owner 区间扫描、标记与 token cap 绑定在 lockOwnerCost 内执行，
@@ -953,7 +959,7 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	if !admission.matchesRoot(root) {
 		return nil, fmt.Errorf("UNREGISTERED_INSTALL: run root does not match its admitted root")
 	}
-	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: capacity, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID)})
+	eng, err := protocol.New(store, protocol.Config{VCSName: req.VCS, NativeHandle: req.NativeHandle, NativeRoot: nativeRoot, Definition: cd, Registry: definition.Registry(), Capacity: capacity, CostSource: CostSourceBridge(root, runID), ClaimDispatch: dispatchClaimBridge(root, runID, admission), WorkerExecution: workerExecutionBridge(root, runID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admission.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, err
 	}
@@ -965,9 +971,9 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	return f, nil
 }
 
-// Drive performs Observe → Decide → SelectIssued.  Lightweight runs record
-// the intake receipt on the first call, settle deterministic steps, and retain
-// an immutable Complete summary.
+// Drive performs Observe → Decide → SelectIssued.  A run whose enabled nodes
+// leave no issued work settles deterministic steps and retains an immutable
+// Complete summary.
 func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
@@ -1084,8 +1090,6 @@ func (f *Facade) driveInWindow() (Run, error) {
 		if err != nil {
 			return Run{}, err
 		}
-	} else if snap.State.Route == "lightweight" {
-		_, err = f.engine.CompleteAll(protocol.Observation{})
 	} else {
 		for {
 			if err := f.syncReleasedChildren(nil); err != nil {
@@ -1133,8 +1137,8 @@ func (f *Facade) driveInWindow() (Run, error) {
 		}
 	}
 	// Native delivery has one verifier. A child freezes a recoverable checkpoint;
-	// an ordinary regular run seals. An abort consumes its existing decision.
-	if plan != nil && plan.Next.Kind == decision.KindComplete && snap.State.Route != "lightweight" {
+	// an ordinary run seals. An abort consumes its existing decision.
+	if plan != nil && plan.Next.Kind == decision.KindComplete {
 		currentSnapshot = nil
 		current, loadErr := f.engine.Load()
 		if loadErr != nil {
@@ -1182,12 +1186,12 @@ func (f *Facade) driveInWindow() (Run, error) {
 		if run, err = f.project(nil); err != nil {
 			return Run{}, err
 		}
-		// 终态快照边界（regular COMPLETE）：发布前后双 resolve 核验原生身份恒等。
+		// 终态快照边界（COMPLETE）：发布前后双 resolve 核验原生身份恒等。
 		snapshotGuard, err := f.terminalSnapshotGuard(run)
 		if err != nil {
 			return Run{}, err
 		}
-		if run.Route == "lightweight" || run.Status == "ABORTED" || run.Status == "COMPLETE" && run.Termination.NativeRoot != "" {
+		if run.Status == "ABORTED" || run.Status == "COMPLETE" && run.Termination.NativeRoot != "" {
 			if err := f.finalizeTerminal(run, interval); err != nil {
 				return Run{}, err
 			}
@@ -1277,7 +1281,7 @@ func (f *Facade) sealDelivered() error {
 // worktree and its baseline ancestry. Both seal and child checkpoint use it.
 func (f *Facade) verifyDelivered() (string, string, error) {
 	if f.vcs == nil {
-		return "", "", fmt.Errorf("engine delivery: regular run %q has no native VCS provider for delivery verification", f.runID)
+		return "", "", fmt.Errorf("engine delivery: run %q has no native VCS provider for delivery verification", f.runID)
 	}
 	snap, err := f.engine.Load()
 	if err != nil {
@@ -1407,10 +1411,12 @@ func (f *Facade) publishSliceReceipt(receipt *protocol.SliceReceipt) error {
 // Submit serializes new typed events with native execution. Exact accepted
 // replay stays read-only; waiting callers consult the current ledger again.
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
-	return f.submit(event)
+	return f.submit(event, "")
 }
 
-func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) {
+// submit 落账展示事件；confirmationSource 是本次决定事件经宿主确认的通道
+// （空值=交互表单或未确认），只随确认链进入 DECIDE 的接纳回执。
+func (f *Facade) submit(event protocol.Event, confirmationSource string) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
@@ -1436,22 +1442,6 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return accepted, run, err
 	}
 	var observation protocol.Observation
-	if event.Request != nil && event.Request.Execution != nil {
-		if err := f.validateExecutionSelection(event.Request.Execution); err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
-	}
-	if event.Decide != nil && event.Decide.Execution != nil {
-		snap, err := f.engine.Load()
-		if err != nil {
-			return protocol.Acceptance{}, Run{}, err
-		}
-		if selection := snap.State.PendingAsks[string(event.Decide.Request)].Execution; selection != nil {
-			if err := f.validateExecutionSelection(selection); err != nil {
-				return protocol.Acceptance{}, Run{}, err
-			}
-		}
-	}
 	if event.Request != nil && event.Request.Control == protocol.ControlReset {
 		snap, err := f.engine.Load()
 		if err != nil {
@@ -1459,7 +1449,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		}
 		preview := snap.State.ResetPreview()
 		preview.Work = snap.State.RequirementWork(f.definition)
-		intake, err := prepareConfirmedIntake(f.root, snap.State.CurrentIntakeConfirmation(), snap.State.Route != "lightweight")
+		intake, err := prepareConfirmedIntake(f.root, snap.State.CurrentIntakeConfirmation(), true)
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
@@ -1512,7 +1502,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			}
 		}
 	}
-	if event.Request != nil && (event.Request.Control == protocol.ControlContinueNode || event.Request.Configuration != nil) || event.Decide != nil && (event.Decide.Continuation != nil || event.Decide.Review != nil && event.Decide.Review.Route != nil && event.Decide.Review.Route.Configuration != nil) {
+	if event.Request != nil && event.Request.Control == protocol.ControlContinueNode || event.Decide != nil && event.Decide.Continuation != nil {
 		parent, err := f.nodeParentSnapshot()
 		if err != nil {
 			return protocol.Acceptance{}, Run{}, err
@@ -1532,6 +1522,7 @@ func (f *Facade) submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			return protocol.Acceptance{}, Run{}, err
 		}
 	}
+	observation.Confirmation = confirmationSource
 	acceptance, err := f.engine.Submit(event, observation)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err
@@ -1649,9 +1640,8 @@ func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
 		return Run{}, err
 	}
 	snap, plan, work := projection.Snapshot, projection.Plan, projection.RequirementWork
-	// COMPLETE 的单一权威是引擎 phase TERMINAL：regular 的 decide 边界在
-	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复），lightweight 的
-	// CompleteAll 已在引擎内相变。
+	// COMPLETE 的单一权威是引擎 phase TERMINAL：decide 的 COMPLETE 边界在
+	// SealTerminal 相变前保持 ACTIVE（交付核验失败可恢复）。
 	status := "ACTIVE"
 	if snap.State.Phase == runtime.PhaseFinalizingCleanup && snap.State.CleanupEligible(f.definition) {
 		status = "FINALIZING_CLEANUP"
@@ -1678,6 +1668,7 @@ func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
 		return Run{}, err
 	}
 	run := Run{
+		NodeStates:                 projection.ExecutionNodes,
 		FlowSelection:              snap.State.FlowSelection,
 		FlowNodes:                  flowNodeFaces(snap.State),
 		ExecutionNodes:             executionNodeFaces(snap.State),
@@ -1697,7 +1688,6 @@ func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
 		EndedAttempts:              snap.State.EndedAttempts,
 		RunID:                      f.runID,
 		Runtime:                    RuntimeEngine,
-		Route:                      snap.State.Route,
 		Status:                     status,
 		Revision:                   snap.Revision,
 		Envelope:                   f.envelope,
@@ -1713,7 +1703,6 @@ func (f *Facade) project(snapshot *protocol.Snapshot) (Run, error) {
 		SliceReceipts:              snap.State.SliceReceipts,
 		GuardBudget:                snap.State.Guard,
 		SummaryPath:                filepath.Join(f.stateDir, "terminal-summary.json"),
-		Unverified:                 snap.State.Route == "lightweight",
 	}
 	if status == "SLICE_READY" {
 		run.SummaryPath = ""
@@ -1836,16 +1825,14 @@ func (f *Facade) pendingAskFaces(snap protocol.Snapshot) []PendingAskFace {
 			token = ""
 		}
 		faces = append(faces, PendingAskFace{
-			Execution:     ask.Execution,
-			Continuation:  ask.Continuation,
-			Validation:    ask.Validation,
-			RequestID:     id,
-			RoundGrant:    ask.RoundGrant,
-			Control:       ask.Control,
-			Options:       append([]protocol.AskOption{}, ask.Options...),
-			RouteGates:    ask.RouteGates,
-			Configuration: ask.Configuration,
-			Token:         token,
+			Continuation: ask.Continuation,
+			Validation:   ask.Validation,
+			RequestID:    id,
+			RoundGrant:   ask.RoundGrant,
+			Control:      ask.Control,
+			Options:      append([]protocol.AskOption{}, ask.Options...),
+			RouteGates:   ask.RouteGates,
+			Token:        token,
 		})
 	}
 	return faces
@@ -1864,13 +1851,9 @@ func terminalSummaryPath(stateDir string) string {
 	return filepath.Join(stateDir, "terminal-summary.json")
 }
 
-// reopenVCSProvider 是重开 run 的 provider 构造：regular 路线用生产 exec
-// runner（重开没有注入替身的通道，exec 是唯一合法生产形态）；lightweight 无
-// VCS 语义，返回 nil。
-func reopenVCSProvider(root, route string, names ...string) *vcs.Provider {
-	if route != "regular" {
-		return nil
-	}
+// reopenVCSProvider 是重开 run 的 provider 构造：生产 exec runner（重开没有
+// 注入替身的通道，exec 是唯一合法生产形态）。
+func reopenVCSProvider(root string, names ...string) *vcs.Provider {
 	name := "git"
 	if len(names) != 0 {
 		name = names[0]
@@ -1883,7 +1866,7 @@ func terminalIntentPath(stateDir string) string {
 }
 
 func summaryForRun(run Run, interval ownerInterval) TerminalSummary {
-	return TerminalSummary{Settings: run.Settings, LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerTranscript: interval.transcript, OwnerStartedAt: interval.startedAt, OwnerEndedAt: interval.endedAt}
+	return TerminalSummary{Settings: run.Settings, LastEvent: run.lastEvent, RunID: run.RunID, Runtime: run.Runtime, Status: run.Status, Termination: run.Termination, ValidationDecisions: run.ValidationDecisions, ValidationRequests: run.ValidationRequests, NotGuaranteed: run.NotGuaranteed, Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Cost: run.Cost, GuardBudget: run.GuardBudget, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnerTranscript: interval.transcript, OwnerStartedAt: interval.startedAt, OwnerEndedAt: interval.endedAt}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -1895,7 +1878,7 @@ func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
 		}
 		// A terminal summary is immutable. Repeated drive/replay calls return
 		// the already committed bytes and never refresh CompletedAt.
-		if existing.RunID == summary.RunID && existing.Status == summary.Status && existing.Revision == summary.Revision && existing.Envelope == summary.Envelope && existing.Unverified == summary.Unverified {
+		if existing.RunID == summary.RunID && existing.Status == summary.Status && existing.Revision == summary.Revision && existing.Envelope == summary.Envelope {
 			return nil
 		}
 		return fmt.Errorf("engine terminal summary conflicts with completed run")
@@ -1942,7 +1925,7 @@ func (f *Facade) terminalEvidenceComplete(summary TerminalSummary) bool {
 		record, ok := s.AbortEvent()
 		return ok && summary.Status == "ABORTED" && summary.LastEvent != nil && record.Digest == summary.LastEvent.Digest && reflect.DeepEqual(record.Acceptance, summary.LastEvent.Acceptance)
 	}
-	return summary.Status == "COMPLETE" && (s.Route == "lightweight" || s.DeliveryComplete(f.definition))
+	return summary.Status == "COMPLETE" && s.DeliveryComplete(f.definition)
 }
 
 // recoverTerminalIntent finishes terminal cleanup from its durable intent.
@@ -2084,7 +2067,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, Unverified: summary.Unverified, SummaryPath: ""}
+	run := Run{Settings: summary.Settings, lastEvent: summary.LastEvent, Termination: summary.Termination, ValidationDecisions: summary.ValidationDecisions, ValidationRequests: summary.ValidationRequests, NotGuaranteed: summary.NotGuaranteed, RunID: summary.RunID, Runtime: summary.Runtime, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Cost: summary.Cost, GuardBudget: summary.GuardBudget, SummaryPath: ""}
 	if s := summary.Termination; s != nil {
 		run.Configuration = s.EffectiveConfiguration()
 		run.FlowSelection = s.FlowSelection
@@ -2216,6 +2199,9 @@ func IntakeDigest(receipt IntakeConfirmationReceipt) (string, error) {
 func validateConfirmation(receipt IntakeConfirmationReceipt) error {
 	if receipt.Source != DefaultIntakeSource || receipt.Authority != DefaultIntakeAuthority || receipt.Transport != DefaultIntakeTransport {
 		return fmt.Errorf("%s: source, authority or transport is not the fixed stable launcher binding", InvalidIntakeConfirmation)
+	}
+	if receipt.Confirmation != "" && receipt.Confirmation != string(host.ConfirmationHostPermission) {
+		return fmt.Errorf("%s: confirmation channel %q is not a native host channel", InvalidIntakeConfirmation, receipt.Confirmation)
 	}
 	if strings.TrimSpace(receipt.RequirementSource) == "" || strings.TrimSpace(receipt.RequirementRevision) == "" || strings.TrimSpace(receipt.SolutionRevision) == "" || strings.TrimSpace(receipt.SolutionDigest) == "" {
 		return fmt.Errorf("%s: requirement and solution bindings are required", InvalidIntakeConfirmation)
@@ -2600,13 +2586,6 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...proto
 	if err != nil {
 		return nil, err
 	}
-	selection := snapshot.State.FlowSelection
-	if route.Configuration != nil {
-		selection = route.Configuration.Configuration.FlowSelection
-	}
-	if selection != nil && slices.Contains(selection.Disabled, "development") {
-		return nil, nil
-	}
 	if len(topology) == 0 && route.DevelopmentPlan == nil {
 		if child := snapshot.State.SliceChild; child != nil {
 			parent, err := Open(f.root, child.MasterRunID, f.runtimeFiles)
@@ -2631,15 +2610,11 @@ func (f *Facade) DevelopmentPlan(route protocol.RouteDecision, topology ...proto
 }
 
 func reopenNativeProvider(configRoot, root string, req StartRequest) *vcs.Provider {
-	p := reopenVCSProvider(configRoot, req.Route, req.VCS)
-	if p == nil {
-		return nil
-	}
-	return p.At(root, req.NativeHandle)
+	return reopenVCSProvider(configRoot, req.VCS).At(root, req.NativeHandle)
 }
 
 // stateSettings adds the existing cost owner's cap only to disposable settings
-// views. The frozen state configuration never carries a second control value.
+// views. Frozen Values do not carry a second token-cap control value.
 func stateSettings(state *protocol.State) *settings.Effective {
 	if state.Settings == nil {
 		return nil

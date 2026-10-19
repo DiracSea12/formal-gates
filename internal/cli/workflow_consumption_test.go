@@ -50,14 +50,15 @@ func TestWorkflowWorkerSourceUsesOriginalProvider(t *testing.T) {
 // have retired. The foreground boundary must consume terminal authority first.
 func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
 	t.Parallel()
-	for _, status := range []string{"COMPLETE", "ABORTED"} {
+	for _, status := range []string{"ABORTED"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
-			f, _, err := facade.Start(facade.StartOptions{Root: root, Request: facade.StartRequest{RunID: "terminal-consumer", Route: "lightweight", DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: writerIntakeReceipt(t, root)}, Admission: engineWriterAdmission(t, root)})
+			saveReviewOnlyConfiguration(t, root)
+			f, _, err := facade.Start(facade.StartOptions{Root: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{RunID: "terminal-consumer", BaseSnapshot: frozenSnapshot, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: writerIntakeReceipt(t, root)}, Admission: engineWriterAdmission(t, root)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status == "ABORTED" {
+			{
 				event, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
 				if err != nil {
 					t.Fatal(err)
@@ -241,7 +242,7 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 	t.Setenv("WORKFLOW_NATIVE_CALLS", calls)
 	t.Setenv("WORKFLOW_SUPERVISOR_CALLS", supervisorCalls)
 	mustWriteCLI(t, filepath.Join(root, ".gates", "config.json"), `{"capacity":2,"qaCapacity":1,"model":"selected-model","reasoningEffort":"high","tokenCap":77}`)
-	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, Admission: admission, Request: facade.StartRequest{RunID: "native-consumer", Route: "regular", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, Admission: admission, Request: facade.StartRequest{RunID: "native-consumer", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}

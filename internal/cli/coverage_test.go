@@ -13,7 +13,7 @@ func coverageCLIFixture(t *testing.T) (coverage.CoverageContract, []coverage.Rev
 	t.Helper()
 	sourceBinding := coverage.SourceBinding{RunID: "run-cli", RequirementRevision: "req-cli", SolutionRevision: "sol-cli"}
 	required := coverage.RequiredSources{Binding: sourceBinding, Sources: []coverage.RequiredSource{{SourceID: "REQ-CLI", Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability}}}
-	manifestBinding := coverage.ManifestBinding{SourceBinding: sourceBinding, ReviewKind: coverage.ReviewBlackbox, RouteScope: "regular", TopologyScope: "master"}
+	manifestBinding := coverage.ManifestBinding{SourceBinding: sourceBinding, ReviewKind: coverage.ReviewBlackbox, RouteScope: "route-scope", TopologyScope: "master"}
 	manifest := coverage.AcceptanceManifest{
 		Binding: manifestBinding,
 		Sources: []string{"REQ-CLI"},

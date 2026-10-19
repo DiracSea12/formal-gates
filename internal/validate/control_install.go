@@ -17,17 +17,11 @@ const controlTOMLStart = "# formal-gates:control:start"
 const controlTOMLEnd = "# formal-gates:control:end"
 
 func controlConfigPath(target installTarget) string {
-	base := filepath.Dir(filepath.Dir(target.targetPath))
-	switch target.host {
-	case "codex":
-		return filepath.Join(base, "config.toml")
-	case "zcode":
-		if target.hookConfig != "" {
-			return target.hookConfig
-		}
-		return filepath.Join(base, "config.json")
+	adapter, err := platformAdapterFor(target.host)
+	if err != nil || adapter.controlPath == nil {
+		return ""
 	}
-	return ""
+	return adapter.controlPath(target)
 }
 
 func configureControlServer(target installTarget, remove bool) (bool, error) {
@@ -35,9 +29,11 @@ func configureControlServer(target installTarget, remove bool) (bool, error) {
 	if path == "" {
 		return false, nil
 	}
-	if target.host == "zcode" {
-		return configureZCodeControl(target, path, remove)
-	}
+	adapter, _ := platformAdapterFor(target.host)
+	return adapter.configureControl(target, path, remove)
+}
+
+func configureCodexControl(target installTarget, path string, remove bool) (bool, error) {
 	before, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -62,77 +58,89 @@ func configureControlServer(target installTarget, remove bool) (bool, error) {
 		if text != "" && !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
-		text += controlTOMLStart + "\n[mcp_servers.formal-gates]\ncommand = " + strconv.Quote(filepath.ToSlash(targetLauncherPath(target))) + "\nargs = [\"workflow\", \"serve\"]\n" + controlTOMLEnd + "\n"
+		text += controlTOMLStart + "\n[mcp_servers.formal-gates]\ncommand = " + strconv.Quote(filepath.ToSlash(targetLauncherPath(target))) + "\nargs = [\"workflow\", \"serve\", \"--package-root\", " + strconv.Quote(filepath.ToSlash(target.targetPath)) + "]\n" + controlTOMLEnd + "\n"
 	}
 	return writeControlConfig(path, before, []byte(text))
 }
 
-func configureZCodeControl(target installTarget, path string, remove bool) (bool, error) {
-	before, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	config := map[string]any{}
-	if len(before) != 0 {
-		if err := json.Unmarshal(before, &config); err != nil || config == nil {
-			return false, fmt.Errorf("existing ZCode MCP configuration must be a JSON object: %s", path)
+// jsonServerControl configures the installer-owned MCP server entry inside a
+// JSON document. serversPath locates the server map (e.g. ["mcp","servers"]
+// or ["mcpServers"]) and entryType is the entry's transport type, empty when
+// the host does not declare one.
+func jsonServerControl(label string, serversPath []string, entryType string) func(installTarget, string, bool) (bool, error) {
+	return func(target installTarget, path string, remove bool) (bool, error) {
+		before, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
 		}
-	}
-	mcp, ok := config["mcp"].(map[string]any)
-	if config["mcp"] != nil && !ok {
-		return false, fmt.Errorf("existing ZCode MCP configuration has malformed mcp object: %s", path)
-	}
-	if mcp == nil {
-		mcp = map[string]any{}
-	}
-	servers, ok := mcp["servers"].(map[string]any)
-	if mcp["servers"] != nil && !ok {
-		return false, fmt.Errorf("existing ZCode MCP configuration has malformed servers object: %s", path)
-	}
-	if servers == nil {
-		servers = map[string]any{}
-	}
-	if _, present := servers[controlServerName]; remove && !present {
-		return false, nil
-	}
-	desired := map[string]any{"type": "stdio", "command": filepath.ToSlash(targetLauncherPath(target)), "args": []any{"workflow", "serve"}}
-	if existing, present := servers[controlServerName]; present {
-		entry, ok := existing.(map[string]any)
-		if !ok || entry["command"] != desired["command"] || !reflect.DeepEqual(entry["args"], desired["args"]) {
-			if remove {
-				return false, nil
-			}
-			return false, fmt.Errorf("MCP server %q in %s is not owned by this installation", controlServerName, path)
-		}
-		for key, value := range entry {
-			if _, owned := desired[key]; !owned {
-				desired[key] = value
+		config := map[string]any{}
+		if len(before) != 0 {
+			if err := json.Unmarshal(before, &config); err != nil || config == nil {
+				return false, fmt.Errorf("existing %s MCP configuration must be a JSON object: %s", label, path)
 			}
 		}
+		node := config
+		parents := []map[string]any{config}
+		for _, key := range serversPath {
+			child, ok := node[key].(map[string]any)
+			if node[key] != nil && !ok {
+				return false, fmt.Errorf("existing %s MCP configuration has malformed %s object: %s", label, key, path)
+			}
+			if child == nil {
+				child = map[string]any{}
+			}
+			node[key] = child
+			parents = append(parents, child)
+			node = child
+		}
+		servers := node
+		if _, present := servers[controlServerName]; remove && !present {
+			return false, nil
+		}
+		desired := map[string]any{"command": filepath.ToSlash(targetLauncherPath(target)), "args": []any{"workflow", "serve", "--package-root", filepath.ToSlash(target.targetPath)}}
+		if entryType != "" {
+			desired["type"] = entryType
+		}
+		if existing, present := servers[controlServerName]; present {
+			entry, ok := existing.(map[string]any)
+			if !ok || entry["command"] != desired["command"] || !ownControlArgs(entry["args"], desired["args"]) {
+				if remove {
+					return false, nil
+				}
+				return false, fmt.Errorf("MCP server %q in %s is not owned by this installation", controlServerName, path)
+			}
+			for key, value := range entry {
+				if _, owned := desired[key]; !owned {
+					desired[key] = value
+				}
+			}
+		}
+		if remove {
+			delete(servers, controlServerName)
+		} else {
+			servers[controlServerName] = desired
+		}
+		for i := len(serversPath); i > 0; i-- {
+			if len(parents[i]) == 0 {
+				delete(parents[i-1], serversPath[i-1])
+			}
+		}
+		if len(config) == 0 {
+			return writeControlConfig(path, before, nil)
+		}
+		desiredBytes, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		return writeControlConfig(path, before, append(desiredBytes, '\n'))
 	}
-	if remove {
-		delete(servers, controlServerName)
-	} else {
-		servers[controlServerName] = desired
-	}
-	if len(servers) == 0 {
-		delete(mcp, "servers")
-	} else {
-		mcp["servers"] = servers
-	}
-	if len(mcp) == 0 {
-		delete(config, "mcp")
-	} else {
-		config["mcp"] = mcp
-	}
-	if len(config) == 0 {
-		return writeControlConfig(path, before, nil)
-	}
-	desiredBytes, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return false, err
-	}
-	return writeControlConfig(path, before, append(desiredBytes, '\n'))
+}
+
+// ownControlArgs reports whether args matches an argument list this installer
+// accepts as its own control-server entry: bare "workflow serve" or the
+// desired slice.
+func ownControlArgs(args, desired any) bool {
+	return reflect.DeepEqual(args, desired) || reflect.DeepEqual(args, []any{"workflow", "serve"})
 }
 
 func writeControlConfig(path string, before, desired []byte) (bool, error) {

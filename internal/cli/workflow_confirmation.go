@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/harness"
 	"formal-gates/internal/host"
+	"formal-gates/internal/validate"
 )
 
 func confirmSavedFile(path string, confirm func(any) error) (func(any) error, error) {
@@ -39,6 +40,7 @@ func confirmSavedFile(path string, confirm func(any) error) (func(any) error, er
 
 func runWorkflowServe(args []string, streams IO) (int, error) {
 	flags := newFlagSet("workflow serve", streams)
+	packageRoot := flags.String("package-root", "", "installed formal-gates package root")
 	if code, err, done := parseFlagSet(flags, args, streams.Stdout); done {
 		return code, err
 	}
@@ -62,7 +64,7 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 		}
 		current := streams
 		current.owner = context.Owner
-		return callConfirmationTool(name, raw, current, confirm)
+		return callConfirmationTool(name, raw, current, confirm, *packageRoot)
 	}, nil), nil
 }
 
@@ -77,18 +79,19 @@ func confirmationTools() []any {
 	return []any{
 		tool("confirm_start", "Request native confirmation of the complete saved intake and start operation. The host's response directly starts the run.", map[string]any{
 			"root": root, "intake": position("Original intake position published by workflow start --precheck"),
-			"route":         map[string]any{"type": "string", "enum": []string{"regular", "lightweight"}},
-			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for a regular run; the program validates and displays it. Omitted uses the current native snapshot; lightweight ignores it."},
+			"summary":       map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
+			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for the run; the program validates and displays it. Omitted uses the current native snapshot."},
 			"vcs":           map[string]any{"type": "string", "description": "Native VCS name, using the existing workflow start selection when omitted."},
 			"configuration": map[string]any{"type": "string", "description": "Saved configuration name or displayed position"},
-			"disabledNodes": map[string]any{"type": "array", "items": position("Original node position published by workflow start --nodes")},
-		}, "intake", "route"),
+		}, "intake"),
 		tool("confirm_control", "Request native confirmation of an original saved control candidate. The host directly submits that exact candidate; no approval is returned for the agent to submit.", map[string]any{
 			"root": root, "run": position("Original top-level run position; may be omitted when only one run exists"),
+			"summary":   map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
 			"candidate": position("Original confirmationCandidate position published by workflow next or replan"),
 		}, "candidate"),
 		tool("confirm_native", "Request native confirmation and delivery of an original saved answer to the displayed pending host interaction.", map[string]any{
 			"root": root, "run": position("Original top-level run position; may be omitted when only one run exists"),
+			"summary":  map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
 			"child":    position("Original child position published by workflow show; omitted selects the master"),
 			"question": position("Original pending question position published by native show"),
 			"decision": position("Original saved decision position published by native respond"),
@@ -96,9 +99,20 @@ func confirmationTools() []any {
 	}
 }
 
-func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm func(any) error) (any, error) {
+func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm func(any) error, packageRoot string) (any, error) {
 	var output, errors bytes.Buffer
 	invocation := IO{Stdin: bytes.NewReader(nil), Stdout: &output, Stderr: &errors, Context: streams.Context, confirmation: confirm, owner: streams.owner}
+	// The serve's own installed package selects the host and its confirmation
+	// channel. A permission-gate host decides before the call arrives, so the
+	// arrived call is confirmed without an interactive form.
+	if admission, err := validate.ResolveEngineAdmission("", packageRoot); err == nil {
+		if descriptor, derr := host.Lookup(admission.Provider); derr == nil {
+			invocation.confirmationChannel = descriptor.Confirmation
+		}
+	}
+	if invocation.confirmationChannel == host.ConfirmationHostPermission {
+		invocation.confirmation = func(any) error { return nil }
+	}
 	rootPath := func(root string) (string, error) {
 		if root == "" {
 			root = "."
@@ -112,11 +126,10 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		var input struct {
 			Root          string `json:"root"`
 			Intake        int    `json:"intake"`
-			Route         string `json:"route"`
+			Summary       string `json:"summary"`
 			BaseSnapshot  string `json:"baseSnapshot"`
 			VCS           string `json:"vcs"`
 			Configuration string `json:"configuration"`
-			DisabledNodes []int  `json:"disabledNodes"`
 		}
 		if err := harness.StrictDecode(raw, &input); err != nil {
 			return nil, err
@@ -132,7 +145,7 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		if _, err := rand.Read(identity[:]); err != nil {
 			return nil, err
 		}
-		args = []string{"--root", root, "--run-id", fmt.Sprintf("run-%x", identity), "--intake", strconv.Itoa(input.Intake), "--route", input.Route}
+		args = []string{"--root", root, "--run-id", fmt.Sprintf("run-%x", identity), "--intake", strconv.Itoa(input.Intake)}
 		if input.BaseSnapshot != "" {
 			args = append(args, "--base-snapshot", input.BaseSnapshot)
 		}
@@ -142,14 +155,15 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		if input.Configuration != "" {
 			args = append(args, "--configuration", input.Configuration)
 		}
-		for _, node := range input.DisabledNodes {
-			args = append(args, "--disable-node", strconv.Itoa(node))
+		if packageRoot != "" {
+			args = append(args, "--package-root", packageRoot)
 		}
 		execute = runWorkflowStart
 	case "confirm_control":
 		var input struct {
 			Root      string `json:"root"`
 			Run       int    `json:"run"`
+			Summary   string `json:"summary"`
 			Candidate int    `json:"candidate"`
 		}
 		if err := harness.StrictDecode(raw, &input); err != nil {
@@ -168,6 +182,7 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 		var input struct {
 			Root     string `json:"root"`
 			Run      int    `json:"run"`
+			Summary  string `json:"summary"`
 			Child    int    `json:"child"`
 			Question int    `json:"question"`
 			Decision int    `json:"decision"`

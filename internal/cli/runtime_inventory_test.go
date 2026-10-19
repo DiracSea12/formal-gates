@@ -82,7 +82,7 @@ func TestInstalledRuntimeInventoryStaysOutsideOriginalProjectMaterials(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}, Request: facade.StartRequest{RunID: "inventory", Route: "regular", VCS: "git", Provider: admission.Provider, BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: intake.IntakeCandidate}})
+	f, run, err := facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}, Request: facade.StartRequest{RunID: "inventory", VCS: "git", Provider: admission.Provider, BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: intake.IntakeCandidate}})
 	if err != nil {
 		t.Fatal(err)
 	}

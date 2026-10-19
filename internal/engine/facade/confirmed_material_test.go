@@ -46,7 +46,7 @@ func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 2, Request: StartRequest{RunID: "confirmed-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: strings.TrimSpace(string(head)), DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "material-runtime", "sha256:package", "zcode")})
+	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 2, Request: StartRequest{RunID: "confirmed-material", Provider: "zcode", VCS: "git", BaseSnapshot: strings.TrimSpace(string(head)), DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "material-runtime", "sha256:package", "zcode")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestConfirmedMaterialsReachOriginalWorkerReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(run.WorkerMaterials) != 1 {
-		t.Fatalf("confirmed regular material did not activate original review: %+v", run.Next)
+		t.Fatalf("confirmed material did not activate original review: %+v", run.Next)
 	}
 	var ref WorkerMaterial
 	for _, value := range run.WorkerMaterials {
@@ -230,7 +230,7 @@ func TestSettledFindingReachesReadinessMaterial(t *testing.T) {
 		t.Fatal("typed intake differs from the standard document parser")
 	}
 	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 2,
-		Request:   StartRequest{RunID: "settled-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: identities[0], DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate},
+		Request:   StartRequest{RunID: "settled-material", Provider: "zcode", VCS: "git", BaseSnapshot: identities[0], DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate},
 		Admission: testAdmission(t, root, "material-runtime", "sha256:package", "zcode"),
 	})
 	if err != nil {

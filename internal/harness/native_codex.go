@@ -138,13 +138,7 @@ func codexToolSchemas(tools *nativeWorkspaceTools) ([]any, error) {
 	return listOf(plain), nil
 }
 
-func codexCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := codexResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return codexConfiguredBinding(settings.Values{Native: native})
-}
+var codexCaptureBinding = nativeCapture(codexResolvePaths, codexConfiguredBinding)
 
 func codexResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}

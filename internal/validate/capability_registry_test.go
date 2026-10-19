@@ -8,12 +8,15 @@ import (
 
 func TestHookCapabilityRegistryCoversEveryInstallableHost(t *testing.T) {
 	for _, descriptor := range host.All() {
-		if !descriptor.Installable || descriptor.Hook.Kind == "" {
+		if !descriptor.Installable {
 			continue
 		}
-		capability, ok := hookCapabilities[descriptor.Hook.Kind]
-		if !ok || capability.configure == nil || capability.remove == nil {
-			t.Fatalf("installable host %q has incomplete hook capability for kind %q", descriptor.ID, descriptor.Hook.Kind)
+		adapter, ok := platformAdapters[descriptor.ID]
+		if !ok || adapter.hook.configure == nil || adapter.hook.remove == nil {
+			t.Fatalf("installable host %q has incomplete hook capability", descriptor.ID)
+		}
+		if _, err := platformAdapterFor(descriptor.ID); err != nil {
+			t.Fatalf("installable host %q has no platform adapter: %v", descriptor.ID, err)
 		}
 	}
 }

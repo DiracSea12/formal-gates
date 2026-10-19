@@ -106,9 +106,9 @@ func admissionSource(t *testing.T) string {
 	return root
 }
 
-// admissionInstallProject performs the documented native install plus the
-// documented install --bootstrap maintenance entry for one project-scope
-// claude target, returning the admission identity workflow start needs.
+// admissionInstallProject performs the documented native install for one
+// project-scope claude target and returns the admission identity workflow
+// start needs. The install commits the bootstrap receipt admission requires.
 func admissionInstallProject(t *testing.T, source, project, registry, launcher string) (string, string) {
 	t.Helper()
 	report, err := Install(InstallOptions{
@@ -121,14 +121,8 @@ func admissionInstallProject(t *testing.T, source, project, registry, launcher s
 	if len(report.Targets) != 1 {
 		t.Fatalf("admission install reported %d targets: %+v", len(report.Targets), report)
 	}
-	if _, statErr := os.Stat(registry + ".bootstrap.json"); !os.IsNotExist(statErr) {
-		t.Fatalf("plain install committed a bootstrap receipt: %v", statErr)
-	}
-	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true,
-	}); err != nil {
-		t.Fatalf("admission documented bootstrap entry failed: %v", err)
+	if _, statErr := os.Stat(registry + ".bootstrap.json"); statErr != nil {
+		t.Fatalf("install did not commit the bootstrap receipt: %v", statErr)
 	}
 	return report.Targets[0].TargetPath, report.Targets[0].RegistryRecordID
 }
@@ -172,12 +166,13 @@ func admissionRecordByID(t *testing.T, document RegistryDocument, id string) Reg
 	return RegistryRecord{}
 }
 
-// TestFirstStartRequiresCommittedBootstrapReceipt pins
-// the documented first-start boundary: a normal install commits registry
-// records without a bootstrap receipt, and workflow start must hard-reject
-// (UNREGISTERED_INSTALL and no state) until
-// the documented install --bootstrap entry commits an accepted receipt.
-func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
+// TestInstallCommittedBootstrapReceipt pins the install admission boundary:
+// a normal install commits registry records plus a bootstrap receipt that
+// mirrors the committed active records, and workflow start accepts that
+// receipt directly. A missing, invalid, or unaccepted receipt still
+// hard-rejects (UNREGISTERED_INSTALL and no state), and the documented
+// install --bootstrap maintenance entry commits the same accepted receipt.
+func TestInstallCommittedBootstrapReceipt(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
@@ -191,18 +186,29 @@ func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetPath, recordID := report.Targets[0].TargetPath, report.Targets[0].RegistryRecordID
-	if _, err := os.Stat(registry + ".bootstrap.json"); !os.IsNotExist(err) {
-		t.Fatalf("plain install wrote bootstrap receipt: %v", err)
+	var receipt BootstrapReceipt
+	if err = json.Unmarshal(admissionRead(t, registry+".bootstrap.json"), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.Accepted || receipt.Operation != "bootstrap" {
+		t.Fatalf("install bootstrap receipt not committed: %+v", receipt)
 	}
 	runID := "admission-first-start"
+	if _, err := admissionStartCurrent(project, targetPath, registry, recordID, runID); err != nil {
+		t.Fatalf("install-committed bootstrap receipt did not admit start: %v", err)
+	}
+	rejectRunID := "admission-reject-start"
 	rejectStart := func(reason string) {
 		t.Helper()
-		if _, err := admissionStartCurrent(project, targetPath, registry, recordID, runID, "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") || !strings.Contains(err.Error(), reason) {
+		if _, err := admissionStartCurrent(project, targetPath, registry, recordID, rejectRunID); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") || !strings.Contains(err.Error(), reason) {
 			t.Fatalf("start did not reject %q: %v", reason, err)
 		}
-		if _, err := os.Stat(admissionEngineDirectory(project, runID)); !os.IsNotExist(err) {
+		if _, err := os.Stat(admissionEngineDirectory(project, rejectRunID)); !os.IsNotExist(err) {
 			t.Fatalf("rejected start created authority: %v", err)
 		}
+	}
+	if err := os.Remove(registry + ".bootstrap.json"); err != nil {
+		t.Fatal(err)
 	}
 	rejectStart("bootstrap receipt")
 	admissionWrite(t, registry+".bootstrap.json", "{not a receipt", 0600)
@@ -214,20 +220,97 @@ func TestFirstStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	if _, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true, Force: true}); err != nil {
 		t.Fatal(err)
 	}
-	var receipt BootstrapReceipt
 	if err = json.Unmarshal(admissionRead(t, registry+".bootstrap.json"), &receipt); err != nil {
 		t.Fatal(err)
 	}
 	if !receipt.Accepted || receipt.Operation != "bootstrap" {
 		t.Fatalf("bootstrap receipt not committed: %+v", receipt)
 	}
-	run, err := admissionStartCurrent(project, targetPath, registry, recordID, runID, "regular")
+	bootstrapRunID := "admission-bootstrap-start"
+	run, err := admissionStartCurrent(project, targetPath, registry, recordID, bootstrapRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := admissionCurrentRequest(t, project, runID)
-	if request.InstalledTargetIdentity != recordID || !isFile(filepath.Join(admissionEngineDirectory(project, runID), "state.json")) {
+	request := admissionCurrentRequest(t, project, bootstrapRunID)
+	if request.InstalledTargetIdentity != recordID || !isFile(filepath.Join(admissionEngineDirectory(project, bootstrapRunID), "state.json")) {
 		t.Fatalf("start lost admission identity: %+v %+v", run, request)
+	}
+}
+
+// TestReinstallBootstrapReceiptTracksCommittedRecords pins the regression
+// where install → uninstall → install, or install → install with a different
+// package digest, left a stale or missing bootstrap receipt that rejected
+// every admission. Each install now rewrites the receipt to mirror the
+// committed active records, so admission resolves after every cycle.
+func TestReinstallBootstrapReceiptTracksCommittedRecords(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	source := admissionSource(t)
+	variant := admissionSource(t)
+	admissionWrite(t, filepath.Join(variant, "README.md"), "reinstalled runtime variant\n", 0o600)
+	project := admissionGitProject(t)
+	isolated := t.TempDir()
+	registry := filepath.Join(isolated, "registry.json")
+	launcher := filepath.Join(isolated, "bin", nativeBinaryName())
+	// install → uninstall → install: a full uninstall removes the registry and
+	// receipt together; the reinstall must commit a fresh accepted receipt.
+	if _, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(registry + ".bootstrap.json"); !os.IsNotExist(err) {
+		t.Fatalf("uninstall left a stale bootstrap receipt: %v", err)
+	}
+	reinstalled, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordID := reinstalled.Targets[0].RegistryRecordID
+	if _, err := admissionStartCurrent(project, reinstalled.Targets[0].TargetPath, registry, recordID, "admission-reinstall-full"); err != nil {
+		t.Fatalf("reinstalled target was not admitted: %v", err)
+	}
+
+	// install → install with a different package digest: the second install
+	// must rewrite the receipt so its records match the newly committed
+	// digests.
+	upgraded, err := Install(InstallOptions{Source: variant, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upgraded.PackageDigest == reinstalled.PackageDigest {
+		t.Fatalf("variant source produced the same package digest: %s", upgraded.PackageDigest)
+	}
+	recordID = upgraded.Targets[0].RegistryRecordID
+	if _, err := admissionStartCurrent(project, upgraded.Targets[0].TargetPath, registry, recordID, "admission-reinstall-variant"); err != nil {
+		t.Fatalf("variant-digest reinstall was not admitted: %v", err)
+	}
+
+	// install → sibling partial-uninstall → install: a surviving sibling record
+	// keeps the registry receipt alive with the removed record's stale digest;
+	// the reinstall must rewrite it before admission resolves again.
+	if _, err := Install(InstallOptions{Source: source, Host: "codex", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(registry + ".bootstrap.json"); err != nil {
+		t.Fatalf("sibling-preserving uninstall removed the bootstrap receipt: %v", err)
+	}
+	siblingReinstall, err := Install(InstallOptions{Source: variant, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := fixtureRegisteredInvocation(registry, siblingReinstall.Targets[0].TargetPath, siblingReinstall.Targets[0].RegistryRecordID)
+	defer restore()
+	if _, err := ResolveEngineAdmissionByRecord(siblingReinstall.Targets[0].RegistryRecordID, registry); err != nil {
+		t.Fatalf("sibling-preserving reinstall was not admitted: %v", err)
 	}
 }
 
@@ -242,7 +325,7 @@ func TestEngineAdmissionPrecedesWorkerMaterial(t *testing.T) {
 	launcher := filepath.Join(isolated, "bin", nativeBinaryName())
 	target, recordID := admissionInstallProject(t, source, project, registry, launcher)
 	runID := "admission-write-fence"
-	_, err := admissionStartCurrent(project, target, registry, recordID, runID, "regular")
+	_, err := admissionStartCurrent(project, target, registry, recordID, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +470,7 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 	}
 
 	// 篡改状态下，同一 project root 的 start 被拒且不创建 run 目录。
-	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest", "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("workflow start admitted a stale installed digest: %v", err)
 	}
 	if _, statErr := os.Stat(admissionEngineDirectory(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
@@ -402,13 +485,13 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("documented bootstrap after restoring the installed tree failed: %v", err)
 	}
-	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest-ok", "regular"); err != nil {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest-ok"); err != nil {
 		t.Fatalf("workflow start still refused after restore+bootstrap at the same root: %v", err)
 	}
 	// 再次篡改：同一 root（且 receipt 已在）的 start 再次被拒，拒绝因此特异
 	// 地来自 stale installed digest。
 	admissionWrite(t, installedReadme, "edited installed runtime\n", 0o600)
-	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest", "regular"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+	if _, err := admissionStartCurrent(project, report.Targets[0].TargetPath, registry, recordID, "admission-stale-digest"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("workflow start admitted a re-edited installed digest: %v", err)
 	}
 	if _, statErr := os.Stat(admissionEngineDirectory(project, "admission-stale-digest")); !os.IsNotExist(statErr) {
@@ -417,7 +500,7 @@ func TestWorkflowStartRefusesEditedInstalledTarget(t *testing.T) {
 }
 
 // Current test setup uses the same admission and typed bootstrap owners as the CLI.
-func admissionStartCurrent(project, target, registry, recordID, runID, route string) (facade.Run, error) {
+func admissionStartCurrent(project, target, registry, recordID, runID string) (facade.Run, error) {
 	restore := fixtureRegisteredInvocation(registry, target, recordID)
 	defer restore()
 	admission, err := ResolveEngineAdmissionByRecord(recordID, registry)
@@ -437,14 +520,11 @@ func admissionStartCurrent(project, target, registry, recordID, runID, route str
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256(raw))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirements.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	base := ""
-	if route == "regular" {
-		base, err = vcs.New(project, nil).Resolve()
-		if err != nil {
-			return facade.Run{}, err
-		}
+	base, err := vcs.New(project, nil).Resolve()
+	if err != nil {
+		return facade.Run{}, err
 	}
-	_, run, err := facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, Capacity: 1, Request: facade.StartRequest{RunID: runID, Route: route, VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	_, run, err := facade.Start(facade.StartOptions{Root: project, ArtifactRoot: project, Capacity: 1, Request: facade.StartRequest{RunID: runID, VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	return run, err
 }
 func admissionEngineDirectory(root, runID string) string {

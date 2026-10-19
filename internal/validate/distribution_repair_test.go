@@ -188,7 +188,10 @@ func TestInstallRejectsManifestUnregisteredHostTargetBeforeTargetCreation(t *tes
 	}
 }
 
-// Start requires the committed bootstrap receipt before creating engine state.
+// Start requires the committed bootstrap receipt before creating engine
+// state. The install transaction commits that receipt when it commits the
+// registry records, so start accepts a freshly installed registry directly
+// and still rejects a missing receipt.
 func TestWorkflowStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
@@ -202,17 +205,23 @@ func TestWorkflowStartRequiresCommittedBootstrapReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt"); err == nil || !strings.Contains(err.Error(), "bootstrap receipt") {
+	if _, _, err := repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt"); err != nil {
+		t.Fatalf("install-committed bootstrap receipt did not admit start: %v", err)
+	}
+	if err := os.Remove(registry + ".bootstrap.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt-missing"); err == nil || !strings.Contains(err.Error(), "bootstrap receipt") {
 		t.Fatalf("start accepted missing bootstrap receipt: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(project, facade.EngineNamespace, "bootstrap-receipt")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(project, facade.EngineNamespace, "bootstrap-receipt-missing")); !os.IsNotExist(err) {
 		t.Fatalf("rejected start created authority: %v", err)
 	}
 	options.Bootstrap = true
 	if _, err = Install(options); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt"); err != nil {
+	if _, _, err = repairStartEngine(project, report.Targets[0].TargetPath, registry, "bootstrap-receipt-committed"); err != nil {
 		t.Fatalf("start refused committed bootstrap: %v", err)
 	}
 }
@@ -268,7 +277,7 @@ func TestEngineDriveRejectsDisabledAdmissionBeforeArtifactWrite(t *testing.T) {
 		t.Fatalf("restored admission refused current drive: %v", err)
 	}
 	if len(restored.WorkerMaterials) != 1 {
-		t.Fatalf("restored regular drive did not issue material: %+v", restored.WorkerMaterials)
+		t.Fatalf("restored drive did not issue material: %+v", restored.WorkerMaterials)
 	}
 	for _, ref := range restored.WorkerMaterials {
 		body, err := os.ReadFile(ref.Path)
@@ -295,7 +304,7 @@ func repairStartEngine(project, target, registry, runID string) (*facade.Facade,
 	if err != nil {
 		return nil, facade.Run{}, err
 	}
-	return facade.Start(facade.StartOptions{Root: project, Capacity: 1, ArtifactRoot: project, Request: facade.StartRequest{RunID: runID, Route: "regular", VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	return facade.Start(facade.StartOptions{Root: project, Capacity: 1, ArtifactRoot: project, Request: facade.StartRequest{RunID: runID, VCS: "git", BaseSnapshot: base, Provider: admission.Provider, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 }
 
 func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {

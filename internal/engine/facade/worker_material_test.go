@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/settings"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +111,17 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	receipt.SolutionRevision = revision
 	receipt.SolutionDigest = "sha256:" + revision
 	admission := testAdmission(t, root, "worker-target", "sha256:worker-package", "zcode")
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.SaveConfiguration(root, home, "project", "工作", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
+		t.Fatal(err)
+	}
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

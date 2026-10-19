@@ -249,6 +249,11 @@ func verifyNativeToolEvidence(directory string) error {
 func (t *nativeWorkspaceTools) publish(f nativeToolFact) (int, error) {
 	f.Action, f.Workspace, f.RequestDigest = t.action, t.workspace, t.requestDigest
 	f.Job = t.directory
+	// Fact paths are repository-relative; store them with canonical slash
+	// separators so assembled references validate on any host filesystem.
+	for i, p := range f.Paths {
+		f.Paths[i] = filepath.ToSlash(p)
+	}
 	body, err := json.Marshal(f)
 	if err != nil {
 		return 0, err

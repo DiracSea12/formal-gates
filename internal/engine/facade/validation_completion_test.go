@@ -7,6 +7,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 )
 
 func TestEmptyWhiteboxPathsDoNotRepeatPromotionAfterRecovery(t *testing.T) {
@@ -62,7 +63,7 @@ func TestEmptyWhiteboxPathsDoNotRepeatPromotionAfterRecovery(t *testing.T) {
 		t.Fatal("completed empty-path validation retained native debt")
 	}
 	source := *state.Validation.Candidate
-	params := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: state.BaseSnapshot, TargetStart: protocol.PromotionObservation{Head: state.BaseSnapshot, Tree: frozenTree, IndexTree: frozenTree, Clean: true}, Message: "validated delivery"}
+	params := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: state.BaseSnapshot, TargetStart: protocol.PromotionObservation{Head: state.BaseSnapshot, Tree: testkit.FrozenTree, IndexTree: testkit.FrozenTree, Clean: true}, Message: "validated delivery"}
 	for id, resource := range state.NativeResources {
 		if resource.Role == "candidate" && resource.Identity == source.Identity && resource.Status == "READY" {
 			params.SourceWorkspace = id
@@ -194,7 +195,7 @@ func TestAffectedCompletionRequiresCurrentApprovedEvidence(t *testing.T) {
 		t.Fatal("repair omitted the first FULL or added another validation wave")
 	}
 	source := d.run.Validation.Candidate
-	params := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: snapshot.State.BaseSnapshot, TargetStart: protocol.PromotionObservation{Head: snapshot.State.BaseSnapshot, Tree: frozenTree, IndexTree: frozenTree, Clean: true}, Message: "validated repaired candidate"}
+	params := protocol.PromotionParameters{Source: source.Identity, SourceDigest: source.Digest, TargetRoot: d.f.root, TargetBase: snapshot.State.BaseSnapshot, TargetStart: protocol.PromotionObservation{Head: snapshot.State.BaseSnapshot, Tree: testkit.FrozenTree, IndexTree: testkit.FrozenTree, Clean: true}, Message: "validated repaired candidate"}
 	for id, resource := range snapshot.State.NativeResources {
 		if resource.Role == "candidate" && resource.Identity == source.Identity && resource.Status == "READY" {
 			params.SourceWorkspace = id

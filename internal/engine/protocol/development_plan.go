@@ -361,17 +361,7 @@ func planTask(cd *compiler.CompiledDefinition, p *GranularityReview, id string) 
 func planTaskScope(plan *GranularityReview, id string) string {
 	return "plan:" + strings.TrimPrefix(planContractDigest(plan), "sha256:") + ":" + id
 }
-func (s *State) routeConfigurationState(route RouteDecision) *State {
-	if route.Configuration == nil {
-		return s
-	}
-	projected := *s
-	projected.FlowSelection = route.Configuration.Configuration.FlowSelection
-	return &projected
-}
-
 func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route RouteDecision) (*DevelopmentPlanPreview, error) {
-	s = s.routeConfigurationState(route)
 	if !s.FlowNodeEnabled("development") {
 		return nil, validationError("development is disabled for this run")
 	}
@@ -408,7 +398,6 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 		preview.Confirmation = DevelopmentPlanConfirmation{Digest: planContractDigest(p), Proposal: p}
 		return preview, nil
 	}
-	route.DevelopmentPlan = nil
 	solutionRevision := s.RequirementRevision()
 	if receipt := s.CurrentIntakeConfirmation(); receipt != nil && receipt.SolutionRevision != "" {
 		solutionRevision = receipt.SolutionRevision
@@ -418,9 +407,8 @@ func (s *State) developmentPlanPreview(cd *compiler.CompiledDefinition, route Ro
 		Requirement string
 		Solution    string
 		Topology    *TopologyBinding
-		Route       RouteDecision
 		Tasks       []runtime.Batch
-	}{id, s.RequirementRevision(), solutionRevision, s.Topology, route, preview.Tasks})}
+	}{id, s.RequirementRevision(), solutionRevision, s.Topology, preview.Tasks})}
 	return preview, nil
 }
 
@@ -531,6 +519,7 @@ func masterDevelopmentPlan(proposal *GranularityReview) *GranularityReview {
 }
 
 func (e *Engine) DevelopmentPlan(route RouteDecision, topology ...TopologyDecision) (*DevelopmentPlanPreview, error) {
+	e = e.evaluatingConfiguration()
 	_, s, err := e.load()
 	if err != nil {
 		return nil, err
@@ -538,17 +527,24 @@ func (e *Engine) DevelopmentPlan(route RouteDecision, topology ...TopologyDecisi
 	if s == nil {
 		return nil, &RejectedError{Code: CodeNotInitialized}
 	}
+	if e.cfg.Configuration != nil {
+		configuration, err := e.cfg.Configuration(s.ConfigurationName())
+		if err == nil {
+			projected := *s
+			projected.FlowSelection = configuration.FlowSelection
+			s = &projected
+		} else if _, unavailable := err.(*ConfigurationUnavailable); unavailable {
+			return nil, err
+		}
+	}
 	if len(topology) > 1 {
 		return nil, validationError("plan preview has more than one prospective topology")
 	}
 	if len(topology) == 1 {
 		return s.splitPlanPreview(e.cfg.Definition, topology[0])
 	}
-	if route.Configuration != nil {
-		proposed := s.routeConfigurationState(route)
-		if !proposed.FlowNodeEnabled("development") || proposed.Topology == nil || !proposed.PreDevelopmentReviewsSatisfied() || !proposed.readinessPreparationReady() {
-			return nil, nil
-		}
+	if !s.FlowNodeEnabled("development") {
+		return nil, nil
 	}
 	return s.developmentPlanPreview(e.cfg.Definition, route)
 }
@@ -833,7 +829,6 @@ func (s *State) developmentInput(task runtime.TaskKey, cd *compiler.CompiledDefi
 	return input
 }
 func (e *Engine) validatePlanConfirmation(s *State, route *RouteDecision) error {
-	s = s.routeConfigurationState(*route)
 	if !s.FlowNodeEnabled("development") {
 		if route.DevelopmentPlan != nil {
 			return validationError("a disabled development node has no plan confirmation")

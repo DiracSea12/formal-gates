@@ -239,13 +239,7 @@ func zcodePinnedCatalogue(binding map[string]any) string {
 // it will execute (capture_binding). The catalogue is host configuration the
 // host refreshes on its own, so it is named in the launch environment but not
 // proofed like an executed binary.
-func zcodeCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := zcodeResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return zcodeConfiguredBinding(settings.Values{Native: native})
-}
+var zcodeCaptureBinding = nativeCapture(zcodeResolvePaths, zcodeConfiguredBinding)
 
 func zcodeResolvePaths(native, sources map[string]string) error {
 	if _, frozen := native["zcodeCataloguePinned"]; frozen {

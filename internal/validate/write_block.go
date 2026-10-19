@@ -14,6 +14,7 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/protocol"
 	engineRuntime "formal-gates/internal/engine/runtime"
+	"formal-gates/internal/host"
 )
 
 // The auxiliary write wall reads current engine issuance, owner identity and
@@ -59,9 +60,11 @@ func hookToolName(value any, providers ...string) string {
 	if object, ok := value.(map[string]any); ok {
 		for _, name := range []string{"tool_name", "toolName", "tool"} {
 			if scalar := scalarHookString(object[name]); scalar != "" {
-				if len(providers) > 0 && providers[0] == "codex" && strings.HasPrefix(scalar, "mcp__") {
-					if _, tool, ok := strings.Cut(strings.TrimPrefix(scalar, "mcp__"), "__"); ok {
-						return tool
+				if len(providers) > 0 && strings.HasPrefix(scalar, "mcp__") {
+					if descriptor, err := host.Lookup(providers[0]); err == nil && descriptor.Hook.Protocol == host.ProtocolCodex {
+						if _, tool, ok := strings.Cut(strings.TrimPrefix(scalar, "mcp__"), "__"); ok {
+							return tool
+						}
 					}
 				}
 				return scalar
@@ -106,8 +109,8 @@ func hookAgentType(value any) string {
 	return ""
 }
 
-// hookPayloadCwd 从 payload 提取工作目录（cwd），用于定位活动正式 run。
-func hookPayloadCwd(value any) string {
+// hookPayloadCwd 优先使用 payload 目录；缺省时读取平台声明的项目目录环境变量。
+func hookPayloadCwd(value any, providers ...string) string {
 	if object, ok := value.(map[string]any); ok {
 		for _, name := range []string{"cwd", "projectDir", "project_dir", "workspace_root"} {
 			if scalar := scalarHookString(object[name]); scalar != "" {
@@ -115,7 +118,12 @@ func hookPayloadCwd(value any) string {
 			}
 		}
 		if nested, ok := object["value"].(map[string]any); ok {
-			return hookPayloadCwd(nested)
+			return hookPayloadCwd(nested, providers...)
+		}
+	}
+	if len(providers) > 0 {
+		if descriptor, err := host.Lookup(providers[0]); err == nil && descriptor.Hook.ProjectDirEnv != "" {
+			return strings.TrimSpace(os.Getenv(descriptor.Hook.ProjectDirEnv))
 		}
 	}
 	return ""
@@ -468,7 +476,7 @@ func readHookRunWritePhase(statePath string) (active bool, started bool, err err
 	if err != nil {
 		return false, false, err
 	}
-	return state.Route == "regular" && state.Phase != engineRuntime.PhaseTerminal, state.DevelopmentStarted(), nil
+	return state.Phase != engineRuntime.PhaseTerminal, state.DevelopmentStarted(), nil
 }
 
 func registeredHookArtifacts(statePath string) []string {
@@ -486,7 +494,7 @@ func registeredHookArtifacts(statePath string) []string {
 // decideWriteBlockValue 对 PreToolUse 载荷执行写阻断判定。返回
 // (decision, true) 表示本载荷属于需要判定的代码/run 状态写入；返回
 // (HookDecision{}, false) 表示非 shell/文件写入或不属于本判定范围，
-// 交由既有 hook 逻辑处理。从载荷 cwd 定位已进入开发阶段的活动 run；找不到时放行（包括
+// 交由既有 hook 逻辑处理。从宿主工作目录定位已进入开发阶段的活动 run；找不到时放行（包括
 // 产品审、技术审等开发前阶段与无活动 run，不干扰文档修订或普通项目）。
 func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool) {
 	toolName := hookToolName(decoded, providers...)
@@ -500,7 +508,7 @@ func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool
 	input := writeBlockPayload{
 		filePath:  hookToolInputFilePath(decoded),
 		agentType: hookAgentType(decoded),
-		cwd:       hookPayloadCwd(decoded),
+		cwd:       hookPayloadCwd(decoded, providers...),
 		toolName:  toolName,
 	}
 	repoRoot, artifacts, owners, ok := activeDevelopmentRunArtifacts(input.cwd)

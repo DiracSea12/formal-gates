@@ -277,7 +277,7 @@ func TestHostActionReceiptNegatives(t *testing.T) {
 			Artifacts:        []IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 			SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 		}
-		if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", confirmation, "", "", nil); err != nil {
+		if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", confirmation, "", "", nil); err != nil {
 			t.Fatalf("init: %v", err)
 		}
 		if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, Observation{}); err != nil {
@@ -594,7 +594,7 @@ func TestHostActionUnknownObservationRoutesAndReplay(t *testing.T) {
 		Artifacts:        []IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 		SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, Observation{}); err != nil {
@@ -711,7 +711,7 @@ func TestReconciledHostActionSettlesFrontierAndRefills(t *testing.T) {
 				Artifacts:        []IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 				SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 			}
-			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", confirmation, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", confirmation, "", "", nil); err != nil {
 				t.Fatalf("init: %v", err)
 			}
 			if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, Observation{}); err != nil {
@@ -825,7 +825,7 @@ func TestHostActionRepeatedOperationSettlesBoundStep(t *testing.T) {
 				Artifacts:        []IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 				SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 			}
-			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", confirmation, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", confirmation, "", "", nil); err != nil {
 				t.Fatalf("init: %v", err)
 			}
 			if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, Observation{}); err != nil {
@@ -931,7 +931,7 @@ func TestAdapterReceiptPreservesRegisteredSchemaFields(t *testing.T) {
 				Artifacts:        []IntakeArtifact{{Path: "requirement.md", Revision: "r1"}},
 				SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 			}
-			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", confirmation, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", confirmation, "", "", nil); err != nil {
 				t.Fatalf("init: %v", err)
 			}
 			if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:testkit-intake"}, Observation{}); err != nil {

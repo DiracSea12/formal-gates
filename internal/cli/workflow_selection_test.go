@@ -87,7 +87,7 @@ func TestWorkflowReentryRetainsUnavailableRunAndSelectsCurrentRun(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request = facade.StartRequest{RunID: "current-run", Route: request.Route, BaseSnapshot: request.BaseSnapshot, Provider: admission.Provider, DefinitionSource: request.DefinitionSource, DefinitionDigest: request.DefinitionDigest, IntakeConfirmationReceipt: request.IntakeConfirmationReceipt}
+	request = facade.StartRequest{RunID: "current-run", BaseSnapshot: request.BaseSnapshot, Provider: admission.Provider, DefinitionSource: request.DefinitionSource, DefinitionDigest: request.DefinitionDigest, IntakeConfirmationReceipt: request.IntakeConfirmationReceipt}
 	a := &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}
 	if _, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, Request: request, Admission: a, VCSRunner: frozenGitRunner{}}); err != nil {
 		t.Fatal(err)

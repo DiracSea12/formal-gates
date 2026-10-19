@@ -278,7 +278,30 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err != nil {
 		return err
 	}
-	configuration, err := settings.Load(root, root)
+	gates := []string{}
+	for _, gate := range catalog.Gates {
+		if gate.ID != prompts.MergeGateID {
+			gates = append(gates, gate.ID)
+		}
+	}
+	home, err := os.MkdirTemp("", "canary-home-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(home)
+	name, err := settings.SaveConfiguration(root, home, "project", "canary", settings.DefaultConfigurationName, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := settings.EditConfiguration(root, home, "project", name, nil, func(configuration *settings.Configuration) error {
+		configuration.FlowSelection = nil
+		configuration.QAModes = []string{"blackbox", "whitebox"}
+		configuration.Gates = &gates
+		return nil
+	}); err != nil {
+		return err
+	}
+	configuration, err := settings.UseConfiguration(root, home, "project", name, nil)
 	if err != nil {
 		return err
 	}
@@ -304,7 +327,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
-	f, run, err := facade.Start(facade.StartOptions{Settings: &configuration, RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Route: "regular", Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Configuration: name, Settings: &configuration, RuntimeFiles: admission.RuntimeFiles, Root: root, ArtifactRoot: root, Capacity: 8, Request: facade.StartRequest{RunID: "canary", VCS: "git", BaseSnapshot: strings.TrimSpace(base), Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if err != nil {
 		return err
 	}
@@ -350,12 +373,6 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 		}
 		return fmt.Errorf("portable control ask missing: %s", kind)
 	}
-	gates := []string{"blackbox", "whitebox"}
-	for _, gate := range catalog.Gates {
-		if gate.ID != prompts.MergeGateID {
-			gates = append(gates, gate.ID)
-		}
-	}
 	topology, routeConfirmed := false, false
 	checked := map[string]bool{}
 	for turns := 0; turns < 100; turns++ {
@@ -372,7 +389,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 					return fmt.Errorf("portable workflow omitted %s", role)
 				}
 			}
-			for _, gate := range gates[2:] {
+			for _, gate := range gates {
 				if !checked["gate:"+gate] {
 					return fmt.Errorf("portable workflow omitted gate %s", gate)
 				}
@@ -421,7 +438,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 			continue
 		}
 		if topology && !routeConfirmed {
-			route := protocol.RouteDecision{Gates: gates, Selected: gates}
+			route := protocol.RouteDecision{Gates: catalog.RouteCandidates()}
 			preview, err := f.DevelopmentPlan(route)
 			if err != nil {
 				return err
@@ -789,10 +806,10 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		addCheck(tc.name+"-installed-binary-regression", true, "stable launcher validated the installed target package")
-		// The documented first-start boundary: a normal install commits registry
-		// records without a bootstrap receipt, and workflow start rejects a
-		// registry that was never bootstrapped. Bootstrap the same registry from
-		// the same source before the installed-binary canary starts its run.
+		// The install transaction commits the bootstrap receipt admission
+		// requires. Bootstrap the same registry from the same source to exercise
+		// the documented maintenance entry before the installed-binary canary
+		// starts its run.
 		if _, bootstrapErr := Install(InstallOptions{Source: root, Host: tc.host, Scope: "project", Project: project, ReleaseRoot: releaseRoot, BinaryTarget: launcher, RegistryPath: registry, Bootstrap: true, Force: true}); bootstrapErr != nil {
 			addCheck(tc.name+"-bootstrap", false, bootstrapErr.Error())
 			continue
@@ -889,7 +906,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 				addCheck(tc.name+"-candidate-workflow-fenced", false, writeErr.Error())
 				continue
 			}
-			candidateStart := exec.Command(candidateExecutable, "workflow", "start", "--root", project, "--package-root", report.Targets[0].TargetPath, "--run-id", candidateRunID, "--intake-receipt", confirmationPath, "--route", "lightweight")
+			candidateStart := exec.Command(candidateExecutable, "workflow", "start", "--root", project, "--package-root", report.Targets[0].TargetPath, "--run-id", candidateRunID, "--intake-receipt", confirmationPath)
 			candidateStart.Env = stableEnv
 			if output, candidateErr := candidateStart.CombinedOutput(); candidateErr == nil {
 				addCheck(tc.name+"-candidate-workflow-fenced", false, "candidate binary unexpectedly created workflow state")
@@ -1079,7 +1096,6 @@ func runWriteBlockCanary(root string) error {
 	}
 	state := protocol.NewState(*view)
 	state.RunID = "write-block-canary"
-	state.Route = "regular"
 	state.IntakeConfirmationReceipt = &protocol.IntakeConfirmationReceipt{RequirementRevision: "r1", Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: "r1"}, {Path: "design.md", Revision: "r2"}}}
 	state.DispatchBindings["development"] = protocol.WorkBinding{RequirementRevision: "r1", PlanRequest: "confirmed-plan", BatchID: "delivery"}
 	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "r1"}}

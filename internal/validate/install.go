@@ -325,6 +325,13 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if err != nil {
 		return InstallReport{}, err
 	}
+	if registryPath != "" {
+		bootstrapSnapshot, snapErr := snapshotOuterFile(registryPath+".bootstrap.json", filepath.Join(transactionRoot, "bootstrap-receipt.before"))
+		if snapErr != nil {
+			return InstallReport{}, snapErr
+		}
+		outer.Receipts = append(outer.Receipts, bootstrapSnapshot)
+	}
 	for index, target := range targets {
 		backupRoot := filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index))
 		tree, backupErr := snapshotInstallTree(target.targetPath, filepath.Join(backupRoot, "runtime"))
@@ -341,8 +348,8 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 		}
 		hookStatePath := ""
 		hookState := outerFileSnapshot{}
-		if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil && descriptor.Hook.Kind == host.HookZCode && target.hookConfig != "" {
-			hookStatePath = zcodeHookStatePath(target.hookConfig)
+		if adapter, adapterErr := platformAdapterFor(target.host); adapterErr == nil && adapter.hookStatePath != nil && target.hookConfig != "" {
+			hookStatePath = adapter.hookStatePath(target.hookConfig)
 			hookState, backupErr = snapshotOuterFile(hookStatePath, filepath.Join(backupRoot, "hook-state.before"))
 			if backupErr != nil {
 				return InstallReport{}, backupErr
@@ -605,6 +612,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 			records = append(records, record)
 		}
 	}
+	committed := RegistryDocument{}
 	if registryPath != "" {
 		if faultErr := installFault("registry-commit"); faultErr != nil {
 			return InstallReport{}, rollbackAll(faultErr)
@@ -614,7 +622,7 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge load failed: %w", loadErr))
 		}
 		registryDocument.Records = retireGlobalInvocationRecords(registryDocument.Records, targets, options)
-		committed, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records)
+		committed, err = commitRegistryRecordsUnlocked(registryPath, registryDocument, records)
 		if err != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge commit failed: %w", err))
 		}
@@ -631,6 +639,18 @@ func Install(options InstallOptions) (_ InstallReport, resultErr error) {
 	if report.ReceiptPath != "" {
 		if writeErr := writeJSONAtomically(filepath.FromSlash(report.ReceiptPath), report); writeErr != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("failed to persist install receipt: %w", writeErr))
+		}
+	}
+	if registryPath != "" {
+		receipt := BootstrapReceipt{
+			Operation: "bootstrap", Accepted: true, Registry: filepath.Clean(registryPath),
+			Epoch: committed.Epoch, PackageDigest: sourcePackage.Digest,
+			VCSIdentity: vcsIdentity, SourceRoot: filepath.ToSlash(canonicalRegistryPath(sourceAbs)),
+			SourceLstat: pathLstat(sourceAbs), Records: committed.Records,
+			StateCreated: false, ObservedAt: nowReceiptTime(),
+		}
+		if writeErr := writeJSONAtomically(registryPath+".bootstrap.json", receipt); writeErr != nil {
+			return InstallReport{}, rollbackAll(fmt.Errorf("failed to persist bootstrap receipt: %w", writeErr))
 		}
 	}
 	outer.Phase = "committed"
@@ -768,8 +788,8 @@ func Uninstall(options UninstallOptions) (_ UninstallReport, resultErr error) {
 		}
 		hookStatePath := ""
 		hookState := outerFileSnapshot{}
-		if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil && descriptor.Hook.Kind == host.HookZCode && target.hookConfig != "" {
-			hookStatePath = zcodeHookStatePath(target.hookConfig)
+		if adapter, adapterErr := platformAdapterFor(target.host); adapterErr == nil && adapter.hookStatePath != nil && target.hookConfig != "" {
+			hookStatePath = adapter.hookStatePath(target.hookConfig)
 			hookState, backupErr = snapshotOuterFile(hookStatePath, filepath.Join(backupRoot, "hook-state.before"))
 			if backupErr != nil {
 				return UninstallReport{}, backupErr
@@ -1333,8 +1353,8 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			if err != nil {
 				return InstallReport{}, rollback(err)
 			}
-			if capability := hookCapabilities[descriptor.Hook.Kind]; capability.packageFiles != nil {
-				targetExpected = append(append([]PackageEntry(nil), expected...), capability.packageFiles()...)
+			if packageFiles := platformAdapters[descriptor.ID].hook.packageFiles; packageFiles != nil {
+				targetExpected = append(append([]PackageEntry(nil), expected...), packageFiles()...)
 				sort.Slice(targetExpected, func(i, j int) bool { return targetExpected[i].Path < targetExpected[j].Path })
 			}
 		}
@@ -1742,17 +1762,9 @@ func installTargets(hostName, scope, project string) ([]installTarget, error) {
 
 type installPathResolver func(home, project, scope string) (base, hookConfig, managedRulePath string, err error)
 
-// installPathResolvers contains only layouts that cannot be represented by
-// the declarative host.PathLayout. Ordinary hosts use the descriptor paths;
-// a new host should need this registry only when its installer has a custom
-// home/config convention.
-var installPathResolvers = map[host.HookKind]installPathResolver{
-	host.HookDSH: dshInstallTargetPaths,
-}
-
 func installTargetPaths(descriptor host.Descriptor, home, project, scope string) (string, string, string, error) {
-	if resolver, ok := installPathResolvers[descriptor.Hook.Kind]; ok {
-		return resolver(home, project, scope)
+	if paths := platformAdapters[descriptor.ID].paths; paths != nil {
+		return paths(home, project, scope)
 	}
 	if scope == "global" {
 		return filepath.Join(home, filepath.FromSlash(descriptor.Paths.GlobalBase)),
@@ -1857,16 +1869,6 @@ type hookCapability struct {
 	packageFiles func() []PackageEntry
 }
 
-// hookCapabilities is the install-time capability registry. Generic nested
-// and flat hosts share one implementation; DSH and ZCode supply only their
-// protocol-specific writers.
-var hookCapabilities = map[host.HookKind]hookCapability{
-	host.HookNested: {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
-	host.HookFlat:   {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
-	host.HookDSH:    {configure: configureDshHook, remove: removeDshHook, packageFiles: dshHookPackageFiles},
-	host.HookZCode:  {configure: configureZCodeHook, remove: removeZCodeHook},
-}
-
 func configureInstallHook(target installTarget) (bool, error) {
 	if strings.TrimSpace(target.hookConfig) == "" {
 		return false, nil
@@ -1875,11 +1877,11 @@ func configureInstallHook(target installTarget) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	capability, ok := hookCapabilities[descriptor.Hook.Kind]
-	if !ok || capability.configure == nil {
+	adapter, ok := platformAdapters[descriptor.ID]
+	if !ok || adapter.hook.configure == nil {
 		return false, fmt.Errorf("host %q has no hook install capability", descriptor.ID)
 	}
-	return capability.configure(target)
+	return adapter.hook.configure(target)
 }
 
 func configureGenericInstallHook(target installTarget) (bool, error) {
@@ -1897,9 +1899,9 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
-	// Metered hosts must bind their transcript parser even when their hook
-	// response uses the generic protocol (Claude Code).
-	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil {
+	// Bind the provider when hooks need its protocol, transcript parser or
+	// native project context.
+	if descriptor.Hook.BindProvider {
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
@@ -1953,11 +1955,11 @@ func removeInstallHooks(target installTarget) error {
 	if err != nil {
 		return err
 	}
-	capability, ok := hookCapabilities[descriptor.Hook.Kind]
-	if !ok || capability.remove == nil {
+	adapter, ok := platformAdapters[descriptor.ID]
+	if !ok || adapter.hook.remove == nil {
 		return fmt.Errorf("host %q has no hook removal capability", descriptor.ID)
 	}
-	return capability.remove(target)
+	return adapter.hook.remove(target)
 }
 
 func removeGenericInstallHooks(target installTarget) error {
@@ -2155,7 +2157,7 @@ func installerHookCommands(target installTarget) map[string]bool {
 		}
 	}
 	gateArgs := []string{"hook", "decide"}
-	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.ReadUsage != nil) {
+	if descriptor, err := host.Lookup(target.host); err == nil && descriptor.Hook.BindProvider {
 		add("hook", "decide")
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
@@ -2176,15 +2178,7 @@ func installerHookCommands(target installTarget) map[string]bool {
 }
 
 func retiredLifecycleHookEvents(provider string) []string {
-	switch provider {
-	case host.Claude, host.Codex, host.DeepSeek:
-		return []string{"SubagentStart", "SubagentStop"}
-	case host.Cursor:
-		return []string{"subagentStart", "subagentStop"}
-	case host.ZCode:
-		return []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
-	}
-	return nil
+	return platformAdapters[provider].retiredHookEvents
 }
 
 func exactNestedHookShape(value map[string]any, hostName string) bool {
@@ -2216,7 +2210,7 @@ func isLegacyInstallerHookCommand(command string) bool {
 }
 
 func isLegacyCodexGateCommand(command string, target installTarget) bool {
-	if target.host != "codex" {
+	if descriptor, err := host.Lookup(target.host); err != nil || !platformAdapters[descriptor.ID].retiredBareGate {
 		return false
 	}
 	want := normalizeHookCommand(command)

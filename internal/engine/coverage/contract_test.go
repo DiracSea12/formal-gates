@@ -12,8 +12,8 @@ func fixtureContract() (CoverageContract, []ReviewResult) {
 		{SourceID: "REQ-1", Category: ProductRequirement, Applicability: QAApplicability},
 		{SourceID: "SOL-1", Category: SolutionConstraint, Applicability: NonQAApplicability},
 	}}
-	blackboxBinding := ManifestBinding{SourceBinding: binding, ReviewKind: ReviewBlackbox, RouteScope: "regular", TopologyScope: "master"}
-	whiteboxBinding := ManifestBinding{SourceBinding: binding, ReviewKind: ReviewWhitebox, RouteScope: "regular", TopologyScope: "master"}
+	blackboxBinding := ManifestBinding{SourceBinding: binding, ReviewKind: ReviewBlackbox, RouteScope: "route-scope", TopologyScope: "master"}
+	whiteboxBinding := ManifestBinding{SourceBinding: binding, ReviewKind: ReviewWhitebox, RouteScope: "route-scope", TopologyScope: "master"}
 	blackbox := AcceptanceManifest{
 		Binding: blackboxBinding,
 		Sources: []string{"REQ-1"},

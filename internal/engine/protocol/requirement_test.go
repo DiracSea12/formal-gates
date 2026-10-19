@@ -797,23 +797,17 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if after := stateBytesOf(t, dir); string(before) != string(after) {
 			t.Fatal("frozen topology decide changed state bytes")
 		}
-		// 屏障解除后同一 Ask 的决定照常走接纳（此处被业务条件拒绝，证明
-		// 之前的拦截确系屏障而非其它约束）。
+		// 屏障解除后同一事务收尾清算前置条件不满足的 Ask：本夹具的审查
+		// 未满足，拓扑 Ask 被作废——同一 ID 的决定以「已解决」拒绝。屏障
+		// 拦截与业务条件的区分已由上方零状态变化与 CHANGE_BARRIER_ACTIVE
+		// 区分码共同证明。
 		askAndDecideRequirement(t, engine, "req-barrier-topology", "abort", nil)
-		token, err = engine.Freshness("req-topology-frozen")
-		if err != nil {
-			t.Fatalf("freshness after the barrier: %v", err)
+		if _, err := engine.Freshness("req-topology-frozen"); err == nil || rejectionCode(t, err) != CodeRequestResolved {
+			t.Fatalf("superseded topology ask stayed decidable after the barrier: %v", err)
 		}
-		retry, err := NewReviewDecideEvent("evt-req-topology-retry", "req-topology-frozen", token, "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
-			Decision: "no-split", Note: "建议不拆",
-		}})
-		if err != nil {
-			t.Fatalf("decide: %v", err)
-		}
-		if _, err := engine.Submit(retry, observedInput); err == nil {
-			t.Fatal("post-barrier topology decide accepted without readiness PASS")
-		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-			t.Fatalf("post-barrier topology code = %q", code)
+		snap := engine.LoadMustSucceed(t)
+		if snap.State.Topology != nil || !snap.State.PendingAsks["req-topology-frozen"].Resolved {
+			t.Fatal("frozen decide bound topology or left the ask pending")
 		}
 	})
 
@@ -989,8 +983,9 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 }
 
 // askAndDecideRequirementCrossPayload 在需求控制 Ask 上提交 Review 载荷
-// （reviewPayload 非 nil），或在拓扑控制 Ask 上提交 Requirement 载荷
-// （requirementPayload 非 nil），返回决定提交的错误并断言零状态变化。
+// （reviewPayload 非 nil），或在非需求控制 Ask（取恒可决的终止 Ask）
+// 上提交 Requirement 载荷（requirementPayload 非 nil），返回决定提交的
+// 错误并断言零状态变化。
 func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requestID string, reviewPayload *ReviewDecisionPayload, requirementPayload *RequirementDecisionPayload) error {
 	t.Helper()
 	observedInput := Observation{}
@@ -999,9 +994,9 @@ func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requ
 	options := requirementOptions()
 	pkg := requirementPackageOf(requirementPayload)
 	if requirementPayload != nil {
-		control = ControlConfirmTopology
-		choice = "no-split"
-		options = topologyOptions()
+		control = ControlAbort
+		choice = "abort"
+		options = []AskOption{{ID: "abort", Label: "终止"}}
 	}
 	var request Event
 	var err error
@@ -1212,11 +1207,7 @@ func TestCarriedProductConclusionReopensAfterReadinessOnlyRedo(t *testing.T) {
 			t.Fatalf("redone readiness series = %+v completed=%d", readiness.Effective, readiness.Completed)
 		}
 		// 门关：readiness 重走期间路线选择拒绝。
-		if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-closed-1", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}}}); err == nil {
-			t.Fatal("route accepted while the redone readiness series is PENDING")
-		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-			t.Fatalf("closed gate code = %q", code)
-		}
+		rejectRouteRequest(t, engine, dir, "req-route-closed-1", []string{"blackbox", "whitebox", "gate.quality", "gate.security"})
 
 		// rev-2 的新一轮 readiness 证据被顺序守卫放行（续用的
 		// 产品审 PASS 绑 rev-1 同样有效）；决定事务的欠轮提案已签出新鲜
@@ -1276,11 +1267,7 @@ func TestProductOnlyRedoCarriesTheReadinessConclusion(t *testing.T) {
 		Source:       RequirementSourceUserInitiated, Classification: RequirementClassificationChanged,
 		RedoProductReview: true, Reason: "only the product walk is affected",
 	})
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-route-pending-1", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}, Gates: []string{"blackbox", "whitebox", "gate.quality", "gate.security"}}}); err == nil {
-		t.Fatal("route accepted while the redone product series is PENDING")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("pending-product gate code = %q", code)
-	}
+	rejectRouteRequest(t, engine, dir, "req-route-pending-1", []string{"blackbox", "whitebox", "gate.quality", "gate.security"})
 
 	// 产品审在 rev-2 重新 PASS（决定事务的欠轮提案签出新鲜轮，直接提交
 	// 证据完成）：携用的 readiness 不被级联失效、不耗新轮次，双审门直接
@@ -1318,7 +1305,7 @@ func TestCarryValidityBindsToTheConfirmedLedger(t *testing.T) {
 		if err != nil {
 			t.Fatalf("record candidate at %s: %v", revision, err)
 		}
-		state.ReviewSeries = set
+		state.ReviewSeries = review.AdmitRound(set, review.StartReadiness, "act:review/start.readiness", 0)
 		return state
 	}
 	phantom := build("rev-phantom")
@@ -2728,11 +2715,7 @@ func TestRedoObligationSurvivesACorrectionOfTheOldRound(t *testing.T) {
 	if !series.FreshOwed {
 		t.Fatal("a correction of the old round must not discharge the redo obligation")
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-owed-route-closed", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "g1", "g2"}, Gates: []string{"blackbox", "whitebox", "g1", "g2"}}}); err == nil {
-		t.Fatal("the development gate opened on a corrected projection while the redo obligation stands")
-	} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-		t.Fatalf("closed gate code = %q (%v)", code, err)
-	}
+	rejectRouteRequest(t, engine, dir, "req-owed-route-closed", []string{"blackbox", "whitebox", "g1", "g2"})
 	if _, err := engine.Load(); err != nil {
 		t.Fatalf("the obligated ledger must load: %v", err)
 	}
@@ -3175,9 +3158,7 @@ func TestUpstreamVoidReleaseCoversTheRequirementRedoPath(t *testing.T) {
 	if voided.Effective.Status != "PENDING" || !voided.UpstreamVoid {
 		t.Fatalf("upgrade did not void start-readiness: %+v", voided.Effective)
 	}
-	if err := askAndDecideRejecting(t, engine, dir, ControlSelectRoute, "req-redo-release-blocked", routeOptions(), "approve", &ReviewDecisionPayload{Route: &RouteDecision{Selected: []string{"blackbox", "whitebox", "g1"}, Gates: []string{"blackbox", "whitebox", "g1"}}}); err == nil {
-		t.Fatal("route accepted while the void holds")
-	}
+	rejectRouteRequest(t, engine, dir, "req-redo-release-blocked", []string{"blackbox", "whitebox", "g1"})
 
 	// Changed requirements create a fresh product-review obligation.
 	askAndDecideRequirement(t, engine, "req-redo-release-change", "proceed", &RequirementDecisionPayload{

@@ -1,7 +1,11 @@
 package protocol
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -9,7 +13,64 @@ import (
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/settings"
 )
+
+func TestPlanBindsAvailabilityObservationWithoutWritingState(t *testing.T) {
+	t.Parallel()
+	engine, dir, ready, _ := preparedEngine(t)
+	issued, _, err := engine.IssueFromPlan(ready, decision.Admission{Capacity: 1}, Observation{})
+	if err != nil || len(issued) != 1 {
+		t.Fatal(issued, err)
+	}
+	before := engine.LoadMustSucceed(t)
+	pending := before.State.PendingActions[issued[0].ActionID]
+	attempt := before.State.Attempts[pending.Task]
+	engine.cfg.Configuration = func(string) (settings.Configuration, error) {
+		return settings.DefaultConfiguration(), nil
+	}
+	reads := 0
+	engine.cfg.WorkerExecution = func(p PendingAction, a Attempt) (*SpawnReceiptPayload, error) {
+		if p != pending || a.ID != attempt.ID {
+			t.Fatal("availability sampled another worker", p, a)
+		}
+		reads++
+		return nil, nil
+	}
+	var key bytes.Buffer
+	enc := json.NewEncoder(&key)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(struct{ Action, Attempt string }{pending.ActionID, attempt.ID}); err != nil {
+		t.Fatal(err)
+	}
+	expected := decision.Observation{Facts: []decision.Fact{{
+		Source: decision.SourceHost,
+		Key:    fmt.Sprintf("execution:sha256:%x", sha256.Sum256(key.Bytes())),
+		Value:  fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("null\n"))),
+	}}}
+	digest, err := expected.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := stateBytesOf(t, dir)
+	local := engine.observing(Observation{})
+	for i := 0; i < 2; i++ {
+		plan, revision, err := local.Plan(Observation{})
+		if err != nil || revision != before.Revision || plan == nil || plan.ObservationDigest != digest {
+			t.Fatalf("plan omitted availability facts: %+v revision=%d error=%v want=%s", plan, revision, err, digest)
+		}
+		if reads != 1 || !reflect.DeepEqual(local.observation.Facts, expected) || engine.observation != nil {
+			t.Fatal("operation resampled, duplicated or leaked facts", reads, local.observation.Facts)
+		}
+		if !bytes.Equal(raw, stateBytesOf(t, dir)) {
+			t.Fatal("read-only plan wrote state")
+		}
+	}
+	if actual, err := local.observation.Fingerprint(); err != nil || actual != digest || reads != 2 {
+		t.Fatal("save fingerprint did not recheck the original worker reader", actual, err, reads)
+	}
+}
 
 func TestOperationObservationSharesSamplesAndRechecksOriginalReaders(t *testing.T) {
 	t.Parallel()
@@ -101,7 +162,7 @@ func TestCostObservationBeforeSaveRejectsChangeWithoutStateEffects(t *testing.T)
 			if err = view.CompleteStep("prep.parse", cd); err != nil {
 				t.Fatal(err)
 			}
-			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", "", nil, "", "", nil); err != nil {
+			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", nil, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			plan, _, err := engine.Plan(Observation{})

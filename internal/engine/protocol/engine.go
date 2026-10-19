@@ -52,6 +52,13 @@ type Config struct {
 	// WorkerExecution reads the native owner's execution facts under its
 	// existing admission window. A nil payload means no execution was claimed.
 	WorkerExecution func(PendingAction, Attempt) (*SpawnReceiptPayload, error)
+	// Configuration reads a bound configuration from the library on each
+	// dispatch evaluation. *ConfigurationUnavailable stops new dispatch; other
+	// errors keep the applied value on the first failed evaluation and stop new
+	// dispatch if the next evaluation still fails. nil keeps recorded values.
+	Configuration  func(name string) (settings.Configuration, error)
+	RouteGates     func() ([]string, error)
+	ParentSnapshot func(runID string) (Snapshot, error)
 }
 
 // Engine 是提交协议内核：每个方法一次完整的「读 state → 变更 →
@@ -62,6 +69,8 @@ type Engine struct {
 	cfg         Config
 	observation *Observation
 	sourceFacts decision.Observation
+	// Configuration samples are local to an operation, like observation.
+	configuration *configurationEvaluation
 }
 
 // New binds the persistent state owner and the workflow configuration.
@@ -106,10 +115,14 @@ func (e *Engine) load() (uint64, *State, error) {
 	if err := state.UnmarshalJSON(snap.Content); err != nil {
 		return 0, nil, fmt.Errorf("protocol: decode engine state: %w", err)
 	}
+	e.assessConfigurationRead(&state)
 	// 加载边界与提交边界共用同一完整性校验：篡改的审查账本或越门的
 	// phase 在读取侧即可区分拒绝。
 	if err := verifyReviewIntegrity(&state); err != nil {
 		return 0, nil, err
+	}
+	if err := state.verifyValidationRoundLimits(e.cfg.Definition); err != nil {
+		return 0, nil, &RejectedError{Code: CodeStateIntegrityInvalid, Detail: err.Error()}
 	}
 	if err := state.verifySliceReceipt(); err != nil {
 		return 0, nil, err
@@ -126,7 +139,7 @@ func (e *Engine) load() (uint64, *State, error) {
 // provider、run 身份、受理确认与初始 snapshot。provider 必须非空；
 // 后续事件与回执按该身份精确配对。已存在状态时拒绝且零变化。
 // sliceStart 非 nil 时，child 继承事实与拓扑一并落账。
-func (e *Engine) InitWithMetadata(view *decision.State, provider string, input Observation, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
+func (e *Engine) InitWithMetadata(view *decision.State, provider string, input Observation, runID string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
 	e = e.observing(input)
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
@@ -145,9 +158,20 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 	}
 	state.RunProvider = provider
 	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	state.Settings = e.cfg.Settings
+	configuration := settings.DefaultConfiguration()
+	configuration.FlowSelection = state.FlowSelection
+	if e.cfg.Settings != nil {
+		// The selected suite becomes the initial applied snapshot; the run keeps
+		// only its binding name and frozen global values.
+		frozen := *e.cfg.Settings
+		configuration = frozen.Configuration
+		frozen.Configuration, frozen.ConfigurationSource = settings.Configuration{}, ""
+		state.Settings = &frozen
+	}
+	preview := &NodeContinuationPreview{To: BusinessNode{ID: "configuration", Kind: "configuration"}, StateRevision: 1}
+	state.AppliedConfigurations = []AppliedConfiguration{{Revision: 1, Configuration: settings.CloneConfiguration(configuration), Preview: preview, Effect: &NodeContinuationDecision{Reason: "Initial bound configuration"}}}
 	state.RunID = runID
-	state.Route = route
+	state.ReviewSeries = review.NewSetWithLimits(configuration.RoundLimit("product-review"), configuration.RoundLimit("tech-review"), 1)
 	state.BaseSnapshot = baseSnapshot
 	state.InitialSnapshot = initialSnapshot
 	state.NativeRoot = e.cfg.NativeRoot
@@ -164,10 +188,26 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 			state.FlowSelection = &FlowSelection{Disabled: slices.Clone(sliceStart.FlowSelection.Disabled)}
 		}
 		binding := sliceStart.Binding
-		binding.InheritedExecution = slices.Clone(binding.InheritedExecution)
 		state.SliceChild = &binding
 		topology := copyTopology(sliceStart.Topology)
 		state.Topology = &topology
+		if e.cfg.Settings == nil {
+			state.AppliedConfigurations[0].Configuration.FlowSelection = state.FlowSelection
+		}
+	}
+	if len(state.AppliedConfigurations) != 0 {
+		entry := &state.AppliedConfigurations[0]
+		entry.Preview.RequirementRevision = state.RequirementRevision()
+		entry.Preview.FromPhase = state.Phase
+		entry.Preview.Digest = entry.Preview.CanonicalDigest()
+		entry.Effect.PreviewDigest = entry.Preview.Digest
+		entry.Effect.AppliedRevision = 1
+		gates, _, err := e.configurationContext(state)
+		if err != nil {
+			return err
+		}
+		state.selectConfiguration(entry.Configuration, gates)
+		entry.SelectedGates = slices.Clone(state.SelectedGates)
 	}
 	_, err := e.commit(state, 0, input)
 	return err
@@ -320,6 +360,10 @@ func (e *Engine) transactionEpilogue(state *State, nextRevision uint64, input Ob
 	if state.requirementChangePending() {
 		state.routingReleasedCapacity = false
 		return nil, nil
+	}
+	e.recordConfigurationRead(state, nextRevision)
+	if _, err := e.reconcileConfiguration(state, nextRevision); err != nil {
+		return nil, err
 	}
 	if _, err := e.advanceNodeContinuation(state, nextRevision); err != nil {
 		return nil, err
@@ -602,9 +646,19 @@ func (s *State) decisionView(compiled *compiler.CompiledDefinition) decision.Sta
 
 func (e *Engine) decide(state *State) (*decision.Plan, error) {
 	view := state.decisionView(e.cfg.Definition)
+	if len(state.AppliedConfigurations) != 0 {
+		projected := *state
+		projected.FlowSelection = state.AppliedConfiguration().FlowSelection
+		projected.projectFlowSelection(&view, e.cfg.Definition)
+	}
 	plan, err := decision.Decide(&view, e.facts(), e.cfg.Definition)
 	if err == nil {
 		state.abortPlan(plan, e.cfg.Definition)
+		err = e.holdUnavailableConfiguration(state, plan)
+	}
+	if err == nil {
+		// Bind facts sampled by the availability projection into the final plan.
+		plan.ObservationDigest, err = e.facts().Digest()
 	}
 	return plan, err
 }
@@ -634,6 +688,7 @@ type Projection struct {
 	Snapshot        Snapshot
 	Plan            *decision.Plan
 	RequirementWork []RequirementWork
+	ExecutionNodes  []ExecutionNodeState
 }
 
 // Project reads the authoritative state once and derives its read-only views.
@@ -649,11 +704,16 @@ func (e *Engine) Project(input Observation) (Projection, error) {
 // ProjectSnapshot derives read-only views from an already validated snapshot.
 func (e *Engine) ProjectSnapshot(snapshot Snapshot, input Observation) (Projection, error) {
 	e = e.observing(input)
+	e.assessConfigurationRead(snapshot.State)
 	plan, err := e.decide(snapshot.State)
 	if err != nil {
 		return Projection{}, err
 	}
-	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.RequirementWork(e.cfg.Definition)}, nil
+	nodes, err := e.executionNodeStates(snapshot.State)
+	if err != nil {
+		return Projection{}, err
+	}
+	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.RequirementWork(e.cfg.Definition), ExecutionNodes: nodes}, nil
 }
 
 // Drive advances deterministic engine-internal steps, then performs the
@@ -661,7 +721,7 @@ func (e *Engine) ProjectSnapshot(snapshot Snapshot, input Observation) (Projecti
 // Complete) is reached.  No external event is accepted here; callers must use
 // Submit for receipts, decisions and observations.
 func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
-	base := e
+	base := e.evaluatingConfiguration()
 	costObserved := false
 	for {
 		e = base.observing(input)
@@ -700,6 +760,13 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 			}
 		}
 
+		// A saved library change commits before the next dispatch evaluation.
+		readChanged := e.recordConfigurationRead(state, revision+1)
+		configured, err := e.reconcileConfiguration(state, revision+1)
+		configured = configured || readChanged
+		if err != nil {
+			return nil, revision, err
+		}
 		attached := e.attachObservedReceipts(state, revision+1)
 		advanced, err := e.advanceValidation(state, revision+1)
 		if err != nil {
@@ -712,7 +779,7 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 		if err := state.settleFrontierSteps(e.cfg.Definition, e.cfg.InternalSteps); err != nil {
 			return nil, revision, err
 		}
-		if attached || advanced || len(state.Completed) != completed || e.reconcileReviewAsks(state) {
+		if configured || attached || advanced || len(state.Completed) != completed || e.reconcileReviewAsks(state) {
 			if _, err := e.commit(state, revision, input); err != nil {
 				return nil, revision, err
 			}
@@ -724,22 +791,9 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 		}
 		switch plan.Next.Kind {
 		case decision.KindComplete:
-			// 终态相变按路线分流：lightweight 的收口事实全在引擎账本内，
-			// Drive 直接相变（已 TERMINAL 的重入只读——不 bump revision、
-			// 不改写状态）。regular 的终态绑定原生交付身份——外部事实经
-			// SealTerminal 公开入口进入，Drive 只呈报 COMPLETE 边界。
-			if state.Phase != runtime.PhaseTerminal {
-				if state.Route != "lightweight" {
-					return plan, revision, nil
-				}
-				if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
-					return nil, revision, err
-				}
-				if _, err := e.commit(state, revision, input); err != nil {
-					return nil, revision, err
-				}
-				continue
-			}
+			// 终态绑定原生交付身份——外部事实经 SealTerminal 公开入口进入，
+			// Drive 只呈报 COMPLETE 边界（已 TERMINAL 的重入只读——不 bump
+			// revision、不改写状态）。
 			return plan, revision, nil
 		case decision.KindWait:
 			return plan, revision, nil
@@ -764,67 +818,6 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 	}
 }
 
-// CompleteAll deterministically settles every compiled step and moves the run
-// to TERMINAL.  It is used only by the lightweight façade route, whose
-// acceptance contract has no external worker/host actions.
-func (e *Engine) CompleteAll(input Observation) (Snapshot, error) {
-	e = e.observing(input)
-	revision, state, err := e.load()
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if state == nil {
-		return Snapshot{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
-	}
-	// Terminal completion is a read-only replay. Repeated drive calls after
-	// Complete must not advance revision or rewrite the state document.
-	if state.Phase == runtime.PhaseTerminal {
-		return e.Load()
-	}
-	if err := state.errWriteBarrier("completion"); err != nil {
-		return Snapshot{}, err
-	}
-	// Compiled steps are ordered by deterministic ordinal, not necessarily by
-	// the author's slice order. Repeatedly settle the currently eligible set so
-	// every dependency is completed before its successor.
-	for len(state.Completed) < len(e.cfg.Definition.Steps) {
-		progressed := false
-		for _, step := range e.cfg.Definition.Steps {
-			done := false
-			for _, completed := range state.Completed {
-				if completed == step.Header.ID {
-					done = true
-					break
-				}
-			}
-			if done {
-				continue
-			}
-			if err := state.CompleteStep(step.Header.ID, e.cfg.Definition); err != nil {
-				// An unmet dependency may become eligible later in this pass;
-				// any other error is a malformed definition/state and must stop.
-				if strings.Contains(err.Error(), "dependency") {
-					continue
-				}
-				return Snapshot{}, err
-			}
-			progressed = true
-		}
-		if !progressed {
-			return Snapshot{}, fmt.Errorf("protocol: complete all: definition dependencies cannot be settled")
-		}
-	}
-	if state.Phase != runtime.PhaseTerminal {
-		if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
-			return Snapshot{}, err
-		}
-	}
-	if _, err := e.commit(state, revision, input); err != nil {
-		return Snapshot{}, err
-	}
-	return e.Load()
-}
-
 // IssueFromPlan 落账一次 Ready 签发：actionID 派生复用 decision.SelectIssued，
 // 随后在同一事务里登记 expected 任务、当前 Attempt 与 pendingActions，
 // 任务视图经 decision.State.TransitionTask 推进 QUEUED→ISSUED（复用
@@ -844,6 +837,12 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, inpu
 	// 修订屏障（Phase A）：未决的需求变化 Ask 期间冻结新的业务任务签发，
 	// 以可区分错误拒绝直接签发调用；Drive 经此同步受阻。
 	if err := state.errWriteBarrier("new task issuance"); err != nil {
+		return nil, 0, err
+	}
+	readChanged := e.recordConfigurationRead(state, revision+1)
+	configured, err := e.reconcileConfiguration(state, revision+1)
+	configured = configured || readChanged
+	if err != nil {
 		return nil, 0, err
 	}
 	identity, err := e.validatePlan(state, plan)
@@ -869,7 +868,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, inpu
 	}
 	// 零状态变化不经提交：容量裁剪后签出集为空且 Expected 未新增时，
 	// 提交只会空转 revision；retainExpected 有增量属状态变化，照常提交。
-	if len(issued) == 0 && len(state.Expected) == expectedCount {
+	if len(issued) == 0 && len(state.Expected) == expectedCount && !configured {
 		return issued, revision, nil
 	}
 	commitRevision, err := e.commit(state, revision, input)
@@ -1114,6 +1113,7 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 				s.ReviewSeries = updated
 			}
 			s.ReviewSeries = review.IssueRound(s.ReviewSeries, mark)
+			s.ReviewSeries = review.AdmitRound(s.ReviewSeries, mark, action.ActionID, nextRevision)
 		}
 		s.restoreRetryBinding(action, nextRevision)
 	}
@@ -1222,11 +1222,21 @@ func (e *Engine) Submit(ev Event, input Observation) (Acceptance, error) {
 		return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "terminal run accepts only recorded event replay"}
 	}
 	if state.Phase == runtime.PhasePreparing {
-		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode && !(ev.Request.Control == ControlSelectRoute && ev.Request.Configuration != nil) || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil) {
+		if ev.Kind == KindRequestControl && ev.Request.Control != ControlAbort && ev.Request.Control != ControlContinueNode || ev.Kind == KindOperatorObservation && (ev.Observation.Validation != nil || ev.Observation.Review != nil) {
 			return Acceptance{}, &RejectedError{Code: CodeEventNotCurrent, Detail: "preparing child has no business control authority"}
 		}
 	}
 	nextRevision := revision + 1
+	if ev.Kind == KindDecide {
+		ask := state.PendingAsks[string(ev.Decide.Request)]
+		if ask.RoundGrant != nil || ask.Validation != nil && (ask.Validation.Kind == "QA_REVIEW" || ask.Validation.Kind == "REPAIR") {
+			if _, err := e.reconcileConfiguration(state, nextRevision); err != nil {
+				return Acceptance{}, err
+			}
+			e.reconcileReviewGrantAsks(state)
+			state.reconcileValidationRemedyAsks(nextRevision)
+		}
+	}
 	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, input)
 	if reject != nil {
 		return Acceptance{}, reject
@@ -1365,24 +1375,24 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			ask.Validation = value
 			_, ask.Options = state.validationOffer(*value)
 		}
-		if ev.Request.Control == ControlSelectExecution {
-			if !slices.Contains(ExecutionNodeIDs(), ev.Request.Execution.Node) {
-				return Acceptance{}, nil, false, validationError("execution selection requires an existing execution node")
-			}
-			selection := *ev.Request.Execution
-			ask.Execution = &selection
-			ask.Options = []AskOption{{ID: "approve", Label: "Apply this choice to unstarted calls"}, {ID: "decline", Label: "Keep the current execution choices"}}
-		}
-		// SELECT_ROUTE pins the available gates and complete configuration, when
-		// present. A configuration update does not confirm missing topology or plans.
+		// Route confirmation owns topology and the exact development plan.
 		if ev.Request.Control == ControlSelectRoute {
-			if state.RouteConfigurationRequired() && ev.Request.Configuration == nil {
-				return Acceptance{}, nil, false, validationError("route changes require the complete configuration and its impact preview")
+			if !state.RouteConfirmationDue(e.cfg.Definition) || state.hasPendingAsks() {
+				return Acceptance{}, nil, false, validationError("only the initial route and development plan can be confirmed; edit the bound configuration for runtime changes")
 			}
 			if err := validateRouteGateCandidates(ev.Request.RouteGates); err != nil {
 				return Acceptance{}, nil, false, err
 			}
-			if state.mergeMaster() && ev.Request.Configuration == nil {
+			if e.cfg.RouteGates != nil {
+				gates, _, err := e.configurationContext(state)
+				if err != nil {
+					return Acceptance{}, nil, false, err
+				}
+				if !sameGateSet(gates, ev.Request.RouteGates) {
+					return Acceptance{}, nil, false, validationError("initial route requires the current complete gate catalogue")
+				}
+			}
+			if state.mergeMaster() {
 				return Acceptance{}, nil, false, &RejectedError{Code: CodeReviewDecisionRejected, Detail: "route is locked to merge verification by the split topology binding; it is not selected (change goes through requirement change, reset, or abort)"}
 			}
 			if state.SliceChild != nil {
@@ -1396,19 +1406,6 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				}
 			}
 			ask.RouteGates = slices.Clone(ev.Request.RouteGates)
-			if ev.Request.Configuration != nil {
-				selected := *ev.Request.Configuration
-				ask.Configuration = &selected
-				parents := []Snapshot{}
-				if ev.nodeParent != nil {
-					parents = append(parents, *ev.nodeParent)
-				}
-				preview, err := e.configurationPreview(state, selected, ask.RouteGates, revision, parents...)
-				if err != nil {
-					return Acceptance{}, nil, false, err
-				}
-				ask.Continuation = &preview
-			}
 		}
 		state.PendingAsks[requestID] = ask
 		token := freshnessToken(nextRevision, RequestID(requestID))
@@ -1418,6 +1415,17 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}, state, true, nil
 
 	case KindDecide:
+		// Decision processing owns its mutable projection; the caller's event
+		// must stay byte-exact for digest replay.
+		data, err := json.Marshal(ev.Decide)
+		if err != nil {
+			return Acceptance{}, nil, false, err
+		}
+		var decision DecidePayload
+		if err := json.Unmarshal(data, &decision); err != nil {
+			return Acceptance{}, nil, false, err
+		}
+		ev.Decide = &decision
 		// 两阶段第二段：request 存在、未决、token 为当前值、选项在
 		// 落账选项集内。token 绑定 (当前 revision, requestID)：任何后续
 		// 提交都会使旧 token 失效——STALE_FRESHNESS 拒绝且零状态变化。
@@ -1459,7 +1467,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 			}
 		}
 		if reviewControl(ask.Control) || ev.Decide.Review != nil {
-			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide, ev.nodeParent); err != nil {
+			if err := e.admitReviewDecision(state, ask, requestID, ev.Decide, ev.nodeParent, nextRevision); err != nil {
 				return Acceptance{}, nil, false, err
 			}
 		}
@@ -1476,11 +1484,6 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				return Acceptance{}, nil, false, err
 			}
 		}
-		if ask.Control == ControlSelectExecution || ev.Decide.Execution != nil {
-			if err := e.acceptExecutionSelection(state, ask, ev.Decide); err != nil {
-				return Acceptance{}, nil, false, err
-			}
-		}
 		if ask.Control == ControlRecovery {
 			record, known := state.recoveryRequest(requestID)
 			if _, _, current := e.recoveryAttempt(state, record); !known || !current {
@@ -1492,23 +1495,6 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		state.Decisions[requestID] = RecordedDecision{
 			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
 			EventID: string(ev.ID), Revision: nextRevision, Validation: ev.Decide.Validation, Review: ev.Decide.Review, Reset: ev.Decide.Reset, Continuation: ev.Decide.Continuation,
-		}
-		if ask.Control == ControlSelectRoute && ask.Configuration != nil && ev.Decide.Choice == "approve" {
-			recorded := state.Decisions[requestID]
-			preview := ask.Continuation
-			recorded.Continuation = &NodeContinuationDecision{PreviewDigest: preview.Digest, Reason: "Apply the confirmed workflow configuration", FreshnessToken: ev.Decide.Token, Work: slices.Clone(preview.Work)}
-			state.Decisions[requestID] = recorded
-			for _, node := range ExecutionNodeIDs() {
-				if err := e.rebindUnclaimedExecution(state, node, state.EffectiveExecutionChoice(node)); err != nil {
-					return Acceptance{}, nil, false, err
-				}
-			}
-		}
-		if ask.Control == ControlSelectExecution && ev.Decide.Choice == "approve" {
-			recorded := state.Decisions[requestID]
-			selection := *ask.Execution
-			recorded.Execution = &selection
-			state.Decisions[requestID] = recorded
 		}
 		if ask.Control == ControlContinueNode && ev.Decide.Choice == "approve" {
 			for id, pending := range state.PendingAsks {
@@ -1540,6 +1526,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
 			Revision: nextRevision, RequestID: requestID, Refill: refill,
+			Confirmation: input.Confirmation,
 		}, state, true, nil
 
 	case KindTaskProgress:
@@ -1618,7 +1605,7 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 				Revision: revision, ActionID: actionID,
 			}, nil, false, nil
 		}
-		pending, _, known := state.workerActionTarget(actionID)
+		pending, attempt, known := state.workerActionTarget(actionID)
 		if !known {
 			return Acceptance{}, nil, false, &RejectedError{
 				Code:   CodeUnknownAction,
@@ -1627,10 +1614,12 @@ func (e *Engine) admitEvent(ev Event, digest string, state *State, revision, nex
 		}
 		// 回执落账即固化派发的任务身份（观察事实）：任务簿记随后可被
 		// 收回，terminal 对账以回执里的任务身份完成同一机械后果。
+		execution := state.executionChoice(attempt.Bindings)
 		receipt := SpawnReceipt{
 			ActionID: actionID, Provider: ev.Spawn.Provider,
 			Correlation: ev.Spawn.Correlation, Status: ev.Spawn.Status,
 			FailureClass: ev.Spawn.FailureClass, Task: pending.Task, Digest: payloadDigest,
+			Execution: &execution,
 		}
 		acceptance := Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
@@ -2585,6 +2574,9 @@ func (e *Engine) refill(state *State, nextRevision uint64, input Observation) ([
 	}
 	if state.requirementChangePending() {
 		return nil, nil
+	}
+	if _, err := e.reconcileConfiguration(state, nextRevision); err != nil {
+		return nil, err
 	}
 	if _, err := e.advanceValidation(state, nextRevision); err != nil {
 		return nil, err

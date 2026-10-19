@@ -25,6 +25,14 @@ import (
 	"formal-gates/internal/requirement"
 )
 
+func TestWorkflowViewReportsConfigurationStopDetails(t *testing.T) {
+	run := facade.Run{Next: decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitConfigurationUnavailable, Detail: "bound configuration 工作 does not exist"}}}
+	next := workflowRunView(run)["next"].(map[string]any)
+	if next["reason"] != decision.WaitConfigurationUnavailable || next["detail"] != "bound configuration 工作 does not exist" {
+		t.Fatal("next/show hid the configuration failure", next)
+	}
+}
+
 func TestWorkflowViewShowsCurrentSemanticEvidenceAndChoices(t *testing.T) {
 	t.Parallel()
 	run := facade.Run{RunID: "run", Status: "ACTIVE", Next: decision.NextResult{Kind: decision.KindAsk}, PendingAsks: []facade.PendingAskFace{{RequestID: "opaque-request", Token: "opaque-token", Control: protocol.ControlReviewFindingDecision, Options: []protocol.AskOption{{ID: "confirm:opaque-finding", Label: "Confirm the finding"}}}}, WorkerMaterials: map[string]facade.WorkerMaterial{"opaque-action": {Path: "other-role-material"}}}
@@ -153,7 +161,7 @@ func TestWorkflowAbortConfirmationIncludesOnlyItsCurrentOperation(t *testing.T) 
 	view := workflowConfirmationView(candidate)
 	current := view["run"].(map[string]any)
 	questions := current["questions"].([]map[string]any)
-	if view["root"] != root || !reflect.DeepEqual(view["input"], candidate.Input) || len(current) != 5 || current["runId"] != candidate.Run.RunID || current["revision"] != candidate.Run.Revision || current["route"] != candidate.Run.Route || current["status"] != candidate.Run.Status || len(questions) != 1 || questions[0]["control"] != protocol.ControlAbort || !reflect.DeepEqual(questions[0]["options"], workflowRunView(candidate.Run)["questions"].([]map[string]any)[0]["options"]) {
+	if view["root"] != root || !reflect.DeepEqual(view["input"], candidate.Input) || len(current) != 4 || current["runId"] != candidate.Run.RunID || current["revision"] != candidate.Run.Revision || current["status"] != candidate.Run.Status || len(questions) != 1 || questions[0]["control"] != protocol.ControlAbort || !reflect.DeepEqual(questions[0]["options"], workflowRunView(candidate.Run)["questions"].([]map[string]any)[0]["options"]) {
 		t.Fatal("abort confirmation lost its exact operation, run or original options", view)
 	}
 	body, err := json.Marshal(view)

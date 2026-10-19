@@ -25,7 +25,7 @@
 
 ### 3.1 workflow 公共入口穷举
 
-1. `workflow start`：唯一 bootstrap 写入口；创建精确当前版本的 top-level regular、retained master 或 lightweight run。child 由 engine 内部 handler 创建，不要求宿主拼接多个 `start`。
+1. `workflow start`：唯一 bootstrap 写入口；创建精确当前版本的 top-level run（含 retained master）。child 由 engine 内部 handler 创建，不要求宿主拼接多个 `start`。
 2. `workflow drive`：不带外部事件，确定性推进到下一个外部边界。
 3. `workflow submit`：唯一外部事件写入口；提交用户决定、主动控制请求、worker 结果、HostAction receipt 与 lifecycle 事件。不得保留 `drive --event`、`submit-result` 或其他第二写通道。
 4. `workflow show` / `status` / `next` / `diagnose`：严格只读。`next/status` 可展示带 freshness token 的 `availableActions`；`diagnose` 可原始只读检查 current、terminal、unsupported、corrupt、missing 状态。
@@ -74,15 +74,14 @@
 
 1. 普通修改请求由插件提醒一次；复杂请求在完整需求/方案确认后、动手前再提醒一次。两次都不要求用户回应，不阻塞普通直接处理。
 2. 用户明确提出 formal-gates 时直接进入完整受理，不在完整需求/方案确认后重复询问“是否进入正式流程”。用户可随时主动取消，但引擎不得制造重复 yes/no Ask。
-3. 受理阶段逐项澄清重大需求与技术选择，展示完整整合后的需求和方案及精确 revision，明确 lightweight 或 regular 后，以绑定原材料和具体启动操作的原生真人确认完成受理。具体流程配置、开发计划和门集合仍在相应原 typed 确认节点确认。
+3. 受理阶段逐项澄清重大需求与技术选择，展示完整整合后的需求和方案及精确 revision，选定启用节点的保存配置后，以绑定原材料和具体启动操作的原生真人确认完成受理。具体流程配置、开发计划和门集合仍在相应原 typed 确认节点确认。
 4. `start` 后首个 drive 自动登记已确认 intake receipt/digest，不重复询问同一份需求确认。
-5. regular 不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一正式 UTF-8 Markdown 需求案，不新增草稿或人工覆盖清单；自然语言正文保留，唯一 `## 需求点` 章节以固定 `REQ → 要求/验收条件/来源` 和唯一 `AC` 结构声明全部必须实现、改变产品/流程行为或需要 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界；通过后仍由用户确认当前完整文件及 revision，后续产品审、技术审、开发和 QA 只消费该确认 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，保留在方案正文并交由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 不写该正式需求案。
+5. 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一正式 UTF-8 Markdown 需求案，不新增草稿或人工覆盖清单；自然语言正文保留，唯一 `## 需求点` 章节以固定 `REQ → 要求/验收条件/来源` 和唯一 `AC` 结构声明全部必须实现、改变产品/流程行为或需要 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界；通过后仍由用户确认当前完整文件及 revision，后续产品审、技术审、开发和 QA 只消费该确认 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，保留在方案正文并交由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。
 
 ### 6.2 正常 Ask
 
-1. lightweight/regular 模式（用户尚未明确时）；lightweight 是 `start` bootstrap 例外，不能由 regular run 后期切入。
-2. 高置信拆分的精确拓扑：边界、数量、依赖、并行度；低置信不拆或不确定由 engine 自动记录 no-split 理由。
-3. regular 非分片 run 与每个 child 直接确认当前具体配置、开发计划和候选门集合，可选择普通门的任意子集（含空集）或全集，黑盒/白盒 QA 各按整组选取。UI 可接受命名配置，但每个 child 持久化独立决定，不提供路线档位。
+1. 高置信拆分的精确拓扑：边界、数量、依赖、并行度；低置信不拆或不确定由 engine 自动记录 no-split 理由。
+2. 非分片 run 与每个 child 直接确认当前具体配置、开发计划和候选门集合，可选择普通门的任意子集（含空集）或全集，黑盒/白盒 QA 各按整组选取。UI 可接受命名配置，但每个 child 持久化独立决定。
 4. 产品审、技术审经 Operator 验证成立的每条 P0/P1/P2/P3 finding，以稳定 ID+digest 逐项 confirm/dismiss；可同屏展示但不得只存一条全局决定。Ask 已附带唯一、完整修法时，confirm 同时批准该修法，不再重复询问；只确认问题而修法仍含用户拥有的产品/重大技术选择时，必须继续澄清并按 §7.2.1 确认完整候选的 review-delta 后才能修订。用户还可对已接纳 finding 的有效性、严重度或 adjudication 发起绑定原 result/finding digest 与当前 revision 的 typed correction Ask；原始结果保留，纠正只 supersede 裁决并重算有效状态。
 
 ### 6.3 条件 Ask 与用户主动事件
@@ -217,7 +216,7 @@
 
 以下每一项都要求可复现测试/QA 证据，不能用 smoke 或口头保证代替：
 
-QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case 多对多映射；标准需求案 `REQ/AC/case` 到既有 `RequiredSource/AcceptancePoint/AcceptanceCase/CoverageEdge` 的无损适配；标准需求案任一 `AC` 缺 approved case 或试图以非 QA 处置绕过时拒绝；其他 source 无适用 QA 点时的显式理由；未知/重复/缺失/orphan source/point/case、仅 case 决策、自动推导 source/point 决策和集合级 PASS 被拒绝；source inventory/manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效；`FULL` expected/actual 不一致与 `AFFECTED` 执行/继承/未执行集合不完整被拒绝；以及 `AUTHORIZED_SKIP` 不计为执行 PASS。覆盖契约、validator 和正常 regular 执行路径共同取证。
+QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case 多对多映射；标准需求案 `REQ/AC/case` 到既有 `RequiredSource/AcceptancePoint/AcceptanceCase/CoverageEdge` 的无损适配；标准需求案任一 `AC` 缺 approved case 或试图以非 QA 处置绕过时拒绝；其他 source 无适用 QA 点时的显式理由；未知/重复/缺失/orphan source/point/case、仅 case 决策、自动推导 source/point 决策和集合级 PASS 被拒绝；source inventory/manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效；`FULL` expected/actual 不一致与 `AFFECTED` 执行/继承/未执行集合不完整被拒绝；以及 `AUTHORIZED_SKIP` 不计为执行 PASS。覆盖契约、validator 和正常执行路径共同取证。
 
 1. **迁移表与用户节点**：每条合法边、pre 拒绝、trigger 分类、Ask/Operator/Wait/HostAction/Ready/Complete、主动 `REQUEST_*`、终态与回退；正常入口不存在遗漏用户节点。
 2. **节点内执行计划**：封闭变体 constructor 非法状态拒绝、closed-world compiler 图校验（可达性/循环/依赖/join 覆盖/版本绑定/registry ID 完备性）、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
@@ -257,7 +256,7 @@ QA 覆盖契约的独立 fixtures 还必须证明：合法 source→point→case
 ## 13. 用户已确认的决策记录
 
 - 用户主动提出 formal-gates 后不重复询问是否进入；插件只非阻塞提醒一次或复杂需求时两次。
-- 完整需求/方案仍须单独确认；lightweight 是 start bootstrap 例外，具体开发计划和门集合在拆分决定后确认。
+- 完整需求/方案仍须单独确认；具体开发计划和门集合在拆分决定后确认。
 - 所有用户选择能力保留为 typed Ask/available action，经唯一 `submit` 入口落账。
 - 用户可自由组合产品审、开发前技术审、初始开发、QA、质量门审查和业务返修六项主要职责，保持所选职责原有相对顺序与并行关系。QA 按设计、独立审查、执行整条链运行；黑盒、白盒各按整组选取，运行模式由原 SelectedGates 持有，关闭 QA 职责也关闭 merge QA。启动及运行中配置入口从同源定义目录展示并绑定明确用户选择，state 只保存当前这一份主流程选择，恢复不重读默认文件；关闭职责不暗跑、不伪造 PASS。初始开发与业务返修分别选择，关闭返修仍保留真实失败与义务。质量门审查独立控制普通门、固定合并门与返修成员门，关闭时不建立门目标、不补写门 PASS；child 继承创建时选择，receipt 保留真实门集合和原结果，主线仅在门职责启用时准备 child 补门目标。
 - 运行中的临时执行选择从主流程目录派生，黑盒 QA 与白盒 QA 各自可选平台、模型和推理强度，同组设计、独立审查与执行共用该组配置；其余主要职责分别选择，辅助任务及合并 QA 不新增公开选择。流程开关与顺序不变。选择沿原 Decisions 持久化，只更新该组未 claim 的调用；已 claim 调用及其恢复保留原 Attempt 绑定。child 继承创建时快照，既存 child 不随父后续选择改变；已保存的共享 QA 选择及其请求重放保持原语义。

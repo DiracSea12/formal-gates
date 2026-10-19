@@ -15,11 +15,23 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/prompts"
+	"formal-gates/internal/settings"
+	"formal-gates/internal/validate"
 )
 
 // confirmationCall is a protocol fixture. It verifies the actual displayed
 // request before responding; it does not stand in for a real host UI test.
 func confirmationCall(t *testing.T, name string, arguments any, capability bool, action string, display func(map[string]any), metadata ...any) map[string]any {
+	t.Helper()
+	return serveConfirmationCall(t, nil, name, arguments, capability, action, display, nil, metadata...)
+}
+
+// serveConfirmationCall is confirmationCall bound to explicit serve flags
+// (an installed --package-root selects the serving host). When elicitations
+// is non-nil it counts the service's elicitation requests: a permission-gate
+// host confirms before the call arrives and must emit none.
+func serveConfirmationCall(t *testing.T, serveArgs []string, name string, arguments any, capability bool, action string, display func(map[string]any), elicitations *int, metadata ...any) map[string]any {
 	t.Helper()
 	in, client, err := os.Pipe()
 	if err != nil {
@@ -34,7 +46,7 @@ func confirmationCall(t *testing.T, name string, arguments any, capability bool,
 	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
-		code := Run("formal-gates", []string{"workflow", "serve"}, IO{Stdin: in, Stdout: out, Stderr: &stderr})
+		code := Run("formal-gates", append([]string{"workflow", "serve"}, serveArgs...), IO{Stdin: in, Stdout: out, Stderr: &stderr})
 		out.Close()
 		done <- code
 	}()
@@ -72,6 +84,9 @@ func confirmationCall(t *testing.T, name string, arguments any, capability bool,
 		}
 		if frame["method"] != "elicitation/create" || frame["id"] == nil || !capability {
 			t.Fatal("unexpected host request", frame)
+		}
+		if elicitations != nil {
+			*elicitations++
 		}
 		params := frame["params"].(map[string]any)
 		schema := params["requestedSchema"].(map[string]any)
@@ -131,6 +146,8 @@ func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +170,7 @@ func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
 		{map[string]any{"thread_id": "codex-flat-owner", "threadId": "codex-flat-owner"}, facade.OwnerBinding{Session: "codex-flat-owner"}},
 	} {
 		var runID string
-		result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "route": "lightweight"}, true, "accept", func(value map[string]any) {
+		result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审"}, true, "accept", func(value map[string]any) {
 			runID = value["runId"].(string)
 		}, test.metadata)
 		if result["isError"] != false {
@@ -181,7 +198,7 @@ func TestWorkflowConfirmationStartPreservesCurrentHostOwner(t *testing.T) {
 			t.Fatal("the original host transcript lost its metering baseline", state.OwnerBaseline, state.OwnerStartedAt)
 		}
 	}
-	result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "route": "lightweight", "owner": owner}, true, "accept", func(map[string]any) { t.Fatal("model-authored owner reached confirmation") })
+	result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审", "owner": owner}, true, "accept", func(map[string]any) { t.Fatal("model-authored owner reached confirmation") })
 	if result["isError"] != true {
 		t.Fatal("model arguments supplied a host owner", result)
 	}
@@ -327,6 +344,8 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -336,14 +355,14 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 		t.Fatal(err)
 	}
 	var output, stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "unconfirmed", "--route", "lightweight", "--intake", "1"}, IO{Stdout: &output, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") {
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "unconfirmed", "--configuration", "仅评审", "--intake", "1"}, IO{Stdout: &output, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") {
 		t.Fatal("start accepted an agent's confirmation", code, stderr.String())
 	}
-	arguments := map[string]any{"root": root, "intake": position, "route": "lightweight", "disabledNodes": []int{1}}
+	arguments := map[string]any{"root": root, "intake": position, "configuration": "仅评审"}
 	var displayedID string
 	check := func(value map[string]any) {
 		materials := value["materials"].(map[string]any)
-		if value["root"] != root || value["route"] != "lightweight" || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
+		if value["root"] != root || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
 			t.Fatal("start confirmation omitted its actual operation or complete source", value)
 		}
 		displayedID = value["runId"].(string)
@@ -377,7 +396,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	}
 	var request facade.StartRequest
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, displayedID, "request.json"))
-	if err != nil || json.Unmarshal(body, &request) != nil || request.Route != "lightweight" || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+	if err != nil || json.Unmarshal(body, &request) != nil || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 		t.Fatal("started run lost its exact displayed inputs", request, err)
 	}
 }
@@ -388,6 +407,8 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +417,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments := mustJSON(t, map[string]any{"root": root, "intake": position, "route": "lightweight"})
+	arguments := mustJSON(t, map[string]any{"root": root, "intake": position, "configuration": "仅评审"})
 	var starts [2]struct {
 		id  string
 		err error
@@ -411,7 +432,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 			_, starts[i].err = callConfirmationTool("confirm_start", arguments, IO{}, func(value any) error {
 				starts[i].id = value.(map[string]any)["runId"].(string)
 				return nil
-			})
+			}, "")
 		}(i)
 	}
 	close(ready)
@@ -427,7 +448,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, start.id, "request.json"), &request); err != nil {
 			t.Fatal(err)
 		}
-		if request.RunID != start.id || request.Route != "lightweight" || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+		if request.RunID != start.id || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 			t.Fatal("started run lost its exact displayed identity or intake", request, start.id)
 		}
 	}
@@ -439,6 +460,7 @@ func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
 	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +481,7 @@ func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *
 			t.Cleanup(func() { os.Args[0] = original })
 			before := snapshotEngineRunTree(t, root, "writer-exclusive")
 			var output, stderr bytes.Buffer
-			code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "rejected-start", "--route", "lightweight", "--intake", strconv.Itoa(position)}, IO{Stdout: &output, Stderr: &stderr})
+			code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--run-id", "rejected-start", "--configuration", "仅评审", "--intake", strconv.Itoa(position)}, IO{Stdout: &output, Stderr: &stderr})
 			if code == 0 || output.Len() != 0 || !strings.Contains(stderr.String(), test.wantError) || !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
 				t.Fatal("start lost its original pre-state rejection", code, output.String(), stderr.String())
 			}
@@ -471,7 +493,7 @@ func TestWorkflowStartPreservesInstallationAdmissionBeforeNativeConfirmation(t *
 				if err != nil {
 					t.Fatal(err)
 				}
-				result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "route": "lightweight"}, true, "accept", func(map[string]any) { t.Fatal("unregistered candidate opened a confirmation") })
+				result := confirmationCall(t, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审"}, true, "accept", func(map[string]any) { t.Fatal("unregistered candidate opened a confirmation") })
 				message := result["content"].([]any)[0].(map[string]any)["text"].(string)
 				if result["isError"] != true || !strings.Contains(message, "UNREGISTERED_INSTALL") {
 					t.Fatal("native capability bypassed installation admission", result)
@@ -491,6 +513,7 @@ func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) 
 	}
 	root := t.TempDir()
 	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
 	cliGit(t, root, "init", "-q")
 	cliGit(t, root, "config", "user.email", "test@example.test")
 	cliGit(t, root, "config", "user.name", "Test User")
@@ -516,21 +539,21 @@ func TestWorkflowConfirmationStartUsesOriginalNativeBaseSelection(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
-		name, route, base, vcs, wantBase, wantVCS, wantInitial, wantError string
+		name, configuration, base, vcs, wantBase, wantVCS, wantInitial, wantError string
 	}{
-		{name: "current native snapshot", route: "regular", wantBase: head, wantVCS: "git", wantInitial: head},
-		{name: "explicit ancestor", route: "regular", base: strings.ToUpper(base), vcs: "GIT", wantBase: base, wantVCS: "git", wantInitial: head},
-		{name: "lightweight ignores base", route: "lightweight", base: "not-a-native-identity", vcs: "git", wantVCS: "git"},
-		{name: "invalid native identity", route: "regular", base: "not-a-native-identity", vcs: "git", wantError: "invalid git snapshot identity"},
-		{name: "divergent native identity", route: "regular", base: divergent, vcs: "git", wantError: "is not an ancestor of the current snapshot"},
-		{name: "unsupported native vcs", route: "regular", base: base, vcs: "unsupported-vcs", wantError: `unsupported VCS "unsupported-vcs"`},
+		{name: "current native snapshot", configuration: settings.DefaultConfigurationName, wantBase: head, wantVCS: "git", wantInitial: head},
+		{name: "explicit ancestor", configuration: settings.DefaultConfigurationName, base: strings.ToUpper(base), vcs: "GIT", wantBase: base, wantVCS: "git", wantInitial: head},
+		{name: "restricted selection still binds base", configuration: "仅评审", base: "not-a-native-identity", vcs: "git", wantError: "invalid git snapshot identity"},
+		{name: "invalid native identity", configuration: settings.DefaultConfigurationName, base: "not-a-native-identity", vcs: "git", wantError: "invalid git snapshot identity"},
+		{name: "divergent native identity", configuration: settings.DefaultConfigurationName, base: divergent, vcs: "git", wantError: "is not an ancestor of the current snapshot"},
+		{name: "unsupported native vcs", configuration: settings.DefaultConfigurationName, base: base, vcs: "unsupported-vcs", wantError: `unsupported VCS "unsupported-vcs"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			before, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			arguments := map[string]any{"root": root, "intake": position, "route": test.route}
+			arguments := map[string]any{"root": root, "intake": position, "configuration": test.configuration}
 			if test.base != "" {
 				arguments["baseSnapshot"] = test.base
 			}
@@ -650,5 +673,274 @@ func TestWorkflowConfirmationDeliversOnlyTheOriginalPendingNativeAnswer(t *testi
 	body, err := os.ReadFile(filepath.Join(job, "interaction-answer.json"))
 	if err != nil || json.Unmarshal(body, &answer) != nil || answer["request_id"] != "original-permission" || answer["option"] != "allow-once" {
 		t.Fatal("native answer changed its original request or choice", answer, err)
+	}
+}
+
+func TestConfirmStartPackageRootSelectsRegisteredHost(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	source := writeInstallSource(t, "source")
+	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range prompts.RequiredActionIDs {
+		mustWriteCLI(t, filepath.Join(source, "prompts", "actions", id+".md"), id+" instructions\n")
+	}
+	for _, platform := range []string{"claude", "codex"} {
+		var stdout, stderr bytes.Buffer
+		if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", platform, "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			t.Fatalf("install %s failed (rc=%d): %s%s", platform, code, stdout.String(), stderr.String())
+		}
+		stdout.Reset()
+		stderr.Reset()
+		if code := runInstalledFixture(t, []string{"install", "--source", source, "--host", platform, "--scope", "global", "--bootstrap"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			t.Fatalf("bootstrap %s failed (rc=%d): %s%s", platform, code, stdout.String(), stderr.String())
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Args[0]
+	os.Args[0] = filepath.Join(home, ".local", "bin", installTestBinaryName())
+	t.Cleanup(func() { os.Args[0] = original })
+	codexTarget := filepath.Join(home, ".codex", "skills", "formal-gates")
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Engine admission selects the installed package root.")+"\n## 方案\n\nUse the installed package root.\n")
+	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, position, err := facade.SaveOriginalPayload(workflowPayloadDirectory(root, "", "intake"), mustJSON(t, preview.IntakeCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := mustJSON(t, map[string]any{"root": root, "intake": position, "configuration": "仅评审"})
+	confirm := func(any) error { return nil }
+	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, ""); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
+		t.Fatalf("shared launcher admission did not conflict: %v", err)
+	}
+	admission, err := validate.ResolveEngineAdmission(root, codexTarget)
+	if err != nil || admission.Provider != "codex" {
+		t.Fatalf("package root did not select the codex record: %+v %v", admission, err)
+	}
+	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, codexTarget); err != nil && strings.Contains(err.Error(), "conflicting active registry records") {
+		t.Fatalf("package root admission still conflicts: %v", err)
+	}
+}
+
+// installConfirmationHost installs the named host at project scope the way its
+// launcher registers it and returns the installed package target; the fixture
+// keeps the registered launcher as the process identity for later engine opens.
+func installConfirmationHost(t *testing.T, root, hostName string) string {
+	t.Helper()
+	clearHostEnv(t)
+	source := writeInstallSource(t, "Host permission fixture")
+	if err := os.Remove(filepath.Join(source, "prompts", "actions", "sample-action.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range prompts.RequiredActionIDs {
+		mustWriteCLI(t, filepath.Join(source, "prompts", "actions", id+".md"), id+" instructions\n")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Args[0]
+	os.Args[0] = filepath.Join(home, ".local", "bin", installTestBinaryName())
+	t.Cleanup(func() { os.Args[0] = original })
+	option := validate.InstallOptions{Source: source, Host: hostName, Scope: "project", Project: root, BinaryTarget: os.Args[0], Force: true}
+	report, err := validate.Install(option)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := report.Targets[0].TargetPath
+	option.Bootstrap = true
+	if _, err := validate.Install(option); err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+// hostPermissionProject returns a project with a saved intake candidate and a
+// startable configuration ready for a confirmation tool call.
+func hostPermissionProject(t *testing.T, root string) (position int) {
+	t.Helper()
+	saveReviewOnlyConfiguration(t, root)
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Confirm through the host permission gate.")+"\n## 方案\n\nRecord the confirming channel with the run.\n")
+	cliStartRepo(t, root)
+	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, position, err = facade.SaveOriginalPayload(workflowPayloadDirectory(root, "", "intake"), mustJSON(t, preview.IntakeCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return position
+}
+
+// A permission-gate host decides before the call reaches the service: the
+// confirm tools execute their displayed operation without an elicitation
+// request, with or without an advertised elicitation capability, and the
+// durable receipts keep the host-permission source.
+func TestHostPermissionConfirmStartSkipsElicitation(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	target := installConfirmationHost(t, root, "devin")
+	position := hostPermissionProject(t, root)
+	for _, capability := range []bool{false, true} {
+		elicitation := 0
+		result := serveConfirmationCall(t, []string{"--package-root", target}, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审"}, capability, "accept", nil, &elicitation)
+		if result["isError"] != false {
+			t.Fatalf("permission-gate start failed with capability=%v: %v", capability, result)
+		}
+		if elicitation != 0 {
+			t.Fatalf("permission-gate start emitted %d elicitation requests with capability=%v", elicitation, capability)
+		}
+		message := result["content"].([]any)[0].(map[string]any)["text"].(string)
+		var view map[string]any
+		if err := json.Unmarshal([]byte(message), &view); err != nil || view["runId"] == "" {
+			t.Fatalf("start output lost its run identity: %q %v", message, err)
+		}
+		runID := view["runId"].(string)
+		var request facade.StartRequest
+		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, runID, "request.json"), &request); err != nil || request.IntakeConfirmationReceipt.Confirmation != "host-permission" {
+			t.Fatalf("start request lost the host-permission source: %+v %v", request, err)
+		}
+		f, err := facade.Open(root, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Drive(); err != nil {
+			t.Fatal(err)
+		}
+		var state struct {
+			Content protocol.State `json:"content"`
+		}
+		body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, runID, "state.json"))
+		if err != nil || json.Unmarshal(body, &state) != nil || state.Content.IntakeReceipt == nil || state.Content.IntakeReceipt.Confirmation.Confirmation != "host-permission" {
+			t.Fatalf("run state lost the host-permission intake source: %+v %v", state.Content.IntakeReceipt, err)
+		}
+	}
+}
+
+// The control decision and the delivered native answer record the same
+// host-permission source as the start receipt; a replayed control confirmation
+// stays idempotent.
+func TestHostPermissionConfirmControlAndNativeAnswer(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	target := installConfirmationHost(t, root, "devin")
+	position := hostPermissionProject(t, root)
+	elicitation := 0
+	result := serveConfirmationCall(t, []string{"--package-root", target}, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审"}, false, "accept", nil, &elicitation)
+	if result["isError"] != false {
+		t.Fatalf("permission-gate start failed: %v", result)
+	}
+	message := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	var view map[string]any
+	if err := json.Unmarshal([]byte(message), &view); err != nil || view["runId"] == "" {
+		t.Fatalf("start output lost its run identity: %q %v", message, err)
+	}
+	runID := view["runId"].(string)
+	f, err := facade.Open(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, facade.EngineNamespace, runID)
+	job := filepath.Join(directory, "jobs", "interaction")
+	if err := os.MkdirAll(job, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(job, "interaction-pending.json"), `[{"connection":1,"method":"session/request_permission","options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"}],"request_id":"41","status":"pending"}]`)
+	var stdout, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"native", "respond", "--root", root, "--question", "1", "--choice", "1"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("decision save failed: %s", stderr.String())
+	}
+	result = serveConfirmationCall(t, []string{"--package-root", target}, "confirm_native", map[string]any{"root": root, "run": 1, "question": 1, "decision": 1}, false, "accept", nil, &elicitation)
+	if result["isError"] != false {
+		t.Fatalf("permission-gate native answer failed: %v", result)
+	}
+	var answer map[string]any
+	if err := readJSONFileInto(filepath.Join(job, "interaction-answer.json"), &answer); err != nil || answer["request_id"] != "41" || answer["option"] != "allow-once" || answer["confirmation"] != "host-permission" {
+		t.Fatalf("delivered native answer lost the host-permission source: %v %v", answer, err)
+	}
+	request, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, pending, err := f.SubmitControl(request); err != nil || len(pending.PendingAsks) != 1 {
+		t.Fatal("control request did not create its Ask", pending, err)
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "decline"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := facade.SaveOriginalPayload(workflowPayloadDirectory(root, runID, "control"), mustJSON(t, candidate)); err != nil {
+		t.Fatal(err)
+	}
+	arguments := map[string]any{"root": root, "run": 1, "candidate": 1}
+	result = serveConfirmationCall(t, []string{"--package-root", target}, "confirm_control", arguments, false, "accept", nil, &elicitation)
+	if result["isError"] != false {
+		t.Fatalf("permission-gate control submit failed: %v", result)
+	}
+	var state struct {
+		Content protocol.State `json:"content"`
+	}
+	body, err := os.ReadFile(filepath.Join(directory, "state.json"))
+	if err != nil || json.Unmarshal(body, &state) != nil {
+		t.Fatal(err)
+	}
+	confirmed := 0
+	for _, record := range state.Content.Events {
+		if record.Acceptance.Confirmation == "host-permission" {
+			confirmed++
+		}
+	}
+	if confirmed != 1 {
+		t.Fatalf("control decision lost its host-permission source: %d acceptances", confirmed)
+	}
+	before := snapshotEngineRunTree(t, root, runID)
+	result = serveConfirmationCall(t, []string{"--package-root", target}, "confirm_control", arguments, false, "accept", nil, &elicitation)
+	if result["isError"] != false {
+		t.Fatalf("replayed control submit failed: %v", result)
+	}
+	if after := snapshotEngineRunTree(t, root, runID); !reflect.DeepEqual(before, after) {
+		t.Fatal("replayed host-permission control changed the run")
+	}
+	if elicitation != 0 {
+		t.Fatalf("permission-gate tools emitted %d elicitation requests", elicitation)
+	}
+}
+
+// A host without a permission-gate channel still requires the interactive
+// form: without an advertised elicitation capability the same confirm call
+// stays rejected and writes nothing.
+func TestElicitationHostWithoutCapabilityRejectsConfirmStart(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	target := installConfirmationHost(t, root, "codex")
+	position := hostPermissionProject(t, root)
+	result := serveConfirmationCall(t, []string{"--package-root", target}, "confirm_start", map[string]any{"root": root, "intake": position, "configuration": "仅评审"}, false, "accept", nil, nil)
+	if result["isError"] != true {
+		t.Fatalf("elicitation host started without confirmation capability: %v", result)
+	}
+	message := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(message, "NATIVE_CONFIRMATION_UNAVAILABLE") {
+		t.Fatalf("rejection lost its original cause: %q", message)
+	}
+	entries, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("unconfirmed start created run files: %v %v", entries, err)
 	}
 }

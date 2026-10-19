@@ -11,7 +11,6 @@ import (
 	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
-	"formal-gates/internal/settings"
 )
 
 // 独立命名 ID（ids.go 哲学：不同用途的 ID 之间不可直接赋值）。
@@ -34,12 +33,11 @@ type (
 type ControlKind string
 
 const (
-	ControlValidation      ControlKind = "VALIDATION"
-	ControlReset           ControlKind = "RESET"
-	ControlAbort           ControlKind = "ABORT"
-	ControlRecovery        ControlKind = "RECOVER_ATTEMPT"
-	ControlContinueNode    ControlKind = "CONTINUE_NODE"
-	ControlSelectExecution ControlKind = "SELECT_EXECUTION"
+	ControlValidation   ControlKind = "VALIDATION"
+	ControlReset        ControlKind = "RESET"
+	ControlAbort        ControlKind = "ABORT"
+	ControlRecovery     ControlKind = "RECOVER_ATTEMPT"
+	ControlContinueNode ControlKind = "CONTINUE_NODE"
 	// 四个开发前审查/拓扑/路线业务控制（总需求 §6.2、§7.3.5、§8.1.1）：
 	// Ask 创建方给出选项集，DECIDE 携带与控制一一对应的 typed Review
 	// 载荷分支（REVIEW_ROUND_GRANT 的 decline 选项除外）。
@@ -57,7 +55,7 @@ const (
 // Valid 报告 k 是否属于封闭控制集合。
 func (k ControlKind) Valid() bool {
 	switch k {
-	case ControlValidation, ControlReset, ControlAbort, ControlRecovery, ControlContinueNode, ControlSelectExecution,
+	case ControlValidation, ControlReset, ControlAbort, ControlRecovery, ControlContinueNode,
 		ControlReviewRoundGrant, ControlReviewFindingDecision, ControlConfirmTopology, ControlSelectRoute,
 		ControlRequestRequirementChange:
 		return true
@@ -130,11 +128,9 @@ func (k EventKind) Valid() bool {
 // without a package to freeze work during clarification. A later update binds
 // the complete package to the same Ask before the user confirms it.
 type RequestPayload struct {
-	Configuration *ConfigurationSelection
-	Execution     *ExecutionSelection
-	Continuation  *NodeContinuationRequest
-	Handoff       *DevelopmentHandoffRequest
-	Validation    *ValidationRequest
+	Continuation *NodeContinuationRequest
+	Handoff      *DevelopmentHandoffRequest
+	Validation   *ValidationRequest
 	// Request and Token bind a package update to an existing requirement Ask.
 	// Empty Request starts a new control request, including a package-free barrier.
 	Request RequestID
@@ -160,7 +156,6 @@ type DevelopmentHandoffRequest struct {
 // 控制携带 typed Requirement 载荷（或作为 decline 两者皆空）。两个变体
 // 指针同时只允许一个非空。
 type DecidePayload struct {
-	Execution    *ExecutionSelectionDecision
 	Continuation *NodeContinuationDecision
 	Validation   *ValidationDecision
 	Request      RequestID
@@ -275,10 +270,9 @@ type ACOwner struct {
 	Owner string `json:"owner"`
 }
 
-// RouteDecision binds the candidate gates and the user's explicit subset,
-// including an empty selection. Split merge duties come from the topology.
+// RouteDecision records the candidate gates, configuration-derived selection
+// and the user's development plan confirmation.
 type RouteDecision struct {
-	Configuration   *ConfigurationSelection      `json:"configuration,omitempty"`
 	DevelopmentPlan *DevelopmentPlanConfirmation `json:"developmentPlan,omitempty"`
 	Gates           []string                     `json:"gates"`
 	Selected        []string                     `json:"selected"`
@@ -675,24 +669,6 @@ func (e Event) Validate() error {
 		} else if e.Request.Continuation != nil {
 			return validationError("该请求不接受节点继续载荷")
 		}
-		if e.Request.Configuration != nil {
-			if e.Request.Control != ControlSelectRoute {
-				return validationError("configuration selection requires SELECT_ROUTE")
-			}
-			if err := settings.ValidateConfiguration(e.Request.Configuration.Configuration); err != nil {
-				return validationError(err.Error())
-			}
-		}
-		if e.Request.Control == ControlSelectExecution {
-			if e.Request.Execution == nil {
-				return validationError("execution selection requires its node and choice")
-			}
-			if err := e.Request.Execution.validate(); err != nil {
-				return err
-			}
-		} else if e.Request.Execution != nil {
-			return validationError("this control does not accept an execution selection")
-		}
 	case KindDecide:
 		if strings.TrimSpace(string(e.Decide.Request)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide request id is empty"}
@@ -702,11 +678,6 @@ func (e Event) Validate() error {
 		}
 		if strings.TrimSpace(string(e.Decide.Choice)) == "" {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide choice is empty"}
-		}
-		if e.Decide.Execution != nil {
-			if e.Decide.Execution.Digest == "" || e.Decide.Review != nil || e.Decide.Requirement != nil || e.Decide.Reset != nil || e.Decide.Validation != nil || e.Decide.Continuation != nil {
-				return validationError("execution decision requires only its original selection digest")
-			}
 		}
 		if e.Decide.Review != nil && e.Decide.Requirement != nil {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "decide payload must carry at most one typed variant (review or requirement)"}
@@ -909,21 +880,18 @@ type eventWire struct {
 }
 
 type requestWire struct {
-	Configuration *ConfigurationSelection     `json:"configuration,omitempty"`
-	Execution     *ExecutionSelection         `json:"execution,omitempty"`
-	Continuation  *NodeContinuationRequest    `json:"continuation,omitempty"`
-	Handoff       *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
-	Validation    *ValidationRequest          `json:"validation,omitempty"`
-	Request       string                      `json:"request,omitempty"`
-	Token         string                      `json:"token,omitempty"`
-	Control       string                      `json:"control"`
-	Options       []AskOption                 `json:"options"`
-	Package       *RequirementDecisionPackage `json:"package,omitempty"`
-	RouteGates    []string                    `json:"routeGates,omitempty"`
+	Continuation *NodeContinuationRequest    `json:"continuation,omitempty"`
+	Handoff      *DevelopmentHandoffRequest  `json:"handoff,omitempty"`
+	Validation   *ValidationRequest          `json:"validation,omitempty"`
+	Request      string                      `json:"request,omitempty"`
+	Token        string                      `json:"token,omitempty"`
+	Control      string                      `json:"control"`
+	Options      []AskOption                 `json:"options"`
+	Package      *RequirementDecisionPackage `json:"package,omitempty"`
+	RouteGates   []string                    `json:"routeGates,omitempty"`
 }
 
 type decideEventWire struct {
-	Execution    *ExecutionSelectionDecision `json:"execution,omitempty"`
 	Continuation *NodeContinuationDecision   `json:"continuation,omitempty"`
 	Reset        *ResetDecision              `json:"reset,omitempty"`
 	Validation   *ValidationDecision         `json:"validation,omitempty"`
@@ -1007,13 +975,10 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 		options = append(options, e.Request.Options...)
 		w.Request = &requestWire{Handoff: e.Request.Handoff, Validation: e.Request.Validation, Control: string(e.Request.Control), Options: options, Package: e.Request.Package, Request: string(e.Request.Request), Token: e.Request.Token, RouteGates: e.Request.RouteGates}
 		w.Request.Continuation = e.Request.Continuation
-		w.Request.Execution = e.Request.Execution
-		w.Request.Configuration = e.Request.Configuration
 	}
 	if e.Decide != nil {
 		w.Decide = &decideEventWire{Reset: e.Decide.Reset, Validation: e.Decide.Validation, Request: string(e.Decide.Request), Token: e.Decide.Token, Choice: e.Decide.Choice, Review: e.Decide.Review, Requirement: e.Decide.Requirement}
 		w.Decide.Continuation = e.Decide.Continuation
-		w.Decide.Execution = e.Decide.Execution
 	}
 	if e.Task != nil {
 		w.Task = &taskEventWire{Task: e.Task.Task.String(), Attempt: e.Task.Attempt, Status: string(e.Task.Status)}
@@ -1079,6 +1044,10 @@ type Acceptance struct {
 	Refill         []string `json:"refill,omitempty"`
 	FailureClass   string   `json:"failureClass,omitempty"`
 	RecoveryAction string   `json:"recoveryAction,omitempty"`
+	// Confirmation records which channel confirmed the decision: empty for the
+	// interactive form, "host-permission" when the host's permission gate
+	// admitted the confirmation call.
+	Confirmation string `json:"confirmation,omitempty"`
 }
 
 // freshnessToken 确定性求值 freshness token：token = sha256(canonical{revision, requestID})。

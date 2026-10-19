@@ -102,11 +102,11 @@ func TestWorkflowPrecheckAssignsMissingIdentitiesWithoutChangingMaterial(t *test
 
 func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
 	root := t.TempDir()
-	for path, content := range map[string]string{"request.md": "# Actual request\n", "design.md": "# Actual solution\n", "reference.md": "# Selected reference\n"} {
+	for path, content := range map[string]string{"request.md": cliStructuredRequirement("Actual request"), "design.md": "# Actual solution\n", "reference.md": "# Selected reference\n"} {
 		mustWriteCLI(t, filepath.Join(root, path), content)
 	}
 	var out, stderr bytes.Buffer
-	args := []string{"workflow", "start", "--precheck", "--root", root, "--route", "lightweight", "--requirement", "request.md", "--solution", "design.md", "--artifact", "reference.md"}
+	args := []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "request.md", "--solution", "design.md", "--artifact", "reference.md"}
 	if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
 		t.Fatal(stderr.String())
 	}
@@ -114,12 +114,12 @@ func TestWorkflowPrecheckMaterialSelectionDoesNotConfirmOrStart(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Materials) != 3 || preview.RequirementDocument != nil || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.SolutionRevision != preview.Materials[0].Revision {
+	if len(preview.Materials) != 3 || preview.RequirementDocument == nil || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.SolutionRevision != preview.Materials[0].Revision {
 		t.Fatal("precheck lost explicit material selection")
 	}
 	out.Reset()
 	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "start", "--root", t.TempDir(), "--run-id", "unconfirmed", "--route", "lightweight", "--intake", "1"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "select an original displayed payload") {
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", t.TempDir(), "--run-id", "unconfirmed", "--intake", "1"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "select an original displayed payload") {
 		t.Fatalf("preview substituted for explicit confirmation receipt: %s", stderr.String())
 	}
 	assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)

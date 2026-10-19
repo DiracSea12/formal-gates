@@ -606,13 +606,7 @@ func dshExecute(request any, directory string, probe bool, services ...Execution
 	return run()
 }
 
-func dshCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := dshResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return dshConfiguredBinding(settings.Values{Native: native})
-}
+var dshCaptureBinding = nativeCapture(dshResolvePaths, dshConfiguredBinding)
 
 func dshResolvePaths(native, sources map[string]string) error {
 	executable := settings.Values{Native: native}.NativeString("dshExecutable")

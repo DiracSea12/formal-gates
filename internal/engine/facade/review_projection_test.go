@@ -1,7 +1,7 @@
 // review_projection_test.go 覆盖 façade Run 投影的审查面：分动作的
 // completed/base/extra/effective/remaining/NextRoundRequirement、raw/
 // adjudication/correction 计数、effective 状态与来源，以及拓扑/路线绑定
-// 的逐项投影；lightweight run 的完整接线面。
+// 的逐项投影；最小节点选择 run 的完整接线面。
 package facade
 
 import (
@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/worker"
 )
 
@@ -412,36 +413,48 @@ func TestReviewFaceProjectsGrantProvenance(t *testing.T) {
 	}
 }
 
-// TestLightweightRunCarriesReviewFace：lightweight run 的 show/drive 投影
-// 带完整审查面（两条初始 series、无拓扑、无路线选择）。
-func TestLightweightRunCarriesReviewFace(t *testing.T) {
+// TestMinimalSelectionRunCarriesReviewFace：仅启用 product-review 的 run 的
+// show 投影带完整审查面（两条初始 series、无拓扑、无路线选择）；终态（abort）
+// 后审查面与所选节点仍保留。
+func TestMinimalSelectionRunCarriesReviewFace(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	verifiedStartFixture(t, root)
+	configureFlowNodes(t, root, "start-readiness", "development", "qa", "gate", "repair")
 	request := StartRequest{
-		RunID: "lightweight-review-face", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		RunID: "minimal-review-face", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}
-	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
+	f, run, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: request, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if len(run.Review.Actions) != 2 {
 		t.Fatalf("review actions = %d, want both series", len(run.Review.Actions))
 	}
-	for _, face := range run.Review.Actions {
-		if face.Completed != 0 || face.BaseLimit != 3 || face.Remaining != 3 ||
-			face.NextRoundRequirement != "AUTOMATIC_CAPACITY" || face.EffectiveStatus != "PENDING" {
-			t.Fatalf("initial series face = %+v", face)
-		}
+	if face := run.Review.Actions[0]; face.Completed != 0 || face.BaseLimit != 3 || face.Remaining != 3 ||
+		face.NextRoundRequirement != "AUTOMATIC_CAPACITY" || face.EffectiveStatus != "PENDING" {
+		t.Fatalf("initial product-review face = %+v", face)
 	}
-	if run.Review.Topology != nil || run.Review.RouteConfirmed || run.Review.SelectedGates != nil {
-		t.Fatalf("lightweight run must not carry topology or route: %+v", run.Review)
-	}
-	completed, err := f.Drive()
+	snapshot, err := f.engine.Load()
 	if err != nil {
-		t.Fatalf("drive: %v", err)
+		t.Fatal(err)
 	}
-	if completed.Status != "COMPLETE" {
+	gates, err := configurationGates(f.admission.Target)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Review.Topology != nil || run.Review.RouteConfirmed ||
+		!reflect.DeepEqual(run.Review.SelectedGates, run.Configuration.SelectedGates(gates)) ||
+		!reflect.DeepEqual(run.Review.SelectedGates, snapshot.State.AppliedConfigurations[0].SelectedGates) ||
+		!reflect.DeepEqual(run.FlowSelection.Disabled, []string{"start-readiness", "development", "qa", "gate", "repair"}) {
+		t.Fatalf("minimal selection run lost its configuration facts or confirmed a route: %+v", run.Review)
+	}
+	completed, err := abortVerifiedRun(t, f)
+	if err != nil {
+		t.Fatalf("terminal drive: %v", err)
+	}
+	if completed.Status != "ABORTED" {
 		t.Fatalf("terminal status = %s", completed.Status)
 	}
 	if len(completed.Review.Actions) != 2 || completed.Review.RouteConfirmed {

@@ -82,12 +82,11 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 		if path == requirementPath {
 			preview.Content, preview.Revision = content, revision
 			preview.IntakeCandidate.RequirementRevision = revision
-			if structured {
-				document, err := requirement.ParseRequirementProjection(path, data)
-				if err != nil {
-					return IntakePreview{}, err
-				}
+			document, err := requirement.ParseRequirementProjection(path, data)
+			if err == nil {
 				preview.RequirementDocument = &document
+			} else if structured {
+				return IntakePreview{}, err
 			}
 		}
 		if path == solutionPath {

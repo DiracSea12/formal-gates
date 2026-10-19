@@ -87,7 +87,10 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 	}
 	root := t.TempDir()
 	testkit.ConfigureNativePaths(t, root, "codex")
-	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "sample requirement\n", 0600)
+	launcherWriteFile(t, filepath.Join(root, "requirements.md"), "## 需求点\n\n### REQ-001：Launcher discovery\n\n#### 要求\n\nThe stable launcher binds its registered admission.\n\n#### 验收条件\n\n- AC-001：The confirmed intake starts under the stable launcher's record.\n\n#### 来源\n\nTest fixture.\n", 0600)
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Launcher Test"}, {"config", "user.email", "launcher@example.invalid"}, {"add", "requirements.md"}, {"commit", "-qm", "base"}} {
+		launcherRun(t, root, "git", args...)
+	}
 	home := t.TempDir()
 	source := copyPackageFixture(t)
 	binaryPath := filepath.Join(source, "bin", nativeBinaryName())
@@ -153,7 +156,7 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 			displayedID := ""
 			output, childErr := launcherConfirmStart(t, command, root, intake, func(original map[string]any) {
 				materials, ok := original["materials"].(map[string]any)
-				if invocation.mode != "stable" || !ok || original["root"] != root || original["route"] != "lightweight" || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
+				if invocation.mode != "stable" || !ok || original["root"] != root || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
 					t.Fatalf("confirmation changed the original launcher operation: %v", original)
 				}
 				displayedID, _ = original["runId"].(string)
@@ -232,7 +235,7 @@ func launcherConfirmStart(t *testing.T, command *exec.Cmd, root string, intake i
 	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
 		return nil, err
 	}
-	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "confirm_start", "arguments": map[string]any{"root": root, "intake": intake, "route": "lightweight"}}}); err != nil {
+	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "confirm_start", "arguments": map[string]any{"root": root, "intake": intake}}}); err != nil {
 		return nil, err
 	}
 	confirmed := false

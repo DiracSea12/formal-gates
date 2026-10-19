@@ -19,7 +19,7 @@ func coverageBinding() coverage.SourceBinding {
 }
 
 func coverageManifestBinding(kind coverage.ReviewKind) coverage.ManifestBinding {
-	return coverage.ManifestBinding{SourceBinding: coverageBinding(), ReviewKind: kind, RouteScope: "regular", TopologyScope: "master"}
+	return coverage.ManifestBinding{SourceBinding: coverageBinding(), ReviewKind: kind, RouteScope: "route-scope", TopologyScope: "master"}
 }
 
 func coverageContract() coverage.CoverageContract {

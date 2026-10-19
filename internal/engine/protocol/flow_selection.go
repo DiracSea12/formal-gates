@@ -78,13 +78,14 @@ func (s *State) projectFlowSelection(view *decision.State, cd *compiler.Compiled
 
 func (s *State) taskFlowEnabled(task runtime.TaskKey, cd *compiler.CompiledDefinition) bool {
 	node := s.ExecutionNode(task, cd)
+	if (node == "qa-blackbox" || node == "qa-whitebox") && s.validationMode(task) == coverage.ReviewMerge {
+		return s.FlowNodeEnabled("qa") && slices.Contains(s.validationKinds(), coverage.ReviewMerge)
+	}
 	switch node {
 	case "qa-blackbox":
 		return s.FlowNodeEnabled("qa") && slices.Contains(s.SelectedGates, "blackbox")
 	case "qa-whitebox":
 		return s.FlowNodeEnabled("qa") && slices.Contains(s.SelectedGates, "whitebox")
-	case "qa":
-		return s.FlowNodeEnabled("qa") && slices.Contains(s.validationKinds(), coverage.ReviewMerge)
 	case "gate":
 		if !s.FlowNodeEnabled("gate") {
 			return false
@@ -103,13 +104,9 @@ func (s *State) flowNodeWasDisabled(id string) bool {
 	if !s.FlowNodeEnabled(id) {
 		return true
 	}
-	if s.Settings != nil && s.Settings.Configuration.FlowSelection != nil && slices.Contains(s.Settings.Configuration.FlowSelection.Disabled, id) {
-		return true
-	}
-	for _, decision := range s.Decisions {
-		if decision.Control == ControlSelectRoute && decision.Choice == "approve" && decision.Review != nil && decision.Review.Route != nil && decision.Review.Route.Configuration != nil {
-			selection := decision.Review.Route.Configuration.Configuration.FlowSelection
-			if selection != nil && slices.Contains(selection.Disabled, id) {
+	for _, applied := range s.AppliedConfigurations {
+		if !applied.Bypassed && applied.Effect != nil && applied.Effect.AppliedRevision != 0 {
+			if selection := applied.Configuration.FlowSelection; selection != nil && slices.Contains(selection.Disabled, id) {
 				return true
 			}
 		}

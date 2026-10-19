@@ -34,6 +34,15 @@ func (s *State) repairExecutions(w *ValidationWave) []repairWork {
 	if !s.FlowNodeEnabled("repair") {
 		return nil
 	}
+	return s.repairExecutionHistory(w)
+}
+
+// repairExecutionHistory projects admitted member identities independently of
+// whether the node currently accepts new work.
+func (s *State) repairExecutionHistory(w *ValidationWave) []repairWork {
+	if w.Repair == nil {
+		return nil
+	}
 	task := s.replacementFold(w.Repair.Task)
 	var proposal *WorkerResult
 	for _, r := range s.Results {

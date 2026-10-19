@@ -151,9 +151,9 @@ func confirmInstalledFixtureStart(t *testing.T, command *exec.Cmd, root, documen
 		return facade.Run{}, err
 	}
 	displayedID := ""
-	body, err := installedConfirmationFixture(t, command, "confirm_start", map[string]any{"root": root, "intake": position, "route": "regular"}, func(original map[string]any) {
+	body, err := installedConfirmationFixture(t, command, "confirm_start", map[string]any{"root": root, "intake": position}, func(original map[string]any) {
 		materials := objectOrEmpty(original["materials"])
-		if original["root"] != root || original["route"] != "regular" || materials["content"] != document || materials["revision"] != preview.Revision {
+		if original["root"] != root || original["baseSnapshot"] == nil || materials["content"] != document || materials["revision"] != preview.Revision {
 			t.Fatal("start form omitted the exact complete source and operation", original)
 		}
 		displayedID = textOf(original["runId"])

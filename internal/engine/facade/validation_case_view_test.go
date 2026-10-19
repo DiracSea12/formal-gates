@@ -69,15 +69,15 @@ func TestWhiteboxReuseRequiresCompleteCaseViews(t *testing.T) {
 						tree["fixture_test.go"] = "package app\nfunc FixtureReady() bool { ready := true; return ready }\n"
 					}
 				}
-				tree["go.mod"] = "module app\ngo 1.24\n"
+				tree["go.mod"] = "module app\ngo 1.21\n"
 				if changed && variant == "config-changed" {
-					tree["go.mod"] = "module app\ngo 1.25\n"
+					tree["go.mod"] = "module app\ngo 1.22\n"
 				}
 				identity, digest := freezeCandidateSource(t, d, params, tree)
 				trees[identity] = tree
 				folder := t.TempDir()
 				os.MkdirAll(folder, 0700)
-				os.WriteFile(filepath.Join(folder, "go.mod"), []byte("module app\ngo 1.24\n"), 0600)
+				os.WriteFile(filepath.Join(folder, "go.mod"), []byte("module app\ngo 1.21\n"), 0600)
 				for p, b := range tree {
 					os.WriteFile(filepath.Join(folder, p), []byte(b), 0600)
 				}

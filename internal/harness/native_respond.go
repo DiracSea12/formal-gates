@@ -252,7 +252,7 @@ func prepareNativeAnswer(held nativeHeldQuestion, selection nativeSelection) (na
 	return nativeAnswerCandidate{resolveNativePath(held.Directory), nativePendingBinding(held.Record), selection}, nil
 }
 
-func submitNativeAnswer(candidate nativeAnswerCandidate) error {
+func submitNativeAnswer(candidate nativeAnswerCandidate, confirmationSource string) error {
 	records, err := readNativePendings(candidate.Directory)
 	if err != nil {
 		return err
@@ -277,12 +277,16 @@ func submitNativeAnswer(candidate nativeAnswerCandidate) error {
 		return err
 	}
 	answer["written_at"] = time.Now().UTC().Format(time.RFC3339)
+	if confirmationSource != "" {
+		answer["confirmation"] = confirmationSource
+	}
 	return writeAtomicJSON(nativeAnswerPath(candidate.Directory), answer)
 }
 
 // NativeRespondFlags shares the native argument owner with the semantic entry.
 // onPosition receives the original input or form position selected during parsing.
-func NativeRespondFlags(errout io.Writer, onPosition func(string, int), confirmation ...func(any) error) (*flag.FlagSet, func() int) {
+// confirmationSource records which channel confirmed the delivered answer.
+func NativeRespondFlags(errout io.Writer, onPosition func(string, int), confirmationSource string, confirmation ...func(any) error) (*flag.FlagSet, func() int) {
 	flags := flag.NewFlagSet("native-respond", flag.ContinueOnError)
 	flags.SetOutput(errout)
 	run := flags.String("run", "", "original run directory")
@@ -394,7 +398,7 @@ func NativeRespondFlags(errout io.Writer, onPosition func(string, int), confirma
 							err = fmt.Errorf("native decision candidate changed while awaiting the host")
 						}
 						if err == nil {
-							err = submitNativeAnswer(candidate)
+							err = submitNativeAnswer(candidate, confirmationSource)
 						}
 					}
 				}
@@ -480,13 +484,14 @@ func NativeRespondFlags(errout io.Writer, onPosition func(string, int), confirma
 }
 
 func NativeRespond(args []string, errout io.Writer) int {
-	return NativeRespondWithConfirmation(args, errout, nil)
+	return NativeRespondWithConfirmation(args, errout, "", nil)
 }
 
 // NativeRespondWithConfirmation delivers the original answer directly after
 // the current host accepts it; the public CLI supplies no confirmation source.
-func NativeRespondWithConfirmation(args []string, errout io.Writer, confirmation func(any) error) int {
-	flags, execute := NativeRespondFlags(errout, nil, confirmation)
+// confirmationSource records which channel confirmed the delivered answer.
+func NativeRespondWithConfirmation(args []string, errout io.Writer, confirmationSource string, confirmation func(any) error) int {
+	flags, execute := NativeRespondFlags(errout, nil, confirmationSource, confirmation)
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
 	}

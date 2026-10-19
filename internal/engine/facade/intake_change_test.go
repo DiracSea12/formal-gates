@@ -43,7 +43,8 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 				if err != nil {
 					t.Fatal(err)
 				}
-				f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "user-edit-runtime", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "user-edit", Route: "regular", BaseSnapshot: base, IntakeConfirmationReceipt: intake.IntakeCandidate}})
+				ensureEditableConfiguration(t, root)
+				f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "user-edit-runtime", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "user-edit", BaseSnapshot: base, IntakeConfirmationReceipt: intake.IntakeCandidate}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -229,7 +230,7 @@ func TestRequirementChangePreservesSelectedMaterials(t *testing.T) {
 					t.Fatal("equal content erased the distinct selected path")
 				}
 			}
-			f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "selected-material", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: initial.IntakeCandidate}, Admission: testAdmission(t, root, "selected-material-runtime", "sha256:package", DefaultProvider)})
+			f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "selected-material", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: initial.IntakeCandidate}, Admission: testAdmission(t, root, "selected-material-runtime", "sha256:package", DefaultProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -409,7 +410,7 @@ func TestResetReconfirmsCurrentSelectedMaterials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "selected-reset", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: initial.IntakeCandidate}, Admission: testAdmission(t, root, "selected-reset-runtime", "sha256:package", DefaultProvider)})
+	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "selected-reset", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: initial.IntakeCandidate}, Admission: testAdmission(t, root, "selected-reset-runtime", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}

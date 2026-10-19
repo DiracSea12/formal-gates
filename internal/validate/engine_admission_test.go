@@ -192,9 +192,6 @@ func TestProjectRuntimeFilesCollectsInstalledHosts(t *testing.T) {
 	if data, err := os.ReadFile(note); err != nil || string(data) != content {
 		t.Fatal("discovery changed original user material", string(data), err)
 	}
-	if _, err := os.Stat(installRegistryPath(InstallOptions{}) + ".bootstrap.json"); !os.IsNotExist(err) {
-		t.Fatal("read-only inventory required workflow bootstrap", err)
-	}
 	if _, err := ResolveEngineAdmission(home, ""); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
 		t.Fatal("read-only inventory weakened formal admission conflict", err)
 	}

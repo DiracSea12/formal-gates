@@ -554,10 +554,6 @@ func (f *Facade) RequestWorkflowChoice() (bool, error) {
 			return false, loadErr
 		}
 		event, err = protocol.NewRouteRequestEvent(id, request.RouteGates, request.Options...)
-		if err == nil && snap.State.RouteConfigurationRequired() {
-			configuration := snap.State.EffectiveConfiguration()
-			event.Request.Configuration = &configuration
-		}
 	}
 	if err != nil {
 		return false, err
@@ -909,7 +905,7 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	s := snapshot.State
-	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
+	if s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
 		return nil
 	}
 	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhasePreparing {

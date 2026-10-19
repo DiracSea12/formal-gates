@@ -32,7 +32,7 @@ func TestCancelledStoppedDispatchRetainsManagedNativeCost(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 				t.Fatal(err)
 			}
-			f, run, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "cancelled-cost", Route: "regular", Provider: meteredProvider, BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+			f, run, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "cancelled-cost", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}

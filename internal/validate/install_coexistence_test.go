@@ -8,6 +8,8 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/settings"
 )
 
 const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
@@ -53,6 +55,17 @@ func coexistenceLegacyActiveState(t *testing.T, project, runID string) string {
 
 func coexistenceCandidateActiveState(t *testing.T, project, runID string) string {
 	t.Helper()
+	home := t.TempDir()
+	name, err := settings.SaveConfiguration(project, home, "project", "coexistence", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(project, home, "project", name, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(testRequirementDocument("Sample requirement.")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	receipt := facade.IntakeConfirmationReceipt{
 		Source:              facade.DefaultIntakeSource,
 		Authority:           facade.DefaultIntakeAuthority,
@@ -63,16 +76,36 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 		SolutionRevision:    "sol-coexistence",
 		SolutionDigest:      "sha256:sol-coexistence",
 	}
+	admission := engineAdmissionFixture(t, project, "sha256:coexistence-candidate", "coexistence-candidate-target")
+	source := repoRootValidateTest(t)
+	for _, directory := range []string{"prompts", "gates"} {
+		if err := filepath.WalkDir(filepath.Join(source, directory), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() {
+				relative, err := filepath.Rel(source, path)
+				if err != nil {
+					return err
+				}
+				copyValidateTestFile(t, source, admission.Target, relative)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, run, err := facade.Start(facade.StartOptions{
-		Root: project,
+		Root:      project,
+		VCSRunner: testkit.NewFrozenGitRepo(),
 		Request: facade.StartRequest{
 			RunID:                     runID,
-			Route:                     "lightweight",
+			BaseSnapshot:              testkit.FrozenSnapshot,
 			DefinitionSource:          facade.DefaultDefinitionSource,
 			DefinitionDigest:          definition.WorkflowDefinitionDigest,
 			IntakeConfirmationReceipt: receipt,
 		},
-		Admission: engineAdmissionFixture(t, project, "sha256:coexistence-candidate", "coexistence-candidate-target"),
+		Admission: admission,
 	})
 	if err != nil {
 		t.Fatalf("create candidate fixture: %v", err)

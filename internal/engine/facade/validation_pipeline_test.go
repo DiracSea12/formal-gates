@@ -10,7 +10,6 @@ import (
 	"reflect"
 	goruntime "runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/review"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
@@ -44,171 +44,6 @@ func init() {
 
 const validationDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
 
-// frozenSnapshot 是冻结快照夹具身份：40 位 hex，单链冻结仓的 base。
-const frozenSnapshot = "0123456789abcdef0123456789abcdef01234567"
-
-// frozenTree 是 frozenSnapshot 所指向提交的树身份（base 内容的冻结摘要）。
-const frozenTree = "0123456789abcdef0123456789abcdef01234568"
-
-// frozenGitRepo 是冻结场景的 Git 应答夹具：单链提交仓（链首即 base），按命令
-// 与参数精确区分身份——rev-parse HEAD 是当前提交，<rev>^{tree} 是该提交的树
-// 身份，merge-base 返回链上较早实参，区间计数＝链上距离（base==HEAD 如实为
-// 0）。候选冻结生成独立提交，目标 HEAD 只随原生 merge/commit/reset 推进。
-// 未推进时应答与单提交仓一致。真实 git 行为（含排除
-// 规则与 squash）由 internal/engine/vcs 的真仓冒烟覆盖。
-type frozenGitRepo struct {
-	commits []string
-	head    string
-	trees   map[string]string
-	objects map[string]string
-	// sequence 是身份发生的单调计数：squash 截断链后仍不复用已出现的提交
-	// 身份（悬空提交与新提交是不同对象）。
-	sequence int
-	// pendingTree 是 reset --soft 后待重提交保留的树身份（squash 保持最终
-	// 树不变）。
-	pendingTree string
-}
-
-func newFrozenGitRepo() *frozenGitRepo {
-	repo := &frozenGitRepo{trees: map[string]string{}, objects: map[string]string{frozenTree: "abcdef0123456789abcdef0123456789abcdef0123"}}
-	repo.commits = append(repo.commits, frozenSnapshot)
-	repo.head = frozenSnapshot
-	repo.trees[frozenSnapshot] = frozenTree
-	return repo
-}
-
-// advance 提交一次内容变化：新提交与其树身份唯一入链并成为当前 HEAD，返回
-// 新提交身份。
-func (r *frozenGitRepo) advance() string {
-	r.sequence++
-	commit := fmt.Sprintf("%040d", r.sequence)
-	r.commits = append(r.commits, commit)
-	r.head = commit
-	r.trees[commit] = fmt.Sprintf("%064d", r.sequence)
-	r.objects[r.trees[commit]] = fmt.Sprintf("%040x", r.sequence+1000000)
-	return commit
-}
-
-func (r *frozenGitRepo) indexOf(rev string) (int, bool) {
-	for i, commit := range r.commits {
-		if strings.EqualFold(commit, rev) {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-func (r *frozenGitRepo) Run(dir, command string, args ...string) (string, error) {
-	joined := strings.Join(args, " ")
-	if command != "git" {
-		return "", fmt.Errorf("frozen git fixture: unexpected command %s %s", command, joined)
-	}
-	head := r.head
-	switch {
-	case joined == "rev-parse --show-toplevel":
-		return dir, nil
-	case joined == "rev-parse HEAD":
-		return head, nil
-	case len(args) == 3 && args[0] == "rev-parse" && args[1] == "--verify" && strings.HasSuffix(args[2], "^{commit}"):
-		rev := strings.TrimSuffix(args[2], "^{commit}")
-		if _, ok := r.indexOf(rev); ok {
-			return rev, nil
-		}
-		return "", fmt.Errorf("frozen git fixture: unknown commit %s", rev)
-	case len(args) == 2 && args[0] == "rev-parse" && strings.HasSuffix(args[1], "^{tree}"):
-		if tree, ok := r.trees[strings.ToLower(strings.TrimSuffix(args[1], "^{tree}"))]; ok {
-			return tree, nil
-		}
-		return "", fmt.Errorf("frozen git fixture: unknown commit %s", args[1])
-	case len(args) == 3 && args[0] == "merge-base":
-		a, aok := r.indexOf(args[1])
-		b, bok := r.indexOf(args[2])
-		if !aok || !bok {
-			return "", fmt.Errorf("frozen git fixture: unknown commit in %s", joined)
-		}
-		if a <= b {
-			return r.commits[a], nil
-		}
-		return r.commits[b], nil
-	case joined == "status --porcelain=v1 --untracked-files=all":
-		if r.pendingTree != "" && r.pendingTree != r.trees[head] {
-			return "M  app.go", nil
-		}
-		return "", nil
-	case joined == "status --porcelain=v1 --branch --untracked-files=all":
-		if r.pendingTree != "" && r.pendingTree != r.trees[head] {
-			return "## HEAD (no branch)\nM  app.go", nil
-		}
-		return "## HEAD (no branch)", nil
-	case len(args) == 8 && strings.Join(args[:5], " ") == "diff --raw --no-abbrev --no-renames -z" && args[7] == "--":
-		object := func(identity string) (string, bool) {
-			if tree, ok := r.trees[identity]; ok {
-				identity = tree
-			}
-			entry, ok := r.objects[identity]
-			return entry, ok
-		}
-		base, baseExists := object(args[5])
-		next, nextExists := object(args[6])
-		if !baseExists || !nextExists {
-			return "", fmt.Errorf("frozen git fixture: unknown diff endpoint %v", args)
-		}
-		if base == next {
-			return "", nil
-		}
-		return ":100644 100644 " + base + " " + next + " M\x00app.go\x00", nil
-	case joined == "write-tree":
-		// 暂存区树：reset --soft 后 index 保留截链前内容（pendingTree）；干净
-		// index 的暂存树＝HEAD 提交的树。
-		if r.pendingTree != "" {
-			return r.pendingTree, nil
-		}
-		return r.trees[head], nil
-	case len(args) == 3 && args[0] == "merge" && args[1] == "--ff-only":
-		if _, ok := r.indexOf(args[2]); !ok {
-			return "", fmt.Errorf("frozen git fixture: unknown merge source %s", args[2])
-		}
-		r.head = args[2]
-		return "", nil
-	case len(args) == 3 && args[0] == "reset" && args[1] == "--soft":
-		// squash 第一步：区间压回 base，当前树留给重提交。
-		bi, ok := r.indexOf(args[2])
-		if !ok {
-			return "", fmt.Errorf("frozen git fixture: unknown commit %s", args[2])
-		}
-		r.pendingTree = r.trees[r.head]
-		r.head = args[2]
-		r.commits = r.commits[:bi+1]
-		return "", nil
-	case len(args) == 3 && args[0] == "commit" && args[1] == "-m":
-		// squash 第二步：以保留树重新提交——内容不变、身份更新。
-		r.sequence++
-		commit := fmt.Sprintf("%040d", r.sequence)
-		tree := r.pendingTree
-		if tree == "" {
-			tree = fmt.Sprintf("%064d", r.sequence)
-			r.objects[tree] = fmt.Sprintf("%040x", r.sequence+1000000)
-		}
-		r.pendingTree = ""
-		r.commits = append(r.commits, commit)
-		r.trees[commit] = tree
-		r.head = commit
-		return "", nil
-	case len(args) == 3 && args[0] == "rev-list" && args[1] == "--count":
-		base, tip, ok := strings.Cut(args[2], "..")
-		if !ok {
-			return "", fmt.Errorf("frozen git fixture: unexpected range %s", args[2])
-		}
-		bi, bok := r.indexOf(base)
-		hi, hok := r.indexOf(tip)
-		if !bok || !hok || hi < bi {
-			return "", fmt.Errorf("frozen git fixture: not an ancestor range %s", args[2])
-		}
-		return strconv.Itoa(hi - bi), nil
-	}
-	return "", fmt.Errorf("frozen git fixture: unexpected command git %s", joined)
-}
-
 type validationDriver struct {
 	mockNative               bool
 	fixtureTool              string
@@ -227,7 +62,7 @@ type validationDriver struct {
 	// 的身份/树摘要取自它——reopen 后的 façade 持生产 exec runner，测试替身
 	// 不随重开丢失。frozen 非空时 materialize 冻结候选提交，保持目标 HEAD。
 	git    *vcs.Provider
-	frozen *frozenGitRepo
+	frozen *testkit.FrozenGitRepo
 	// routeRedos 记录本 driver 已走过的路线重走次数：每次重走需要一个
 	// 全新的需求文档 revision（账本要求严格单调），递增换行数产生唯一
 	// revision。
@@ -399,6 +234,12 @@ func (d *validationDriver) business(id string, p protocol.ValidationResult) {
 		d.drive()
 	}
 }
+func (d *validationDriver) routeAskIndex(kind protocol.ControlKind, gates []string) int {
+	return slices.IndexFunc(d.run.PendingAsks, func(pending PendingAskFace) bool {
+		return kind == protocol.ControlSelectRoute && pending.Control == kind && slices.Equal(pending.RouteGates, gates)
+	})
+}
+
 func (d *validationDriver) control(kind protocol.ControlKind, choice string, p protocol.ReviewDecisionPayload) {
 	d.t.Helper()
 	if p.Topology != nil && p.Topology.Decision == "split" && p.Topology.DevelopmentPlan == nil {
@@ -413,16 +254,17 @@ func (d *validationDriver) control(kind protocol.ControlKind, choice string, p p
 	var err error
 	if kind == protocol.ControlSelectRoute && p.Route != nil {
 		e, err = protocol.NewRouteRequestEvent(id, p.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		if err == nil {
-			e.Request.Configuration = p.Route.Configuration
-		}
 	} else {
 		e, err = protocol.NewRequestEvent(id, kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
 	}
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	d.submit(e)
+	if i := d.routeAskIndex(kind, e.Request.RouteGates); i >= 0 {
+		id = protocol.EventID(d.run.PendingAsks[i].RequestID)
+	} else {
+		d.submit(e)
+	}
 	var token string
 	for _, a := range d.run.PendingAsks {
 		if a.RequestID == string(id) {
@@ -439,13 +281,13 @@ func startValidationDriver(t *testing.T, inventory *protocol.CoverageInventory) 
 	return startValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory)
 }
 func startValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory) *validationDriver {
-	repo := newFrozenGitRepo()
-	d := startValidationDriverAtVCS(t, root, provider, repo, frozenSnapshot, inventory)
+	repo := testkit.NewFrozenGitRepo()
+	d := startValidationDriverAtVCS(t, root, provider, repo, testkit.FrozenSnapshot, inventory)
 	d.frozen = repo
 	return d
 }
 
-// startValidationDriverAtVCS 以注入的 Git runner 与显式 base 身份建立 regular
+// startValidationDriverAtVCS 以注入的 Git runner 与显式 base 身份建立验证
 // 驱动；真仓链路传 nil runner（生产 exec），base 由调用方从仓库解析。
 func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.Runner, base string, inventory *protocol.CoverageInventory, solutionPaths ...string) *validationDriver {
 	t.Helper()
@@ -465,13 +307,14 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 	}
 	receipt := preview.IntakeCandidate
 	receipt.Coverage = inventory
-	_, mocked := runner.(*frozenGitRepo)
+	_, mocked := runner.(*testkit.FrozenGitRepo)
 	var f *Facade
 	var r Run
 	if mocked {
 		f, r, err = abstractValidationFacade(t, root, provider, runner, base, receipt)
 	} else {
-		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+		ensureEditableConfiguration(t, root)
+		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -504,8 +347,8 @@ func plannedValidationDriver(t *testing.T, inventory *protocol.CoverageInventory
 	return plannedValidationDriverAt(t, t.TempDir(), DefaultProvider, inventory, plan, gates...)
 }
 func plannedValidationDriverAt(t *testing.T, root, provider string, inventory *protocol.CoverageInventory, plan *protocol.GranularityReview, gates ...string) *validationDriver {
-	repo := newFrozenGitRepo()
-	d := plannedValidationDriverAtVCS(t, root, provider, repo, frozenSnapshot, inventory, plan, gates...)
+	repo := testkit.NewFrozenGitRepo()
+	d := plannedValidationDriverAtVCS(t, root, provider, repo, testkit.FrozenSnapshot, inventory, plan, gates...)
 	d.frozen = repo
 	return d
 }
@@ -1194,7 +1037,7 @@ func gateReviewView(params protocol.CandidateParameters) *protocol.GateReviewVie
 // semantic admission tests. Native workspace effects have real-repository
 // public-chain coverage; these fixtures provide typed operation observations.
 func abstractValidationFacade(t *testing.T, root, provider string, runner vcs.Runner, base string, receipt IntakeConfirmationReceipt) (*Facade, Run, error) {
-	return semanticValidationFacade(t, StartOptions{Capacity: 16, Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	return semanticValidationFacade(t, StartOptions{Capacity: 16, Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 }
 
 // semanticValidationFacade supplies typed native observations in owner tests.
@@ -1239,16 +1082,17 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	if err := os.WriteFile(filepath.Join(root, req.IntakeConfirmationReceipt.RequirementSource), []byte(validationDocument), 0600); err != nil {
 		return nil, Run{}, err
 	}
-	engine, err := protocol.New(store, protocol.Config{NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID)})
-	if err != nil {
-		return nil, Run{}, err
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, Run{}, err
 	}
+	ensureEditableConfiguration(t, root)
 	effective, err := settings.Load(root, home)
 	tokenCap := effective.Values.TokenCap
+	if err != nil {
+		return nil, Run{}, err
+	}
+	engine, err := protocol.New(store, protocol.Config{Settings: &effective, NativeRoot: root, Definition: cd, Registry: definition.Registry(), Capacity: options.Capacity, CostSource: CostSourceBridge(root, req.RunID), ClaimDispatch: dispatchClaimBridge(root, req.RunID, admitted), WorkerExecution: workerExecutionBridge(root, req.RunID), Configuration: configurationLibrary(root), RouteGates: configurationGates(admitted.Target), ParentSnapshot: configurationParent(root)})
 	if err != nil {
 		return nil, Run{}, err
 	}
@@ -1275,11 +1119,6 @@ func semanticValidationFacade(t *testing.T, options StartOptions) (*Facade, Run,
 	return f, run, err
 }
 
-func (r *frozenGitRepo) RunRaw(dir, command string, input []byte, args ...string) ([]byte, error) {
-	out, err := r.Run(dir, command, args...)
-	return []byte(out), err
-}
-
 func (d *validationDriver) candidateReceipt(id string, intent protocol.HostActionIntent, p protocol.CandidateParameters) protocol.Event {
 	assertCandidateStep(d.t, d, intent)
 	if d.fixtureCandidateObserver != nil {
@@ -1293,9 +1132,7 @@ func (d *validationDriver) candidateReceipt(id string, intent protocol.HostActio
 		d.t.Fatal(err)
 	}
 	if d.frozen != nil {
-		target := d.frozen.head
-		identity = d.frozen.advance()
-		d.frozen.head = target
+		identity = d.frozen.CommitDetached()
 	}
 	digest, err := d.git.TreeDigest(identity)
 	if err != nil {

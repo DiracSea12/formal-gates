@@ -9,6 +9,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/requirement"
+	"formal-gates/internal/settings"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,16 +45,46 @@ func (d *validationDriver) configureRoute(route *protocol.RouteDecision) {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	if route.Configuration == nil && snapshot.State.RouteConfigurationRequired() {
-		configuration := snapshot.State.EffectiveConfiguration()
-		configuration.SetSelectedGates(route.Selected)
-		route.Configuration = &configuration
+	home, err := os.UserHomeDir()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(d.f.root, home, "project", snapshot.State.ConfigurationName(), nil, func(value *settings.Configuration) error {
+		selection := protocol.ConfigurationSelection{Configuration: *value}
+		selection.SetSelectedGates(route.Selected)
+		value.Gates = selection.Configuration.Gates
+		if snapshot.State.SliceChild == nil {
+			value.QAModes = selection.Configuration.QAModes
+		}
+		return nil
+	}); err != nil {
+		d.t.Fatal(err)
+	}
+	request, err := d.f.routeRequestPayload(snapshot.State.SliceChild != nil)
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	route.Gates = request.RouteGates
+	if _, _, err := d.f.engine.Drive(protocol.Observation{}); err != nil {
+		d.t.Fatal(err)
+	}
+	d.run, err = d.f.project(nil)
+	if err != nil {
+		d.t.Fatal(err)
 	}
 }
 
 func (d *validationDriver) confirmRoute(route protocol.RouteDecision) {
 	d.t.Helper()
+	snapshot, err := d.f.engine.Load()
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	confirmationDue := snapshot.State.RouteConfirmationDue(d.f.definition)
 	d.configureRoute(&route)
+	if !confirmationDue {
+		return
+	}
 	preview, err := d.f.DevelopmentPlan(route)
 	if err != nil {
 		d.t.Fatal(err)
@@ -591,6 +622,7 @@ func TestPlanAdmissionRequiresCompleteProposalAndExactConfirmation(t *testing.T)
 	verifyReviewFixture(t, d, ready)
 	d.control(protocol.ControlConfirmTopology, "no-split", protocol.ReviewDecisionPayload{Topology: &protocol.TopologyDecision{Decision: "no-split", Note: "one command"}})
 	route := routeDecisionForGates([]string{"blackbox", "quality"})
+	d.configureRoute(&route)
 	req, err := protocol.NewRouteRequestEvent(d.eventID(), route.Gates, protocol.AskOption{ID: "approve", Label: "Confirm"})
 	if err != nil {
 		t.Fatal(err)
@@ -726,7 +758,8 @@ func TestReleasedSlicePlanPreviewUsesConfirmedOwnership(t *testing.T) {
 	}
 	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
 	driver.drive()
-	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Selected: []string{"quality"}}
+	driver.configureRoute(&route)
 	expected, err := parent.SliceDevelopmentPlan("lane-core")
 	if err != nil {
 		t.Fatal(err)
@@ -791,7 +824,8 @@ func TestCheckpointMasterConfirmsFinalSliceAndReopensItsOriginalPlan(t *testing.
 	}
 	driver := &validationDriver{t: t, f: child, run: run, revision: master.revision, provider: master.host(), git: child.vcs}
 	driver.drive()
-	route := protocol.RouteDecision{Gates: []string{"gate.quality"}, Selected: []string{"gate.quality"}}
+	route := protocol.RouteDecision{Selected: []string{"quality"}}
+	driver.configureRoute(&route)
 	preview, err := child.DevelopmentPlan(route)
 	if err != nil {
 		t.Fatal(err)

@@ -21,14 +21,14 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-// 本文件是真 git 仓上的快照公开链：regular Start 的 base 校验、终态多 commit
+// 本文件是真 git 仓上的快照公开链：Start 的 base 校验、终态多 commit
 // 拒绝与晋升（含 squash）、QA 原生工作区投影与清空转换。全部走生产 exec
 // runner，无模型调用。
 
 // PrepareCandidate exercises the signed promotion handler within its native window.
 func (f *Facade) PrepareCandidate(_ string) (string, error) {
 	if f.vcs == nil {
-		return "", fmt.Errorf("candidate promotion requires a regular run with a native VCS provider")
+		return "", fmt.Errorf("candidate promotion requires a run with a native VCS provider")
 	}
 	unlock, err := f.acquireWriteWindow()
 	if err != nil {
@@ -61,7 +61,7 @@ func snapshotRepoCommits(t *testing.T, root string, commits ...string) []string 
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.22\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	writeSnapshotCommand(t, root)
@@ -123,7 +123,7 @@ func startSnapshotRun(t *testing.T, root, runID, base string) *Facade {
 	t.Helper()
 	receipt := testReceipt()
 	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: runID, Route: "regular", BaseSnapshot: base,
+		RunID: runID, BaseSnapshot: base,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
@@ -133,10 +133,10 @@ func startSnapshotRun(t *testing.T, root, runID, base string) *Facade {
 	return f
 }
 
-// TestRegularStartAcceptsAncestorBaseAndRejectsDivergent：regular Start 把
+// TestStartAcceptsAncestorBaseAndRejectsDivergent：Start 把
 // BaseSnapshot 变成事实——合法（可复现且为 HEAD 祖先或相等）接纳并规范化为小
 // 写；分叉身份与非法形态可区分拒绝。
-func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
+func TestStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	identities := snapshotRepoCommits(t, root, "second")
@@ -188,7 +188,7 @@ func TestRegularStartAcceptsAncestorBaseAndRejectsDivergent(t *testing.T) {
 				return
 			}
 			_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-				RunID: "snapshot-reject-" + strings.ReplaceAll(strings.ReplaceAll(name, " ", "-"), "/", "-"), Route: "regular", BaseSnapshot: tc.base,
+				RunID: "snapshot-reject-" + strings.ReplaceAll(strings.ReplaceAll(name, " ", "-"), "/", "-"), BaseSnapshot: tc.base,
 				DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 				IntakeConfirmationReceipt: testReceipt(),
 			}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
@@ -635,7 +635,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "app.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.23\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.22\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	writeSnapshotCommand(t, root)
@@ -691,7 +691,7 @@ func TestPrepareCandidateChainPassesWithoutGitignore(t *testing.T) {
 	}
 }
 
-// completePromotionPipeline 把真仓 regular run 推进到「终 wave COMPLETE、待晋
+// completePromotionPipeline 把真仓 run 推进到「终 wave COMPLETE、待晋
 // 升」的边界（验证收集完成、区间保持 base..HEAD 多提交——晋升需要 squash，
 // 使「被拒时零 Git 副作用」可观察）。runner 注入门面 Git provider（nil＝生产
 // exec）。

@@ -165,7 +165,7 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 	writeTranscript(t, transcript, []string{
 		`{"type":"assistant","uuid":"u1","message":{"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3}}}`,
 	})
-	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: newFrozenGitRepo(), Request: StartRequest{RunID: "cost-chain", Route: "regular", Provider: "claude-code", BaseSnapshot: frozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", "claude-code")})
+	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "cost-chain", Provider: "claude-code", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", "claude-code")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,11 +231,12 @@ func TestCostPublicChainHoldsPendingThenRecordsExactUsage(t *testing.T) {
 func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	verifiedStartFixture(t, root)
 	transcript := filepath.Join(root, "owner.jsonl")
 	writeTranscript(t, transcript, []string{
 		`{"type":"assistant","uuid":"base-1","message":{"usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":10}}}`,
 	})
-	f, run, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: "claude-code"}, Request: StartRequest{RunID: "owner-run", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	f, run, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: "claude-code"}, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "owner-run", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,11 +247,11 @@ func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 		`{"type":"assistant","uuid":"base-1","message":{"usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":10}}}`,
 		`{"type":"assistant","uuid":"delta-1","message":{"usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":1}}}`,
 	})
-	run, err = f.Drive()
+	run, err = abortVerifiedRun(t, f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "COMPLETE" {
+	if run.Status != "ABORTED" {
 		t.Fatalf("run status = %s", run.Status)
 	}
 	owner := run.Cost.Owner
@@ -282,11 +283,12 @@ func TestOwnerBaselineAndTerminalDelta(t *testing.T) {
 func TestOwnerMissingBaselineMarksUnavailable(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, Request: StartRequest{RunID: "owner-missing", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	verifiedStartFixture(t, root)
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: filepath.Join(root, "missing.jsonl"), Provider: "claude-code"}, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "owner-missing", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := f.Drive()
+	run, err := abortVerifiedRun(t, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +312,7 @@ func TestTokenCapConfigurationStates(t *testing.T) {
 	t.Run("invalid config is a clear start error", func(t *testing.T) {
 		root := t.TempDir()
 		writeTokenCap(t, root, `{"engineDispatchMaxTotalTokens":-3}`)
-		_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "bad-cap", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+		_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "bad-cap", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 		if err == nil || !strings.Contains(err.Error(), "token-cap.json") {
 			t.Fatalf("invalid cap config error = %v", err)
 		}

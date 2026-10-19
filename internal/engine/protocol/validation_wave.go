@@ -11,6 +11,7 @@ import (
 
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -126,8 +127,10 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 	if s.resetPending() {
 		return e.advanceReset(s, nextRevision)
 	}
-	if d, known := s.nodeContinuationDecision(); known && d.Continuation.AppliedRevision == 0 && s.PendingAsks[d.RequestID].Continuation.To.Kind == "configuration" {
-		return false, nil
+	for _, d := range s.nodeContinuationDecisions() {
+		if d.Continuation.AppliedRevision == 0 && d.Preview.To.Kind == "configuration" {
+			return false, nil
+		}
 	}
 	if !s.parentReviewReady() || s.SliceChild != nil && s.Phase == runtime.PhaseSliceReady {
 		return false, nil
@@ -247,7 +250,7 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 		if s.validationDispositionBlocked(work.wave) {
 			return changed, nil
 		}
-		if s.completedValidationWaves() >= automaticValidationWaveLimit && !s.repairExtraAuthorized(work) && !work.wave.Repair.PureP2 && !work.pureP2 {
+		if s.repairRoundBlocked(work) {
 			changed = s.ensureValidationAsk(ValidationRequest{Kind: "REPAIR", Target: work.wave.ID}, nextRevision) || changed
 		}
 		if s.repairReady(work) && s.developmentEditResult(work.task) == nil {
@@ -504,6 +507,7 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		versions[mode] = v.Sets[mode].Version
 	}
 	w := ValidationWave{SourceTasks: slices.Clone(sources), AuthorizationRequest: authorization, Candidate: *v.Candidate, RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteDigest: s.validationRouteDigest(), Versions: versions, Status: "COLLECTING", Scope: scope, Targets: map[string]*ValidationTarget{}}
+	w.LimitHistory = []review.LimitInterval{s.roundLimitInterval("repair")}
 	if _, plan, _ := s.confirmedDevelopmentPlan(); plan != nil {
 		if tasks, checkpoint := s.planCheckpoint(e.cfg.Definition, plan); checkpoint {
 			w.CheckpointTasks = tasks

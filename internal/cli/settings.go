@@ -21,6 +21,13 @@ func runSettings(args []string, streams IO) (int, error) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command, args = args[0], args[1:]
 	}
+	scalarName, scalarValue := "", ""
+	if (command == "set" || command == "remove") && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		scalarName, args = args[0], args[1:]
+		if command == "set" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+			scalarValue, args = args[0], args[1:]
+		}
+	}
 	fs := flag.NewFlagSet("settings "+command, flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
 	root := fs.String("root", ".", "project root")
@@ -30,7 +37,10 @@ func runSettings(args []string, streams IO) (int, error) {
 	field := fs.Int("field", 0, "published scalar field position")
 	value := fs.String("value", "", "new scalar value; stdin when omitted")
 	configuration := fs.String("configuration", "", "configuration name or displayed position; omitted selects the active configuration")
-	name := fs.String("name", "", "user-supplied name for settings save")
+	name := fs.String("name", "", "new name for save or rename; omitted on save generates a unique copy name")
+	roundLimit := fs.String("round-limit", "", "round limit name or displayed position; set takes --value 1..64, remove restores the default")
+	var revisionFlags stringListFlag
+	fs.Var(&revisionFlags, "revision", "scope=sha256 overlay revision from settings show; a changed file rejects the write; repeatable")
 	flowNode := fs.String("flow-node", "", "flow-node name or displayed position")
 	qaMode := fs.String("qa-mode", "", "QA group name or displayed position")
 	enabled := fs.String("enabled", "", "true or false for the selected flow node or QA group")
@@ -52,13 +62,48 @@ func runSettings(args []string, streams IO) (int, error) {
 	}
 	supplied := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { supplied[f.Name] = true })
+	if scalarName != "" {
+		if *field != 0 {
+			return 1, fmt.Errorf("select a field by name or by --field")
+		}
+		effective, err := settings.Load(*root, *userHome)
+		if err != nil {
+			return 1, err
+		}
+		fields, err := settings.EditableFields(effective)
+		if err != nil {
+			return 1, err
+		}
+		for _, option := range fields {
+			if option.Name == scalarName {
+				*field = option.Position
+			}
+		}
+		if *field == 0 {
+			return 1, fmt.Errorf("unknown settings field %q", scalarName)
+		}
+		if scalarValue != "" {
+			*value, supplied["value"] = scalarValue, true
+		}
+	}
 	if execution.Node == "" && (supplied["platform"] || supplied["model"] || supplied["effort"]) {
 		return 1, fmt.Errorf("--platform, --model and --effort require --execution-node")
 	}
 	if supplied["enabled"] && *flowNode == "" && *qaMode == "" {
 		return 1, fmt.Errorf("--enabled requires --flow-node or --qa-mode")
 	}
-	profileEdit := *flowNode != "" || *qaMode != "" || execution.Node != "" || *allGates || *noGates || len(gates) != 0
+	var expected map[string]string
+	for _, entry := range revisionFlags {
+		revisionScope, revision, ok := strings.Cut(entry, "=")
+		if !ok {
+			return 1, fmt.Errorf("--revision must be scope=sha256")
+		}
+		if expected == nil {
+			expected = map[string]string{}
+		}
+		expected[revisionScope] = revision
+	}
+	profileEdit := *flowNode != "" || *qaMode != "" || execution.Node != "" || *roundLimit != "" || *allGates || *noGates || len(gates) != 0
 	if profileEdit && command != "set" && command != "remove" && command != "execution-options" {
 		return 1, fmt.Errorf("workflow choices are changed with settings set or remove")
 	}
@@ -76,40 +121,52 @@ func runSettings(args []string, streams IO) (int, error) {
 			}
 			*value = string(data)
 		}
-		if _, err := settings.EditField(*root, *userHome, *scope, *field, *value, command == "remove"); err != nil {
+		if _, err := settings.EditField(*root, *userHome, *scope, *field, *value, command == "remove", expected); err != nil {
 			return 1, err
 		}
 	} else {
 		switch command {
 		case "show":
 		case "save":
-			if _, err := settings.SaveConfiguration(*root, *userHome, *scope, *name, *configuration); err != nil {
+			if supplied["name"] && strings.TrimSpace(*name) == "" {
+				return 1, fmt.Errorf("configuration name must be nonempty")
+			}
+			created, err := settings.SaveConfiguration(*root, *userHome, *scope, *name, *configuration, expected)
+			if err != nil {
 				return 1, err
 			}
-			*configuration = *name
+			*configuration = created
 		case "use":
-			if _, err := settings.UseConfiguration(*root, *userHome, *scope, *configuration); err != nil {
+			if _, err := settings.UseConfiguration(*root, *userHome, *scope, *configuration, expected); err != nil {
 				return 1, err
 			}
-		case "delete":
-			if _, err := settings.DeleteConfiguration(*root, *userHome, *scope, *configuration); err != nil {
+		case "delete", "rename":
+			resolveBindings := func() (map[string][]string, error) { return facade.BoundConfigurations(*root) }
+			var err error
+			if command == "delete" {
+				_, err = settings.DeleteConfiguration(*root, *userHome, *scope, *configuration, resolveBindings, expected)
+				*configuration = ""
+			} else {
+				_, err = settings.RenameConfiguration(*root, *userHome, *scope, *configuration, *name, resolveBindings, expected)
+				*configuration = *name
+			}
+			if err != nil {
 				return 1, err
 			}
-			*configuration = ""
 		case "set", "remove":
 			categories := 0
-			for _, present := range []bool{*flowNode != "", *qaMode != "", execution.Node != "", *allGates || *noGates || len(gates) != 0} {
+			for _, present := range []bool{*flowNode != "", *qaMode != "", execution.Node != "", *roundLimit != "", *allGates || *noGates || len(gates) != 0} {
 				if present {
 					categories++
 				}
 			}
 			if categories != 1 {
-				return 1, fmt.Errorf("select one flow node, QA group, execution group or ordinary gate set")
+				return 1, fmt.Errorf("select one flow node, QA group, execution group, round limit or ordinary gate set")
 			}
-			if command == "remove" && execution.Node == "" {
-				return 1, fmt.Errorf("settings remove accepts a scalar field or an execution group to inherit")
+			if command == "remove" && execution.Node == "" && *roundLimit == "" {
+				return 1, fmt.Errorf("settings remove accepts a scalar field, an execution group to inherit or a round limit to restore its default")
 			}
-			_, err := settings.EditConfiguration(*root, *userHome, *scope, *configuration, func(selected *settings.Configuration) error {
+			_, err := settings.EditConfiguration(*root, *userHome, *scope, *configuration, expected, func(selected *settings.Configuration) error {
 				if *flowNode != "" || *qaMode != "" {
 					on, err := strconv.ParseBool(*enabled)
 					if err != nil {
@@ -120,16 +177,13 @@ func runSettings(args []string, streams IO) (int, error) {
 						if err != nil {
 							return err
 						}
-						if selected.FlowSelection == nil {
-							selected.FlowSelection = &settings.FlowSelection{Disabled: []string{}}
-						}
-						selected.FlowSelection.Disabled = settings.SetSelection(selected.FlowSelection.Disabled, node.ID, !on)
+						selected.SetFlowNodeEnabled(node.ID, on)
 					} else {
 						mode, err := settingsChoice([]string{prompts.BlackboxQAID, prompts.WhiteboxQAID}, *qaMode, "QA group")
 						if err != nil {
 							return err
 						}
-						selected.QAModes = settings.SetSelection(selected.QAModes, mode, on)
+						selected.SetQAMode(mode, on)
 					}
 					return nil
 				}
@@ -159,6 +213,25 @@ func runSettings(args []string, streams IO) (int, error) {
 						selected.Execution = map[string]settings.ExecutionChoice{}
 					}
 					selected.Execution[node.ID] = choice.Choice
+					return nil
+				}
+				if *roundLimit != "" {
+					node, err := settingsChoice(settings.RoundLimitNodes, *roundLimit, "round limit")
+					if err != nil {
+						return err
+					}
+					if command == "remove" {
+						delete(selected.RoundLimits, node)
+						return nil
+					}
+					limit, err := strconv.Atoi(strings.TrimSpace(*value))
+					if err != nil {
+						return fmt.Errorf("--value must be an integer from 1 to 64")
+					}
+					if selected.RoundLimits == nil {
+						selected.RoundLimits = map[string]int{}
+					}
+					selected.RoundLimits[node] = limit
 					return nil
 				}
 				if *allGates && *noGates || (*allGates || *noGates) && len(gates) != 0 {
@@ -212,7 +285,7 @@ func runSettings(args []string, streams IO) (int, error) {
 			}
 			return printJSON(streams.Stdout, map[string]any{"configuration": selected.Name, "options": queried, "platforms": numberedChoices(queried.Platforms), "models": numberedModels(queried)})
 		default:
-			return 1, fmt.Errorf("settings command must be show, save, set, remove, use, delete or execution-options")
+			return 1, fmt.Errorf("settings command must be show, save, set, remove, use, rename, delete or execution-options")
 		}
 	}
 	return printSettings(*root, *userHome, *configuration, *listGates, streams)
@@ -292,13 +365,18 @@ func printSettings(root, home, selection string, listGates bool, streams IO) (in
 	}
 	qa := []map[string]any{}
 	for i, mode := range []string{prompts.BlackboxQAID, prompts.WhiteboxQAID} {
-		qa = append(qa, map[string]any{"mode": i + 1, "name": mode, "enabled": slices.Contains(selected.Configuration.QAModes, mode)})
+		qa = append(qa, map[string]any{"mode": i + 1, "name": mode, "enabled": selected.Configuration.QAModeEnabled(mode)})
 	}
 	execution := []map[string]any{}
 	for i, node := range definition.ExecutionNodes() {
 		execution = append(execution, map[string]any{"node": i + 1, "name": node.ID, "description": node.Description, "execution": selected.Configuration.Execution[node.ID]})
 	}
-	view := map[string]any{"effective": effective, "fields": fields, "configurations": options, "configuration": selected.Name, "flowNodes": flow, "qaModes": qa, "executionNodes": execution}
+	roundLimits := []map[string]any{}
+	for i, node := range settings.RoundLimitNodes {
+		_, saved := selected.Configuration.RoundLimits[node]
+		roundLimits = append(roundLimits, map[string]any{"limit": i + 1, "name": node, "value": selected.Configuration.RoundLimit(node), "default": !saved})
+	}
+	view := map[string]any{"effective": effective, "fields": fields, "configurations": options, "configuration": selected.Name, "flowNodes": flow, "qaModes": qa, "executionNodes": execution, "roundLimits": roundLimits, "revisions": effective.Revisions}
 	if listGates {
 		available, err := settingsGates(root)
 		if err != nil {

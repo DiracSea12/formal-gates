@@ -64,7 +64,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	observedInput := Observation{}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	plan, _, err := engine.Plan(Observation{})
@@ -361,7 +361,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 		t.Fatalf("complete prep: %v", err)
 	}
 	observedInput := Observation{}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	plan, _, err := engine.Plan(Observation{})

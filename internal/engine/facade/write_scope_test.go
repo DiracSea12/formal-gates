@@ -24,7 +24,7 @@ func TestWriteScopeUsesIssuedEngineWorkAndOwnerSession(t *testing.T) {
 	receipt := testReceipt()
 	receipt.RequirementRevision = hex.EncodeToString(sum[:])
 	receipt.Artifacts[0].Revision = receipt.RequirementRevision
-	f, run, err := semanticValidationFacade(t, StartOptions{Root: root, Capacity: 16, Owner: OwnerBinding{Session: "owner-session"}, Admission: testAdmission(t, root, "scope-owner", "sha256:scope-package", DefaultProvider), Request: StartRequest{RunID: "scope", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, run, err := semanticValidationFacade(t, StartOptions{Root: root, Capacity: 16, Owner: OwnerBinding{Session: "owner-session"}, Admission: testAdmission(t, root, "scope-owner", "sha256:scope-package", DefaultProvider), Request: StartRequest{RunID: "scope", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -432,7 +432,6 @@ func writeCurrentHookFixture(t *testing.T, root, runID string, active, started b
 	}
 	state := protocol.NewState(*view)
 	state.RunID = runID
-	state.Route = "regular"
 	state.OwnerTranscript = transcript
 	state.OwnerSession = session
 	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "r1"}}

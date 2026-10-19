@@ -76,7 +76,7 @@ func selectedReviewEngine(t *testing.T, selection *FlowSelection) (*Engine, stri
 		t.Fatal(err)
 	}
 	confirmation := reviewConfirmation()
-	if err := e.InitWithMetadata(view, testProvider, Observation{}, "selected-flow", "regular", confirmation, "", "", nil); err != nil {
+	if err := e.InitWithMetadata(view, testProvider, Observation{}, "selected-flow", confirmation, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, Observation{}); err != nil {

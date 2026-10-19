@@ -72,7 +72,7 @@ func TestNativeWorkspaceVisibilityAcrossProcesses(t *testing.T) {
 	}
 	for _, fact := range tools.facts {
 		for _, path := range fact.Paths {
-			if path != "app.go" && path != filepath.FromSlash(".gates/input/requirements.md") {
+			if path != "app.go" && path != ".gates/input/requirements.md" {
 				t.Fatalf("published runtime fact: %+v", fact)
 			}
 		}

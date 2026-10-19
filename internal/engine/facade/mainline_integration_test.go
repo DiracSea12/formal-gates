@@ -52,6 +52,8 @@ func mainlineReady(t *testing.T, conflict string, identical bool, supplied ...*p
 	}
 	plan.Batches[0].ID = plan.Batches[0].Owner
 	passPreDevelopmentReviews(t, master, plan)
+	route := routeDecisionForGates([]string{"blackbox", "quality", "security"})
+	master.configureRoute(&route)
 
 	topology := &protocol.TopologyDecision{Decision: "split", Slices: []string{"parser", "command", "tooling"}, ACOwners: []protocol.ACOwner{{AC: "AC-001", Owner: "master-merge"}}, SplitCount: 3, Parallel: "three independent slices"}
 	master.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})

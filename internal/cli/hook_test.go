@@ -98,7 +98,6 @@ func currentDeniedHookPayload(t *testing.T) string {
 	}
 	state := protocol.NewState(*view)
 	state.RunID = runID
-	state.Route = "regular"
 	state.OwnerTranscript = transcript
 	state.OwnerSession = session
 	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "r1"}}

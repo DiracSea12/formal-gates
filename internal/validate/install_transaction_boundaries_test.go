@@ -516,7 +516,7 @@ func TestAdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
 				test.id = "absent"
 			}
 			runID := "install-" + test.id
-			_, err := admissionStartCurrent(root, packageRoot, registry, test.id, runID, "lightweight")
+			_, err := admissionStartCurrent(root, packageRoot, registry, test.id, runID)
 			if err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 				t.Fatalf("invalid admission was accepted: %v", err)
 			}
@@ -607,10 +607,10 @@ func TestWorkflowStateUsesNestedProjectBinding(t *testing.T) {
 	parentRecord := installRecordByID(t, document, parentInstall.Targets[0].RegistryRecordID)
 	nestedRecord := installRecordByID(t, document, nestedInstall.Targets[0].RegistryRecordID)
 	packageRoot := nestedRecord.Target
-	if _, err := admissionStartCurrent(nested, parentRecord.Target, registry, parentRecord.ID, "install-parent", "lightweight"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+	if _, err := admissionStartCurrent(nested, parentRecord.Target, registry, parentRecord.ID, "install-parent"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
 		t.Fatalf("less-specific project binding accepted: %v", err)
 	}
-	run, err := admissionStartCurrent(nested, packageRoot, registry, nestedRecord.ID, "install-nested", "lightweight")
+	run, err := admissionStartCurrent(nested, packageRoot, registry, nestedRecord.ID, "install-nested")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestGlobalAdmissionUsesExistingProjectLocalRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := admissionStartCurrent(project, packageRoot, registry, global.ID, "install-global", "lightweight")
+	run, err := admissionStartCurrent(project, packageRoot, registry, global.ID, "install-global")
 	if err != nil {
 		t.Fatal(err)
 	}

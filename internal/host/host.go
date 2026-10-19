@@ -16,6 +16,7 @@ const (
 	DeepSeek  = "deepseek-harness"
 	ZCode     = "zcode"
 	WorkBuddy = "workbuddy"
+	Devin     = "devin"
 	Default   = "default"
 )
 
@@ -36,6 +37,20 @@ const (
 	ProtocolZCode   HookProtocol = "zcode"
 )
 
+// ConfirmationChannel is the host's native confirmation transport.
+type ConfirmationChannel string
+
+const (
+	// ConfirmationElicitation confirms through the host's interactive form:
+	// the service sends the original operation as a form request and the
+	// human's answer gates it. It is the zero-value default.
+	ConfirmationElicitation ConfirmationChannel = ""
+	// ConfirmationHostPermission treats the host's tool-call permission gate
+	// as the approval authority: the host decides before the call reaches the
+	// service, so an arrived call is already confirmed by that gate.
+	ConfirmationHostPermission ConfirmationChannel = "host-permission"
+)
+
 type PathLayout struct {
 	GlobalBase        string
 	GlobalHookConfig  string
@@ -51,6 +66,11 @@ type HookSpec struct {
 	GateEvent   string
 	GateMatcher string
 	GateTimeout bool
+	// BindProvider appends --provider <id> to the installed gate hook command.
+	BindProvider bool
+	// ProjectDirEnv names the environment variable holding the project
+	// directory when the hook payload carries no cwd.
+	ProjectDirEnv string
 }
 
 type Descriptor struct {
@@ -65,6 +85,9 @@ type Descriptor struct {
 	Hook              HookSpec
 	EnvironmentKeys   []string `json:"-"`
 	LifecycleRequired bool
+	// Confirmation is the host's native confirmation channel; the zero value
+	// means interactive form elicitation.
+	Confirmation ConfirmationChannel
 }
 
 var descriptors = []*Descriptor{
@@ -79,7 +102,7 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".claude/skills", GlobalHookConfig: ".claude/settings.json", GlobalManaged: ".claude/CLAUDE.md",
 			ProjectBase: ".claude/skills", ProjectHookConfig: ".claude/settings.json", ProjectManaged: "CLAUDE.md",
 		},
-		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*", BindProvider: true},
 		LifecycleRequired: true,
 	},
 	{
@@ -93,7 +116,7 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".codex/skills", GlobalHookConfig: ".codex/hooks.json", GlobalManaged: ".codex/AGENTS.md",
 			ProjectBase: ".codex/skills", ProjectHookConfig: ".codex/hooks.json", ProjectManaged: "AGENTS.md",
 		},
-		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolCodex, GateEvent: "PreToolUse", GateMatcher: ".*", GateTimeout: true},
+		Hook:              HookSpec{Kind: HookNested, Protocol: ProtocolCodex, GateEvent: "PreToolUse", GateMatcher: ".*", GateTimeout: true, BindProvider: true},
 		LifecycleRequired: true,
 	},
 	{
@@ -118,7 +141,7 @@ var descriptors = []*Descriptor{
 		Aliases:           []string{"dsh", "deepseek", "deepseek-harness", "deepseek harness"},
 		Installable:       true,
 		Paths:             PathLayout{ProjectManaged: "AGENTS.md"},
-		Hook:              HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+		Hook:              HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*", BindProvider: true},
 		LifecycleRequired: true,
 	},
 	{
@@ -132,7 +155,7 @@ var descriptors = []*Descriptor{
 			GlobalBase: ".zcode/skills", GlobalHookConfig: ".zcode/cli/config.json", GlobalManaged: ".zcode/AGENTS.md",
 			ProjectBase: ".zcode/skills", ProjectManaged: "AGENTS.md",
 		},
-		Hook:              HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*"},
+		Hook:              HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", BindProvider: true},
 		LifecycleRequired: true,
 	},
 	{
@@ -141,6 +164,16 @@ var descriptors = []*Descriptor{
 		Paths:             PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
 		LifecycleRequired: true,
 		Configuration:     []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
+		Hook:              HookSpec{BindProvider: true},
+	},
+	{
+		ID: Devin, InstallName: "devin", ManifestName: "Devin",
+		Aliases: []string{"devin"}, Installable: true,
+		Paths: PathLayout{
+			ProjectBase: ".devin/skills", ProjectHookConfig: ".devin/config.json", ProjectManaged: "AGENTS.md",
+		},
+		Hook:         HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: ".*", BindProvider: true, ProjectDirEnv: "DEVIN_PROJECT_DIR"},
+		Confirmation: ConfirmationHostPermission,
 	},
 	{
 		ID:                Default,

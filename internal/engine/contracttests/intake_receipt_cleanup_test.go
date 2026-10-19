@@ -2,6 +2,7 @@ package contracttests
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +16,56 @@ import (
 func fixtureAdmission(t *testing.T, root, packageDigest, recordID string) *facade.Admission {
 	t.Helper()
 	registryPath, target, generation, lease, token := testkit.Installation(t, root, recordID, packageDigest, "engine")
+	for _, directory := range []string{"prompts", "gates"} {
+		source := os.DirFS(filepath.Join("..", "..", "..", directory))
+		if err := fs.WalkDir(source, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			destination := filepath.Join(target, directory, filepath.FromSlash(path))
+			if entry.IsDir() {
+				return os.MkdirAll(destination, 0o777)
+			}
+			data, err := fs.ReadFile(source, path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(destination, data, 0o666)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return &facade.Admission{RegistryPath: registryPath, Target: target, Root: root, Provider: "engine",
 		PackageDigest: packageDigest, InstalledTargetIdentity: recordID, Generation: generation, Lease: lease, Token: token}
+}
+
+func TestFixtureAdmissionPreservesMaterials(t *testing.T) {
+	admission := fixtureAdmission(t, t.TempDir(), "sha256:fixture-package", "fixture-target")
+	for _, directory := range []string{"prompts", "gates"} {
+		source := os.DirFS(filepath.Join("..", "..", "..", directory))
+		if err := fs.WalkDir(source, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			want, err := fs.ReadFile(source, path)
+			if err != nil {
+				return err
+			}
+			got, err := os.ReadFile(filepath.Join(admission.Target, directory, filepath.FromSlash(path)))
+			if err != nil {
+				return err
+			}
+			if string(got) != string(want) {
+				t.Fatalf("installed material %s/%s differs from its source", directory, path)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // TestFacadeOpenMissingReceiptHidesFilesystemPath covers the normal
@@ -89,6 +138,7 @@ func TestCleanupTerminalCommitsReceiptAndClearsIntent(t *testing.T) {
 // gone but whose retained result still owns the run id.
 func TestCandidateStartRejectsRetainedLegacyResult(t *testing.T) {
 	root := t.TempDir()
+	verifiedStartFixture(t, root)
 	runID := "retained-legacy-result"
 	resultPath := filepath.Join(root, ".gates", "results", runID+".json")
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {

@@ -13,13 +13,7 @@ import (
 	"strings"
 )
 
-func claudeCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := claudeResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return claudeConfiguredBinding(settings.Values{Native: native})
-}
+var claudeCaptureBinding = nativeCapture(claudeResolvePaths, claudeConfiguredBinding)
 
 func claudeResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}

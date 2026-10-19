@@ -133,7 +133,7 @@ func (p *pathResolverFixture) ResolveNativePaths(native, sources map[string]stri
 }
 
 func TestSelectedNativePathFreezeUsesRegisteredOwner(t *testing.T) {
-	provider := &pathResolverFixture{Descriptor: &host.Descriptor{ID: "settings-path-owner", Installable: true, Aliases: []string{"settings-path-alias"}}}
+	provider := &pathResolverFixture{Descriptor: &host.Descriptor{ID: "settings-path-owner", Installable: true, Aliases: []string{"settings-path-alias"}, Configuration: []host.ConfigField{host.StringConfig("settingsPathOwnerExecutable", "x")}}}
 	if err := host.Register(provider); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +158,25 @@ func TestSelectedNativePathFreezeUsesRegisteredOwner(t *testing.T) {
 	failed, err := Freeze(provider.ID, effective)
 	if err == nil || effective.Values.Native["fixtureRoot"] != "" || failed.Values.Native["fixtureRoot"] != "" {
 		t.Fatalf("failed mapper published partial paths: %+v %v", failed, err)
+	}
+}
+
+func TestFreezeSkipsResolverForHostWithoutNativeConfiguration(t *testing.T) {
+	effective := Effective{Values: Values{Native: map[string]string{}, QACapacity: 2, Capacity: 3}, Sources: map[string]string{}, Files: []string{"user.json"}}
+	hostOnly := &host.Descriptor{ID: "settings-host-only", Installable: true, Aliases: []string{"settings-host-only"}}
+	if err := host.Register(hostOnly); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := Freeze("settings-host-only", effective)
+	if err != nil || !reflect.DeepEqual(frozen, effective) {
+		t.Fatalf("host-only adapter requires native resolution: %+v %v", frozen, err)
+	}
+	configured := &host.Descriptor{ID: "settings-no-resolver", Installable: true, Aliases: []string{"settings-no-resolver"}, Configuration: []host.ConfigField{host.StringConfig("settingsNoResolverExecutable", "x")}}
+	if err := host.Register(configured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Freeze("settings-no-resolver", effective); err == nil || !strings.Contains(err.Error(), "native path resolver unavailable") {
+		t.Fatalf("configured adapter without resolver accepted: %v", err)
 	}
 }
 

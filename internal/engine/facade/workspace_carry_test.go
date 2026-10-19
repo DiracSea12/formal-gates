@@ -55,25 +55,15 @@ func TestQueuedDevelopmentWorkspaceSurvivesRouteSelection(t *testing.T) {
 				}
 				d.submit(unknown)
 			}
-			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: []int{4}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
-				t.Fatal(err)
-			}
-			// Replacing an ordinary gate is legal before any development dispatch.
-			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, d.run, err = submitControlWithHost(t, d.f, choice); err != nil || !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[3:4]) {
-				t.Fatal("queued workspace blocked confirmed route replacement", err)
+			configuration := protocol.RouteDecision{Selected: catalog[3:4]}
+			d.configureRoute(&configuration)
+			if !reflect.DeepEqual(d.run.Review.SelectedGates, catalog[3:4]) {
+				t.Fatal("queued workspace blocked a saved library change")
 			}
 			d.reopen()
 			state = driverState(t, d)
 			if len(state.PendingHostActions) != 1 || !reflect.DeepEqual(state.PendingHostActions[original.ActionID], original) || state.NativeResources[parameters.Resource.ID] != parameters.Resource || !state.NativeActionCurrent(original, d.f.definition) || state.NativeActionWritable(original, d.f.definition) == lostResponse {
-				t.Fatal("route replacement changed original responsibility or UNKNOWN qualification")
+				t.Fatalf("workspace after library change: count=%d original=%t resource=%t current=%t writable=%t lost=%t", len(state.PendingHostActions), reflect.DeepEqual(state.PendingHostActions[original.ActionID], original), state.NativeResources[parameters.Resource.ID] == parameters.Resource, state.NativeActionCurrent(original, d.f.definition), state.NativeActionWritable(original, d.f.definition), lostResponse)
 			}
 			if progress, err := d.f.completeNativeIntent(state, original, !lostResponse); err != nil || !progress {
 				t.Fatal("original completion did not reach typed receipt admission", progress, err)
@@ -368,24 +358,12 @@ func TestPendingBlackboxMirrorRouteAdditionUsesCurrentManifest(t *testing.T) {
 				}
 				d.submit(unknown)
 			}
-			request, err := d.f.PrepareControl(ControlInput{Request: protocol.ControlSelectRoute, Gates: []int{1, 3, 4}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, d.run, err = submitControlWithHost(t, d.f, request); err != nil {
-				t.Fatal(err)
-			}
-			choice, err := d.f.PrepareControl(ControlInput{Ask: askPosition(t, d.run, protocol.ControlSelectRoute), Choice: "approve"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, d.run, err = submitControlWithHost(t, d.f, choice); err != nil {
-				t.Fatal(err)
-			}
+			configuration := protocol.RouteDecision{Selected: []string{catalog[0], catalog[2], catalog[3]}}
+			d.configureRoute(&configuration)
 			d.reopen()
 			state = driverState(t, d)
 			if !reflect.DeepEqual(state.PendingHostActions[original.ActionID], original) || state.NativeActionCurrent(original, d.f.definition) || state.NativeActionWritable(original, d.f.definition) || !state.WorkspaceMirrorSuperseded(original, d.f.definition) {
-				t.Fatal("route addition rewrote original evidence or retained its writer")
+				t.Fatalf("mirror after library change: original=%t current=%t writable=%t superseded=%t", reflect.DeepEqual(state.PendingHostActions[original.ActionID], original), state.NativeActionCurrent(original, d.f.definition), state.NativeActionWritable(original, d.f.definition), state.WorkspaceMirrorSuperseded(original, d.f.definition))
 			}
 			target := filepath.Join(parameters.Resource.Path, ".gates", "cases", "blackbox.md")
 			prior, priorErr := os.ReadFile(target)

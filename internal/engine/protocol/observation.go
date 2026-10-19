@@ -7,6 +7,9 @@ import "formal-gates/internal/engine/decision"
 type Observation struct {
 	Facts decision.Observation
 	Read  func() (decision.Observation, error)
+	// Confirmation is the channel that confirmed this write; empty means the
+	// interactive form (or no confirmation happened for this event).
+	Confirmation string
 }
 
 // Fingerprint re-reads the exact source set for the Store transaction.
@@ -35,6 +38,7 @@ func (e *Engine) observing(input Observation) *Engine {
 	if e.observation != nil {
 		return e
 	}
+	e = e.evaluatingConfiguration()
 	local := *e
 	local.sourceFacts = input.Facts
 	input.Facts.Facts = append([]decision.Fact(nil), input.Facts.Facts...)

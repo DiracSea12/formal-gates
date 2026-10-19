@@ -26,11 +26,13 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
 	"formal-gates/internal/engine/vcs"
+	"formal-gates/internal/settings"
 )
 
 func receiptMaster(t *testing.T, owner ...OwnerBinding) *validationDriver {
 	t.Helper()
 	d := nativeMasterDriver(t)
+	saveVerificationRoute(t, d, "blackbox", "quality", "security")
 	meterReceiptDispatches(d, 3, 9, 4)
 	passPreDevelopmentReviews(t, d, splitCommandPlan())
 
@@ -73,14 +75,15 @@ func meterReceiptDispatches(d *validationDriver, hit, miss, output int64) {
 		}
 		return protocol.ResolvedCostSource{State: protocol.CostSourceReady, Usage: usage}
 	}
-	eng, err := protocol.New(d.f.store, protocol.Config{Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission)})
+	state := driverState(d.t, d)
+	eng, err := protocol.New(d.f.store, protocol.Config{Settings: state.Settings, VCSName: state.VCSName, NativeHandle: state.NativeHandle, NativeRoot: state.NativeRoot, Definition: d.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: resolver, ClaimDispatch: dispatchClaimBridge(d.f.root, d.f.runID, d.f.admission), WorkerExecution: workerExecutionBridge(d.f.root, d.f.runID), Configuration: configurationLibrary(d.f.root), RouteGates: configurationGates(d.f.admission.Target), ParentSnapshot: configurationParent(d.f.root)})
 	if err != nil {
 		d.t.Fatal(err)
 	}
 	d.f.engine = eng
 }
 
-func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode string) *validationDriver {
+func receiptChild(t *testing.T, master *validationDriver, childID, sliceID string) *validationDriver {
 	t.Helper()
 	options := sliceChildStart(master, childID, sliceID, sliceChildReceipt(master.revision))
 	options.Request.BaseSnapshot = master.run.BaseSnapshot
@@ -90,10 +93,12 @@ func receiptChild(t *testing.T, master *validationDriver, childID, sliceID, mode
 	}
 	d := &validationDriver{t: t, f: f, run: run, revision: master.revision, git: f.vcs}
 	meterReceiptDispatches(d, 1, 4, 2)
-	route := protocol.RouteDecision{Gates: []string{"quality", "security"}, Selected: []string{"quality", "security"}}
-	if mode == "selected" {
-		route.Selected = []string{"security"}
+	catalog, err := d.f.routeRequestPayload(true)
+	if err != nil {
+		t.Fatal(err)
 	}
+	configuration := protocol.ConfigurationSelection{Configuration: driverState(t, master).AppliedConfiguration()}
+	route := protocol.RouteDecision{Selected: configuration.SelectedGates(catalog.RouteGates)}
 	d.confirmSliceRoute(route, sliceLanePlan())
 	d.drive()
 	id, input := planBatchAction(d, "command")
@@ -124,6 +129,30 @@ func publishReceiptChild(t *testing.T, child *validationDriver) protocol.SliceRe
 		t.Fatal(err)
 	}
 	return readSliceReceipt(t, child)
+}
+
+func assertReceiptQualification(t *testing.T, source *protocol.State, receipt protocol.SliceReceipt) {
+	t.Helper()
+	if source.RunID != receipt.Receipt.ChildRunID || source.SliceChild == nil || source.SliceChild.MasterRunID != receipt.Receipt.MasterRunID || receipt.Digest != receipt.Receipt.CanonicalDigest() {
+		t.Fatal("receipt qualification lost its frozen child identity")
+	}
+	if authority := receipt.Configuration; authority != nil {
+		found := false
+		for _, applied := range source.AppliedConfigurations {
+			found = found || reflect.DeepEqual(applied, *authority)
+		}
+		if !found || authority.Revision == 0 || authority.Bypassed || !authority.RouteChanged || authority.Preview == nil || authority.Effect == nil || authority.Effect.AppliedRevision < authority.Revision || authority.Effect.PreviewDigest != authority.Preview.CanonicalDigest() {
+			t.Fatal("receipt configuration qualification is not an applied fact of its child")
+		}
+	}
+	if authority := receipt.Continuation; authority != nil {
+		decision := source.Decisions[authority.Decision.RequestID]
+		preview := source.PendingAsks[authority.Decision.RequestID].Continuation
+		event := source.Events[authority.Decision.EventID]
+		if !reflect.DeepEqual(decision, authority.Decision) || !reflect.DeepEqual(event, authority.Event) || !reflect.DeepEqual(preview, &authority.Preview) || decision.Continuation == nil || decision.Continuation.AppliedRevision < decision.Revision || decision.Continuation.PreviewDigest != authority.Preview.CanonicalDigest() {
+			t.Fatal("receipt continuation qualification is not the child's accepted applied control")
+		}
+	}
 }
 
 func assertMasterReceiptProjection(t *testing.T, master *validationDriver, own *protocol.State, receipts ...protocol.SliceReceipt) {
@@ -204,7 +233,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 	writeTranscript(t, path, []string{intervalBaseLine})
 	master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
 	own := driverState(t, master)
-	core := receiptChild(t, master, "core", "lane-core", "selected")
+	core := receiptChild(t, master, "core", "lane-core")
 	promoteReceiptChild(t, core)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 	first := publishReceiptChild(t, core)
@@ -216,7 +245,7 @@ func TestMasterReceiptAcceptancePreservesCostsAcrossConcurrencyAndReplay(t *test
 			t.Fatalf("child dispatch differs from its known transcript: %+v", entry)
 		}
 	}
-	tooling := receiptChild(t, master, "tooling", "lane-tooling", "selected")
+	tooling := receiptChild(t, master, "tooling", "lane-tooling")
 	tooling.reopen()
 	promoteReceiptChild(t, tooling)
 	second := publishReceiptChild(t, tooling)
@@ -366,7 +395,7 @@ func TestMasterWaitsForExactClaimsAndRejectsReceiptConflicts(t *testing.T) {
 	if len(driverState(t, master).SliceReceipts) != 0 || master.run.Status != "ACTIVE" {
 		t.Fatal("unclaimed slices did not wait")
 	}
-	child := receiptChild(t, master, "core", "lane-core", "selected")
+	child := receiptChild(t, master, "core", "lane-core")
 	master.drive()
 	if len(driverState(t, master).SliceReceipts) != 0 {
 		t.Fatal("unfinished child was accepted")
@@ -436,8 +465,23 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "owner.jsonl")
 			writeTranscript(t, path, []string{intervalBaseLine})
 			master := receiptMaster(t, OwnerBinding{Transcript: path, Provider: meteredProvider})
+			issued := driverState(t, master)
+			home, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := settings.EditConfiguration(master.f.root, home, "project", issued.ConfigurationName(), nil, func(configuration *settings.Configuration) error {
+				configuration.SetFlowNodeEnabled("product-review", false)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			master.drive()
 			own := driverState(t, master)
-			child := receiptChild(t, master, "core", "lane-core", "selected")
+			if reflect.DeepEqual(own.FlowSelection, issued.FlowSelection) || !reflect.DeepEqual(own.PendingActions, issued.PendingActions) || !reflect.DeepEqual(own.DispatchBindings, issued.DispatchBindings) {
+				t.Fatal("a completed-node configuration change did not preserve the original merge design issuance")
+			}
+			child := receiptChild(t, master, "core", "lane-core")
 			promoteReceiptChild(t, child)
 			writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
 			receipt := publishReceiptChild(t, child)
@@ -454,7 +498,7 @@ func TestMasterReceiptDiscoveryRecoversPublicationAndAcceptance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				eng, err := protocol.New(store, protocol.Config{Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission)})
+				eng, err := protocol.New(store, protocol.Config{Settings: own.Settings, VCSName: own.VCSName, NativeHandle: own.NativeHandle, NativeRoot: own.NativeRoot, Definition: master.f.definition, Registry: definition.Registry(), Capacity: 16, CostSource: CostSourceBridge(master.f.root, master.f.runID), ClaimDispatch: dispatchClaimBridge(master.f.root, master.f.runID, master.f.admission), WorkerExecution: workerExecutionBridge(master.f.root, master.f.runID), Configuration: configurationLibrary(master.f.root), RouteGates: configurationGates(master.f.admission.Target), ParentSnapshot: configurationParent(master.f.root)})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -490,7 +534,7 @@ func TestMasterReceiptAcceptsRepairCarryWithoutRewritingEvidence(t *testing.T) {
 	t.Parallel()
 	master := receiptMaster(t)
 	own := driverState(t, master)
-	child := receiptChild(t, master, "core", "lane-core", "all")
+	child := receiptChild(t, master, "core", "lane-core")
 	quality, input := child.gateAction("quality")
 	child.business(quality, protocol.ValidationResult{Binding: input.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P2", Message: "documented output order differs"}}})
 	security, input := child.gateAction("security")
@@ -537,7 +581,7 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 	for _, scope := range []string{"requirement", "topology", "route"} {
 		t.Run(scope, func(t *testing.T) {
 			master := receiptMaster(t)
-			child := receiptChild(t, master, "core", "lane-core", "selected")
+			child := receiptChild(t, master, "core", "lane-core")
 			promoteReceiptChild(t, child)
 			child.drive()
 			receipt := readSliceReceipt(t, child)
@@ -572,9 +616,11 @@ func TestMasterReceiptHistorySurvivesRequirementScopeChanges(t *testing.T) {
 			master.reopen()
 			master.drive()
 			state := driverState(t, master)
-			if !reflect.DeepEqual(state.SliceReceipts[child.f.runID], receipt) || !reflect.DeepEqual(state.Cost, before.Cost) || state.SliceReceiptCurrent(receipt) || scope == "topology" && state.Topology != nil || scope == "route" && state.RouteConfirmed {
+			current := state.SliceReceipts[child.f.runID]
+			if !reflect.DeepEqual(current.Receipt, receipt.Receipt) || current.Digest != receipt.Digest || !reflect.DeepEqual(state.Cost, before.Cost) || state.SliceReceiptCurrent(receipt) || state.SliceReceiptCurrent(current) || scope == "topology" && state.Topology != nil || scope == "route" && state.RouteConfirmed {
 				t.Fatal("Phase B history was coupled to the superseded current context")
 			}
+			assertReceiptQualification(t, driverState(t, child), current)
 			next, _ := json.Marshal(master.run.Next)
 			if strings.Contains(string(next), "all expected slices are ready") {
 				t.Fatal("historical receipt qualified as current ready")
@@ -678,7 +724,25 @@ func assertReceiptGuardBasis(t *testing.T, master *validationDriver, state *prot
 					attempts = payload.Retry.MaxAttempts
 				}
 				key.Scope = fmt.Sprintf("%d:MERGE:1:", state.Validation.Generation)
-				basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.RouteSource, Identity: basis.Route.Identity}, MaxAttempts: &attempts})
+				source := guard.Provenance{Kind: guard.RouteSource, Identity: basis.Route.Identity}
+				issued := false
+				for _, binding := range state.DispatchBindings {
+					if binding.Task == key {
+						issued = true
+						if binding.RouteScope == "" {
+							t.Fatal("issued merge design lost its original route")
+						}
+						source.Revision = binding.RouteScope
+						if source.Identity != basis.Route.Identity {
+							basis.HistoricalSources = append(basis.HistoricalSources, source)
+						}
+						break
+					}
+				}
+				if !issued {
+					t.Fatal("merge design budget has no signed dispatch")
+				}
+				basis.ExternalTasks = append(basis.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: source, MaxAttempts: &attempts})
 			}
 		}
 	}

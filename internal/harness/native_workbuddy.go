@@ -97,13 +97,7 @@ func workbuddyCLIEfforts(executable, workspace string, environment map[string]st
 	return nil, nil
 }
 
-func workbuddyCaptureBinding() (map[string]any, error) {
-	native, sources := map[string]string{}, map[string]string{}
-	if err := workbuddyResolvePaths(native, sources); err != nil {
-		return nil, err
-	}
-	return workbuddyConfiguredBinding(settings.Values{Native: native})
-}
+var workbuddyCaptureBinding = nativeCapture(workbuddyResolvePaths, workbuddyConfiguredBinding)
 
 func workbuddyResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}

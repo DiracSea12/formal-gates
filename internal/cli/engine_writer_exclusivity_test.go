@@ -62,14 +62,14 @@ func writerIntakeReceipt(t *testing.T, root string) facade.IntakeConfirmationRec
 	return preview.IntakeCandidate
 }
 
-// startEngineRunForWriterTest 以 façade 建立真实 engine run（regular 路线，
+// startEngineRunForWriterTest 以 façade 建立真实 engine run（默认启用全部节点，
 // 独立临时 root），返回 façade 与其权威 state.json 路径。
 func startEngineRunForWriterTest(t *testing.T) (*facade.Facade, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	receipt := writerIntakeReceipt(t, root)
 	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: frozenGitRunner{}, Request: facade.StartRequest{
-		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: frozenSnapshot,
+		RunID: "writer-exclusive", BaseSnapshot: frozenSnapshot,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
 	}, Admission: engineWriterAdmission(t, root)})
@@ -160,7 +160,7 @@ func startAdmittedEngineRun(t *testing.T, root string, nativeBase ...string) *fa
 		runner, base = vcs.ExecRunner{}, nativeBase[0]
 	}
 	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Request: facade.StartRequest{
-		RunID: "writer-exclusive", Route: "regular", BaseSnapshot: base, Provider: admission.Provider,
+		RunID: "writer-exclusive", BaseSnapshot: base, Provider: admission.Provider,
 		DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: writerIntakeReceipt(t, root),
 	}, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})

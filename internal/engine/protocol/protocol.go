@@ -214,8 +214,6 @@ type PendingAction struct {
 // Resolved=true；已失去绑定事实的自动授权 Ask 也退休为 Resolved。
 // 用户决定另保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
-	Configuration  *ConfigurationSelection  `json:"configuration,omitempty"`
-	Execution      *ExecutionSelection      `json:"execution,omitempty"`
 	Continuation   *NodeContinuationPreview `json:"continuation,omitempty"`
 	Reset          *ResetPreview            `json:"reset,omitempty"`
 	ResetRequestID string                   `json:"resetRequestId,omitempty"`
@@ -246,7 +244,6 @@ type PendingAsk struct {
 
 // RecordedDecision preserves the user decision and its typed action.
 type RecordedDecision struct {
-	Execution    *ExecutionSelection       `json:"execution,omitempty"`
 	Continuation *NodeContinuationDecision `json:"continuation,omitempty"`
 	Reset        *ResetDecision            `json:"reset,omitempty"`
 	Review       *ReviewDecisionPayload    `json:"review,omitempty"`
@@ -270,6 +267,9 @@ type EventRecord struct {
 // 回执 canonical 字节的摘要：同 actionID 的逐字节重发按它判幂等，字节
 // 不同即 RECEIPT_CONFLICT 硬拒绝。
 type SpawnReceipt struct {
+	// Execution preserves the signed choice when the receipt is accepted,
+	// including native omissions, independently of the Attempt's lifetime.
+	Execution         *ExecutionChoice       `json:"execution,omitempty"`
 	ActionID          string                 `json:"actionId"`
 	Provider          string                 `json:"provider"`
 	Correlation       string                 `json:"correlation"`
@@ -474,19 +474,22 @@ type LifecycleEventRecord struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
-	FlowSelection        *FlowSelection            `json:"flowSelection,omitempty"`
-	TaskMessages         map[string]TaskMessage    `json:"taskMessages,omitempty"`
-	Settings             *settings.Effective       `json:"settings,omitempty"`
-	StartedAt            string                    `json:"startedAt,omitempty"`
-	RequirementGuarantee *GuaranteeActivation      `json:"requirementGuarantee,omitempty"`
-	VCSName              string                    `json:"vcsName,omitempty"`
-	NativeHandle         vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
-	NativeRoot           string                    `json:"nativeRoot,omitempty"`
-	NativeResources      map[string]NativeResource `json:"nativeResources,omitempty"`
-	// BaseSnapshot 是 regular 路线经原生 VCS provider 校验过的不可变基线身份
-	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
+	FlowSelection *FlowSelection         `json:"flowSelection,omitempty"`
+	TaskMessages  map[string]TaskMessage `json:"taskMessages,omitempty"`
+	Settings      *settings.Effective    `json:"settings,omitempty"`
+	// AppliedConfigurations is the ordered applied-value history of the
+	// configuration bound by Settings.ConfigurationName.
+	AppliedConfigurations []AppliedConfiguration    `json:"appliedConfigurations,omitempty"`
+	StartedAt             string                    `json:"startedAt,omitempty"`
+	RequirementGuarantee  *GuaranteeActivation      `json:"requirementGuarantee,omitempty"`
+	VCSName               string                    `json:"vcsName,omitempty"`
+	NativeHandle          vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
+	NativeRoot            string                    `json:"nativeRoot,omitempty"`
+	NativeResources       map[string]NativeResource `json:"nativeResources,omitempty"`
+	// BaseSnapshot 是经原生 VCS provider 校验过的不可变基线身份（启动时
+	// verify＋ancestor-or-equal）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
-	// InitialSnapshot is the immutable native HEAD accepted at regular Start.
+	// InitialSnapshot is the immutable native HEAD accepted at Start.
 	// It owns the first development source and target identity before a promotion.
 	InitialSnapshot string `json:"initialSnapshot,omitempty"`
 	// PromotedSnapshot 是已绑定晋升的候选快照身份（与 PromotedDigest 同
@@ -510,7 +513,6 @@ type State struct {
 	// writer.  Confirmation is captured at start; IntakeReceipt is populated by
 	// the first drive and is intentionally not a second confirmation event.
 	RunID                     string                      `json:"runId,omitempty"`
-	Route                     string                      `json:"route,omitempty"`
 	IntakeConfirmationReceipt *IntakeConfirmationReceipt  `json:"intakeConfirmationReceipt,omitempty"`
 	IntakeReceipt             *IntakeReceipt              `json:"intakeReceipt,omitempty"`
 	Expected                  []runtime.TaskKey           `json:"expected"`
@@ -719,6 +721,11 @@ type IntakeConfirmationReceipt struct {
 	SolutionRevision string `json:"solutionRevision"`
 	SolutionDigest   string `json:"solutionDigest"`
 	Digest           string `json:"digest,omitempty"`
+	// Confirmation records which channel delivered the host's confirmation:
+	// empty for the interactive form, "host-permission" when the host's own
+	// tool-call permission gate admitted the call. It is provenance, not part
+	// of the material binding, so the canonical digest excludes it.
+	Confirmation string `json:"confirmation,omitempty"`
 }
 
 // IntakeReceipt is the first-drive durable projection of the exact
@@ -837,7 +844,8 @@ func (s *State) normalizeCollections() {
 	// 两条 series 均无动作绑定的格式使用初始账本；只有一条绑定的部分
 	// 投影由加载/提交边界的 review.Validate 拒绝。
 	if s.ReviewSeries.ProductReview.Action == "" && s.ReviewSeries.StartReadiness.Action == "" {
-		s.ReviewSeries = review.NewSet()
+		configuration := s.AppliedConfiguration()
+		s.ReviewSeries = review.NewSetWithLimits(configuration.RoundLimit("product-review"), configuration.RoundLimit("tech-review"), 0)
 	}
 	// An empty local ledger is seeded from this run's original intake receipt.
 	if len(s.RequirementRevisions) == 0 && s.IntakeReceipt != nil {

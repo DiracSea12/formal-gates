@@ -13,10 +13,7 @@ import (
 
 // initialGuarantee freezes activation only at the explicit initial confirmation.
 // A structured document observed later cannot create this authority.
-func initialGuarantee(root, route string, receipt IntakeConfirmationReceipt) (*protocol.GuaranteeActivation, error) {
-	if route != "regular" {
-		return nil, nil
-	}
+func initialGuarantee(root string, receipt IntakeConfirmationReceipt) (*protocol.GuaranteeActivation, error) {
 	data, err := os.ReadFile(filepath.Join(root, receipt.RequirementSource))
 	if err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/host"
 	"io"
 	"maps"
@@ -22,7 +23,16 @@ type Values struct {
 
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+
+	// PanelIdleTimeout is in seconds; 0 disables the timeout.
+	PanelIdleTimeout int  `json:"panelIdleTimeout"`
+	PanelSelection   bool `json:"panelSelection"`
 }
+
+// commonFields are the overlay fields owned by Values; the remaining scalar
+// fields belong to platform adapters.
+var commonFields = []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort", "panelIdleTimeout", "panelSelection"}
+
 type Effective struct {
 	Values              Values            `json:"values"`
 	Sources             map[string]string `json:"sources"`
@@ -30,6 +40,8 @@ type Effective struct {
 	ConfigurationName   string            `json:"configurationName,omitempty"`
 	Configuration       Configuration     `json:"configuration"`
 	ConfigurationSource string            `json:"configurationSource,omitempty"`
+	// Revisions hashes the exact overlay bytes used by this load, not run state.
+	Revisions map[string]string `json:"-"`
 }
 type input struct {
 	QACapacity *int   `json:"qaCapacity,omitempty"`
@@ -38,6 +50,9 @@ type input struct {
 
 	Model           *string `json:"model,omitempty"`
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+
+	PanelIdleTimeout *int  `json:"panelIdleTimeout,omitempty"`
+	PanelSelection   *bool `json:"panelSelection,omitempty"`
 }
 
 // Freeze resolves only the selected native platform into the persisted values.
@@ -47,6 +62,9 @@ func Freeze(provider string, effective Effective) (Effective, error) {
 		return effective, err
 	}
 	if !adapter.HostDescriptor().Installable {
+		return effective, nil
+	}
+	if len(adapter.HostDescriptor().Configuration) == 0 {
 		return effective, nil
 	}
 	resolver, ok := adapter.(interface {
@@ -79,9 +97,9 @@ func Load(root, home string) (Effective, error) {
 
 func load(root, home, candidatePath string, candidate []byte) (Effective, []ConfigurationOption, error) {
 	nativeFields := host.Configuration()
-	e := Effective{Values: Values{QACapacity: 4, Capacity: 16, Native: map[string]string{}}, Sources: map[string]string{}, Files: overlayPaths(root, home)}
+	e := Effective{Values: Values{QACapacity: 4, Capacity: 16, PanelIdleTimeout: 300, PanelSelection: true, Native: map[string]string{}}, Sources: map[string]string{}, Files: overlayPaths(root, home), Revisions: map[string]string{"user": "", "project": ""}}
 	configurations := newConfigurationSet()
-	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
+	for _, name := range commonFields {
 		e.Sources[name] = "default"
 	}
 	for name, field := range nativeFields {
@@ -112,8 +130,9 @@ func load(root, home, candidatePath string, candidate []byte) (Effective, []Conf
 	} else if !os.IsNotExist(err) {
 		return e, nil, err
 	}
-	for _, path := range e.Files {
-		data, err := os.ReadFile(path)
+	for i, scope := range []string{"user", "project"} {
+		path := e.Files[i]
+		data, err := atomicfile.ReadFile(path)
 		if path == candidatePath {
 			data, err = candidate, nil
 		}
@@ -123,13 +142,14 @@ func load(root, home, candidatePath string, candidate []byte) (Effective, []Conf
 		if err != nil {
 			return e, nil, err
 		}
+		e.Revisions[scope] = overlayRevision(data)
 		if err := applyOverlay(&e, configurations, path, data, path == e.Files[0] && e.Sources["tokenCap"] == legacy); err != nil {
 			return e, nil, err
 		}
 	}
 	selected, ok := configurations.values[configurations.active]
 	if !ok {
-		return e, nil, fmt.Errorf("configuration %q does not exist", configurations.active)
+		return e, configurations.options(), fmt.Errorf("configuration %q %w", configurations.active, ErrActiveConfigurationMissing)
 	}
 	e.ConfigurationName, e.Configuration, e.ConfigurationSource = configurations.active, selected, configurations.sources[configurations.active]
 	return e, configurations.options(), nil
@@ -218,6 +238,15 @@ func applyOverlay(e *Effective, configurations *configurationSet, path string, d
 		}
 		e.Values.ReasoningEffort = *in.ReasoningEffort
 	}
+	if in.PanelIdleTimeout != nil {
+		if *in.PanelIdleTimeout < 0 || *in.PanelIdleTimeout > 86400 {
+			return fmt.Errorf("%s: panelIdleTimeout: use seconds from 0 to 86400 (0 disables the timeout)", path)
+		}
+		e.Values.PanelIdleTimeout = *in.PanelIdleTimeout
+	}
+	if in.PanelSelection != nil {
+		e.Values.PanelSelection = *in.PanelSelection
+	}
 	for field := range raw {
 		if field == "configurations" || field == "configuration" {
 			continue
@@ -271,7 +300,7 @@ func (v *Values) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
+	for _, name := range commonFields {
 		delete(fields, name)
 	}
 	nativeFields := host.Configuration()

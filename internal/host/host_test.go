@@ -14,6 +14,7 @@ func TestRegistryExposesFiniteInstallableHostCapabilities(t *testing.T) {
 		{"dsh", DeepSeek, "dsh"},
 		{"z-code", ZCode, "zcode"},
 		{"cbc", WorkBuddy, "workbuddy"},
+		{"devin", "devin", "devin"},
 	} {
 		descriptor, err := Lookup(want.value)
 		if err != nil {
@@ -43,11 +44,37 @@ func TestZCodeDescriptorCapturesGlobalOnlyWriteBlockHook(t *testing.T) {
 }
 
 func TestInstallableListsComeFromRegistry(t *testing.T) {
-	if got, want := InstallableNames(), []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy"}; !equalStrings(got, want) {
+	if got, want := InstallableNames(), []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy", "devin"}; !equalStrings(got, want) {
 		t.Fatalf("InstallableNames()=%v, want %v", got, want)
 	}
-	if got, want := InstallableIDs(), []string{Claude, Codex, Cursor, DeepSeek, ZCode, WorkBuddy}; !equalStrings(got, want) {
+	if got, want := InstallableIDs(), []string{Claude, Codex, Cursor, DeepSeek, ZCode, WorkBuddy, "devin"}; !equalStrings(got, want) {
 		t.Fatalf("InstallableIDs()=%v, want %v", got, want)
+	}
+}
+
+func TestDevinDescriptorExposesOnlyHostInstallation(t *testing.T) {
+	d, err := Lookup("devin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ManifestName != "Devin" || d.Paths.ProjectBase != ".devin/skills" || d.Paths.ProjectHookConfig != ".devin/config.json" || d.Paths.ProjectManaged != "AGENTS.md" {
+		t.Fatalf("native host paths: %+v", d)
+	}
+	if d.Hook.Kind != HookNested || d.Hook.Protocol != ProtocolGeneric || d.Hook.GateEvent != "PreToolUse" || d.Hook.GateMatcher != ".*" || !d.Hook.BindProvider || d.Hook.ProjectDirEnv != "DEVIN_PROJECT_DIR" {
+		t.Fatalf("native hooks: %+v", d.Hook)
+	}
+	if d.Confirmation != ConfirmationHostPermission {
+		t.Fatalf("devin confirmation channel: %q", d.Confirmation)
+	}
+	if d.ReadUsage != nil || d.LifecycleRequired || len(d.Configuration) != 0 {
+		t.Fatalf("unsupported capabilities advertised: %+v", d)
+	}
+	adapter, err := LookupAdapter("devin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := adapter.(SelectionAdapter); ok {
+		t.Fatal("unverified native model catalogue advertised")
 	}
 }
 

@@ -252,7 +252,7 @@ func TestWorkerResumeUsesOriginalObservedDispatchIdentity(t *testing.T) {
 			confirmation.RequirementRevision = "sha256:" + projection.ContentDigest
 			confirmation.Artifacts = []IntakeArtifact{{Path: "requirement.md", Revision: confirmation.RequirementRevision}}
 			observedInput := Observation{}
-			if err := engine.InitWithMetadata(view, testProvider, observedInput, "native-resume", "regular", confirmation, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, observedInput, "native-resume", confirmation, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digestOfCanonical(confirmation)}, observedInput); err != nil {

@@ -27,22 +27,38 @@ func init() {
 		provider string
 		nativeImplementation
 	}{
-		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, capture: dshCaptureBinding, captureConfigured: dshConfiguredBinding, validateBinding: dshValidateBinding, verifySource: dshVerifySource, verifyStart: dshVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
-		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, capture: zcodeCaptureBinding, captureConfigured: zcodeConfiguredBinding, validateBinding: zcodeValidateBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
-		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, capture: claudeCaptureBinding, captureConfigured: claudeConfiguredBinding, validateBinding: claudeValidateBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
-		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, capture: codexCaptureBinding, captureConfigured: codexConfiguredBinding, validateBinding: codexValidateBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
-		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, cleanup: workbuddyInvocationCleanup, capture: workbuddyCaptureBinding, captureConfigured: workbuddyConfiguredBinding, validateBinding: workbuddyValidateBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
-		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, capture: cursorCaptureBinding, captureConfigured: cursorConfiguredBinding, validateBinding: cursorValidateBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
+		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, captureConfigured: dshConfiguredBinding, verifySource: dshVerifySource, verifyStart: dshVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
+		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, captureConfigured: zcodeConfiguredBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
+		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, captureConfigured: claudeConfiguredBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
+		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, captureConfigured: codexConfiguredBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
+		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, cleanup: workbuddyInvocationCleanup, captureConfigured: workbuddyConfiguredBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
+		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, captureConfigured: cursorConfiguredBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
 	}
 
 	for _, entry := range platforms {
+		implementation := entry.nativeImplementation
+		implementation.capture = nativeCapture(implementation.resolvePaths, implementation.captureConfigured)
+		implementation.validateBinding = func(binding any) error {
+			return validateNativeBinding(binding, entry.provider)
+		}
 		base, err := host.LookupAdapter(entry.provider)
 		if err != nil {
 			panic(err)
 		}
-		if err := registerNativePlatform(base.HostDescriptor(), entry.nativeImplementation); err != nil {
+		if err := registerNativePlatform(base.HostDescriptor(), implementation); err != nil {
 			panic(err)
 		}
+	}
+}
+
+// nativeCapture resolves live native paths and freezes them into a binding.
+func nativeCapture(resolvePaths func(map[string]string, map[string]string) error, configured func(settings.Values) (map[string]any, error)) func() (map[string]any, error) {
+	return func() (map[string]any, error) {
+		native, sources := map[string]string{}, map[string]string{}
+		if err := resolvePaths(native, sources); err != nil {
+			return nil, err
+		}
+		return configured(settings.Values{Native: native})
 	}
 }
 

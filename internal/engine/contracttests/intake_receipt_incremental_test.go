@@ -91,7 +91,7 @@ func TestProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite(t *testing.
 			}
 			confirmation := baseConfirmation
 			confirmation.Artifacts = append([]facade.IntakeArtifact(nil), baseConfirmation.Artifacts...)
-			if err := engine.InitWithMetadata(view, "engine", fingerprint, "receipt-binding", "lightweight", &confirmation, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, "engine", fingerprint, "receipt-binding", &confirmation, "", "", nil); err != nil {
 				t.Fatalf("init with confirmation: %v", err)
 			}
 			baseline, err := store.Load()

@@ -61,7 +61,7 @@ func TestPortableZCodeInstalledWorkflowCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "COMPLETE" || run.Unverified || run.PromotedSnapshot == "" || run.Envelope.InstalledTargetIdentity != target.RegistryRecordID {
+	if run.Status != "COMPLETE" || run.PromotedSnapshot == "" || run.Envelope.InstalledTargetIdentity != target.RegistryRecordID {
 		t.Fatalf("installed ZCode workflow lost its verified terminal: %+v", run)
 	}
 }

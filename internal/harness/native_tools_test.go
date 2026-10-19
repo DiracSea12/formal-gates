@@ -991,3 +991,94 @@ func TestNativeWorkspaceCopiesOriginalLineRangesAndBasenames(t *testing.T) {
 		t.Fatal("copy altered source bytes")
 	}
 }
+
+// Program-owned fact paths are published with canonical separators: a nested
+// file reached only by listing/read ordinals must assemble a test reference
+// that coverage validation and the real go tool accept.
+func TestNativeWorkspacePublishesCanonicalNestedTestPaths(t *testing.T) {
+	t.Parallel()
+	directory, workspace := nativeToolFixture(t)
+	body := "package labelctl\nimport (\"testing\"; \"os\")\nfunc TestWrong(t *testing.T) { t.Fatal(\"wrong test executed\") }\nfunc TestChosen(t *testing.T) { if err := os.WriteFile(\"selected.txt\", []byte(\"chosen\"), 0600); err != nil { t.Fatal(err) } }\n"
+	if err := os.MkdirAll(filepath.Join(workspace, "cmd", "labelctl"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{filepath.Join("cmd", "labelctl", "main_test.go"): body, "go.mod": "module labelctl\ngo 1.22\n"} {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(list map[string]any, name string) int {
+		t.Helper()
+		for _, row := range list["entries"].([]any) {
+			if getOf(row, "name") == name {
+				return getOf(row, "entry").(int)
+			}
+		}
+		t.Fatalf("published listing lacks %s: %v", name, list)
+		return 0
+	}
+	rootList := callWorkspace(t, tools, `{"action":"list"}`)
+	cmdList := callWorkspace(t, tools, fmt.Sprintf(`{"action":"list","listing":%d,"entry":%d}`, rootList["listing"].(int), entry(rootList, "cmd")))
+	nested := callWorkspace(t, tools, fmt.Sprintf(`{"action":"list","listing":%d,"entry":%d}`, cmdList["listing"].(int), entry(cmdList, "labelctl")))
+	read := callWorkspace(t, tools, fmt.Sprintf(`{"action":"read","listing":%d,"entry":%d}`, nested["listing"].(int), entry(nested, "main_test.go")))
+	choices := read["testSymbols"].([]map[string]any)
+	if len(choices) != 2 || choices[0]["name"] != "TestWrong" || choices[1]["name"] != "TestChosen" || choices[1]["symbol"] != 2 {
+		t.Fatal("published symbol choices did not match nested source declarations", choices)
+	}
+	originalRead := read["read"].(int)
+	resumed, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := resumed.facts[originalRead-1]
+	if persisted.Kind != "read" || len(persisted.Paths) != 1 || persisted.Paths[0] != "cmd/labelctl/main_test.go" {
+		t.Fatal("persisted read fact lost the canonical nested path", persisted.Paths)
+	}
+	if nestedList := resumed.facts[nested["listing"].(int)-1]; !slices.Contains(nestedList.Paths, "cmd/labelctl/main_test.go") {
+		t.Fatal("persisted listing fact lost the canonical nested path", nestedList.Paths)
+	}
+	facts := make([]worker.LocationFact, 0, len(resumed.facts))
+	for _, fact := range resumed.facts {
+		facts = append(facts, worker.LocationFact{Kind: fact.Kind, Paths: fact.Paths, Content: fact.Content})
+	}
+	binding := coverage.SourceBinding{RunID: "run", RequirementRevision: "req", SolutionRevision: "sol"}
+	input := protocol.WorkerInput{InputCodec: protocol.WorkerInputCodec, OutputCodec: worker.OutputCodec, RunID: "run", Handler: "engine.qa.design.v6", Provider: "host", Pending: protocol.PendingAction{ActionID: "action", AttemptID: "attempt"}, Validation: &protocol.ValidationInput{Manifest: coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: binding, ReviewKind: coverage.ReviewWhitebox, RouteScope: "route-scope", TopologyScope: "master"}, Sources: []string{"REQ"}, Points: []coverage.AcceptancePoint{{PointID: "P-1", ObservableBehavior: "chosen test runs", Oracle: "selected.txt contains chosen"}}}, SourcePoints: []protocol.SourcePoint{{SourceID: "REQ", PointID: "P-1"}}}}
+	raw := []byte(fmt.Sprintf(`{"cases":[{"scenario":"SUCCESS","oracle":"selected.txt contains chosen","files":[{"read":%d}],"test":{"read":%d,"symbol":2}}],"coverage":[[1]]}`, originalRead, originalRead))
+	event, err := worker.DecodeResultWithFacts(input, "result", raw, "original-output", []string{}, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qaCase := event.Result.Validation.Manifest.Cases[0]
+	if !reflect.DeepEqual(qaCase.Files, []string{"cmd/labelctl/main_test.go"}) {
+		t.Fatal("assembled case files are not the canonical nested path", qaCase.Files)
+	}
+	if qaCase.TestRef != "cmd/labelctl/main_test.go::TestChosen" {
+		t.Fatal("assembled test reference is not canonical", qaCase.TestRef)
+	}
+	contract := coverage.CoverageContract{RequiredSources: coverage.RequiredSources{Binding: binding, Sources: []coverage.RequiredSource{{SourceID: "REQ", Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability}}}, Manifests: []coverage.AcceptanceManifest{*event.Result.Validation.Manifest}, Candidate: &coverage.ValidationCandidate{Identity: "candidate"}}
+	if err := contract.Validate(); err != nil {
+		t.Fatal("assembled manifest fails ordinary contract validation", err)
+	}
+	if err := coverage.ValidateGoTestReference(workspace, qaCase.TestRef); err != nil {
+		t.Fatal("selected test declaration is invalid", err)
+	}
+	operation, err := coverage.GoTestOperation(qaCase.TestRef)
+	if err != nil {
+		t.Fatal("selected test cannot execute", err)
+	}
+	cmd := exec.Command(operation.Operation.Argv[0], operation.Operation.Argv[1:]...)
+	cmd.Dir = filepath.Join(workspace, operation.Directory)
+	output, err := cmd.CombinedOutput()
+	if err != nil || coverage.GoTestExecutionResult(output, operation.GoTestName) != "pass" {
+		t.Fatalf("selected nested test did not actually pass: %v\n%s", err, output)
+	}
+	value, err := os.ReadFile(filepath.Join(workspace, "cmd", "labelctl", "selected.txt"))
+	if err != nil || string(value) != "chosen" {
+		t.Fatal("actual selected test side effect differs", err)
+	}
+	t.Logf("read=%d symbol=2 ref=%s persisted=%q", originalRead, qaCase.TestRef, persisted.Paths)
+}

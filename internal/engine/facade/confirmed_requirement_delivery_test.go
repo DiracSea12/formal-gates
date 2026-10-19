@@ -18,7 +18,11 @@ import (
 // Confirmation identity is checked through actual independent Git delivery and a retained user control.
 func deliveredChildCheckpoint(t *testing.T, currentDocument string) (*validationDriver, *validationDriver, *protocol.State, protocol.SliceReceipt) {
 	t.Helper()
-	root := t.TempDir()
+	return deliveredChildCheckpointAt(t, t.TempDir(), currentDocument)
+}
+
+func deliveredChildCheckpointAt(t *testing.T, root, currentDocument string) (*validationDriver, *validationDriver, *protocol.State, protocol.SliceReceipt) {
+	t.Helper()
 	base := snapshotRepoCommits(t, root)[0]
 	content := []byte("startup project content\n")
 	if err := os.WriteFile(filepath.Join(root, "startup.txt"), content, 0644); err != nil {

@@ -12,7 +12,7 @@ formal-gates 由 Go 引擎计算完整下一步；程序在本 run 选定平台�
 
 本次覆盖：
 
-- regular 非分片、retained master、child、merge 和 lightweight；
+- 非分片、retained master、child 与 merge 拓扑；
 - Git、SVN、P4 的非分片与分片全流程；
 - Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的原生 adapter；每个平台的真实验证资格独立取证，额度与能力限制如实记录；
 - 产品审、技术审、开发、黑盒/白盒 QA、门、修复、需求变化、中断恢复、Seal/Abort；
@@ -210,23 +210,22 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 
 用户主动提出 formal-gates 后直接进入受理，不再重复问“是否进入正式流程”。主代理逐项澄清需求和重大技术选择，然后单独请求确认完整整合后的需求与方案；只有确认后才能 `start`。`start` 后首个 `drive` 自动登记 intake receipt/digest，不再次询问同一份确认。
 
-regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。主代理通过 `requirement` 提交对齐后的新语义，程序直接构造唯一正式 UTF-8 Markdown 需求案，保留未改原文与已有 ID，不另建草稿或人工覆盖清单；固定 `REQ → 要求/验收条件/来源` 与 `AC` 结构由程序生成，语义内容覆盖全部必须实现、会改变产品/流程行为或必须进入 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界，预检通过后仍由用户确认当前完整文件和 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，留在方案正文并由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 继续只登记需求后 Seal，不写该正式需求案。
+受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。主代理通过 `requirement` 提交对齐后的新语义，程序直接构造唯一正式 UTF-8 Markdown 需求案，保留未改原文与已有 ID，不另建草稿或人工覆盖清单；固定 `REQ → 要求/验收条件/来源` 与 `AC` 结构由程序生成，语义内容覆盖全部必须实现、会改变产品/流程行为或必须进入 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界，预检通过后仍由用户确认当前完整文件和 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，留在方案正文并由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。
 
 受理 owner 根据确定性预检生成的完整候选与用户对全文/revision 的明确确认，保存 typed
 `intakeConfirmationReceipt`。来源、authority 与 transport 使用当前协议的固定值，程序
 传递原对象与工件绑定，不要求模型手抄 identity/digest。`start` 校验确认来源、当前工件
 与结构一致，旧 receipt 配当前不同工件在首写前拒绝。
 
-若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和普通门确认，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
+执行行为由所选保存配置的启用节点决定；配置须至少启用一个节点，全部节点关闭拒绝启动。
 
 ### 4.2 正常 Ask
 
 正常流程只在用户拥有决定权时 Ask：
 
-1. lightweight/regular（尚未明确时）；
-2. 高置信拆分建议的精确拓扑，包括边界、数量、依赖和并行度；
-3. regular 非分片 run 和每个 child 的门与开发计划确认：Ask 钉住当前完整候选门目录，按启动时冻结的命名配置预选普通门与 QA，可改选任意子集（含空集）或全集。初始仅有“默认”配置，主节点启用、无普通 QA、全普通门、执行选择继承宿主；配置同时保存流程节点及各组的平台/模型/推理强度，黑盒与白盒各为一组。child 候选不含普通 QA，各自独立确认；推荐仍须用户确认。
-4. 经 Operator 核实成立的产品审/技术审每条 P0–P3 finding 的 confirm/dismiss，以及对已接纳 review finding/adjudication 的语义纠正；Ask 已附唯一完整 remedy 时 confirm 同时批准 remedy，存在多个用户拥有的修法或纠正选项时继续澄清并按 §5.1 确认完整候选的 review-delta。
+1. 高置信拆分建议的精确拓扑，包括边界、数量、依赖和并行度；
+2. 非分片 run 和每个 child 的门与开发计划确认：Ask 钉住当前完整候选门目录，按启动时冻结的命名配置预选普通门与 QA，可改选任意子集（含空集）或全集。初始仅有“默认”配置，主节点启用、无普通 QA、全普通门、执行选择继承宿主；配置同时保存流程节点及各组的平台/模型/推理强度，黑盒与白盒各为一组。child 候选不含普通 QA，各自独立确认；推荐仍须用户确认。
+3. 经 Operator 核实成立的产品审/技术审每条 P0–P3 finding 的 confirm/dismiss，以及对已接纳 review finding/adjudication 的语义纠正；Ask 已附唯一完整 remedy 时 confirm 同时批准 remedy，存在多个用户拥有的修法或纠正选项时继续澄清并按 §5.1 确认完整候选的 review-delta。
 
 命名配置同时保存流程节点与各执行组 tuple；运行中可明确选择保存配置或编辑本次节点，复用 SELECT_ROUTE 的完整配置、候选与 continuation 影响确认。修改默认不自动传播；启用过去或跳过节点后沿原节点继续。child 路线可在界面批量接受统一默认，但状态中逐 child 保存独立决定。低置信不拆或不确定由引擎自动记录 no-split 理由，不制造无意义 Ask。
 

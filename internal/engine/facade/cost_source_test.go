@@ -164,7 +164,10 @@ func TestExecutionSelectionCostUsesOnlyClaimedInvocations(t *testing.T) {
 	}
 	platform.descriptor.ReadUsage = descriptor.ReadUsage
 	platform.descriptor.LifecycleRequired = true
-	selectExecution(t, f, ExecutionSelectionInput{Node: "product-review", Platform: platform.descriptor.ID, Model: "Careful"})
+	saveExecution(t, f, ExecutionSelectionInput{Node: "product-review", Platform: platform.descriptor.ID, Model: "Careful"})
+	if _, err := f.Drive(); err != nil {
+		t.Fatal(err)
+	}
 	release, err := AdmitExecution(oldDirectory, oldSupervisor)
 	if release != nil {
 		release()

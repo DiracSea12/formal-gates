@@ -150,6 +150,19 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if err := writeAtomicJSON(filepath.Join(project, ".gates", "config.json"), map[string]any{"capacity": 2, "codexExecutable": filepath.Join(filepath.Dir(s.home), "codex")}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := settings.SaveConfiguration(project, s.home, "project", "命令", settings.DefaultConfigurationName, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(project, s.home, "project", "命令", nil, func(configuration *settings.Configuration) error {
+		gates := []string{"implementation-quality-gate"}
+		configuration.Gates = &gates
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(project, s.home, "project", "命令", nil); err != nil {
+		t.Fatal(err)
+	}
 	c := engineCanary{t: t, doc: []byte(document)}
 	var f *facade.Facade
 	if len(installed) > 0 && installed[0] {
@@ -165,7 +178,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 			t.Fatal(loadErr)
 		}
 		effective.Values.Native = s.nativeSettings().Native
-		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -764,28 +777,17 @@ func stageNativeDevelopmentReady(t *testing.T, f *facade.Facade, s *codexScenari
 	if _, _, err := f.Submit(decision); err != nil {
 		t.Fatal(err)
 	}
-	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
-	preview, err := f.DevelopmentPlan(route)
+	if requested, err := f.RequestWorkflowChoice(); err != nil || !requested {
+		t.Fatal("engine did not issue its actual initial route Ask", err)
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "approve"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	route.DevelopmentPlan = &preview.Confirmation
-	request, err = protocol.NewRouteRequestEvent("setup-route", route.Gates, protocol.AskOption{ID: "approve", Label: "command gate"})
-	if err != nil {
-		t.Fatal(err)
+	if candidate.DevelopmentPlan == nil || !slices.Equal(candidate.Event.Decide.Review.Route.Selected, []string{"implementation-quality-gate"}) {
+		t.Fatal("initial route lost the original development plan or bound gate")
 	}
-	if _, _, err := f.Submit(request); err != nil {
-		t.Fatal(err)
-	}
-	token, err = f.Freshness(string(request.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err = protocol.NewReviewDecideEvent("setup-route-decision", protocol.RequestID(request.ID), token, "approve", protocol.ReviewDecisionPayload{Route: &route})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.Submit(decision); err != nil {
+	if _, _, err := confirmFacadeFixtureControl(t, f, candidate); err != nil {
 		t.Fatal(err)
 	}
 	run, err := f.Drive()
@@ -1702,9 +1704,6 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	decide := func(owner *facade.Facade, kind protocol.ControlKind, choice string, payload protocol.ReviewDecisionPayload) {
 		t.Helper()
 		ask, err := protocol.NewRequestEvent(protocol.EventID("child-choice:"+choice), kind, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		if kind == protocol.ControlSelectRoute {
-			ask, err = protocol.NewRouteRequestEvent(protocol.EventID("child-choice:"+choice), payload.Route.Gates, protocol.AskOption{ID: protocol.AskOptionID(choice), Label: choice})
-		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1730,7 +1729,6 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	}
 	topology.DevelopmentPlan = &preview.Confirmation
 	decide(f, protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{Topology: topology})
-	route := protocol.RouteDecision{Gates: []string{"blackbox", "whitebox", "implementation-quality-gate"}, Selected: []string{"implementation-quality-gate"}}
 	s.peer.Mode = "workflow-held"
 	s.peer.Answer = nil
 	s.peer.Configuration["sandbox"] = map[string]any{"type": "workspaceWrite"}
@@ -1860,18 +1858,16 @@ func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	if err != nil || len(childRun.PendingAsks) != 1 || childRun.PendingAsks[0].Control != protocol.ControlSelectRoute {
 		t.Fatal("child did not retain its typed route Ask", err)
 	}
-	childRoute := protocol.RouteDecision{Gates: childRun.PendingAsks[0].RouteGates, Selected: route.Selected}
-	preview, err = child.DevelopmentPlan(childRoute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childRoute.DevelopmentPlan = &preview.Confirmation
 	ask := childRun.PendingAsks[0]
-	event, err := protocol.NewReviewDecideEvent("approve-child-route", protocol.RequestID(ask.RequestID), ask.Token, "approve", protocol.ReviewDecisionPayload{Route: &childRoute})
+	candidate, err := child.PrepareControl(facade.ControlInput{Ask: 1, Choice: "approve"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := child.Submit(event); err != nil {
+	if candidate.DevelopmentPlan == nil || candidate.Event.Decide.Request != protocol.RequestID(ask.RequestID) || candidate.Event.Decide.Token != ask.Token ||
+		candidate.Run.Configuration.Name != run.Configuration.Name || !slices.Equal(candidate.Event.Decide.Review.Route.Selected, []string{"implementation-quality-gate"}) {
+		t.Fatal("child route lost its original Ask, plan or inherited configuration")
+	}
+	if _, _, err := confirmFacadeFixtureControl(t, child, candidate); err != nil {
 		t.Fatal(err)
 	}
 	s.peer.Mode = "workflow-decision"

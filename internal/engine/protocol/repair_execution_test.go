@@ -8,6 +8,7 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/settings"
 	"testing"
 )
 
@@ -302,7 +303,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &State{RunID: "run", Route: "regular", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
+			s := &State{RunID: "run", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
 			task := pipelineTask(cd, "engine.repair.v7", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}, Waves: []ValidationWave{{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Counted: true, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}
@@ -386,8 +387,16 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			complete(correction)
 			fail(correction)
 			next := s.repairMembers(w)[0]
-			if s.completedValidationWaves() != automaticValidationWaveLimit || s.repairExtraAuthorized(&next) {
+			if s.completedValidationWaves() != settings.DefaultRoundLimit || s.repairExtraAuthorized(&next) {
 				t.Fatal("exhausted source acquired stale authority")
+			}
+			s.AppliedConfigurations = []AppliedConfiguration{{Revision: 11, Configuration: settings.Configuration{RoundLimits: map[string]int{"repair": 64}}}}
+			if s.repairRoundBlocked(&next) {
+				t.Fatal("configured capacity ignored counted waves plus per-batch gate depth")
+			}
+			s.AppliedConfigurations = append(s.AppliedConfigurations, AppliedConfiguration{Revision: 12, Configuration: settings.Configuration{RoundLimits: map[string]int{"repair": 1}}})
+			if !s.repairRoundBlocked(&next) || s.completedValidationWaves() != 3 {
+				t.Fatal("lowering the limit changed the combined business count")
 			}
 			s.PendingAsks["grant"] = PendingAsk{Validation: &ValidationRequest{Kind: "REPAIR", Binding: WorkBinding{Task: next.task}}}
 			s.Decisions["grant"] = RecordedDecision{Choice: "approve"}

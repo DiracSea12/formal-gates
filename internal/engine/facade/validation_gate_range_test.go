@@ -7,14 +7,15 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 )
 
-func TestRegularStartRequiresNativeBaseBeforeWriting(t *testing.T) {
+func TestStartRequiresNativeBaseBeforeWriting(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-base", Route: "regular", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "target", "package", DefaultProvider)})
+	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-base", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "target", "package", DefaultProvider)})
 	if err == nil {
-		t.Fatal("regular run without native base accepted")
+		t.Fatal("run without native base accepted")
 	}
 	if _, err := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(err) {
 		t.Fatalf("start wrote before validating native base: %v", err)
@@ -51,7 +52,7 @@ func TestGateRangeRequiresBoundOwnershipEvidence(t *testing.T) {
 			d.submit(ev)
 			d.drive()
 			_, in := d.gateAction("quality")
-			if in.Gate == nil || in.Gate.BaseSnapshot != frozenSnapshot || in.Gate.Gate != "quality" || in.Gate.Candidate.Identity != in.Binding.Candidate || !reflect.DeepEqual(in.Gate.TestOwnedPaths, []string{"app_test.go"}) {
+			if in.Gate == nil || in.Gate.BaseSnapshot != testkit.FrozenSnapshot || in.Gate.Gate != "quality" || in.Gate.Candidate.Identity != in.Binding.Candidate || !reflect.DeepEqual(in.Gate.TestOwnedPaths, []string{"app_test.go"}) {
 				t.Fatalf("missing exact gate input: %+v", in.Gate)
 			}
 			saved := *in.Gate
@@ -78,7 +79,7 @@ func TestGateRangeKeepsRunBaseAcrossRepairRouteAndRequirement(t *testing.T) {
 	id, in := d.gateAction("performance")
 	before := *in.Gate
 	binding := in.Binding
-	if in.Gate == nil || in.Gate.BaseSnapshot != frozenSnapshot || in.Gate.Candidate != w.Candidate || in.Gate.BaseSnapshot == d.run.Validation.DevelopmentSnapshot || in.Gate.Gate != "performance" || len(in.Gate.TestOwnedPaths) != 0 {
+	if in.Gate == nil || in.Gate.BaseSnapshot != testkit.FrozenSnapshot || in.Gate.Candidate != w.Candidate || in.Gate.BaseSnapshot == d.run.Validation.DevelopmentSnapshot || in.Gate.Gate != "performance" || len(in.Gate.TestOwnedPaths) != 0 {
 		t.Fatalf("wrong immutable review range: %+v", in.Gate)
 	}
 	confirmValidationWork(d, "")
