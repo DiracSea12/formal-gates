@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -44,7 +45,16 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(flags, args, streams.Stdout); done {
 		return code, err
 	}
-	return harness.ServeTools(streams.Stdin, streams.Stdout, streams.Stderr, confirmationTools(), func(name string, raw json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
+	controller, err := newPanelController()
+	if err != nil {
+		return 1, err
+	}
+	defer controller.Close()
+	ctx := streams.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return harness.ServeToolsWithContext(ctx, streams.Stdin, streams.Stdout, streams.Stderr, confirmationTools(), func(callCtx context.Context, name string, raw json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
 		var context struct {
 			Owner *facade.OwnerBinding `json:"formal-gates/owner"`
 		}
@@ -64,6 +74,8 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 		}
 		current := streams
 		current.owner = context.Owner
+		current.Context = callCtx
+		current.panelCtl = controller
 		return callConfirmationTool(name, raw, current, confirm, *packageRoot)
 	}, nil), nil
 }
@@ -80,7 +92,8 @@ func confirmationTools() []any {
 		tool("confirm_start", "Request native confirmation of the complete saved intake and start operation. The host's response directly starts the run.", map[string]any{
 			"root": root, "intake": position("Original intake position published by workflow start --precheck"),
 			"summary":       map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
-			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for the run; the program validates and displays it. Omitted uses the current native snapshot."},
+			"route":         map[string]any{"type": "string", "enum": []string{"regular", "lightweight"}},
+			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for a regular run; the program validates and displays it. Omitted uses the current native snapshot; lightweight ignores it."},
 			"vcs":           map[string]any{"type": "string", "description": "Native VCS name, using the existing workflow start selection when omitted."},
 			"configuration": map[string]any{"type": "string", "description": "Saved configuration name or displayed position"},
 		}, "intake"),
@@ -96,6 +109,11 @@ func confirmationTools() []any {
 			"question": position("Original pending question position published by native show"),
 			"decision": position("Original saved decision position published by native respond"),
 		}, "question", "decision"),
+		tool("configure", "Open the flow configuration panel and wait for its result. Before intake selection, tell the user that this graphical panel is available now and later: ask the agent to call configure, or run formal-gates config in a terminal; disabling panelSelection switches selection to conversation. With intake, selected/timeout returns a saved configuration and derived route for confirm_start; the panel does not approve startup. Never call confirm_start after cancelled or superseded. If disabled/unavailable, explain the reason and offer equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
+			"root":   map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory."},
+			"intake": position("Original intake position published by workflow start --precheck"),
+			"force":  map[string]any{"type": "boolean", "description": "Open the panel even when panelSelection is disabled"},
+		}),
 	}
 }
 
@@ -122,11 +140,46 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 	var args []string
 	var execute func([]string, IO) (int, error)
 	switch name {
+	case "configure":
+		var input struct {
+			Root   string `json:"root"`
+			Intake *int   `json:"intake"`
+			Force  bool   `json:"force"`
+		}
+		if err := harness.StrictDecode(raw, &input); err != nil {
+			return nil, err
+		}
+		intake := 0
+		if input.Intake != nil {
+			// Positions are 1-based; an explicit zero is an invalid selection,
+			// not an omitted library open.
+			if *input.Intake < 1 {
+				return nil, fmt.Errorf("select an original intake position")
+			}
+			intake = *input.Intake
+		}
+		root, err := rootPath(input.Root)
+		if err != nil {
+			return nil, err
+		}
+		if streams.panelCtl == nil {
+			return nil, fmt.Errorf("panel controller unavailable")
+		}
+		callCtx := invocation.Context
+		if callCtx == nil {
+			callCtx = context.Background()
+		}
+		result, err := streams.panelCtl.configure(callCtx, root, intake, input.Force)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
 	case "confirm_start":
 		var input struct {
 			Root          string `json:"root"`
 			Intake        int    `json:"intake"`
 			Summary       string `json:"summary"`
+			Route         string `json:"route"`
 			BaseSnapshot  string `json:"baseSnapshot"`
 			VCS           string `json:"vcs"`
 			Configuration string `json:"configuration"`
@@ -146,6 +199,9 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 			return nil, err
 		}
 		args = []string{"--root", root, "--run-id", fmt.Sprintf("run-%x", identity), "--intake", strconv.Itoa(input.Intake)}
+		if input.Route != "" {
+			args = append(args, "--route", input.Route)
+		}
 		if input.BaseSnapshot != "" {
 			args = append(args, "--base-snapshot", input.BaseSnapshot)
 		}

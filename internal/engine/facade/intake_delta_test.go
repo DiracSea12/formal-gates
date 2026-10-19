@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/engine/review"
 )
 
 func materialFindingDriver(t *testing.T, severity string) *validationDriver {
@@ -224,10 +224,10 @@ func TestReviewFindingUnchangedMaterialsDoNotCreateConfirmation(t *testing.T) {
 	}
 }
 
-func TestOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
+func TestLightweightOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	for path, content := range map[string]string{"notes.txt": validationDocument, "design.txt": "原完整方案。\n"} {
+	for path, content := range map[string]string{"notes.txt": "普通需求正文。\n", "design.txt": "原完整方案。\n"} {
 		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -236,8 +236,8 @@ func TestOrdinaryMaterialsRetainSolutionRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifiedStartFixture(t, root)
-	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "ordinary-material-change", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "ordinary-intake", "sha256:package", DefaultProvider)})
+	configureLightweight(t, root)
+	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "ordinary-material-change", Route: "lightweight", IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "ordinary-intake", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}

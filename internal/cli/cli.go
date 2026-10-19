@@ -34,6 +34,7 @@ type IO struct {
 	// it is provenance stamped onto the records a confirmation leaves behind.
 	confirmationChannel host.ConfirmationChannel
 	owner               *facade.OwnerBinding
+	panelCtl            *panelController
 }
 
 func Run(program string, args []string, streams IO) int {
@@ -104,6 +105,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runNativeInteraction(args[1:], streams)
 	case "settings":
 		return runSettings(args[1:], streams)
+	case "config":
+		return runConfig(args[1:], streams)
 	case "workflow":
 		return runWorkflow(program, args[1:], streams)
 	case "hook":
@@ -353,11 +356,12 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "current engine run id")
 	vcsName := fs.String("vcs", "", "external VCS name")
-	base := fs.String("base-snapshot", "", "native base identity for the run")
+	base := fs.String("base-snapshot", "", "native base identity for a regular run")
+	route := fs.String("route", "", "regular or lightweight")
 	configuration := fs.String("configuration", "", "saved configuration name or position for this run; omitted uses the active default")
 	intakePath := fs.String("intake-receipt", "", "program integration: exact original intake candidate file")
 	intakeChoice := fs.Int("intake", 0, "original displayed intake candidate position")
-	document := fs.Int("document", 0, "original displayed requirement document or material position")
+	document := fs.Int("document", 0, "original displayed requirement document or lightweight material position")
 	solutionDocument := fs.Int("solution-document", 0, "original displayed confirmation material position")
 	var artifactDocuments positionListFlag
 	fs.Var(&artifactDocuments, "artifact-document", "original displayed confirmation material position; repeatable")
@@ -371,11 +375,15 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	routeName := strings.ToLower(strings.TrimSpace(*route))
+	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
+		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
+	}
 	if *precheck {
 		if *listMaterials {
 			return printIntakeMaterials(*root, streams.Stdout)
 		}
-		structured := true
+		structured := false
 		selected, err := selectIntakeDocuments(*root, structured, requirementPath, *document, solutionPath, *solutionDocument, &artifacts, artifactDocuments, streams.Stdout)
 		if err != nil {
 			return 1, err
@@ -439,25 +447,33 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	baseIdentity := ""
 	effective, err := facade.StartConfiguration(*root, *configuration)
 	if err != nil {
 		return 1, err
 	}
-	if err := facade.ValidateStartConfiguration(effective.Configuration); err != nil {
+	derivedRoute, err := facade.ConfigurationRoute(effective.Configuration)
+	if err != nil {
 		return 1, err
 	}
-	baseIdentity := *base
-	if baseIdentity == "" {
-		baseIdentity, err = vcs.NewNative(*root, *vcsName, nil).Resolve()
-		if err != nil {
-			return 1, err
+	if routeName != "" && routeName != derivedRoute {
+		return 1, fmt.Errorf("route %q differs from configuration route %q", routeName, derivedRoute)
+	}
+	routeName = derivedRoute
+	if routeName == "regular" {
+		baseIdentity = *base
+		if baseIdentity == "" {
+			baseIdentity, err = vcs.NewNative(*root, *vcsName, nil).Resolve()
+			if err != nil {
+				return 1, err
+			}
 		}
 	}
 	var owner facade.OwnerBinding
 	if streams.owner != nil {
 		owner = *streams.owner
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -1396,7 +1412,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview|serve\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|rename|execution-options\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|progress|message|replan|handoff|diagnose|guard-preview|serve\n  requirement show|append|edit|remove\n  settings show|save|set|remove|use|delete|rename|execution-options\n  config [--root DIR]  open the flow-configuration panel\n  native show|respond\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {

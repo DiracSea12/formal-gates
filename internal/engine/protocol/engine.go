@@ -139,7 +139,7 @@ func (e *Engine) load() (uint64, *State, error) {
 // provider、run 身份、受理确认与初始 snapshot。provider 必须非空；
 // 后续事件与回执按该身份精确配对。已存在状态时拒绝且零变化。
 // sliceStart 非 nil 时，child 继承事实与拓扑一并落账。
-func (e *Engine) InitWithMetadata(view *decision.State, provider string, input Observation, runID string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
+func (e *Engine) InitWithMetadata(view *decision.State, provider string, input Observation, runID, route string, confirmation *IntakeConfirmationReceipt, baseSnapshot, initialSnapshot string, sliceStart *SliceRunStart) error {
 	e = e.observing(input)
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
@@ -172,6 +172,7 @@ func (e *Engine) InitWithMetadata(view *decision.State, provider string, input O
 	state.AppliedConfigurations = []AppliedConfiguration{{Revision: 1, Configuration: settings.CloneConfiguration(configuration), Preview: preview, Effect: &NodeContinuationDecision{Reason: "Initial bound configuration"}}}
 	state.RunID = runID
 	state.ReviewSeries = review.NewSetWithLimits(configuration.RoundLimit("product-review"), configuration.RoundLimit("tech-review"), 1)
+	state.Route = route
 	state.BaseSnapshot = baseSnapshot
 	state.InitialSnapshot = initialSnapshot
 	state.NativeRoot = e.cfg.NativeRoot
@@ -689,6 +690,7 @@ type Projection struct {
 	Plan            *decision.Plan
 	RequirementWork []RequirementWork
 	ExecutionNodes  []ExecutionNodeState
+	FlowProgress    FlowProgress
 }
 
 // Project reads the authoritative state once and derives its read-only views.
@@ -713,7 +715,7 @@ func (e *Engine) ProjectSnapshot(snapshot Snapshot, input Observation) (Projecti
 	if err != nil {
 		return Projection{}, err
 	}
-	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.RequirementWork(e.cfg.Definition), ExecutionNodes: nodes}, nil
+	return Projection{Snapshot: snapshot, Plan: plan, RequirementWork: snapshot.State.RequirementWork(e.cfg.Definition), ExecutionNodes: nodes, FlowProgress: snapshot.State.flowProgress(e.cfg.Definition)}, nil
 }
 
 // Drive advances deterministic engine-internal steps, then performs the
@@ -791,9 +793,22 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 		}
 		switch plan.Next.Kind {
 		case decision.KindComplete:
-			// 终态绑定原生交付身份——外部事实经 SealTerminal 公开入口进入，
-			// Drive 只呈报 COMPLETE 边界（已 TERMINAL 的重入只读——不 bump
-			// revision、不改写状态）。
+			// 终态相变按路线分流：lightweight 的收口事实全在引擎账本内，
+			// Drive 直接相变（已 TERMINAL 的重入只读——不 bump revision、
+			// 不改写状态）。regular 的终态绑定原生交付身份——外部事实经
+			// SealTerminal 公开入口进入，Drive 只呈报 COMPLETE 边界。
+			if state.Phase != runtime.PhaseTerminal {
+				if state.Route != "lightweight" {
+					return plan, revision, nil
+				}
+				if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
+					return nil, revision, err
+				}
+				if _, err := e.commit(state, revision, input); err != nil {
+					return nil, revision, err
+				}
+				continue
+			}
 			return plan, revision, nil
 		case decision.KindWait:
 			return plan, revision, nil
@@ -816,6 +831,67 @@ func (e *Engine) Drive(input Observation) (*decision.Plan, uint64, error) {
 			return plan, revision, nil
 		}
 	}
+}
+
+// CompleteAll deterministically settles every compiled step and moves the run
+// to TERMINAL.  It is used only by the lightweight façade route, whose
+// acceptance contract has no external worker/host actions.
+func (e *Engine) CompleteAll(input Observation) (Snapshot, error) {
+	e = e.observing(input)
+	revision, state, err := e.load()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if state == nil {
+		return Snapshot{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	// Terminal completion is a read-only replay. Repeated drive calls after
+	// Complete must not advance revision or rewrite the state document.
+	if state.Phase == runtime.PhaseTerminal {
+		return e.Load()
+	}
+	if err := state.errWriteBarrier("completion"); err != nil {
+		return Snapshot{}, err
+	}
+	// Compiled steps are ordered by deterministic ordinal, not necessarily by
+	// the author's slice order. Repeatedly settle the currently eligible set so
+	// every dependency is completed before its successor.
+	for len(state.Completed) < len(e.cfg.Definition.Steps) {
+		progressed := false
+		for _, step := range e.cfg.Definition.Steps {
+			done := false
+			for _, completed := range state.Completed {
+				if completed == step.Header.ID {
+					done = true
+					break
+				}
+			}
+			if done {
+				continue
+			}
+			if err := state.CompleteStep(step.Header.ID, e.cfg.Definition); err != nil {
+				// An unmet dependency may become eligible later in this pass;
+				// any other error is a malformed definition/state and must stop.
+				if strings.Contains(err.Error(), "dependency") {
+					continue
+				}
+				return Snapshot{}, err
+			}
+			progressed = true
+		}
+		if !progressed {
+			return Snapshot{}, fmt.Errorf("protocol: complete all: definition dependencies cannot be settled")
+		}
+	}
+	if state.Phase != runtime.PhaseTerminal {
+		if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if _, err := e.commit(state, revision, input); err != nil {
+		return Snapshot{}, err
+	}
+	return e.Load()
 }
 
 // IssueFromPlan 落账一次 Ready 签发：actionID 派生复用 decision.SelectIssued，

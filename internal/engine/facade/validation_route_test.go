@@ -13,9 +13,9 @@ import (
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/runtime"
-	"formal-gates/internal/engine/testkit"
 )
 
 func validationWithGateFinding(t *testing.T, drivers ...*validationDriver) (*validationDriver, string, string) {

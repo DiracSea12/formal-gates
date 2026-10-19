@@ -15,7 +15,7 @@ import (
 	"formal-gates/internal/engine/vcs"
 )
 
-// terminalSnapshotGuard 是 COMPLETE 终态发布段的身份边界，单一规则：
+// terminalSnapshotGuard 是 regular COMPLETE 终态发布段的身份边界，单一规则：
 // sealDelivered 已验证的交付身份（head==PromotedSnapshot）贯穿 seal 窗口与发布
 // 窗口——发布前 resolve 必须仍等于该晋升身份（窗口内漂移即错、摘要不落盘），
 // 返回的 guard 在终态发布（摘要落盘）后调用，核对发布段内身份未移动。
@@ -23,11 +23,11 @@ import (
 // 史形状的核验统一由 verifyDelivered 单点持有。无 provider＝明确报错，不静默跳
 // 过校验。
 func (f *Facade) terminalSnapshotGuard(run Run) (func() error, error) {
-	if run.Status != "COMPLETE" {
+	if run.Route != "regular" || run.Status != "COMPLETE" {
 		return func() error { return nil }, nil
 	}
 	if f.vcs == nil {
-		return nil, fmt.Errorf("engine terminal: run %q has no native VCS provider for snapshot verification", f.runID)
+		return nil, fmt.Errorf("engine terminal: regular run %q has no native VCS provider for snapshot verification", f.runID)
 	}
 	head, err := f.vcs.Resolve()
 	if err != nil {

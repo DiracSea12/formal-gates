@@ -161,7 +161,7 @@ func TestWorkflowAbortConfirmationIncludesOnlyItsCurrentOperation(t *testing.T) 
 	view := workflowConfirmationView(candidate)
 	current := view["run"].(map[string]any)
 	questions := current["questions"].([]map[string]any)
-	if view["root"] != root || !reflect.DeepEqual(view["input"], candidate.Input) || len(current) != 4 || current["runId"] != candidate.Run.RunID || current["revision"] != candidate.Run.Revision || current["status"] != candidate.Run.Status || len(questions) != 1 || questions[0]["control"] != protocol.ControlAbort || !reflect.DeepEqual(questions[0]["options"], workflowRunView(candidate.Run)["questions"].([]map[string]any)[0]["options"]) {
+	if view["root"] != root || !reflect.DeepEqual(view["input"], candidate.Input) || len(current) != 5 || current["runId"] != candidate.Run.RunID || current["revision"] != candidate.Run.Revision || current["route"] != candidate.Run.Route || current["status"] != candidate.Run.Status || len(questions) != 1 || questions[0]["control"] != protocol.ControlAbort || !reflect.DeepEqual(questions[0]["options"], workflowRunView(candidate.Run)["questions"].([]map[string]any)[0]["options"]) {
 		t.Fatal("abort confirmation lost its exact operation, run or original options", view)
 	}
 	body, err := json.Marshal(view)

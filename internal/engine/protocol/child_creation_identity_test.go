@@ -21,7 +21,7 @@ func TestPreparedChildBindsOriginAndConfigurationName(t *testing.T) {
 	}
 	start := parent.ChildStart(plan)
 	actual := &State{
-		RunID: plan.RunID, VCSName: "git", BaseSnapshot: parent.BaseSnapshot,
+		RunID: plan.RunID, Route: "regular", VCSName: "git", BaseSnapshot: parent.BaseSnapshot,
 		NativeRoot: resource.Path, NativeHandle: resource.Handle,
 		SliceChild: &start.Binding, Topology: &start.Topology, IntakeConfirmationReceipt: confirmation,
 		Settings:      &settings.Effective{ConfigurationName: "shared"},
@@ -36,7 +36,7 @@ func TestPreparedChildBindsOriginAndConfigurationName(t *testing.T) {
 	}{
 		{"missing-child", func(s *State) { s.SliceChild = nil }},
 		{"run", func(s *State) { s.RunID = "other-child" }},
-
+		{"route", func(s *State) { s.Route = "lightweight" }},
 		{"native-vcs", func(s *State) { s.VCSName = "svn" }},
 		{"native-resource-handle", func(s *State) { s.NativeHandle.Source = "other-resource" }},
 		{"native-resource-root", func(s *State) { s.NativeRoot = "other-root" }},

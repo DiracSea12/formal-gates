@@ -962,7 +962,7 @@ func (s *State) PendingAskCurrent(ask PendingAsk) bool {
 	if ask.Resolved {
 		return false
 	}
-	if ask.Control == ControlConfirmTopology || ask.Control == ControlSelectRoute {
+	if s.Route == "regular" && (ask.Control == ControlConfirmTopology || ask.Control == ControlSelectRoute) {
 		return s.PreDevelopmentReviewsSatisfied() && s.readinessPreparationReady()
 	}
 	return true

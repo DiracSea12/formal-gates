@@ -130,6 +130,44 @@ func TestBoundLibraryRequiresExactNamesAndReportsParsingFailure(t *testing.T) {
 	}
 }
 
+func TestConfigurationNodeStatesPreviewsCandidateWithoutChangingRun(t *testing.T) {
+	f, _ := workerMaterialFacade(t)
+	candidate := settings.Configuration{
+		QAModes:       []string{},
+		FlowSelection: &settings.FlowSelection{Disabled: []string{"development"}},
+	}
+	before, err := os.ReadFile(filepath.Join(f.stateDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := f.engine.ConfigurationNodeStates(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.ConfigurationNodeStates(candidate)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("facade preview differs from the engine owner: %+v %v", got, err)
+	}
+	var development *protocol.ExecutionNodeState
+	for i := range got {
+		if got[i].Node == "development" {
+			development = &got[i]
+		}
+	}
+	if development == nil || development.Enabled {
+		t.Fatal("a candidate-disabled node stayed enabled through the facade", development)
+	}
+	after, _ := os.ReadFile(filepath.Join(f.stateDir, "state.json"))
+	snapshot2, _ := f.engine.Load()
+	if !reflect.DeepEqual(before, after) || snapshot2.Revision != snapshot.Revision || len(snapshot2.State.Decisions) != len(snapshot.State.Decisions) || len(snapshot2.State.AppliedConfigurations) != len(snapshot.State.AppliedConfigurations) {
+		t.Fatal("candidate preview changed run state")
+	}
+}
+
 func TestReopenKeepsFrozenValuesAndAppliedConfiguration(t *testing.T) {
 	f, root := workerMaterialFacade(t)
 	before, err := f.engine.Load()

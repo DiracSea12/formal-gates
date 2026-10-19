@@ -132,7 +132,7 @@ function controlClient(binary, dshHome, ask) {
   }
   child.stderr.on('data', (chunk) => { stderr += chunk })
   child.on('error', fail)
-  child.on('close', () => fail(new Error(stderr || 'formal-gates control service closed')))
+  child.on('close', () => { closed = true; fail(new Error(stderr || 'formal-gates control service closed')) })
   child.stdin.on('error', fail)
   const lines = createInterface({ input: child.stdout })
   lines.on('line', async (line) => {
@@ -161,14 +161,40 @@ function controlClient(binary, dshHome, ask) {
     }
   })
   return {
-    request(method, params) {
+    request(method, params, signal) {
       return new Promise((resolve, reject) => {
         const id = ++counter
-        pending.set(id, { resolve, reject })
+        let onAbort = null
+        // settle removes the abort listener with the request so completed
+        // closures never outlive their call on the signal.
+        const settle = (fn, value) => {
+          if (onAbort) signal.removeEventListener('abort', onAbort)
+          pending.delete(id)
+          fn(value)
+        }
+        pending.set(id, { resolve: (v) => settle(resolve, v), reject: (e) => settle(reject, e) })
+        // A request-scoped abort sends the cancellation notification with the
+        // exact request ID and detaches only this call's promise; the client
+        // and the service it talks to keep running for other calls.
+        if (signal && typeof signal.addEventListener === 'function') {
+          if (signal.aborted) {
+            pending.delete(id)
+            reject(new Error('formal-gates request cancelled'))
+            return
+          }
+          onAbort = () => {
+            if (!pending.has(id)) return
+            pending.delete(id)
+            send({ method: 'notifications/cancelled', params: { requestId: id } })
+            reject(new Error('formal-gates request cancelled'))
+          }
+          signal.addEventListener('abort', onAbort, { once: true })
+        }
         send({ id, method, params })
       })
     },
     notify(method) { send({ method }) },
+    isClosed() { return closed },
     close() { closed = true; fail(new Error('formal-gates confirmation cancelled')); lines.close(); child.kill() },
   }
 }
@@ -187,6 +213,33 @@ async function registerControlTools(ctx, binary, dshHome, provider) {
   } finally {
     discovery.close()
   }
+  // The configure tool owns long-lived panel windows, so its control client
+  // is cached per project for the plugin lifetime: a request abort detaches
+  // the call without killing the service that owns the user's window.
+  const configureClients = new Map()
+  const cachedConfigureClient = async (root) => {
+    const key = root || ''
+    let entry = configureClients.get(key)
+    let client = entry ? await entry : null
+    if (client && !client.isClosed()) return client
+    configureClients.delete(key)
+    if (client) client.close()
+    client = controlClient(binary, dshHome)
+    entry = initializeControl(client)
+      .then(() => client)
+      .catch((error) => {
+        configureClients.delete(key)
+        client.close()
+        throw error
+      })
+    configureClients.set(key, entry)
+    return entry
+  }
+  const closeCachedClients = () => {
+    for (const entry of configureClients.values()) entry.then((client) => client.close(), () => {})
+    configureClients.clear()
+  }
+  ctx.effect(() => closeCachedClients)
   for (const tool of tools) {
     const remove = ctx.tools.register({
       name: tool.name,
@@ -195,6 +248,14 @@ async function registerControlTools(ctx, binary, dshHome, provider) {
       output: { schema: { type: 'object' }, render(_args, result) { return result.content } },
       async execute(args, exec) {
         if (!exec.agent) throw new Error('formal-gates confirmation requires the live root agent')
+        const identity = payloadFor(ctx, exec)
+        const owner = { session: identity.session_id, transcript: identity.transcript_path, provider: identity.transcript_path ? provider : '' }
+        const root = headerOf(exec.agent)?.cwd
+        if (tool.name === 'configure') {
+          exec.signal?.throwIfAborted()
+          const client = await cachedConfigureClient(root)
+          return await client.request('tools/call', { name: tool.name, arguments: { ...(root ? { root } : {}), ...args }, _meta: { 'formal-gates/owner': owner } }, exec.signal)
+        }
         const client = controlClient(binary, dshHome, async (request) => {
           if (request.mode !== 'form') throw new Error('formal-gates confirmation requires a native form')
           const answer = await ctx.userQuestions.ask({
@@ -212,9 +273,6 @@ async function registerControlTools(ctx, binary, dshHome, provider) {
         try {
           exec.signal?.throwIfAborted()
           await initializeControl(client)
-          const root = headerOf(exec.agent)?.cwd
-          const identity = payloadFor(ctx, exec)
-          const owner = { session: identity.session_id, transcript: identity.transcript_path, provider: identity.transcript_path ? provider : '' }
           return await client.request('tools/call', { name: tool.name, arguments: { ...(root ? { root } : {}), ...args }, _meta: { 'formal-gates/owner': owner } })
         } finally {
           exec.signal?.removeEventListener('abort', cancel)

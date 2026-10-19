@@ -50,7 +50,7 @@ func costEngineFixture(t *testing.T, resolver CostSourceResolver) *Engine {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	return engine

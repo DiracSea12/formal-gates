@@ -121,7 +121,7 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

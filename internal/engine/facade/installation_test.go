@@ -20,7 +20,6 @@ import (
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
-	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/vcs"
 )
 
@@ -95,7 +94,7 @@ func installationFiles(t *testing.T, root string) map[string]string {
 func TestStartRecoveryKeepsAdmissionThroughRootAlias(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	alias := filepath.Join(t.TempDir(), "project")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
@@ -108,7 +107,7 @@ func TestStartRecoveryKeepsAdmissionThroughRootAlias(t *testing.T) {
 	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID, Admission: *admission}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Start(StartOptions{Root: alias, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: runID, IntakeConfirmationReceipt: testReceipt()}, Admission: admission}); err != nil {
+	if _, _, err := Start(StartOptions{Root: alias, Request: StartRequest{RunID: runID, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: admission}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(root, runID)
@@ -185,7 +184,7 @@ func TestRetainedInstallationKeepsNamespaceAndReadOnlyReplay(t *testing.T) {
 func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	for _, missing := range []string{"namespace", "generation", "lease", "token", "target", "provider"} {
 		t.Run(missing, func(t *testing.T) {
@@ -204,7 +203,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 			case "provider":
 				incomplete.Provider = ""
 			}
-			_, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "missing-" + missing, IntakeConfirmationReceipt: testReceipt()}, Admission: &incomplete})
+			_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "missing-" + missing, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &incomplete})
 			if err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
 				t.Fatalf("incomplete binding=%v", err)
 			}
@@ -214,7 +213,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 		})
 	}
 	wrongProvider := *a
-	if _, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "provider-mismatch", Provider: "zcode", IntakeConfirmationReceipt: testReceipt()}, Admission: &wrongProvider}); err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
+	if _, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "provider-mismatch", Route: "lightweight", Provider: "zcode", IntakeConfirmationReceipt: testReceipt()}, Admission: &wrongProvider}); err == nil || !strings.Contains(err.Error(), UnregisteredInstall) {
 		t.Fatalf("provider mismatch=%v", err)
 	}
 }
@@ -222,7 +221,7 @@ func TestCandidateWriterRequiresCompleteAdmission(t *testing.T) {
 func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
 	id := "interrupted-start"
 	dir := filepath.Join(root, EngineNamespace, id)
@@ -237,7 +236,7 @@ func TestStaleStartRecoveryRetainsItsOriginalPrefix(t *testing.T) {
 	}
 	before := installationFiles(t, filepath.Join(root, EngineNamespace))
 	next := advanceInstallation(t, *a)
-	_, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: id, IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
+	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: id, Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
 	if !errors.Is(err, errStaleFencingToken) {
 		t.Fatalf("stale prefix recovery=%v", err)
 	}
@@ -252,9 +251,9 @@ func TestPersistenceRecoveryUsesOwningInstallation(t *testing.T) {
 		for _, fenced := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fenced=%t", point, fenced), func(t *testing.T) {
 				root := t.TempDir()
-				verifiedStartFixture(t, root)
+				configureLightweight(t, root)
 				a := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
-				f, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "recovery", IntakeConfirmationReceipt: testReceipt()}, Admission: a})
+				f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "recovery", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: a})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -488,16 +487,16 @@ func TestNewInstallationStartsWithoutWritingFencedOwnerPeer(t *testing.T) {
 	old := startIntervalRun(t, root, "old-owner", transcript)
 	before := installationFiles(t, old.stateDir)
 	next := advanceInstallation(t, old.admission)
-	f, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "new-owner", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: "new-owner", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: &next})
 	if err != nil {
 		t.Fatalf("new installation start=%v", err)
 	}
 	writeTranscript(t, transcript, []string{intervalBaseLine, intervalDuringLine})
-	run, err := abortVerifiedRun(t, f)
+	run, err := f.Drive()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Cost == nil || run.Cost.Owner == nil || run.Cost.Owner.Source != "unavailable" || run.Cost.Owner.TotalInputTokens != 0 {
+	if run.Cost.Owner == nil || run.Cost.Owner.Source != "unavailable" || run.Cost.Owner.TotalInputTokens != 0 {
 		t.Fatalf("overlap owner=%+v", run.Cost.Owner)
 	}
 	if after := installationFiles(t, old.stateDir); !reflect.DeepEqual(before, after) {
@@ -510,15 +509,12 @@ func TestFencedTerminalWindowsRetainEvidenceAndAllowPureReplay(t *testing.T) {
 	for _, window := range []string{"intent", "cleanup", "summary", "remove-intent", "end-lifecycle", "complete"} {
 		t.Run(window, func(t *testing.T) {
 			root := t.TempDir()
-			verifiedStartFixture(t, root)
-			f, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "terminal", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+			configureLightweight(t, root)
+			f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			// 决定 abort 并让引擎推进到终态：得到未发布的权威终态投影（状
-			// 态文件仍在盘上），终态发布窗口由本测试按序手工展开。
-			decideAbort(t, f)
-			if _, _, err := f.engine.Drive(protocol.Observation{}); err != nil {
+			if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
 				t.Fatal(err)
 			}
 			run, err := f.project(nil)
@@ -627,8 +623,8 @@ func TestInstallationSubprocess(t *testing.T) {
 func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
-	f, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "process-window", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	configureLightweight(t, root)
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,9 +684,9 @@ func TestRegistryWindowFencesDelayedProcessAndReleasesAfterCrash(t *testing.T) {
 	// A holder from the current generation exits without releasing its lock.
 	// Use the newly admitted run to check both process/state order and crash release.
 	currentRoot := t.TempDir()
-	verifiedStartFixture(t, currentRoot)
+	configureLightweight(t, currentRoot)
 	currentAdmission := testAdmission(t, currentRoot, "current", "sha256:package", DefaultProvider)
-	current, _, err := Start(StartOptions{Root: currentRoot, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{BaseSnapshot: testkit.FrozenSnapshot, RunID: "process-window", IntakeConfirmationReceipt: testReceipt()}, Admission: currentAdmission})
+	current, _, err := Start(StartOptions{Root: currentRoot, Request: StartRequest{RunID: "process-window", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}, Admission: currentAdmission})
 	if err != nil {
 		t.Fatal(err)
 	}

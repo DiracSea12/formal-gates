@@ -797,17 +797,23 @@ func TestRequirementChangeBarrierPhaseA(t *testing.T) {
 		if after := stateBytesOf(t, dir); string(before) != string(after) {
 			t.Fatal("frozen topology decide changed state bytes")
 		}
-		// 屏障解除后同一事务收尾清算前置条件不满足的 Ask：本夹具的审查
-		// 未满足，拓扑 Ask 被作废——同一 ID 的决定以「已解决」拒绝。屏障
-		// 拦截与业务条件的区分已由上方零状态变化与 CHANGE_BARRIER_ACTIVE
-		// 区分码共同证明。
+		// 屏障解除后同一 Ask 的决定照常走接纳（此处被业务条件拒绝，证明
+		// 之前的拦截确系屏障而非其它约束）。
 		askAndDecideRequirement(t, engine, "req-barrier-topology", "abort", nil)
-		if _, err := engine.Freshness("req-topology-frozen"); err == nil || rejectionCode(t, err) != CodeRequestResolved {
-			t.Fatalf("superseded topology ask stayed decidable after the barrier: %v", err)
+		token, err = engine.Freshness("req-topology-frozen")
+		if err != nil {
+			t.Fatalf("freshness after the barrier: %v", err)
 		}
-		snap := engine.LoadMustSucceed(t)
-		if snap.State.Topology != nil || !snap.State.PendingAsks["req-topology-frozen"].Resolved {
-			t.Fatal("frozen decide bound topology or left the ask pending")
+		retry, err := NewReviewDecideEvent("evt-req-topology-retry", "req-topology-frozen", token, "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
+			Decision: "no-split", Note: "建议不拆",
+		}})
+		if err != nil {
+			t.Fatalf("decide: %v", err)
+		}
+		if _, err := engine.Submit(retry, observedInput); err == nil {
+			t.Fatal("post-barrier topology decide accepted without readiness PASS")
+		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+			t.Fatalf("post-barrier topology code = %q", code)
 		}
 	})
 
@@ -983,9 +989,8 @@ func TestRequirementDecisionValidationAndCAS(t *testing.T) {
 }
 
 // askAndDecideRequirementCrossPayload 在需求控制 Ask 上提交 Review 载荷
-// （reviewPayload 非 nil），或在非需求控制 Ask（取恒可决的终止 Ask）
-// 上提交 Requirement 载荷（requirementPayload 非 nil），返回决定提交的
-// 错误并断言零状态变化。
+// （reviewPayload 非 nil），或在拓扑控制 Ask 上提交 Requirement 载荷
+// （requirementPayload 非 nil），返回决定提交的错误并断言零状态变化。
 func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requestID string, reviewPayload *ReviewDecisionPayload, requirementPayload *RequirementDecisionPayload) error {
 	t.Helper()
 	observedInput := Observation{}
@@ -994,9 +999,9 @@ func askAndDecideRequirementCrossPayload(t *testing.T, engine *Engine, dir, requ
 	options := requirementOptions()
 	pkg := requirementPackageOf(requirementPayload)
 	if requirementPayload != nil {
-		control = ControlAbort
-		choice = "abort"
-		options = []AskOption{{ID: "abort", Label: "终止"}}
+		control = ControlConfirmTopology
+		choice = "no-split"
+		options = topologyOptions()
 	}
 	var request Event
 	var err error

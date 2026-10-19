@@ -138,7 +138,7 @@ func TestCleanupTerminalCommitsReceiptAndClearsIntent(t *testing.T) {
 // gone but whose retained result still owns the run id.
 func TestCandidateStartRejectsRetainedLegacyResult(t *testing.T) {
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	runID := "retained-legacy-result"
 	resultPath := filepath.Join(root, ".gates", "results", runID+".json")
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {

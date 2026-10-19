@@ -14,7 +14,7 @@ func TestChildStartInheritsIndependentFlowSelection(t *testing.T) {
 	t.Parallel()
 	confirmation := reviewConfirmation()
 	child := ChildPreparation{SliceID: "core", RunID: "child", ResourceID: "workspace"}
-	parent := &State{RunID: "master", FlowSelection: &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development"}}, IntakeConfirmationReceipt: confirmation,
+	parent := &State{RunID: "master", Route: "regular", FlowSelection: &FlowSelection{Disabled: []string{"product-review", "start-readiness", "development"}}, IntakeConfirmationReceipt: confirmation,
 		NativeResources: map[string]NativeResource{"workspace": {}}, SliceChildren: map[string]string{"core": "child"},
 		ChildCreation: &ChildCreation{RequirementRevision: confirmation.RequirementRevision, Intake: confirmation, Topology: TopologyBinding{Decision: topologySplit, SplitCount: 2, Slices: []string{"core", "tools"}, Parallel: "two slices"}, Children: []ChildPreparation{child}}}
 	start := parent.ChildStart(child)
@@ -33,7 +33,7 @@ func TestChildStartInheritsIndependentFlowSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, child.RunID, confirmation, "", "", start); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, child.RunID, "regular", confirmation, "", "", start); err != nil {
 		t.Fatal(err)
 	}
 	start.FlowSelection.Disabled[0] = "repair"

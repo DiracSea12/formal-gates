@@ -690,6 +690,161 @@ func TestUseRepairsADanglingActivePointer(t *testing.T) {
 	}
 }
 
+func TestWriteConfigurationStoresCompleteDraftInOneTransaction(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	user, project := overlayPaths(root, home)[0], overlayPaths(root, home)[1]
+	putConfig(t, project, `{"capacity":9,"configuration":"既有","configurations":{"既有":{"qaModes":["blackbox"]}}}`)
+	draft := Configuration{
+		FlowSelection: &FlowSelection{Disabled: []string{"repair"}},
+		QAModes:       []string{"blackbox", "whitebox"},
+		Execution:     map[string]ExecutionChoice{"development": {Provider: host.Codex, Model: "chosen", ReasoningEffort: "high"}},
+		RoundLimits:   map[string]int{"product-review": 1, "tech-review": 2, "qa-blackbox": 3, "qa-whitebox": 4, "repair": 5},
+	}
+	effective, err := WriteConfiguration(root, home, "project", "面板", draft, false, nil)
+	if err != nil || effective.ConfigurationName != "既有" || effective.Values.Capacity != 9 {
+		t.Fatalf("create changed the active pointer or scalars: %+v %v", effective, err)
+	}
+	_, options, err := LoadConfigurations(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := SelectConfiguration(options, "面板")
+	if err != nil || saved.Source != project || saved.Active || !reflect.DeepEqual(saved.Configuration, draft) {
+		t.Fatalf("saved draft: %+v %v", saved, err)
+	}
+	if saved.Configuration.Gates != nil {
+		t.Fatal("a nil gate selection materialized a list")
+	}
+	if _, err := os.Stat(user); !os.IsNotExist(err) {
+		t.Fatalf("create wrote the other overlay: %v", err)
+	}
+}
+
+func TestWriteConfigurationOverwriteKeepsScopeAndUnrelatedValues(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	user, project := overlayPaths(root, home)[0], overlayPaths(root, home)[1]
+	putConfig(t, user, `{"configurations":{"面板":{"qaModes":["blackbox"]}}}`)
+	putConfig(t, project, `{"tokenCap":11,"configuration":"别套","configurations":{"面板":{"qaModes":["whitebox"]},"别套":{"qaModes":["blackbox"]}}}`)
+	userBefore, err := os.ReadFile(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates := []string{}
+	draft := Configuration{QAModes: []string{"blackbox"}, Gates: &gates, RoundLimits: map[string]int{"repair": 2}}
+	effective, err := WriteConfiguration(root, home, "project", "面板", draft, true, nil)
+	if err != nil || effective.ConfigurationName != "别套" || *effective.Values.TokenCap != 11 {
+		t.Fatalf("overwrite changed activation or scalars: %+v %v", effective, err)
+	}
+	data, err := os.ReadFile(project)
+	var raw struct {
+		Active string                   `json:"configuration"`
+		Named  map[string]Configuration `json:"configurations"`
+	}
+	if err != nil || json.Unmarshal(data, &raw) != nil || raw.Active != "别套" || !reflect.DeepEqual(raw.Named["面板"], draft) || !reflect.DeepEqual(raw.Named["别套"].QAModes, []string{"blackbox"}) {
+		t.Fatalf("project overlay after overwrite: %s %v", data, err)
+	}
+	if raw.Named["面板"].Gates == nil || len(*raw.Named["面板"].Gates) != 0 {
+		t.Fatal("an explicit empty gate list collapsed to nil")
+	}
+	if after, err := os.ReadFile(user); err != nil || !bytes.Equal(userBefore, after) {
+		t.Fatalf("overwrite reached into the shadowed layer: %s %v", after, err)
+	}
+}
+
+func TestWriteConfigurationRejectionsLeaveBothOverlaysUntouched(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	user, project := overlayPaths(root, home)[0], overlayPaths(root, home)[1]
+	putConfig(t, user, `{"capacity":3,"configurations":{"甲":{"qaModes":["blackbox"]}}}`)
+	putConfig(t, project, `{"tokenCap":11,"configuration":"乙","configurations":{"乙":{"qaModes":["whitebox"]}}}`)
+	userBefore, err := os.ReadFile(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectBefore, err := os.ReadFile(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective, err := Load(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := Configuration{QAModes: []string{"whitebox"}}
+	for reason, run := range map[string]func() error{
+		"duplicate across merged layers": func() error {
+			_, err := WriteConfiguration(root, home, "project", "甲", draft, false, nil)
+			return err
+		},
+		"overwrite from another scope": func() error {
+			_, err := WriteConfiguration(root, home, "project", "甲", draft, true, nil)
+			return err
+		},
+		"nonexistent overwrite target": func() error {
+			_, err := WriteConfiguration(root, home, "project", "丙", draft, true, nil)
+			return err
+		},
+		"empty name": func() error {
+			_, err := WriteConfiguration(root, home, "project", "", draft, false, nil)
+			return err
+		},
+		"whitespace name": func() error {
+			_, err := WriteConfiguration(root, home, "project", " \t", draft, true, nil)
+			return err
+		},
+		"built-in name on create": func() error {
+			_, err := WriteConfiguration(root, home, "project", DefaultConfigurationName, draft, false, nil)
+			return err
+		},
+		"built-in name on overwrite": func() error {
+			_, err := WriteConfiguration(root, home, "project", DefaultConfigurationName, draft, true, nil)
+			return err
+		},
+		"invalid round limit": func() error {
+			_, err := WriteConfiguration(root, home, "project", "新", Configuration{RoundLimits: map[string]int{"repair": 0}}, false, nil)
+			return err
+		},
+		"stale user revision": func() error {
+			_, err := WriteConfiguration(root, home, "project", "新", draft, false, map[string]string{"user": "stale", "project": effective.Revisions["project"]})
+			return err
+		},
+		"stale project revision": func() error {
+			_, err := WriteConfiguration(root, home, "project", "新", draft, false, map[string]string{"user": effective.Revisions["user"], "project": "stale"})
+			return err
+		},
+	} {
+		if err := run(); err == nil {
+			t.Fatalf("%s was accepted", reason)
+		}
+	}
+	userAfter, _ := os.ReadFile(user)
+	projectAfter, _ := os.ReadFile(project)
+	if !bytes.Equal(userBefore, userAfter) || !bytes.Equal(projectBefore, projectAfter) {
+		t.Fatal("a rejected write changed an overlay file")
+	}
+}
+
+func TestWriteConfigurationMatchesNumericNamesExactly(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	putConfig(t, overlayPaths(root, home)[1], `{"configurations":{"甲":{"qaModes":["blackbox"]},"乙":{"qaModes":["whitebox"]}}}`)
+	if _, err := WriteConfiguration(root, home, "project", "2", Configuration{QAModes: []string{"blackbox"}}, false, nil); err != nil {
+		t.Fatalf("a free numeric name was read as a displayed position: %v", err)
+	}
+	if _, err := WriteConfiguration(root, home, "project", "2", Configuration{QAModes: []string{"whitebox"}}, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, options, err := LoadConfigurations(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SelectConfiguration(options, "甲")
+	if err != nil || !reflect.DeepEqual(second.Configuration.QAModes, []string{"blackbox"}) {
+		t.Fatalf("overwrite by name rewrote the entry at that position: %+v %v", second, err)
+	}
+	named, err := SelectConfiguration(options, "2")
+	if err != nil || !reflect.DeepEqual(named.Configuration.QAModes, []string{"whitebox"}) {
+		t.Fatalf("numeric name lookup lost its entry: %+v %v", named, err)
+	}
+}
+
 func TestConfigurationQATogglesNormalizeEffectiveSelection(t *testing.T) {
 	configuration := Configuration{
 		FlowSelection: &FlowSelection{Disabled: []string{"repair", "qa"}},

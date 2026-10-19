@@ -682,7 +682,7 @@ func (e *Engine) admitRequirementDecision(state *State, ask PendingAsk, requestI
 	if err := e.applyWorkAuthorization(state, state.RequirementRevisions[len(state.RequirementRevisions)-1]); err != nil {
 		return err
 	}
-	if document != "" {
+	if document != "" && state.Route == "regular" {
 		observation := &OperatorObservationPayload{Subject: payload.CandidateRevision, Validation: &ValidationObservation{Kind: "REQUIREMENT", RequirementRevision: payload.CandidateRevision, Document: document}}
 		if err := e.acceptValidationObservation(state, observation, nextRevision-1, nextRevision); err != nil {
 			return err

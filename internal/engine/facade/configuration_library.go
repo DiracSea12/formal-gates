@@ -13,23 +13,21 @@ import (
 	"formal-gates/internal/settings"
 )
 
-// ValidateStartConfiguration rejects a configuration that cannot start a run:
-// QA, gates or repair without an enabled development node, or no enabled
-// flow node at all.
-func ValidateStartConfiguration(configuration settings.Configuration) error {
+// ConfigurationRoute derives admission from the enabled responsibilities.
+func ConfigurationRoute(configuration settings.Configuration) (string, error) {
 	enabled := func(node string) bool {
 		return configuration.FlowSelection == nil || !slices.Contains(configuration.FlowSelection.Disabled, node)
 	}
 	qa := enabled("qa") && len(configuration.QAModes) != 0
 	if !enabled("development") && (qa || enabled("gate") || enabled("repair")) {
-		return fmt.Errorf("QA, gates and repair require an enabled development node")
+		return "", fmt.Errorf("QA, gates and repair require an enabled development node")
 	}
 	for _, node := range definition.MainFlowNodes() {
 		if enabled(node.ID) && (node.ID != "qa" || qa) {
-			return nil
+			return "regular", nil
 		}
 	}
-	return fmt.Errorf("starting a run requires at least one enabled flow node")
+	return "lightweight", nil
 }
 
 func StartConfiguration(root, selection string) (settings.Effective, error) {
@@ -81,6 +79,17 @@ func configurationGates(target string) func() ([]string, error) {
 		}
 		return catalogue.RouteCandidates(), nil
 	}
+}
+
+// ConfigurationNodeStates previews a candidate value's node obligations under
+// the control read window; it does not change run state.
+func (f *Facade) ConfigurationNodeStates(configuration settings.Configuration) ([]protocol.ExecutionNodeState, error) {
+	unlock, err := f.acquireControlReadWindow()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return f.engine.ConfigurationNodeStates(configuration)
 }
 
 func configurationParent(root string) func(string) (protocol.Snapshot, error) {

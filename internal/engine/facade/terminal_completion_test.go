@@ -12,12 +12,12 @@ import (
 	"formal-gates/internal/engine/testkit"
 )
 
-// 本文件验证 run 的终态完成机制：终态收口以「终 wave COMPLETE＋候选
+// 本文件验证 regular run 的终态完成机制：终态收口以「终 wave COMPLETE＋候选
 // 晋升绑定（内容与已验证最终候选相等）」为共同事实，验证收集期晋升被意图准
 // 入拒绝（零 Git 副作用）；两事实齐备后 Drive 核验交付并相变到终态；终态后的
 // 重入 Drive 只读。
 
-// concludePromoted 把 run 推进到 COMPLETE：验证收集期晋升被拒（wave
+// concludePromoted 把 regular run 推进到 COMPLETE：验证收集期晋升被拒（wave
 // 未 COMPLETE——准入在先，零 Git 副作用、无意图落账），补齐 gate 结果使 wave
 // COMPLETE 后晋升收敛，最终 Drive 核验交付到达终态。返回到达终态的驱动。
 func concludePromoted(t *testing.T) *validationDriver {

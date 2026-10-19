@@ -194,7 +194,7 @@ func TestInitialSnapshotAndFieldLevelHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.InitWithMetadata(view, testProvider, Observation{}, "bound-run", reviewConfirmation(), "", "", nil); err != nil {
+	if err := e.InitWithMetadata(view, testProvider, Observation{}, "bound-run", "regular", reviewConfirmation(), "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	state := e.LoadMustSucceed(t).State

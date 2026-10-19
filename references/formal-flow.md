@@ -74,18 +74,30 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 `.gates/tmp/intake` 载荷目录，返回 `intake` 序号；保存候选不代表确认，不创建 run，
 不读取或写入 admission/registry。材料选择 flags 仅供 precheck；正常 start 只接收
 由原生真人确认通道接纳的原载荷。精确 `--requirement/--solution/--artifact` 与
-`--save-candidate` 文件接口仅供人工或程序集成。预检总是尝试解析 REQ/AC 结构；
-普通材料也可形成候选，不能把候选已保存当作材料合格。启动确认前严格校验需求结构。
+`--save-candidate` 文件接口仅供人工或程序集成。预检不按 `--route` 分流，总是尝试解析 REQ/AC 结构；
+普通材料也可形成候选，不能把候选已保存当作正式路线材料合格。正式路线在启动确认前严格校验需求结构。
 材料或配置校验失败先修正，不请求确认；材料修改后重新预检、展示和确认。确认前不启动开发 run、不确定拆分拓扑或派发后续代理。预检的通过
 不是产品审、技术审或 QA 的 PASS。
+
+### 面板选择流程
+
+需要用户选择流程时，先说明图形面板现在和运行中都可打开：可以让代理调用
+`configure`，也可以在终端运行 `formal-gates config`；关闭 `panelSelection` 可改用对话。
+随后用原 `intake` 序号调用 `configure`。已有 run 不妨碍新受理候选打开面板。
+面板中的“选好了”只返回已保存配置与推导路线，不代表用户批准启动。
+`selected` 或 `timeout` 结果沿原 `confirm_start` 确认；结果含校验错误时先处理错误。
+`cancelled` 或 `superseded` 不得启动，候选失效先重新预检与展示。
+`disabled` 或 `unavailable` 时说明原因，用 `settings` 与对话完成同等选择；
+用户明确要求打开可传 `force`。终端 `formal-gates config` 不受选择模式开关限制，
+也不携带受理候选。
 
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
 精确 revisions。预检已由程序保存完整原对象；调用当前主宿主 MCP 工具 `confirm_start`，
-传入原 `intake` 序号与保存配置的 `configuration` 名称或原序号。
-程序按该配置的启用节点决定执行行为；配置须至少启用一个节点，
-全部节点关闭或未开发却启用 QA、门或返修的组合拒绝。
+传入原 `intake` 序号、保存配置的 `configuration` 名称或原序号及推导出的 `route`。
+程序按该配置的启用节点推导路线并核对入参，不一致拒绝；route 不是用户手选档位。
+全部节点关闭为 lightweight，任一节点启用为 regular；不开发却启用 QA、门或返修的组合拒绝。
 服务生成 run ID，原生弹窗展示原材料、所选配置与完整启动操作；
 只有用户亲自确认才直接启动。`root` 缺省为当前目录，无需模型抄写 run ID、摘要或全文。
 普通 CLI `start --intake` / `--intake-receipt` 不接受自报批准。保存候选不会启动 run。
@@ -98,8 +110,8 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 
 内容 revision 将 CRLF 规范化为 LF 后计算。路径不能重复或越出项目；start 重算实际
 材料内容，拒绝与 receipt 不符的文件。首次 drive 把确认与 intake digest 恰好登记一次，
-后续步骤消费该确认 revision，不再询问同一全文确认。所有 run 使用同一预检与真实
-已确认需求/方案材料的 typed receipt，展示完整材料。
+后续步骤消费该确认 revision，不再询问同一全文确认。lightweight 不要求 REQ/AC 案，
+但仍使用同一预检与真实已确认需求/方案材料的 typed receipt，展示完整材料；路线由全关的保存配置推导。
 
 ## 启动与 run 控制
 
@@ -137,10 +149,12 @@ start/show/status/next/drive/submit 默认展示当前语义问题、短选择�
 语义 next/replan 默认在原 run 的 payloads/control 目录保存完整原对象并公布
 `confirmationCandidate` 序号；纯 show/status/next 不写载荷。默认展示不改变接纳绑定。precheck 的完整材料与 revision 输出不裁减。
 
-未显式提供 `--base-snapshot` 时，由原 VCS provider Resolve 取得实际不可变基线，
-再交既有 Start 强校验；显式精确 base 仍供人工或程序集成。启动总是使用原生 VCS 基线；
-不声明 split 意向。唯一正式文件同时承载需求和方案时，
-单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。实际 start 按保存配置的启用节点决定执行行为。
+regular 未显式提供 `--base-snapshot` 时，由原 VCS provider Resolve 取得实际不可变基线，
+再交既有 Start 强校验；显式精确 base 仍供人工或程序集成。regular 使用原生 VCS 基线；启动不声明 split 意向。唯一正式文件同时承载需求和方案时，
+单一 artifact 的确认绑定需求保证，后续文件观测不自行改变其激活事实。实际 start 按保存配置推导路线；
+显式 `--route` 或 `confirm_start.route` 只核对推导结果，不能覆盖配置。预检不选择启动路线。
+lightweight 只留明确 unverified 记录，不开发、不快照、不做 QA/门验证。regular 不能
+在开发中降为 lightweight。
 
 `submit --request` 选择当前控制类型；程序创建 REQUEST Ask，不直接授权。
 决定使用 `next --ask --choice`：默认展示的 `ask` 先编号当前 run
@@ -160,6 +174,11 @@ run 不能换绑，运行中编辑该名的保存配置，在下一次派发评�
 原调用跑完后停止后续派发，不撤回。需要回退时仍用原节点继续、reset 或需求变更确认路径，
 保存或启用节点本身不授予回退权限。完整生效与故障恢复规则见
 [绑定与运行中生效](user-configuration.md#绑定与运行中生效)。
+
+运行中可让代理调用 `configure`，或在自己的终端运行 `formal-gates config`。
+面板不提供换绑或回退；回退通过对话提出，沿原 reset/需求变更确认路径处理。
+代理在已有的授权、确认、异常、进度和结束汇报中顺带提醒这两个打开入口，
+不为提醒面板单独发消息。窗口不可用时继续用对话与 `settings`，不削减配置能力。
 
 运行中的 `businessNodes` 按当前 run 与已建立 child 的同一顺序编号真实职责。
 `next --node <序号>` 只准备从该职责继续的原请求；提交保存的候选，或以

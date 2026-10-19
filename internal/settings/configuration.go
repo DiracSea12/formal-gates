@@ -388,6 +388,44 @@ func storeConfiguration(raw map[string]json.RawMessage, name string, configurati
 	return err
 }
 
+// WriteConfiguration stores a complete named value in one locked transaction:
+// create requires a free name in the merged view, overwrite requires the target
+// to live in this scope's layer. The active pointer is unchanged.
+func WriteConfiguration(root, home, scope, name string, configuration Configuration, overwrite bool, expected map[string]string) (Effective, error) {
+	if strings.TrimSpace(name) == "" {
+		return Effective{}, fmt.Errorf("configuration name must be nonempty")
+	}
+	if name == DefaultConfigurationName {
+		return Effective{}, errBuiltinConfiguration
+	}
+	return editOverlay(root, home, scope, expected, func(raw map[string]json.RawMessage, effective Effective, options []ConfigurationOption) error {
+		var existing *ConfigurationOption
+		for i := range options {
+			if options[i].Name == name {
+				existing = &options[i]
+				break
+			}
+		}
+		if !overwrite {
+			if existing != nil {
+				return fmt.Errorf("configuration %q already exists", name)
+			}
+		} else {
+			if existing == nil {
+				return fmt.Errorf("configuration %q does not exist", name)
+			}
+			path := effective.Files[1]
+			if scope == "user" {
+				path = effective.Files[0]
+			}
+			if existing.Source != path {
+				return fmt.Errorf("configuration %q source is %s, not the %s scope; select its source scope", name, existing.Source, scope)
+			}
+		}
+		return storeConfiguration(raw, name, CloneConfiguration(configuration))
+	})
+}
+
 // EditConfiguration reads and changes its selected value while holding the
 // same overlay lock as field edits, preserving concurrent edits to other values.
 func EditConfiguration(root, home, scope, selection string, expected map[string]string, change func(*Configuration) error) (Effective, error) {

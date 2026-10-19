@@ -108,7 +108,7 @@ func canonicalReviewEngine(t *testing.T) (*Engine, string) {
 	}
 	observedInput := Observation{}
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-canonical", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-canonical", "", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {

@@ -362,7 +362,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	var displayedID string
 	check := func(value map[string]any) {
 		materials := value["materials"].(map[string]any)
-		if value["root"] != root || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
+		if value["root"] != root || value["route"] != "regular" || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
 			t.Fatal("start confirmation omitted its actual operation or complete source", value)
 		}
 		displayedID = value["runId"].(string)
@@ -396,7 +396,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	}
 	var request facade.StartRequest
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, displayedID, "request.json"))
-	if err != nil || json.Unmarshal(body, &request) != nil || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+	if err != nil || json.Unmarshal(body, &request) != nil || request.Route != "regular" || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 		t.Fatal("started run lost its exact displayed inputs", request, err)
 	}
 }
@@ -448,7 +448,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, start.id, "request.json"), &request); err != nil {
 			t.Fatal(err)
 		}
-		if request.RunID != start.id || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+		if request.RunID != start.id || request.Route != "regular" || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 			t.Fatal("started run lost its exact displayed identity or intake", request, start.id)
 		}
 	}

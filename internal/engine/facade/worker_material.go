@@ -905,7 +905,7 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	s := snapshot.State
-	if s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
+	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
 		return nil
 	}
 	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhasePreparing {

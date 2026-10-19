@@ -346,7 +346,8 @@ func normalizeStatusPath(path string) string {
 // directories and descendants. Status callers exclude only untracked paths.
 func RuntimePath(path string) bool {
 	path = filepath.ToSlash(filepath.Clean(path))
-	if path == ".gates/config.json" || path == ".gates/config.json.lock" {
+	if path == ".gates/config.json" || path == ".gates/config.json.lock" ||
+		path == ".gates/panel-instance.json" || path == ".gates/panel-instance.lock" {
 		return true
 	}
 	for _, dir := range runtimeStatusDirs {

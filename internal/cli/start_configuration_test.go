@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/settings"
 )
 
@@ -32,6 +33,26 @@ func saveReviewOnlyConfiguration(t *testing.T, root string) {
 	}
 }
 
+func saveLightweightConfiguration(t *testing.T, root string) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.SaveConfiguration(root, home, "project", "轻量", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(root, home, "project", "轻量", nil, func(configuration *settings.Configuration) error {
+		configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", "轻量", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // cliStartRepo 让 root 成为有一个提交的 git 仓库，使 workflow start 能解析
 // 原生 base 快照。
 func cliStartRepo(t *testing.T, root string) {
@@ -40,7 +61,6 @@ func cliStartRepo(t *testing.T, root string) {
 		cliGit(t, root, args...)
 	}
 }
-
 func TestWorkflowStartRejectsPerRunNodeParameters(t *testing.T) {
 	for _, flags := range [][]string{{"--nodes"}, {"--disable-node", "1"}, {"--precheck", "--disable-node", "1"}} {
 		root := t.TempDir()

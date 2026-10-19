@@ -21,10 +21,7 @@ import (
 	"formal-gates/internal/settings"
 )
 
-// verifiedStartFixture 提供可启动的最小夹具：命名的可编辑配置（默认全部节
-// 点启用）与 requirements.md 承载的确认需求文档。Start 另需 VCSRunner＋
-// BaseSnapshot（冻结 Git 夹具）。
-func verifiedStartFixture(t *testing.T, root string) {
+func configureLightweight(t *testing.T, root string) {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -33,17 +30,16 @@ func verifiedStartFixture(t *testing.T, root string) {
 	if _, err := settings.SaveConfiguration(root, home, "project", "记录", "", nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := settings.EditConfiguration(root, home, "project", "记录", nil, func(configuration *settings.Configuration) error {
+		configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := settings.UseConfiguration(root, home, "project", "记录", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(workflowIntakeDocument), 0600); err != nil {
-		t.Fatal(err)
-	}
 }
-
-// workflowIntakeDocument is the minimal parseable requirement document carried
-// by the start fixture's requirements.md.
-const workflowIntakeDocument = "# Delivery\n\n## 需求点\n\n### REQ-001：命令\n\n#### 要求\n命令验证输入。\n\n#### 验收条件\n- AC-001：正常输入成功，错误输入拒绝。\n\n#### 来源\n用户要求。\n"
 
 // workflowIntakeReceipt is intentionally independent of the façade package's test
 // fixture.  The revisions are opaque bindings here because this test does not
@@ -68,7 +64,7 @@ func workflowIntakeReceipt() facade.IntakeConfirmationReceipt {
 func verticalStartRequest(runID string, receipt facade.IntakeConfirmationReceipt) facade.StartRequest {
 	return facade.StartRequest{
 		RunID:                     runID,
-		BaseSnapshot:              testkit.FrozenSnapshot,
+		Route:                     "lightweight",
 		Provider:                  "engine",
 		DefinitionSource:          facade.DefaultDefinitionSource,
 		DefinitionDigest:          definition.WorkflowDefinitionDigest,
@@ -82,10 +78,10 @@ func verticalStartRequest(runID string, receipt facade.IntakeConfirmationReceipt
 // engine namespace is created.
 func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	admission := fixtureAdmission(t, root, "sha256:admitted", "target-qa")
 	_, run, err := facade.Start(facade.StartOptions{
-		Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: verticalStartRequest("admission-ok", workflowIntakeReceipt()), Admission: admission,
+		Root: root, Request: verticalStartRequest("admission-ok", workflowIntakeReceipt()), Admission: admission,
 	})
 	if err != nil {
 		t.Fatalf("admitted start: %v", err)
@@ -115,10 +111,10 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 			req.RunID = "bad/run"
 			return req
 		}, want: "run id"},
-		{name: "missing base snapshot", mutate: func(req facade.StartRequest, _ *facade.StartOptions) facade.StartRequest {
-			req.BaseSnapshot = ""
+		{name: "unsupported route", mutate: func(req facade.StartRequest, _ *facade.StartOptions) facade.StartRequest {
+			req.Route = "unrecognized"
 			return req
-		}, want: "base snapshot is required"},
+		}, want: "differs from configuration route"},
 		{name: "negative capacity", mutate: func(req facade.StartRequest, options *facade.StartOptions) facade.StartRequest {
 			options.Capacity = -1
 			return req
@@ -127,8 +123,8 @@ func TestFacadeAdmissionAndPreWriteInputFence(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			caseRoot := t.TempDir()
-			verifiedStartFixture(t, caseRoot)
-			options := facade.StartOptions{Root: caseRoot, VCSRunner: testkit.NewFrozenGitRepo(), Admission: fixtureAdmission(t, caseRoot, admission.PackageDigest, admission.InstalledTargetIdentity)}
+			configureLightweight(t, caseRoot)
+			options := facade.StartOptions{Root: caseRoot, Admission: fixtureAdmission(t, caseRoot, admission.PackageDigest, admission.InstalledTargetIdentity)}
 			request := row.mutate(verticalStartRequest("reject-"+strings.ReplaceAll(row.name, " ", "-"), workflowIntakeReceipt()), &options)
 			options.Request = request
 			if _, _, err := facade.Start(options); err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(row.want)) {
@@ -165,7 +161,7 @@ func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 		t.Fatalf("new state: %v", err)
 	}
 	confirmation := workflowIntakeReceipt()
-	if err := engine.InitWithMetadata(view, "engine", fp, "vertical-receipt", &confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, "engine", fp, "vertical-receipt", "lightweight", &confirmation, "", "", nil); err != nil {
 		t.Fatalf("init with confirmation: %v", err)
 	}
 	digest, err := facade.IntakeDigest(confirmation)
@@ -227,17 +223,17 @@ func TestProtocolIntakeReceiptIsExactlyOnce(t *testing.T) {
 // summary, and that Show/Status/Next do not rewrite terminal bytes.
 func TestFacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	root := t.TempDir()
-	verifiedStartFixture(t, root)
+	configureLightweight(t, root)
 	runID := "terminal-open-replay"
 	f, _, err := facade.Start(facade.StartOptions{
-		Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: verticalStartRequest(runID, workflowIntakeReceipt()),
+		Root: root, Request: verticalStartRequest(runID, workflowIntakeReceipt()),
 		Admission: fixtureAdmission(t, root, "sha256:pkg", "target"),
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	completed, err := abortWorkflowRun(t, f)
-	if err != nil || completed.Status != "ABORTED" || completed.Next.Kind != decision.KindComplete {
+	completed, err := f.Drive()
+	if err != nil || completed.Status != "COMPLETE" || !completed.Unverified || completed.Next.Kind != decision.KindComplete {
 		t.Fatalf("drive terminal projection = %+v err=%v", completed, err)
 	}
 	statePath := filepath.Join(root, facade.EngineNamespace, runID, "state.json")
@@ -255,7 +251,7 @@ func TestFacadeOpenTerminalSummaryReplayIsReadOnly(t *testing.T) {
 	}
 	for _, query := range []func() (facade.Run, error){opened.Show, opened.Status} {
 		view, err := query()
-		if err != nil || view.Status != "ABORTED" || view.Next.Kind != decision.KindComplete || view.Revision != completed.Revision {
+		if err != nil || view.Status != "COMPLETE" || view.Next.Kind != decision.KindComplete || !view.Unverified || view.Revision != completed.Revision {
 			t.Fatalf("summary-only query = %+v err=%v", view, err)
 		}
 	}
@@ -367,34 +363,4 @@ func TestSubmitFencesUnknownKindAndProviderBeforeWrite(t *testing.T) {
 	if after.Revision != baseline.Revision || !reflect.DeepEqual(after.State, baseline.State) {
 		t.Fatal("rejected typed submits changed engine revision or state")
 	}
-}
-
-// abortWorkflowRun 提交并决定 abort 控制，驱动 run 到已发布终态（ABORTED）。
-func abortWorkflowRun(t *testing.T, f *facade.Facade) (facade.Run, error) {
-	t.Helper()
-	ask, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "abort"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, run, err := f.Submit(ask)
-	if err != nil {
-		return run, err
-	}
-	token := ""
-	for _, pending := range run.PendingAsks {
-		if pending.RequestID == "abort-request" {
-			token = pending.Token
-		}
-	}
-	if token == "" {
-		t.Fatal("abort request did not raise a pending ask")
-	}
-	decide, err := protocol.NewDecideEvent("abort-decide", "abort-request", token, "abort")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.Submit(decide); err != nil {
-		return facade.Run{}, err
-	}
-	return f.Drive()
 }

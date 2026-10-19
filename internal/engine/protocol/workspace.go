@@ -116,7 +116,7 @@ func (e *Engine) RecordCandidatePromotion(actionID string, proof CandidatePromot
 	return err
 }
 
-// SealTerminal seals an ordinary run after verified native delivery.
+// SealTerminal seals an ordinary regular run after verified native delivery.
 // A child cannot seal independently. Native identity enters from the facade;
 // current validation, promotion, barrier and abort facts are checked here.
 // A terminal replay with the same promoted identity performs no write.
@@ -130,8 +130,8 @@ func (e *Engine) SealTerminal(delivered string, input Observation) error {
 	if state == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if state.SliceChild != nil {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "terminal sealing requires an ordinary run; a slice child uses its recoverable checkpoint"}
+	if state.Route != "regular" || state.SliceChild != nil {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "terminal sealing requires an ordinary regular run; a slice child uses its recoverable checkpoint"}
 	}
 	if state.Phase == runtime.PhaseTerminal {
 		if delivered == state.PromotedSnapshot {

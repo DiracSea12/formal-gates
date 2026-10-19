@@ -204,7 +204,7 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 			t.Fatal(err)
 		}
 	}
-	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt}})
+	f, _, err := facade.Start(facade.StartOptions{Root: root, ArtifactRoot: root, VCSRunner: runner, Admission: admission, Request: facade.StartRequest{RunID: "consumer", Route: "regular", BaseSnapshot: strings.TrimSpace(base), IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}

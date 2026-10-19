@@ -36,8 +36,8 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
 9. **Promotion 与 Seal。** 核对同一候选的等价 receipt，清理全部登记资源并证明无残留
    后才 Complete。Seal、主线集成、真实 canary 和全局切换分别留证。
 
-执行行为只由保存配置的启用节点决定；配置须至少启用一个节点才能启动，
-全部节点关闭的选择被拒绝。
+lightweight 只留下明确“本 run 未经任何验证”的 unverified 记录，不开发、不快照、
+不选 QA/门路线。regular 不在开发中降为 lightweight。
 
 [正式流程公共合同](references/formal-flow.md) 唯一持有收据字段与调用形式；
 [完整示例](references/example-run.md)、[拆分与主线](references/sliced-runs.md) 和
@@ -59,7 +59,7 @@ Codex、ZCode 安装控制 MCP；DSH global 复用根代理原生问题服务，
 start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与已确认决定；
 message 追加同 action 临时消息，handoff 请求原恢复 Ask，replan 准备并保存计划重审确认载荷。
 `settings` 可保存、修改和启用用户命名配置；`confirm_start.configuration` 仅选择本次配置。
-节点开关、QA 组、门集合与执行选择只通过保存配置修改，至少启用一个节点才能启动；
+节点开关、QA 组、门集合与执行选择只通过保存配置修改；
 配置改动保存后对未完成节点在下一次派发评估生效，已领取调用按原配置跑完。
 启用过去或跳过的节点后可从原节点继续；修改保存默认不会自动影响已有 run。
 

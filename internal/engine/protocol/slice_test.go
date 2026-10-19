@@ -119,7 +119,7 @@ func sliceChildEngine(t *testing.T) (*Engine, string) {
 			ACOwners: map[string]string{"AC-001": "lane-core", "AC-002": "lane-tooling"},
 		},
 	}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-child", confirmation, "", "", sliceStart); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-child", "", confirmation, "", "", sliceStart); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {

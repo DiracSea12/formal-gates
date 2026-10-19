@@ -3,7 +3,9 @@ package harness
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"formal-gates/internal/engine/coverage"
@@ -1021,119 +1025,294 @@ func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call f
 }
 
 // ServeTools keeps confirmation on the requesting host's MCP connection. The
-// callback may execute only after that connection accepts the displayed object.
+// callback may execute only after that connection accepts the displayed
+// object. Ordinary requests queue behind the active call and run in arrival
+// order; only a pending human confirmation refuses new calls, which also
+// flushes the queue.
 func ServeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
-	var err error
-	decoder := json.NewDecoder(in)
-	encoder := json.NewEncoder(out)
-	formSupported := false
-	confirmationID := 0
-	var activeCallID json.RawMessage
-	confirm := func(value any) error {
-		if !formSupported {
-			return fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: the current host does not support MCP form elicitation")
-		}
-		body, err := json.MarshalIndent(value, "", "  ")
-		if err != nil {
-			return err
-		}
-		confirmationID++
-		id := "formal-gates-confirmation-" + strconv.Itoa(confirmationID)
-		if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": map[string]any{
-			"mode": "form", "message": "Confirm this exact operation:\n" + string(body),
-			"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"confirmOperation": map[string]any{"type": "boolean", "title": "确认并执行所展示的具体操作"}}, "required": []string{"confirmOperation"}, "additionalProperties": false},
-		}}); err != nil {
-			return err
-		}
+	return serveTools(context.Background(), in, out, errout, schemas,
+		func(_ context.Context, name string, arguments json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
+			return call(name, arguments, confirm, metadata)
+		}, record, true)
+}
+
+// mcpFrame is one decoded inbound message on the transport.
+type mcpFrame struct {
+	Raw       json.RawMessage
+	ID        json.RawMessage
+	Method    string
+	RequestID json.RawMessage
+	Result    json.RawMessage
+	Error     json.RawMessage
+	Params    json.RawMessage
+}
+
+// confirmWaiter is one outstanding elicitation request routed by its form ID.
+type confirmWaiter struct {
+	reply chan mcpFrame
+}
+
+// toolCall tracks the single in-flight tools/call so cancellation targets it
+// and its result can be joined exactly once.
+type toolCall struct {
+	id          json.RawMessage
+	cancel      context.CancelCauseFunc
+	confirmBase int32
+}
+
+type toolCallResult struct {
+	request json.RawMessage
+	value   any
+	err     error
+}
+
+// ServeToolsWithContext serves the workflow-control MCP surface with caller
+// context and a dedicated reader: while one tool callback runs, the
+// dispatcher still answers pings, routes notifications/cancelled by the
+// exact original request ID, and replies busy to other tool requests instead
+// of queueing workflow control calls behind a long configure. A request
+// cancellation cancels only that callback's context; closing stdin (EOF)
+// cancels the active call so the owner-facing cleanup runs.
+func ServeToolsWithContext(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
+	return serveTools(ctx, in, out, errout, schemas, call, record, false)
+}
+
+func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error, queueOrdinary bool) int {
+	frames := make(chan mcpFrame, 64)
+	decodeDone := make(chan error, 1)
+	go func() {
+		defer close(frames)
+		decoder := json.NewDecoder(in)
 		for {
-			var response struct {
+			var raw json.RawMessage
+			if err := decoder.Decode(&raw); err != nil {
+				if err != io.EOF {
+					decodeDone <- err
+				}
+				return
+			}
+			var frame mcpFrame
+			var decoded struct {
 				ID     json.RawMessage `json:"id"`
 				Method string          `json:"method"`
-				Params struct {
+				Params json.RawMessage `json:"params"`
+				Result json.RawMessage `json:"result"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				decodeDone <- err
+				return
+			}
+			frame.ID, frame.Method, frame.Params, frame.Result, frame.Error = decoded.ID, decoded.Method, decoded.Params, decoded.Result, decoded.Error
+			if frame.Method == "notifications/cancelled" {
+				var cancelled struct {
 					RequestID json.RawMessage `json:"requestId"`
-				} `json:"params"`
-				Result struct {
-					Action  string `json:"action"`
-					Content struct {
-						ConfirmOperation bool `json:"confirmOperation"`
-					} `json:"content"`
-				} `json:"result"`
-				Error json.RawMessage `json:"error"`
-			}
-			if err := decoder.Decode(&response); err != nil {
-				return fmt.Errorf("native confirmation was not received: %w", err)
-			}
-			if response.Method == "notifications/cancelled" {
-				var cancelled string
-				if bytes.Equal(response.Params.RequestID, activeCallID) || json.Unmarshal(response.Params.RequestID, &cancelled) == nil && cancelled == id {
-					return fmt.Errorf("native confirmation cancelled; operation was not executed")
 				}
-				continue
+				_ = json.Unmarshal(frame.Params, &cancelled)
+				frame.RequestID = cancelled.RequestID
 			}
-			if len(response.ID) == 0 {
-				continue
+			frame.Raw = raw
+			select {
+			case frames <- frame:
+			case <-ctx.Done():
+				return
 			}
-			if response.Method == "ping" {
-				if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": response.ID, "result": map[string]any{}}); err != nil {
-					return err
-				}
-				continue
+		}
+	}()
+	var writeMu sync.Mutex
+	encoder := json.NewEncoder(out)
+	encode := func(value any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return encoder.Encode(value)
+	}
+	encodeBusy := func(id json.RawMessage) {
+		if err := encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32000, "message": "a native confirmation is pending; retry this request after it finishes"}}); err != nil {
+			fmt.Fprintln(errout, err)
+		}
+	}
+	formSupported := false
+	var confirmationID atomic.Int32
+	var confirmMu sync.Mutex
+	pendingConfirm := map[string]*confirmWaiter{}
+	// Replies arriving before their waiter registers are held here so an
+	// already-buffered answer is consumed instead of being dropped. The map
+	// is scoped to the active call: stale or never-issued form replies are
+	// discarded, not stockpiled for a later prompt.
+	earlyReplies := map[string]mcpFrame{}
+	// A response owning no known request ID is foreign; while a call is in
+	// flight it poisons that call's next confirmation. The flag resets when
+	// the call ends.
+	foreignReply := false
+	transportEOF := false
+	var active *toolCall
+	// Ordinary requests queued behind the active call in legacy mode.
+	var queued []mcpFrame
+	// confirmNumber reads the sequence suffix of our own form IDs; the
+	// boolean answers whether the ID was issued this serve run at all.
+	confirmNumber := func(raw json.RawMessage) (int64, bool) {
+		var id string
+		if json.Unmarshal(raw, &id) != nil {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(strings.TrimPrefix(id, "formal-gates-confirmation-"), 10, 64)
+		return n, err == nil
+	}
+	// confirmAnswer classifies one routed elicitation reply.
+	confirmAnswer := func(response mcpFrame) error {
+		if len(response.Error) != 0 {
+			var message string
+			if json.Unmarshal(response.Error, &message) == nil {
+				return errors.New(message)
 			}
-			if response.Method != "" {
-				if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": response.ID, "error": map[string]any{"code": -32000, "message": "a native confirmation is pending; retry this request after it finishes"}}); err != nil {
-					return err
-				}
-				continue
+			return fmt.Errorf("native confirmation failed: %s", response.Error)
+		}
+		var result struct {
+			Action  string `json:"action"`
+			Content struct {
+				ConfirmOperation bool `json:"confirmOperation"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(response.Result, &result); err != nil {
+			return fmt.Errorf("native confirmation has no supported host action")
+		}
+		switch result.Action {
+		case "accept":
+			if !result.Content.ConfirmOperation {
+				return fmt.Errorf("native confirmation did not explicitly confirm the displayed operation")
 			}
-			var actual string
-			if json.Unmarshal(response.ID, &actual) != nil || actual != id {
+			return nil
+		case "decline", "cancel":
+			return fmt.Errorf("native confirmation %s; operation was not executed", result.Action)
+		default:
+			return fmt.Errorf("native confirmation has no supported host action")
+		}
+	}
+	makeConfirm := func(callCtx context.Context) func(any) error {
+		return func(value any) error {
+			if !formSupported {
+				return fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: the current host does not support MCP form elicitation")
+			}
+			body, err := json.MarshalIndent(value, "", "  ")
+			if err != nil {
+				return err
+			}
+			id := "formal-gates-confirmation-" + strconv.Itoa(int(confirmationID.Add(1)))
+			waiter := &confirmWaiter{reply: make(chan mcpFrame, 1)}
+			confirmMu.Lock()
+			pendingConfirm[id] = waiter
+			// A human is now deciding; anything queued behind this call can
+			// never run before it finishes, so queued callers get the busy
+			// refusal up front.
+			flush := queued
+			queued = nil
+			confirmMu.Unlock()
+			for _, queuedFrame := range flush {
+				encodeBusy(queuedFrame.ID)
+			}
+			defer func() {
+				confirmMu.Lock()
+				delete(pendingConfirm, id)
+				confirmMu.Unlock()
+			}()
+			if err := encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": map[string]any{
+				"mode": "form", "message": "Confirm this exact operation:\n" + string(body),
+				"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"confirmOperation": map[string]any{"type": "boolean", "title": "确认并执行所展示的具体操作"}}, "required": []string{"confirmOperation"}, "additionalProperties": false},
+			}}); err != nil {
+				return err
+			}
+			confirmMu.Lock()
+			switch {
+			case callCtx.Err() != nil && !errors.Is(context.Cause(callCtx), io.EOF):
+				confirmMu.Unlock()
+				return fmt.Errorf("native confirmation cancelled; operation was not executed")
+			}
+			if early, ok := earlyReplies[id]; ok {
+				delete(earlyReplies, id)
+				waiter.reply <- early
+				delete(pendingConfirm, id)
+			} else if foreignReply {
+				confirmMu.Unlock()
 				return fmt.Errorf("native confirmation response belongs to another request")
+			} else if transportEOF {
+				confirmMu.Unlock()
+				return fmt.Errorf("native confirmation was not received: transport closed")
 			}
-			if len(response.Error) != 0 {
-				return fmt.Errorf("native confirmation failed: %s", response.Error)
-			}
-			switch response.Result.Action {
-			case "accept":
-				if !response.Result.Content.ConfirmOperation {
-					return fmt.Errorf("native confirmation did not explicitly confirm the displayed operation")
+			confirmMu.Unlock()
+			select {
+			case response := <-waiter.reply:
+				return confirmAnswer(response)
+			case <-callCtx.Done():
+				// EOF ends the host, but a reply that was already routed to
+				// this exact form still counts; an explicit cancellation
+				// never honours a late approval.
+				if errors.Is(context.Cause(callCtx), io.EOF) {
+					select {
+					case response := <-waiter.reply:
+						return confirmAnswer(response)
+					default:
+					}
 				}
-				return nil
-			case "decline", "cancel":
-				return fmt.Errorf("native confirmation %s; operation was not executed", response.Result.Action)
-			default:
-				return fmt.Errorf("native confirmation has no supported host action")
+				return fmt.Errorf("native confirmation cancelled; operation was not executed")
+			case <-ctx.Done():
+				return fmt.Errorf("native confirmation cancelled; operation was not executed")
 			}
 		}
 	}
-	for {
-		var rawRequest json.RawMessage
-		var request struct {
-			JSONRPC string          `json:"jsonrpc"`
-			ID      json.RawMessage `json:"id"`
-			Method  string          `json:"method"`
-			Params  json.RawMessage `json:"params"`
-		}
-		if err := decoder.Decode(&rawRequest); err == io.EOF {
-			return 0
-		} else if err != nil {
-			fmt.Fprintln(errout, err)
-			return 1
-		}
-		if err := json.Unmarshal(rawRequest, &request); err != nil {
-			fmt.Fprintln(errout, err)
-			return 1
-		}
-		if len(request.ID) == 0 {
-			continue
-		}
+	callDone := make(chan toolCallResult, 1)
+	finishCall := func(outcome toolCallResult) int {
 		var result any
-		switch request.Method {
+		var responseErr error
+		text := ""
+		if outcome.err != nil {
+			text = outcome.err.Error()
+		} else {
+			body, marshalErr := json.Marshal(outcome.value)
+			if marshalErr != nil {
+				responseErr = marshalErr
+			}
+			text = string(body)
+		}
+		result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": outcome.err != nil || responseErr != nil}
+		if record != nil {
+			if err := record(outcome.request, result); err != nil {
+				fmt.Fprintln(errout, err)
+				return 1
+			}
+		}
+		response := map[string]any{"jsonrpc": "2.0", "id": json.RawMessage("null"), "result": result}
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.Unmarshal(outcome.request, &request)
+		response["id"] = request.ID
+		if responseErr != nil {
+			delete(response, "result")
+			response["error"] = map[string]any{"code": -32601, "message": responseErr.Error()}
+		}
+		if err := encode(response); err != nil {
+			fmt.Fprintln(errout, err)
+			return 1
+		}
+		confirmMu.Lock()
+		active = nil
+		foreignReply = false
+		earlyReplies = map[string]mcpFrame{}
+		confirmMu.Unlock()
+		return -1
+	}
+	// dispatch answers one request, starting a tool call when free. Callers
+	// have already handled ping, cancellations, and ID-less notifications.
+	dispatch := func(frame mcpFrame) {
+		var result any
+		var callErr error
+		switch frame.Method {
 		case "initialize":
 			var params struct {
 				ProtocolVersion string                     `json:"protocolVersion"`
 				Capabilities    map[string]json.RawMessage `json:"capabilities"`
 			}
-			err = json.Unmarshal(request.Params, &params)
+			callErr = json.Unmarshal(frame.Params, &params)
 			var elicitation map[string]json.RawMessage
 			formSupported = false
 			if raw, ok := params.Capabilities["elicitation"]; ok && json.Unmarshal(raw, &elicitation) == nil && elicitation != nil {
@@ -1149,43 +1328,180 @@ func ServeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(st
 				Arguments json.RawMessage `json:"arguments"`
 				Metadata  json.RawMessage `json:"_meta"`
 			}
-			err = json.Unmarshal(request.Params, &params)
-			var value any
-			if err == nil {
-				activeCallID = request.ID
-				value, err = call(params.Name, params.Arguments, confirm, params.Metadata)
-				activeCallID = nil
+			callErr = json.Unmarshal(frame.Params, &params)
+			if callErr == nil {
+				callCtx, cancel := context.WithCancelCause(ctx)
+				confirmMu.Lock()
+				active = &toolCall{id: frame.ID, cancel: cancel, confirmBase: confirmationID.Load()}
+				foreignReply = false
+				earlyReplies = map[string]mcpFrame{}
+				confirmMu.Unlock()
+				confirmFunc := makeConfirm(callCtx)
+				request := frame.Raw
+				go func() {
+					value, err := call(callCtx, params.Name, params.Arguments, confirmFunc, params.Metadata)
+					cancel(context.Canceled)
+					callDone <- toolCallResult{request: request, value: value, err: err}
+				}()
+				return
 			}
-			text := ""
-			if err != nil {
-				text = err.Error()
-			} else {
-				body, marshalErr := json.Marshal(value)
-				err = marshalErr
-				text = string(body)
+		default:
+			callErr = fmt.Errorf("unsupported MCP method %s", frame.Method)
+		}
+		response := map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": result}
+		if callErr != nil {
+			delete(response, "result")
+			response["error"] = map[string]any{"code": -32601, "message": callErr.Error()}
+		}
+		if err := encode(response); err != nil {
+			fmt.Fprintln(errout, err)
+		}
+	}
+	eof := false
+	for {
+		select {
+		case frame, ok := <-frames:
+			if !ok {
+				frames = nil
+				eof = true
+				// A dead transport can never deliver a pending confirmation
+				// reply; buffered answers were already routed first.
+				confirmMu.Lock()
+				transportEOF = true
+				for id, waiter := range pendingConfirm {
+					delete(pendingConfirm, id)
+					waiter.reply <- mcpFrame{Error: json.RawMessage(strconv.Quote("native confirmation was not received: transport closed"))}
+				}
+				confirmMu.Unlock()
+				// The owner pipe is gone: cancel the active call so owner
+				// cleanup (controller close, owned service EOF) runs now.
+				if active != nil {
+					active.cancel(io.EOF)
+					continue
+				}
+				select {
+				case err := <-decodeDone:
+					fmt.Fprintln(errout, err)
+					return 1
+				default:
+					return 0
+				}
 			}
-			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": err != nil}
-			err = nil
-			if record != nil {
-				if err := record(rawRequest, result); err != nil {
+			// Responses route to the elicitation that owns the ID. Our own
+			// form IDs can arrive before their waiter registers (prebuffered
+			// input), so they are held until the waiter asks; any other ID
+			// while a confirmation is pending is a foreign reply.
+			if frame.Method == "" && len(frame.ID) != 0 {
+				var id string
+				owned := json.Unmarshal(frame.ID, &id) == nil && strings.HasPrefix(id, "formal-gates-confirmation-")
+				if owned {
+					n, _ := confirmNumber(frame.ID)
+					confirmMu.Lock()
+					waiter, ok := pendingConfirm[id]
+					switch {
+					case ok:
+						delete(pendingConfirm, id)
+						waiter.reply <- frame
+					case active != nil && int64(active.confirmBase) < n && n <= int64(confirmationID.Load())+1:
+						// Issued by the current call but not yet awaited.
+						earlyReplies[id] = frame
+					default:
+						// Stale or impossible form reply: ignored for this
+						// call and never stockpiled for a later one.
+					}
+					confirmMu.Unlock()
+					continue
+				}
+				confirmMu.Lock()
+				hadPending := len(pendingConfirm) > 0
+				for waitingID, waiter := range pendingConfirm {
+					delete(pendingConfirm, waitingID)
+					waiter.reply <- mcpFrame{Error: json.RawMessage(strconv.Quote("native confirmation response belongs to another request"))}
+				}
+				if !hadPending && active != nil {
+					foreignReply = true
+				}
+				confirmMu.Unlock()
+				continue
+			}
+			if frame.Method == "notifications/cancelled" {
+				var cancelled string
+				callCancelled := active != nil && bytes.Equal(frame.RequestID, active.id)
+				if callCancelled {
+					active.cancel(context.Canceled)
+				}
+				confirmMu.Lock()
+				for id, waiter := range pendingConfirm {
+					formCancelled := json.Unmarshal(frame.RequestID, &cancelled) == nil && cancelled == id
+					if formCancelled || callCancelled {
+						delete(pendingConfirm, id)
+						waiter.reply <- mcpFrame{Error: json.RawMessage(strconv.Quote("native confirmation cancelled; operation was not executed"))}
+					}
+				}
+				confirmMu.Unlock()
+				continue
+			}
+			if len(frame.ID) == 0 {
+				continue
+			}
+			if frame.Method == "ping" {
+				if err := encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{}}); err != nil {
 					fmt.Fprintln(errout, err)
 					return 1
 				}
+				continue
 			}
-		case "ping":
-			result = map[string]any{}
-		default:
-			err = fmt.Errorf("unsupported MCP method %s", request.Method)
-		}
-		response := map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result}
-		if err != nil {
-			delete(response, "result")
-			response["error"] = map[string]any{"code": -32601, "message": err.Error()}
-			err = nil
-		}
-		if err := encoder.Encode(response); err != nil {
-			fmt.Fprintln(errout, err)
-			return 1
+			if active != nil {
+				confirmMu.Lock()
+				if queueOrdinary && len(pendingConfirm) == 0 {
+					queued = append(queued, frame)
+					confirmMu.Unlock()
+					continue
+				}
+				confirmMu.Unlock()
+				if err := encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "error": map[string]any{"code": -32000, "message": "a native confirmation is pending; retry this request after it finishes"}}); err != nil {
+					fmt.Fprintln(errout, err)
+					return 1
+				}
+				continue
+			}
+			dispatch(frame)
+		case outcome := <-callDone:
+			if code := finishCall(outcome); code >= 0 {
+				return code
+			}
+			for {
+				confirmMu.Lock()
+				if len(queued) == 0 {
+					confirmMu.Unlock()
+					break
+				}
+				next := queued[0]
+				queued = queued[1:]
+				confirmMu.Unlock()
+				dispatch(next)
+				if active != nil {
+					break
+				}
+			}
+			if eof && active == nil {
+				select {
+				case err := <-decodeDone:
+					fmt.Fprintln(errout, err)
+					return 1
+				default:
+					return 0
+				}
+			}
+		case <-ctx.Done():
+			if active != nil {
+				active.cancel(context.Canceled)
+				outcome := <-callDone
+				if code := finishCall(outcome); code >= 0 {
+					return code
+				}
+			}
+			return 0
 		}
 	}
 }

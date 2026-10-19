@@ -98,3 +98,79 @@ func TestRepairNodeProjectionRetainsWorkAndFutureValidationDuties(t *testing.T) 
 		t.Fatal("closure erased or rewrote the actual repair duty")
 	}
 }
+
+func TestConfigurationNodeStatesPreviewsCandidateWithoutWriting(t *testing.T) {
+	e, dir := readyReviewEngine(t)
+	library := bindLibrary(t, e, settings.DefaultConfiguration())
+
+	missing, err := New(mustStore(t, t.TempDir()), e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missing.ConfigurationNodeStates(settings.DefaultConfiguration()); err == nil || rejectionCode(t, err) != CodeNotInitialized {
+		t.Fatalf("a store without state did not report the not-initialized rejection: %v", err)
+	}
+
+	var before []byte
+	var revision uint64
+	var decisions, applied int
+	snapshot := func() {
+		before = stateBytesOf(t, dir)
+		snap := e.LoadMustSucceed(t)
+		revision, decisions, applied = snap.Revision, len(snap.State.Decisions), len(snap.State.AppliedConfigurations)
+	}
+	unchanged := func() {
+		snap := e.LoadMustSucceed(t)
+		if !reflect.DeepEqual(before, stateBytesOf(t, dir)) || snap.Revision != revision || len(snap.State.Decisions) != decisions || len(snap.State.AppliedConfigurations) != applied {
+			t.Fatal("candidate projection changed persisted state, revision, decisions or applied history")
+		}
+	}
+
+	snapshot()
+	nodes, err := e.ConfigurationNodeStates(settings.Configuration{
+		QAModes:       []string{},
+		FlowSelection: &FlowSelection{Disabled: []string{"product-review"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review := executionNodeState(t, nodes, "product-review"); !review.Owed || review.Enabled || review.Completed || review.Dispatchable || review.Running || !review.Editable {
+		t.Fatal("a candidate-disabled node lost or closed its owed obligation", review)
+	}
+	unchanged()
+
+	action := issueReady(t, e)[0]
+	e.cfg.WorkerExecution = func(p PendingAction, a Attempt) (*SpawnReceiptPayload, error) {
+		if p.ActionID != action {
+			t.Fatal("claim lookup did not bind the original action")
+		}
+		return &SpawnReceiptPayload{ActionID: action, Provider: testProvider}, nil
+	}
+	library.value.FlowSelection = &FlowSelection{Disabled: []string{"product-review"}}
+	reconcile(t, e)
+
+	snapshot()
+	candidate := settings.Configuration{
+		QAModes:       []string{},
+		FlowSelection: &FlowSelection{Disabled: []string{"start-readiness"}},
+	}
+	preview := func(engine *Engine) {
+		nodes, err := engine.ConfigurationNodeStates(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if review := executionNodeState(t, nodes, "product-review"); !review.Running || !review.Closing || !review.Owed || review.Editable || review.Completed {
+			t.Fatal("a claimed node lost its running close or outstanding duty under the candidate", review)
+		}
+		if readiness := executionNodeState(t, nodes, "start-readiness"); readiness.Enabled {
+			t.Fatal("a candidate-disabled node stayed enabled", readiness)
+		}
+	}
+	preview(e)
+	reopened, err := New(mustStore(t, dir), e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview(reopened)
+	unchanged()
+}

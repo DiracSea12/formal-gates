@@ -76,13 +76,13 @@ func selectWorkflowRun(root string, runID *string, position int, out io.Writer) 
 			if diagnosticErr != nil {
 				return nil, true, err
 			}
-			choice["status"] = diagnostic.Summary["status"]
+			choice["route"], choice["status"] = request.Route, diagnostic.Summary["status"]
 			choice["available"], choice["error"] = false, err.Error()
 		} else {
 			if run.MasterRunID != "" {
 				continue
 			}
-			choice["status"] = run.Status
+			choice["status"], choice["route"] = run.Status, run.Route
 			if run.IntakeConfirmationReceipt != nil {
 				choice["requirement"] = run.IntakeConfirmationReceipt.RequirementSource
 			}

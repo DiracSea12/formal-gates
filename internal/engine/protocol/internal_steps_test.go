@@ -115,7 +115,7 @@ func TestInternalStepExecutionPersistsOnceAcrossRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			inject = true
@@ -176,7 +176,7 @@ func TestInternalStepWaitAndErrorDoNotComplete(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
+			if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			before := stateBytesOf(t, dir)
@@ -213,7 +213,7 @@ func TestInternalStepErrorRollsBackUpstreamTransformation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	before := stateBytesOf(t, dir)

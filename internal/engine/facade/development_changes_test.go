@@ -273,7 +273,7 @@ func TestReplanWithDisabledReadinessPreservesSelectionAndRenewsPreparation(t *te
 			}
 			configureFlowNodes(t, root, disabled...)
 			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
-				RunID: "selected-replan", BaseSnapshot: base,
+				RunID: "selected-replan", Route: "regular", BaseSnapshot: base,
 				IntakeConfirmationReceipt: intake.IntakeCandidate,
 			}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 			if err != nil {

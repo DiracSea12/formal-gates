@@ -162,7 +162,7 @@ func TestCostObservationBeforeSaveRejectsChangeWithoutStateEffects(t *testing.T)
 			if err = view.CompleteStep("prep.parse", cd); err != nil {
 				t.Fatal(err)
 			}
-			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", nil, "", "", nil); err != nil {
+			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", "", nil, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			plan, _, err := engine.Plan(Observation{})

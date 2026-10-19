@@ -97,6 +97,16 @@ func PrepareIntake(root, requirementPath, solutionPath string, artifacts []strin
 	return preview, err
 }
 
+// CheckIntakeCandidate revalidates a saved confirmation candidate's pinned
+// artifact bindings and reloads its materials for preview. It records no
+// binding, intake, or run.
+func CheckIntakeCandidate(root string, receipt IntakeConfirmationReceipt, structured bool) (IntakePreview, error) {
+	if err := validateArtifactBindings(root, receipt); err != nil {
+		return IntakePreview{}, err
+	}
+	return prepareConfirmedIntake(root, &receipt, structured)
+}
+
 // prepareConfirmedIntake reuses the selected paths of the current confirmation.
 func prepareConfirmedIntake(root string, receipt *IntakeConfirmationReceipt, structured bool) (IntakePreview, error) {
 	paths := make([]string, len(receipt.Artifacts))

@@ -398,7 +398,7 @@ func (f *Facade) prepareControl(input ControlInput, run Run) (ControlCandidate, 
 					return candidate, fmt.Errorf("requirement change needs its complete prepared package")
 				}
 				p := face.Package
-				intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, true)
+				intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, run.Route != "lightweight")
 				if e != nil {
 					return candidate, e
 				}
@@ -510,12 +510,14 @@ func (f *Facade) SubmitControl(candidate ControlCandidate, confirmation ...func(
 		if err := validateConfirmation(candidate.Intake.IntakeCandidate); err != nil {
 			return protocol.Acceptance{}, Run{}, err
 		}
-		if candidate.Intake.RequirementDocument == nil {
-			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its original full projection")
-		}
-		projection, err := requirement.ParseRequirementProjection(candidate.Intake.IntakeCandidate.RequirementSource, []byte(candidate.Intake.Content))
-		if err != nil || projection.ContentDigest != candidate.Intake.Revision || controlDigest(projection) != controlDigest(candidate.Intake.RequirementDocument) {
-			return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation content differs from its original revision or projection")
+		if candidate.Run.Route == "regular" {
+			if candidate.Intake.RequirementDocument == nil {
+				return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation lacks its original full projection")
+			}
+			projection, err := requirement.ParseRequirementProjection(candidate.Intake.IntakeCandidate.RequirementSource, []byte(candidate.Intake.Content))
+			if err != nil || projection.ContentDigest != candidate.Intake.Revision || controlDigest(projection) != controlDigest(candidate.Intake.RequirementDocument) {
+				return protocol.Acceptance{}, Run{}, fmt.Errorf("requirement confirmation content differs from its original revision or projection")
+			}
 		}
 		digest, err := IntakeDigest(candidate.Intake.IntakeCandidate)
 		if err != nil || digest != candidate.Intake.IntakeCandidate.Digest {
@@ -592,7 +594,7 @@ func bindWork(work []protocol.RequirementWork, choices []WorkChoice) ([]protocol
 }
 
 func (f *Facade) prepareRequirementChange(run Run, input RequirementChangeInput) (protocol.RequirementDecisionPackage, IntakePreview, []MaterialDelta, error) {
-	intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, true)
+	intake, e := prepareConfirmedIntake(f.root, run.IntakeConfirmationReceipt, run.Route != "lightweight")
 	if e != nil {
 		return protocol.RequirementDecisionPackage{}, intake, nil, e
 	}

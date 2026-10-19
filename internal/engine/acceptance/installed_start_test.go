@@ -255,22 +255,36 @@ func exchangeInstalledConfirmation(input io.Writer, output io.Reader, tool strin
 	}
 }
 
-func (p installedStartProject) start(t *testing.T, base ...string) string {
+func (p installedStartProject) start(t *testing.T, route string, base ...string) string {
 	t.Helper()
 	displayedID := ""
 	expectedBase := p.base
-	if len(base) != 0 && base[0] != "" {
+	if route == "lightweight" {
+		expectedBase = ""
+	} else if len(base) != 0 && base[0] != "" {
 		expectedBase = base[0]
 	}
-	arguments := map[string]any{"root": p.project, "intake": p.intakePosition, "baseSnapshot": p.base}
+	arguments := map[string]any{"root": p.project, "intake": p.intakePosition, "route": route, "baseSnapshot": p.base}
+	if route == "lightweight" {
+		if _, err := settings.SaveConfiguration(p.project, p.home, "project", "记录", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := settings.EditConfiguration(p.project, p.home, "project", "记录", nil, func(configuration *settings.Configuration) error {
+			configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		arguments["configuration"] = "记录"
+	}
 	if len(base) != 0 {
 		arguments["baseSnapshot"] = base[0]
 	}
 	body, err := p.confirmation(t, "confirm_start", arguments, func(original map[string]any) {
 		var materials facade.IntakePreview
 		data := installedJSON(t, original["materials"])
-		if err := json.Unmarshal(data, &materials); err != nil || materials.Content != p.preview.Content || materials.Revision != p.preview.Revision || !reflect.DeepEqual(materials.Materials, p.preview.Materials) || !reflect.DeepEqual(materials.IntakeCandidate, p.preview.IntakeCandidate) || original["root"] != p.project || original["baseSnapshot"] != expectedBase {
-			t.Fatalf("start form changed its original source, revision or project: %v %s", err, data)
+		if err := json.Unmarshal(data, &materials); err != nil || materials.Content != p.preview.Content || materials.Revision != p.preview.Revision || !reflect.DeepEqual(materials.Materials, p.preview.Materials) || !reflect.DeepEqual(materials.IntakeCandidate, p.preview.IntakeCandidate) || original["root"] != p.project || original["route"] != route || original["baseSnapshot"] != expectedBase {
+			t.Fatalf("start form changed its original source, revision, project or route: %v %s", err, data)
 		}
 		displayedID, _ = original["runId"].(string)
 		if displayedID == "" {
@@ -335,8 +349,8 @@ func (p installedStartProject) bindings(t *testing.T, runID, provider string) (f
 	if err := json.Unmarshal(snapshot.Content, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.RunProvider != provider || state.BaseSnapshot != request.BaseSnapshot || !reflect.DeepEqual(state.IntakeConfirmationReceipt, &request.IntakeConfirmationReceipt) {
-		t.Fatalf("protocol lost request bindings: provider=%s base=%s intake=%+v", state.RunProvider, state.BaseSnapshot, state.IntakeConfirmationReceipt)
+	if state.RunProvider != provider || state.BaseSnapshot != request.BaseSnapshot || state.Route != request.Route || !reflect.DeepEqual(state.IntakeConfirmationReceipt, &request.IntakeConfirmationReceipt) {
+		t.Fatalf("protocol lost request bindings: provider=%s base=%s route=%s intake=%+v", state.RunProvider, state.BaseSnapshot, state.Route, state.IntakeConfirmationReceipt)
 	}
 	if digest, err := facade.IntakeDigest(*state.IntakeConfirmationReceipt); err != nil || digest != state.IntakeConfirmationReceipt.Digest {
 		t.Fatalf("intake content digest=%s err=%v", digest, err)
@@ -369,13 +383,13 @@ func readInstalledFile(t *testing.T, path string) []byte {
 	return data
 }
 
-func TestInstalledStartCarriesHostThroughPublicOperations(t *testing.T) {
+func TestInstalledRegularStartCarriesHostThroughPublicOperations(t *testing.T) {
 	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	runID := p.start(t)
+	runID := p.start(t, "regular")
 	request, _ := p.bindings(t, runID, "zcode")
-	if request.BaseSnapshot != p.base {
+	if request.BaseSnapshot != p.base || request.Route != "regular" {
 		t.Fatalf("native request=%+v", request)
 	}
 	statePath := filepath.Join(p.project, facade.EngineNamespace, runID, "state.json")
@@ -394,7 +408,7 @@ func TestInstalledStartCarriesHostThroughPublicOperations(t *testing.T) {
 	}
 	driven := p.run(t, "drive", runID)
 	if driven.Next.Kind != decision.KindWait || driven.Next.Wait.Reason != decision.WaitTasksInFlight || len(driven.PendingActions) == 0 || driven.IntakeReceipt == nil || driven.IntakeReceipt.IntakeDigest != request.IntakeConfirmationReceipt.Digest {
-		t.Fatalf("drive did not reach the external worker boundary: %+v", driven)
+		t.Fatalf("regular drive did not reach the external worker boundary: %+v", driven)
 	}
 	actions := make([]string, 0, len(driven.PendingActions))
 	for action := range driven.PendingActions {
@@ -430,7 +444,7 @@ func TestInstalledStartCarriesHostThroughPublicOperations(t *testing.T) {
 	// A second installed host shares the launcher. Reopening selects the run's
 	// exact record; a sibling's host never replaces its persisted binding.
 	p.install(t, "codex", "project")
-	projectRunID := p.start(t)
+	projectRunID := p.start(t, "regular")
 	projectRequest, _ := p.bindings(t, projectRunID, "codex")
 	if projectRequest.InstalledTargetIdentity == request.InstalledTargetIdentity {
 		t.Fatal("global and project installations shared a record identity")
@@ -487,53 +501,67 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 			t.Fatalf("%s created a run or state namespace", name)
 		}
 	}
-	arguments := func() map[string]any {
-		return map[string]any{"root": p.project, "intake": p.intakePosition, "baseSnapshot": p.base}
+	arguments := func(route string) map[string]any {
+		return map[string]any{"root": p.project, "intake": p.intakePosition, "route": route}
 	}
-	assertRejected("uninstalled", arguments(), "UNREGISTERED_INSTALL")
+	assertRejected("uninstalled", arguments("regular"), "UNREGISTERED_INSTALL")
 	p.install(t, "zcode", "global")
-	runID := p.start(t, "")
+	runID := p.start(t, "regular", "")
 	request, _ := p.bindings(t, runID, "zcode")
 	if request.BaseSnapshot != p.base {
 		t.Fatalf("program resolved base=%q want native HEAD %q", request.BaseSnapshot, p.base)
 	}
 	t.Logf("isolated home=%s project=%s resolved original native HEAD=%s", p.home, p.project, request.BaseSnapshot)
-	wrongBase := arguments()
+	wrongBase := arguments("regular")
 	wrongBase["baseSnapshot"] = strings.Repeat("f", 40)
 	assertRejected("wrong-base", wrongBase, "snapshot")
-	for _, field := range []string{"split", "master", "retainedOverall", "fromSealedRun", "runId", "route"} {
-		args := arguments()
+	body, err := p.confirmation(t, "confirm_start", arguments(""), func(original map[string]any) {
+		if original["route"] != "regular" {
+			t.Fatal("omitted route was not derived from the default configuration")
+		}
+	})
+	if err != nil {
+		t.Fatalf("derived route could not cross native confirmation: %v %s", err, body)
+	}
+	assertRejected("unknown-route", arguments("unsupported"), "workflow start supports --route regular or lightweight")
+	for _, field := range []string{"split", "master", "retainedOverall", "fromSealedRun", "runId"} {
+		args := arguments("regular")
 		args[field] = "agent-authored"
 		assertRejected(field, args, "unknown field")
 	}
-	if output, err := p.command(nil, "workflow", "start", "--root", p.project, "--run-id", "agent-authored", "--intake", fmt.Sprint(p.intakePosition)).CombinedOutput(); err == nil || !strings.Contains(string(output), "NATIVE_CONFIRMATION_UNAVAILABLE") {
+	if output, err := p.command(nil, "workflow", "start", "--root", p.project, "--run-id", "agent-authored", "--intake", fmt.Sprint(p.intakePosition), "--route", "regular").CombinedOutput(); err == nil || !strings.Contains(string(output), "NATIVE_CONFIRMATION_UNAVAILABLE") {
 		t.Fatalf("agent-authored start bypassed the native channel: %v %s", err, output)
 	}
 	if err := os.WriteFile(filepath.Join(p.project, "design.md"), []byte("# Revised solution\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	assertRejected("stale-intake", arguments(), facade.InvalidIntakeConfirmation)
+	assertRejected("stale-intake", arguments("regular"), facade.InvalidIntakeConfirmation)
 	if head := p.git(t, "rev-parse", "HEAD"); head != p.base {
 		t.Fatalf("rejected starts changed native history: %s", head)
 	}
 }
 
-func TestInstalledStartRecovery(t *testing.T) {
+func TestInstalledLightweightAndRegularStartRecovery(t *testing.T) {
 	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	// A start without a native repository is rejected; nothing reaches state.
+	// An all-disabled saved configuration needs no native repository.
 	if err := os.RemoveAll(filepath.Join(p.project, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.confirmation(t, "confirm_start", map[string]any{"root": p.project, "intake": p.intakePosition}, func(original map[string]any) { t.Fatal("no-repository start reached host confirmation", original) }); err == nil || !strings.Contains(err.Error(), "git working copy") {
-		t.Fatalf("no-repository start err=%v", err)
+	lightweightID := p.start(t, "lightweight", "not-a-native-snapshot")
+	request, _ := p.bindings(t, lightweightID, "zcode")
+	if request.Route != "lightweight" || request.BaseSnapshot != "" {
+		t.Fatalf("lightweight acquired native semantics: %+v", request)
+	}
+	if run := p.run(t, "drive", lightweightID); run.Next.Kind != decision.KindComplete || !run.Unverified {
+		t.Fatalf("lightweight completion=%+v", run)
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Installed workflow"}, {"config", "user.email", "workflow@example.invalid"}, {"add", "."}, {"commit", "-qm", "Application"}} {
 		p.git(t, args...)
 	}
 	p.base = p.git(t, "rev-parse", "HEAD")
-	referenceID := p.start(t)
+	referenceID := p.start(t, "regular")
 	referenceRequest, referenceState := p.bindings(t, referenceID, "zcode")
 	// Construct the durable prefix of Start's request-before-state window.
 	// Recovery uses the trusted program Start API for that exact issued identity.
@@ -626,7 +654,7 @@ func TestInstalledStartRecovery(t *testing.T) {
 	var publicIDs [2]string
 	for i := range publicIDs {
 		workers.Add(1)
-		go func(i int) { defer workers.Done(); publicIDs[i] = p.start(t) }(i)
+		go func(i int) { defer workers.Done(); publicIDs[i] = p.start(t, "regular") }(i)
 	}
 	workers.Wait()
 	if publicIDs[0] == "" || publicIDs[1] == "" || publicIDs[0] == publicIDs[1] {
@@ -644,7 +672,7 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	t.Parallel()
 	p := newInstalledStartProject(t)
 	p.install(t, "zcode", "global")
-	runID := p.start(t)
+	runID := p.start(t, "regular")
 	p.run(t, "drive", runID)
 	request, _ := p.bindings(t, runID, "zcode")
 	files := func() map[string]string {
@@ -735,6 +763,6 @@ func TestInstalledSubmitRejectsTokenChangedAfterOpen(t *testing.T) {
 	if !reflect.DeepEqual(before, files()) {
 		t.Fatal("stale CLI changed owning state, intent, receipt or sidecar bytes")
 	}
-	currentID := p.start(t)
+	currentID := p.start(t, "regular")
 	p.bindings(t, currentID, "zcode")
 }

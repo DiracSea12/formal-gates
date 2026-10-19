@@ -62,14 +62,14 @@ func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t 
 			if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
 				t.Fatal("unconfirmed preview created run or receipt state")
 			}
-			// This fixture supplies the displayed material's explicit user confirmation.
-			verifiedStartFixture(t, root)
 			if changed != "" {
 				if err := os.WriteFile(filepath.Join(root, changed), []byte(contents[changed]+"changed\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			_, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "prepared-intake", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)})
+			// This fixture supplies the displayed material's explicit user confirmation.
+			configureLightweight(t, root)
+			_, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "prepared-intake", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)})
 			if changed != "" {
 				if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) || !strings.Contains(err.Error(), "artifact "+changed+" revision mismatch") {
 					t.Fatalf("original file verification did not reject changed material: %v", err)
@@ -91,7 +91,7 @@ func TestPreparedIntakeBindsSelectedMaterialAndStartsThroughOriginalAdmission(t 
 	}
 }
 
-func TestPreparedIntakeKeepsSingleFileDefaultAndUnstructuredMaterial(t *testing.T) {
+func TestPreparedIntakeKeepsSingleFileDefaultAndLightweightMaterial(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "requirements.md")
@@ -100,17 +100,17 @@ func TestPreparedIntakeKeepsSingleFileDefaultAndUnstructuredMaterial(t *testing.
 	}
 	preview, err := PrepareIntake(root, "requirements.md", "", nil, false)
 	if err != nil || len(preview.Materials) != 1 || preview.RequirementDocument != nil || preview.IntakeCandidate.SolutionRevision != preview.Revision || preview.IntakeCandidate.SolutionDigest != "sha256:"+preview.Revision {
-		t.Fatalf("single-file unstructured preview: %+v %v", preview, err)
+		t.Fatalf("single-file lightweight preview: %+v %v", preview, err)
 	}
 	if _, err := PrepareIntake(root, "requirements.md", "", nil, true); err == nil {
-		t.Fatal("precheck skipped REQ/AC structure")
+		t.Fatal("regular precheck skipped REQ/AC structure")
 	}
 	if _, err := PrepareIntake(root, "../requirements.md", "", nil, false); err == nil {
 		t.Fatal("selection escaped the project")
 	}
 }
 
-func TestStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testing.T) {
+func TestRegularStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
@@ -125,9 +125,9 @@ func TestStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testing.T) {
 	}
 	_, precheckErr := PrepareIntake(root, "requirements.md", "", nil, true)
 	if precheckErr == nil {
-		t.Fatal("structured precheck accepted unstructured material")
+		t.Fatal("regular precheck accepted unstructured material")
 	}
-	options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "confirmed-intake", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)}
+	options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "confirmed-intake", Route: "regular", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)}
 	for attempt := 0; attempt < 2; attempt++ {
 		f, run, err := Start(options)
 		if err == nil || err.Error() != precheckErr.Error() || f != nil || run.RunID != "" {
@@ -143,9 +143,23 @@ func TestStartRejectsUnstructuredConfirmedIntakeBeforeBootstrap(t *testing.T) {
 			t.Fatal("rejected intake changed the confirmed source", err)
 		}
 	}
+	options.Request.Route = "lightweight"
+	configureLightweight(t, root)
+	f, run, err := Start(options)
+	if err != nil || f == nil || run.Status != "ACTIVE" || run.RequirementGuarantee != nil || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
+		t.Fatalf("lightweight rejected its ordinary confirmed material: %+v %v", run, err)
+	}
+	snapshot, err := f.engine.Load()
+	if err != nil || snapshot.State.RequirementGuarantee != nil {
+		t.Fatal("lightweight persisted a regular guarantee", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(after, content) {
+		t.Fatal("lightweight Start changed the confirmed source", err)
+	}
 }
 
-func TestPreparedIntakeStartBindsPrecheckedDocument(t *testing.T) {
+func TestPreparedIntakeRegularStartBindsPrecheckedDocument(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	base := snapshotRepoCommits(t, root)[0]
@@ -153,14 +167,14 @@ func TestPreparedIntakeStartBindsPrecheckedDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "prepared-start", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-runtime", "sha256:package", DefaultProvider)})
+	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "prepared-regular", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "regular-intake-runtime", "sha256:package", DefaultProvider)})
 	if err != nil || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
-		t.Fatalf("Start did not accept its prechecked candidate: %+v %v", run, err)
+		t.Fatalf("regular Start did not accept its prechecked candidate: %+v %v", run, err)
 	}
 	expected := protocol.NewGuaranteeActivation(preview.Revision, preview.IntakeCandidate.SolutionRevision, *preview.RequirementDocument)
 	snapshot, err := f.engine.Load()
 	if err != nil || !reflect.DeepEqual(snapshot.State.RequirementGuarantee, expected) {
-		t.Fatal("Start did not freeze the complete confirmed guarantee", err)
+		t.Fatal("regular Start did not freeze the complete confirmed guarantee", err)
 	}
 	f, err = Open(root, run.RunID)
 	if err != nil {
@@ -190,7 +204,7 @@ func TestPreparedIntakeStartReusesGeneratedSourceIdentities(t *testing.T) {
 		t.Fatalf("precheck source projection: %+v", document)
 	}
 	// The fixture confirms this exact displayed material before Start.
-	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "semantic-intake", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "semantic-intake-runtime", "sha256:package", DefaultProvider)})
+	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "semantic-intake", Route: "regular", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "semantic-intake-runtime", "sha256:package", DefaultProvider)})
 	if err != nil || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &preview.IntakeCandidate) {
 		t.Fatalf("confirmed semantic material failed original Start: %+v %v", run, err)
 	}
@@ -235,8 +249,8 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-native", InstallName: "intake-native", Installable: true, ReadUsage: usage.ReadUsage, Configuration: []host.ConfigField{host.StringConfig("intakeNativeRoot", "")}}}
-	unselected := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-unselected", InstallName: "intake-unselected", Installable: true, Configuration: []host.ConfigField{host.StringConfig("intakeUnselectedRoot", "")}}, fail: true}
+	selected := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-native", InstallName: "intake-native", Installable: true, ReadUsage: usage.ReadUsage}}
+	unselected := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-unselected", InstallName: "intake-unselected", Installable: true}, fail: true}
 	for _, adapter := range []*intakePathAdapter{selected, unselected} {
 		if err := host.Register(adapter); err != nil {
 			t.Fatal(err)
@@ -263,7 +277,7 @@ func TestStartFreezesSelectedPathsAndChildrenInheritWithoutDiscovery(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "native-parent", Provider: selected.ID, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-path-runtime", "sha256:package", selected.ID)}
+			options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "native-parent", Route: "regular", Provider: selected.ID, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-path-runtime", "sha256:package", selected.ID)}
 			if explicit {
 				options.Settings = &loaded
 				if err := os.WriteFile(config, []byte(`{"capacity":9,"qaCapacity":5,"model":"later-model","reasoningEffort":"low","tokenCap":5}`), 0600); err != nil {
@@ -345,7 +359,7 @@ func TestStartRejectsInvalidIntakeAndResolverFailureBeforeIntent(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
-	adapter := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-refusal", InstallName: "intake-refusal", Installable: true, Configuration: []host.ConfigField{host.StringConfig("intakeRefusalRoot", "")}}, fail: true}
+	adapter := &intakePathAdapter{Descriptor: &host.Descriptor{ID: "intake-refusal", InstallName: "intake-refusal", Installable: true}, fail: true}
 	if err := host.Register(adapter); err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +371,7 @@ func TestStartRejectsInvalidIntakeAndResolverFailureBeforeIntent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			options := StartOptions{Root: root, Request: StartRequest{RunID: "intake-refusal", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-refusal-runtime", "sha256:package", adapter.ID)}
+			options := StartOptions{Root: root, Request: StartRequest{RunID: "intake-refusal", Route: "regular", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: testAdmission(t, root, "intake-refusal-runtime", "sha256:package", adapter.ID)}
 			switch invalid {
 			case "admission":
 				options.Admission = nil
@@ -463,7 +477,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "native-paths", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: admission}
+	options := StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{RunID: "native-paths", Route: "regular", VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}, Admission: admission}
 	f, run, err := Start(options)
 	if err != nil {
 		t.Fatal(err)
@@ -501,7 +515,7 @@ func main() {
 	}
 	run, err = f.Drive()
 	if err != nil || len(run.WorkerMaterials) != 1 {
-		t.Fatal("Start did not issue the original worker", err)
+		t.Fatal("regular Start did not issue the original worker", err)
 	}
 	var material WorkerMaterial
 	for _, value := range run.WorkerMaterials {

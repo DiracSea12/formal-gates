@@ -26,7 +26,7 @@ const Version authoring.DefinitionVersion = "28"
 // entryNode 是定义的唯一入口节点（可达性校验的起点）。
 const entryNode authoring.NodeID = "entry"
 
-// Static work is carried by explicit handlers; dynamic obligations belong to
+// Regular work is carried by explicit handlers; dynamic obligations belong to
 // protocol State and are projected as RequiredTasks.
 var (
 	workflowHandlers = []struct {

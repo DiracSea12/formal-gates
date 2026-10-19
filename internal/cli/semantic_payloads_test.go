@@ -54,7 +54,7 @@ func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &materials); err != nil || len(materials) != 3 {
 		t.Fatal("material positions", out.String(), err)
 	}
-	invoke("workflow", "start", "--root", root, "--precheck", "--document", "1", "--solution-document", "1", "--artifact-document", "3")
+	invoke("workflow", "start", "--root", root, "--precheck", "--document", "2", "--solution-document", "1", "--artifact-document", "3")
 	var preview facade.IntakePreview
 	if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
 		t.Fatal(err)
@@ -67,19 +67,19 @@ func TestIntakeSelectsOriginalDocumentsAndMaterialPositions(t *testing.T) {
 	if err != nil || string(original) != "Complete independent solution\r\n原文  " {
 		t.Fatal("precheck changed original bytes", err)
 	}
-	invoke("workflow", "start", "--root", root, "--precheck", "--document", "1", "--solution-document", "1", "--artifact-document", "3")
+	invoke("workflow", "start", "--root", root, "--precheck", "--document", "2", "--solution-document", "1", "--artifact-document", "3")
 	assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 	t.Log("document position 1 and material positions 1/3 preserved full original intake; repeated preparation reused the same payload without run/registry")
 }
 
-func TestIntakePrecheckPreservesMaterialBytes(t *testing.T) {
+func TestIntakePrecheckPreservesOrdinaryMaterialAcrossRoutes(t *testing.T) {
 	t.Parallel()
 	for _, multiple := range []bool{false, true} {
 		t.Run(strconv.FormatBool(multiple), func(t *testing.T) {
 			root := t.TempDir()
-			originals := map[string]string{"request.md": cliStructuredRequirement("Preserve the confirmed material bytes.\r\n")}
+			originals := map[string]string{"request.md": "# 普通需求与方案\r\n保留原文、空格  和引号 \"原样\"。\r\n"}
 			if multiple {
-				originals["design.md"] = cliStructuredRequirement("Independent solution.\r\n")
+				originals["design.txt"] = "独立方案\r\n"
 				originals["reference.txt"] = "原参考\n"
 			}
 			for path, content := range originals {
@@ -93,7 +93,7 @@ func TestIntakePrecheckPreservesMaterialBytes(t *testing.T) {
 				args := append([]string{"workflow", "start", "--precheck", "--root", root}, flags...)
 				return Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr})
 			}
-			if invoke("--materials") != 0 {
+			if invoke("--route", "lightweight", "--materials") != 0 {
 				t.Fatal(stderr.String())
 			}
 			var materials []requirementDocumentChoice
@@ -104,29 +104,21 @@ func TestIntakePrecheckPreservesMaterialBytes(t *testing.T) {
 			for _, material := range materials {
 				positions[material.Path] = material.Position
 			}
-			documentPositions := map[string]int{"request.md": 1}
+			if invoke("--route", "lightweight") != 0 {
+				t.Fatal(stderr.String())
+			}
 			if multiple {
-				if invoke() != 0 {
-					t.Fatal(stderr.String())
-				}
 				var choices []requirementDocumentChoice
-				if err := json.Unmarshal(out.Bytes(), &choices); err != nil || len(choices) != 2 {
-					t.Fatal("ambiguous intake lost its original document positions", out.String(), err)
-				}
-				documentPositions = map[string]int{}
-				for _, choice := range choices {
-					if choice.Path != "request.md" && choice.Path != "design.md" {
-						t.Fatal("ambiguous intake listed an unqualified document", choice)
-					}
-					documentPositions[choice.Path] = choice.Position
+				if err := json.Unmarshal(out.Bytes(), &choices); err != nil || !reflect.DeepEqual(choices, materials) {
+					t.Fatal("ambiguous lightweight intake did not retain original positions", out.String(), err)
 				}
 				if paths, err := facade.OriginalPayloadPaths(workflowPayloadDirectory(root, "", "intake")); err != nil || len(paths) != 0 {
 					t.Fatal("ambiguous selection saved a candidate", paths, err)
 				}
 			}
-			flags := []string{"--document", strconv.Itoa(documentPositions["request.md"])}
+			flags := []string{"--route", "lightweight", "--document", strconv.Itoa(positions["request.md"])}
 			if multiple {
-				flags = append(flags, "--solution-document", strconv.Itoa(positions["design.md"]), "--artifact-document", strconv.Itoa(positions["reference.txt"]))
+				flags = append(flags, "--solution-document", strconv.Itoa(positions["design.txt"]), "--artifact-document", strconv.Itoa(positions["reference.txt"]))
 			}
 			for range 2 {
 				if invoke(flags...) != 0 {
@@ -136,8 +128,8 @@ func TestIntakePrecheckPreservesMaterialBytes(t *testing.T) {
 				if err := json.Unmarshal(out.Bytes(), &preview); err != nil {
 					t.Fatal(err)
 				}
-				if preview.RequirementDocument == nil || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.RequirementRevision != preview.RequirementDocument.ContentDigest || len(preview.Materials) != len(originals) {
-					t.Fatal("precheck changed original confirmation material", preview)
+				if preview.RequirementDocument != nil || preview.Content != strings.ReplaceAll(originals["request.md"], "\r\n", "\n") || preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.RequirementRevision != preview.Revision || len(preview.Materials) != len(originals) {
+					t.Fatal("lightweight selection changed original confirmation material", preview)
 				}
 				for _, material := range preview.Materials {
 					if material.Content != strings.ReplaceAll(originals[material.Path], "\r\n", "\n") {
@@ -146,9 +138,24 @@ func TestIntakePrecheckPreservesMaterialBytes(t *testing.T) {
 				}
 				assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
 			}
-			mustWriteCLI(t, filepath.Join(root, "ordinary.md"), "# 普通需求与方案\r\n保留原文、空格  和引号 \"原样\"。\r\n")
-			if code := invoke("--requirement", "ordinary.md"); code == 0 {
-				t.Fatal("precheck accepted an unstructured requirement", out.String())
+			for _, selection := range [][]string{{"--document", strconv.Itoa(positions["request.md"])}, {"--requirement", "request.md"}} {
+				flags := append([]string{"--route", "regular"}, selection...)
+				if multiple {
+					flags = append(flags, "--solution-document", strconv.Itoa(positions["design.txt"]), "--artifact-document", strconv.Itoa(positions["reference.txt"]))
+				}
+				if invoke(flags...) != 0 {
+					t.Fatal("precheck incorrectly enforced a route's material format", out.String(), stderr.String())
+				}
+				var preview facade.IntakePreview
+				if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.RequirementDocument != nil ||
+					preview.Content != strings.ReplaceAll(originals["request.md"], "\r\n", "\n") ||
+					preview.IntakeCandidate.RequirementSource != "request.md" || preview.IntakeCandidate.RequirementRevision != preview.Revision {
+					t.Fatal("precheck changed the ordinary source or its exact revision", preview, err)
+				}
+				assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
+			}
+			if _, err := facade.PrepareIntake(root, "request.md", "", nil, true); err == nil || !strings.Contains(err.Error(), "document must contain exactly one ## 需求点 section") {
+				t.Fatal("regular confirmation stopped requiring structured requirements", err)
 			}
 			for path, content := range originals {
 				actual, err := os.ReadFile(filepath.Join(root, path))

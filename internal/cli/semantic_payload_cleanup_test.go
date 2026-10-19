@@ -17,7 +17,7 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
-	for _, status := range []string{"ABORTED"} {
+	for _, status := range []string{"ABORTED", "COMPLETE"} {
 		t.Run(status, func(t *testing.T) {
 			fixture := t.TempDir()
 			startAdmittedEngineRun(t, fixture)
@@ -44,7 +44,16 @@ func TestWorkflowTerminalCleanupRetiresProgramPayloads(t *testing.T) {
 				}
 				return position
 			}
-			{
+			if status == "COMPLETE" {
+				root, runID = t.TempDir(), "payload-seal"
+				saveLightweightConfiguration(t, root)
+				testkit.ConfigureNativePaths(t, root, "zcode")
+				mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Save the original progress before terminal cleanup."))
+				intake := candidate(call("start", "--precheck", "--route", "lightweight", "--document", "1"), "intake")
+				call("start", "--route", "lightweight", "--run-id", runID, "--intake", strconv.Itoa(intake))
+				payloadKind = "progress"
+				payloadPosition = candidate(call("progress", "--save-progress"), "progress")
+			} else {
 				position := candidate(call("next", "--request", "ABORT"), "confirmationCandidate")
 				call("submit", "--confirmation-candidate", strconv.Itoa(position), "--single-step")
 				position = candidate(call("next", "--ask", "1", "--choice", "abort"), "confirmationCandidate")

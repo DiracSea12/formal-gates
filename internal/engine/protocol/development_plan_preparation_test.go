@@ -36,7 +36,7 @@ func developmentPreparationEngine(t *testing.T) (*Engine, string) {
 	confirmation := reviewConfirmation()
 	confirmation.RequirementRevision = "sha256:" + projection.ContentDigest
 	confirmation.Artifacts = []IntakeArtifact{{Path: "requirement.md", Revision: confirmation.RequirementRevision}}
-	if err := e.InitWithMetadata(view, testProvider, Observation{}, "selected-development", confirmation, "", "", nil); err != nil {
+	if err := e.InitWithMetadata(view, testProvider, Observation{}, "selected-development", "regular", confirmation, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: digestOfCanonical(confirmation)}, Observation{}); err != nil {

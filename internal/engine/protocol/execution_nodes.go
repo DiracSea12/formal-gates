@@ -130,6 +130,19 @@ func (e *Engine) executionNodeStates(s *State) ([]ExecutionNodeState, error) {
 	return e.executionNodeStatesFor(s, configuration)
 }
 
+// ConfigurationNodeStates previews a candidate value's node obligations
+// against the current run for read-only display; it reconciles nothing.
+func (e *Engine) ConfigurationNodeStates(configuration settings.Configuration) ([]ExecutionNodeState, error) {
+	_, state, err := e.load()
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		return nil, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	return e.executionNodeStatesFor(state, configuration)
+}
+
 func (e *Engine) executionNodeStatesFor(s *State, configuration settings.Configuration) ([]ExecutionNodeState, error) {
 	gates, parents, err := e.configurationContext(s)
 	if err != nil {
