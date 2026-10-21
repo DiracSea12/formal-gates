@@ -36,6 +36,9 @@ const RESP = [
 ];
 const LABEL = Object.fromEntries(RESP.map(n => [n.id, n.t]));
 const BUILTIN = "默认";
+// Node box width in px; must match .node width in style.css.
+const NODE_W = 220;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 let state = null;          // last /api/state payload
 let winInfo = null;        // last /api/window payload
@@ -52,9 +55,11 @@ let closing = false;
 let optSeq = 0;            // stale async guard for execution options
 let activity = false;      // real user activity since last heartbeat
 let gone = false;
+let downSince = 0;         // first failure of the current poll-failure streak; a successful poll clears it
 let pendingDo = null;      // continuation to run after a successful dirty-guard save
 let inspSig = "";          // inspector content signature; rebuilds only on change
 let inspGen = 0;           // bumped on each inspector rebuild so stale async work bails
+const boundOpen = {};      // configuration name -> bound-run list expanded
 
 if (DOM) ["click", "keydown", "wheel", "pointerdown", "touchstart", "dragstart"].forEach(ev =>
 	document.addEventListener(ev, () => { activity = true; }, { capture: true, passive: true }));
@@ -113,6 +118,21 @@ function selectedRun() {
 }
 function option(name) { return (state.configurations || []).find(o => o.name === name); }
 function boundRuns(name) { return (state.bindings && state.bindings[name]) || []; }
+// Runs are identified to users by their requirement document name, start
+// time and status; a run without a requirement source falls back to a short
+// id.  The full run id stays on tooltips and API values.
+function shortRunId(id) { return (id || "").replace(/^run-/, "").slice(0, 12) || "?"; }
+function runLabel(r) {
+	const t = r && r.startedAt ? new Date(r.startedAt) : null;
+	const when = t && !isNaN(t) ? `${t.getMonth() + 1}-${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}` : "";
+	const st = !r || r.status === "COMPLETE" || r.status === "ABORTED" ? "已结束" : r.status;
+	const name = (r && r.requirement) || "run " + shortRunId(r && r.runId);
+	return `${name}${when ? " · " + when : ""} · ${st}`;
+}
+function runRef(id) { const r = (state.runs || []).find(x => x.runId === id); return r ? runLabel(r) : "run " + shortRunId(id); }
+// The currently-effective configuration: the selected run's binding in run
+// mode, else the enable pointer target.
+function currentName() { const run = selectedRun(); return run ? run.configuration : state.active; }
 // Node obligations belong to the selected run only when editing its bound
 // configuration; other edits are library drafts without a lock story.
 function nodeState(id) {
@@ -253,12 +273,28 @@ async function guardDirtyThen(next) {
 // gates, no QA inside) → mainline merge → merge QA + merge gate →
 // verification QA and ordinary gates in parallel → repair → verification.
 // Before a plan is confirmed the canvas is an explicitly marked schematic.
+//
+// Every repeated development node names its role in the label (开发批次 /
+// 开发分片 / 开发分片 · 分片门) because those boxes are the only ones whose
+// count is run-specific; the fixed review, merge and verification nodes keep
+// their own names so a lane of batches never reads as one more review stage.
 function buildGraph() {
 	const run = selectedRun();
 	const nodes = [], edges = [], groups = [];
-	const X = 200, Y = 118;
-	const put = (key, resp, label, sub, col, row, op) => {
-		nodes.push({ key, resp, label, sub, op: !!op, x: 40 + col * X, y: 50 + row * Y });
+	// X and Y are the column and row pitches in px. X stays wider than one node
+	// box (NODE_W = 220, mirrored by .node width in style.css) so horizontal
+	// neighbours never overlap and the r→l flow link keeps a channel of its
+	// own. SLICE_DX is the batch pitch inside one slice lane, counted in X
+	// units; 0.95 * X = 237.5px, still wider than NODE_W.
+	const X = 250, Y = 118, SLICE_DX = 0.95;
+	// put() places a node on the col/row lattice: x = 40 + col*X,
+	// y = 50 + row*Y. op marks a non-configurable operation node — it carries
+	// no resp, so nodeState()/execOf() never see it, it renders no status pill
+	// and it cannot be selected. terminal marks a display-only end node that
+	// closes the flow (the seal). Both flags describe the graph, not runtime
+	// state.
+	const put = (key, resp, label, sub, col, row, op, terminal) => {
+		nodes.push({ key, resp, label, sub, op: !!op, terminal: !!terminal, x: 40 + col * X, y: 50 + row * Y });
 	};
 	const link = (a, b, cls) => edges.push({ a, b, cls });
 	const qaMergeResp = () => nodeEnabled(work, "qa-whitebox") ? "qa-whitebox" : nodeEnabled(work, "qa-blackbox") ? "qa-blackbox" : null;
@@ -268,7 +304,18 @@ function buildGraph() {
 		put("v-qa-b", "qa-blackbox", "验证·黑盒 QA", "执行验收", col2, 0.4);
 		put("v-qa-w", "qa-whitebox", "验证·白盒 QA", "执行验收", col2, 1.4);
 		put("v-gate", "gate", "验证·质量门", "已选普通门", col2, 2.4);
-		put("v-repair", "repair", "业务返修", "", col2 + 1, 1.4);
+		// The repair column sits a stride and a half right of the verification
+		// column (1.45 * X = 362.5px): the channel left between those columns
+		// carries the return manifold that drawRepairLoops runs from the repair
+		// node's bottom into each verification node's bottom.
+		put("v-repair", "repair", "业务返修", "", col2 + 1.45, 1.4);
+		// Seal closes the flow as a display-only terminal operation: its resp is
+		// empty, so no nodeState()/execOf() lookup and no backend read or write
+		// can name it; only the repair edge into it plus the op/terminal render
+		// express it. It sits 1.2 * X = 300px right of repair so the manifold
+		// channel stays clear.
+		put("v-seal", "", "封板 Seal", "终态操作 · 不可配置", col2 + 2.65, 1.4, true, true);
+		link("v-repair", "v-seal");
 		const heads = [];
 		if (nodeEnabled(work, "qa-blackbox")) heads.push("v-qa-b");
 		if (nodeEnabled(work, "qa-whitebox")) heads.push("v-qa-w");
@@ -294,14 +341,28 @@ function buildGraph() {
 
 	const flow = run && run.flow;
 	// Master dev chain draws only batches the engine requires of this run;
-	// slice-owned batches are rendered inside their slice.
+	// slice-owned batches are rendered inside their slice. An omitted required
+	// flag counts as required for this filter, while required:false marks the
+	// batches the engine does not own under this run's merge ownership — the
+	// owning slice child run supplies their progress.
 	const batches = ((flow && flow.developmentBatches) || []).filter(b => b.required !== false);
 	const slices = (run && run.slices) || [];
+	// Any slice switches the mainline to the split shape: slice batches and
+	// their gate render inside the slice lane, the slice gates feed the merge
+	// operation, and only the master's own batches stay in the dev chain.
 	const split = slices.length > 0;
+	// planReady is the one prerequisite for drawing the real flow: an intake
+	// window, a run without flow, or a run whose development plan is still
+	// unconfirmed all render the schematic below instead.
 	const planReady = !!(flow && flow.planConfirmed);
 
 	if (!run || !planReady) {
-		// Schematic: intake or a run whose plan is not yet confirmed.
+		// Schematic: intake or a run whose plan is not yet confirmed. Nothing is
+		// scheduled yet, so the placeholder topology is fixed — two serial
+		// batches, two parallel slices, no QA inside a slice — and the lane
+		// header says the real counts come from topology confirmation. The tail
+		// (merge, verification, repair, seal) is already the real one so the
+		// whole flow shape is readable before any plan exists.
 		put("n-product-review", "product-review", "产品审查", "", 0, 1);
 		put("n-start-readiness", "start-readiness", "开发前技术审查", "", 1, 1);
 		put("n-dev-0", "development", "开发批次 1", "", 2, 1);
@@ -311,13 +372,13 @@ function buildGraph() {
 		link("n-product-review", "n-start-readiness"); link("n-start-readiness", "n-dev-0"); link("n-dev-0", "n-dev-1");
 		link("n-start-readiness", "n-qa-blackbox");
 		link("n-start-readiness", "n-qa-whitebox");
-		put("s0-dev", "development", "分片 A · 开发", "", 4, 0.3);
-		put("s0-gate", "gate", "分片 A · 分片门", "", 4.8, 0.3);
-		put("s1-dev", "development", "分片 B · 开发", "", 4, 1.7);
-		put("s1-gate", "gate", "分片 B · 分片门", "", 4.8, 1.7);
+		put("s0-dev", "development", "开发分片 A", "", 4, 0.3);
+		put("s0-gate", "gate", "开发分片 A · 分片门", "", 4.95, 0.3);
+		put("s1-dev", "development", "开发分片 B", "", 4, 1.7);
+		put("s1-gate", "gate", "开发分片 B · 分片门", "", 4.95, 1.7);
 		link("n-dev-1", "s0-dev"); link("n-dev-1", "s1-dev"); link("s0-dev", "s0-gate"); link("s1-dev", "s1-gate");
-		mergeTail(["s0-gate", "s1-gate"], 5.6);
-		groups.push({ x: 16, y: 8, w: 900, h: 22, label: "示意图 · 受理阶段的批次与分片数量以拓扑确认为准；分片内无 QA" });
+		mergeTail(["s0-gate", "s1-gate"], 5.95);
+		groups.push({ x: 16, y: 0, w: 900, h: 26, label: "示意图 · 受理阶段的批次与分片数量以拓扑确认为准；分片内无 QA" });
 		return { nodes, edges, groups, schematic: true };
 	}
 
@@ -330,7 +391,7 @@ function buildGraph() {
 		const key = "n-dev-" + b.id;
 		batchKey[b.id] = key;
 		const statusText = { QUEUED: "排队", ISSUED: "已签发", RUNNING: "运行中", VALIDATING: "校验中", TERMINAL: "已完成" }[b.status] || b.status;
-		put(key, "development", "批次 " + b.id, (b.owner || "") + (statusText ? " · " + statusText : ""), 2 + i, split ? 0.15 : 0.7);
+		put(key, "development", "开发批次 " + b.id, [b.owner || "", statusText].filter(Boolean).join(" · "), 2 + i, split ? 0.15 : 0.7);
 	});
 	for (const b of batches) {
 		const deps = (b.dependsOn || []).filter(d => batchKey[d]);
@@ -348,6 +409,7 @@ function buildGraph() {
 
 	if (split) {
 		const sliceCol = 2 + Math.max(batches.length, 1) + 0.6;
+		const sliceGateCol = len => sliceCol + Math.max(len * SLICE_DX, SLICE_DX) + 0.15;
 		const sliceGates = [];
 		// Owner-plan batches map batch IDs to their owning slice; child-owned
 		// ones carry no master status, the child run supplies its own.
@@ -358,6 +420,9 @@ function buildGraph() {
 		// can depend on a batch the sorted list has not reached yet.
 		const sliceInfo = slices.map((s, i) => {
 			const row = 0.2 + i * 1.35;
+			// A slice that entered the mainline runs under the master
+			// configuration, so its nodes say so instead of reporting the child
+			// run's own status.
 			const entered = s.enteredMainline;
 			const childBatches = (s.flow && s.flow.developmentBatches) || [];
 			if (childBatches.length > widest) widest = childBatches.length;
@@ -366,19 +431,26 @@ function buildGraph() {
 				const key = "sl-dev-" + s.id + "-" + b.id;
 				localKey[b.id] = key;
 				const st = { QUEUED: "待执行", ISSUED: "已派发", RUNNING: "执行中", VALIDATING: "验证中", TERMINAL: "已结束" }[b.status] || "";
-				put(key, "development", "分片 " + s.id + " · 批次 " + b.id,
-					(entered ? "已进主线，随主线配置" : st || (s.status || "")), sliceCol + j * 0.72, row);
+				put(key, "development", "开发分片 " + s.id + " · 批次 " + b.id,
+					(entered ? "已进主线，随主线配置" : st || (s.status || "")), sliceCol + j * SLICE_DX, row);
 			});
 			const gt = "sl-gate-" + s.id;
-			put(gt, "gate", "分片 " + s.id + " · 分片门", entered ? "已进主线" : "",
-				sliceCol + Math.max(childBatches.length * 0.72, 0.9), row);
+			put(gt, "gate", "开发分片 " + s.id + " · 分片门", entered ? "已进主线" : "", sliceGateCol(childBatches.length), row);
 			if (!childBatches.length) {
 				const dv = "sl-dev-" + s.id;
-				put(dv, "development", "分片 " + s.id + " · 开发", (entered ? "已进主线，随主线配置" : "运行中 " + (s.status || "")), sliceCol, row);
+				put(dv, "development", "开发分片 " + s.id, (entered ? "已进主线，随主线配置" : "运行中 " + (s.status || "")), sliceCol, row);
 				localKey[""] = dv;
 			}
 			sliceGates.push(gt);
-			groups.push({ x: 20 + sliceCol * X, y: 38 + row * Y, w: X * Math.max(1.7, childBatches.length * 0.72 + 0.9), h: 18, label: "分片 " + s.id + (entered ? " · 已进主线，随主线配置" : "") });
+			// Lane strip: one header band per slice row, starting 20px left of
+			// the first batch column and spanning the batch pitches plus the
+			// gate. h = 26 is exactly one 16px text line + 8px padding + 2px
+			// border (style.css .group under border-box), and y = 22 + row*Y
+			// puts its bottom 2px above the row's node top edge
+			// (y = 50 + row*Y), so the strip never covers a node box. The label
+			// is whitespace-nowrap, so it has to stay short enough for that
+			// single fixed line instead of growing the strip.
+			groups.push({ x: 20 + sliceCol * X, y: 22 + row * Y, w: X * Math.max(2, childBatches.length * SLICE_DX + 1.15), h: 26, label: "开发分片 " + s.id + (entered ? " · 已进主线，随主线配置" : "") });
 			return { s, localKey, childBatches, gt };
 		});
 		// Pass 2: dependency edges can now resolve cross-slice sources.
@@ -395,7 +467,7 @@ function buildGraph() {
 			}
 			link(info.localKey[info.childBatches[info.childBatches.length - 1].id], info.gt);
 		}
-		mergeTail(sliceGates, sliceCol + widest * 0.72 + 1.0);
+		mergeTail(sliceGates, sliceCol + widest * SLICE_DX + 1.2);
 	} else {
 		verifyTail(2 + Math.max(batches.length, 1) + 0.8);
 		for (const d of devHeads) link(d, "v-gate");
@@ -407,62 +479,194 @@ function buildGraph() {
 }
 
 // ---------- view / pan / zoom ----------
+// Auto-fit never shrinks below FIT_MIN: a wider graph overflows and pans
+// instead of rendering node text illegibly small. The wheel, the zoom control
+// and the whole-graph overview reach down to ZMIN; ZMAX caps every explicit
+// zoom.
+const FIT_MIN = 0.9, ZMIN = 0.4, ZMAX = 1.8;
+// VIEW_PAD is the gap the pan boundary keeps between the content and the
+// visible canvas edge. contentBox already adds 40px of breathing space around
+// the outermost nodes, so the pad is a second, deliberate margin; it must stay
+// >= fitContent's own margin m = 30, otherwise applyView would re-clamp a
+// freshly fitted view and shift it off the fit position.
+const VIEW_PAD = 70;
 const view = { x: 0, y: 0, z: 1 };
-let world = null, canvas = null;
+// viewAdjusted separates a view the user chose from one a panel placed. Pan
+// (mouse/touch), arrow keys, wheel, the double-click reset and every zoombar
+// button set it; fitContent clears it whenever an automatic fit runs (initial
+// load, library open, node pick, configuration switch). closeDrawer reads it to
+// decide between refitting and clamping.
+let viewAdjusted = false;
+let world = null, canvas = null, zoomPct = null;
+// Measured node height per node key, written by renderNodes; the || fallbacks
+// cover the first frame, before any node has been laid out.
 const NODE_H = {};
+// Insets of the two overlay panels, measured rather than assumed because both
+// animate open and closed. The inspector takes canvas width only on desktop —
+// below the 760px breakpoint style.css turns it into a bottom sheet — while the
+// drawer always overlays the canvas from the left.
 function inspectorInset() { return DOM && window.innerWidth > 760 && $("#insp").classList.contains("open") ? 320 : 0; }
-function applyView() {
-	const W = canvas.clientWidth - inspectorInset(), H = canvas.clientHeight;
-	const g = graph; if (!g.nodes.length) return;
-	const cx0 = Math.min(...g.nodes.map(n => n.x)) - 40, cx1 = Math.max(...g.nodes.map(n => n.x + 176)) + 40;
-	const cy0 = Math.min(...g.nodes.map(n => n.y)) - 40, cy1 = Math.max(...g.nodes.map(n => n.y + (NODE_H[n.key] || 96))) + 40;
-	const z = view.z, pad = 70;
-	const lx = [W - pad - cx1 * z, pad - cx0 * z], ly = [H - pad - cy1 * z, pad - cy0 * z];
-	view.x = lx[0] > lx[1] ? (W - (cx0 + cx1) * z) / 2 : Math.min(lx[1], Math.max(lx[0], view.x));
-	view.y = ly[0] > ly[1] ? (H - (cy0 + cy1) * z) / 2 : Math.min(ly[1], Math.max(ly[0], view.y));
-	world.style.transform = `translate(${view.x}px,${view.y}px) scale(${z})`;
+function drawerInset() { return DOM && $("#drawer").classList.contains("open") ? $("#drawer").offsetWidth : 0; }
+// contentBox is the graph's bounding box in world coordinates: node extents
+// plus 40px on each side, so the outer cards keep breathing space inside the
+// framed area.
+function contentBox() {
+	const g = graph;
+	return {
+		x0: Math.min(...g.nodes.map(n => n.x)) - 40, x1: Math.max(...g.nodes.map(n => n.x + NODE_W)) + 40,
+		y0: Math.min(...g.nodes.map(n => n.y)) - 40, y1: Math.max(...g.nodes.map(n => n.y + (NODE_H[n.key] || 96))) + 40,
+	};
 }
+// rawView writes the view as it stands, without the boundary check. fitAll
+// needs that: the overview deliberately frames content wider than the band,
+// which applyView would re-centre and thereby undo.
+function rawView() {
+	world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.z})`;
+	if (zoomPct) zoomPct.textContent = Math.round(view.z * 100) + "%";
+}
+// applyView keeps the content inside the visible canvas band [L, L+W]: the
+// drawer overlays the canvas from the left, so the band origin is its width,
+// and the inspector overlays the right edge, so W already subtracts it. With
+// the content spanning [cx0*z, cx1*z] canvas px and a translation view.x, the
+// two pad constraints are
+//   view.x <= L + W - VIEW_PAD - cx1*z   right edge one pad short of L+W
+//   view.x >= L + VIEW_PAD - cx0*z       left edge one pad inside L
+// i.e. lx = [right-most, left-most] placement. lx[0] > lx[1] means the content
+// is narrower than the band, no placement satisfies both, and that axis is
+// centred instead; otherwise view.x is clamped into [lx[0], lx[1]] so a wider
+// axis can never be panned out of the band. view.y repeats the derivation
+// without insets.
+function applyView() {
+	if (!graph.nodes.length) return;
+	const L = drawerInset(), W = canvas.clientWidth - inspectorInset() - L, H = canvas.clientHeight;
+	const { x0: cx0, x1: cx1, y0: cy0, y1: cy1 } = contentBox();
+	const z = view.z;
+	const lx = [L + W - VIEW_PAD - cx1 * z, L + VIEW_PAD - cx0 * z], ly = [H - VIEW_PAD - cy1 * z, VIEW_PAD - cy0 * z];
+	view.x = lx[0] > lx[1] ? L + (W - (cx0 + cx1) * z) / 2 : Math.min(lx[1], Math.max(lx[0], view.x));
+	view.y = ly[0] > ly[1] ? (H - (cy0 + cy1) * z) / 2 : Math.min(ly[1], Math.max(ly[0], view.y));
+	rawView();
+}
+// fitContent places the graph for an automatic fit. inset is the inspector
+// width the caller wants excluded from the band; the drawer inset is measured
+// live because the drawer animates.
 function fitContent(inset) {
-	const W = canvas.clientWidth - inset, H = canvas.clientHeight, m = 30, g = graph;
+	const L = drawerInset(), W = canvas.clientWidth - inset - L, H = canvas.clientHeight, m = 30, g = graph;
 	if (!g.nodes.length) return;
-	const cx0 = Math.min(...g.nodes.map(n => n.x)) - 40, cx1 = Math.max(...g.nodes.map(n => n.x + 176)) + 40;
-	const cy0 = Math.min(...g.nodes.map(n => n.y)) - 40, cy1 = Math.max(...g.nodes.map(n => n.y + (NODE_H[n.key] || 96))) + 40;
-	// Fit never zooms in past 1 nor drops below the wheel minimum; when the
-	// whole graph still overflows at that floor the clicked node stays in view.
-	const nz = Math.max(.5, Math.min(1, (W - 2 * m) / (cx1 - cx0), (H - 2 * m) / (cy1 - cy0)));
+	viewAdjusted = false;
+	const { x0: cx0, x1: cx1, y0: cy0, y1: cy1 } = contentBox();
+	// Fit never zooms in past 1 nor drops below the readability floor. When
+	// the graph still overflows at that floor the clicked node stays in
+	// view; otherwise each overflowing axis pins its start edge to the
+	// margin so reading order begins at the first column.
+	const nz = Math.max(FIT_MIN, Math.min(1, (W - 2 * m) / (cx1 - cx0), (H - 2 * m) / (cy1 - cy0)));
 	const sx0 = view.x + cx0 * view.z, sx1 = view.x + cx1 * view.z, sy0 = view.y + cy0 * view.z, sy1 = view.y + cy1 * view.z;
+	// Already inside the margins at the wanted scale: leave the view untouched,
+	// so re-picking a node or re-opening a panel does not re-animate and jump a
+	// view that is still valid.
 	if (sx0 >= m && sx1 <= W - m && sy0 >= m && sy1 <= H - m && Math.abs(nz - view.z) < 0.01) return;
 	view.z = nz;
 	const clicked = selKey && g.nodes.find(n => n.key === selKey);
 	if (clicked && ((cx1 - cx0) * nz > W - 2 * m || (cy1 - cy0) * nz > H - 2 * m)) {
-		view.x = W / 2 - (clicked.x + 88) * nz;
+		// Overflowing even at the floor: centre on the clicked instance rather
+		// than an edge, so the box a repeated responsibility was picked from
+		// stays on screen.
+		view.x = L + W / 2 - (clicked.x + NODE_W / 2) * nz;
 		view.y = H / 2 - (clicked.y + (NODE_H[clicked.key] || 96) / 2) * nz;
 	} else {
-		view.x = (W - (cx0 + cx1) * view.z) / 2; view.y = (H - (cy0 + cy1) * view.z) / 2;
+		view.x = (cx1 - cx0) * nz > W - 2 * m ? L + m - cx0 * nz : L + (W - (cx0 + cx1) * nz) / 2;
+		view.y = (cy1 - cy0) * nz > H - 2 * m ? m - cy0 * nz : (H - (cy0 + cy1) * nz) / 2;
 	}
 	world.classList.add("anim"); applyView(); setTimeout(() => world.classList.remove("anim"), 300);
+}
+// Zoom keeps the point at the centre of the visible canvas band fixed. For a
+// canvas point p the world point under it is (p - view.x) / view.z, so holding
+// p still across the scale change gives view.x' = p - (p - view.x) * z' / z.
+// p is the band centre L + W/2 horizontally — not the canvas centre once a
+// side panel is open — and H/2 vertically. z is clamped first so a press at the
+// limit is a no-op instead of a rounding drift.
+function zoomTo(z) {
+	const L = drawerInset(), W = canvas.clientWidth - inspectorInset() - L, H = canvas.clientHeight;
+	const mx = L + W / 2, my = H / 2;
+	z = Math.min(ZMAX, Math.max(ZMIN, z));
+	view.x = mx - (mx - view.x) * z / view.z;
+	view.y = my - (my - view.y) * z / view.z;
+	view.z = z;
+	applyView();
+}
+// The overview frames the whole graph and may go below FIT_MIN; the ordinary
+// fit (fitContent) keeps its readability floor. 80px is the total slack (40 per
+// side), the scale is clamped to [ZMIN, 1], and the result goes through
+// rawView: showing content wider than the band is the point, so applyView's pad
+// boundary must not pull it back. The zoombar marks this as a user view, so
+// closing the drawer later only clamps it instead of refitting.
+function fitAll() {
+	const g = graph;
+	if (!g.nodes.length) return;
+	const L = drawerInset(), W = canvas.clientWidth - inspectorInset() - L, H = canvas.clientHeight;
+	const { x0, x1, y0, y1 } = contentBox();
+	const z = Math.max(ZMIN, Math.min(1, (W - 80) / (x1 - x0), (H - 80) / (y1 - y0)));
+	view.z = z;
+	view.x = L + (W - (x0 + x1) * z) / 2;
+	view.y = (H - (y0 + y1) * z) / 2;
+	world.classList.add("anim"); rawView(); setTimeout(() => world.classList.remove("anim"), 300);
+}
+// − / percentage / ＋ / 适应, laid over the canvas; style.css shifts it left
+// while the inspector is open. Every button marks the view as user-chosen. −
+// and ＋ step the scale by 1/1.15 and 1.15 around the band centre (zoomTo), the
+// percentage returns to 1, and 适应 switches to the whole-graph overview, which
+// has no single anchor point.
+function buildZoomBar() {
+	const bar = el("div", "zoombar");
+	const button = (act, cls, text, title) => {
+		const b = el("button", cls, text);
+		b.type = "button"; b.dataset.z = act; b.title = title;
+		b.onclick = () => { viewAdjusted = true; act === "fit" ? fitAll() : zoomTo(act === "pct" ? 1 : act === "in" ? view.z * 1.15 : view.z / 1.15); };
+		return b;
+	};
+	bar.appendChild(button("out", "", "−", "缩小"));
+	zoomPct = button("pct", "pct", "100%", "回到 100%");
+	bar.appendChild(zoomPct);
+	bar.appendChild(button("in", "", "＋", "放大"));
+	bar.appendChild(button("fit", "", "适应", "全览整张流程图"));
+	canvas.appendChild(bar);
+	zoomPct.textContent = Math.round(view.z * 100) + "%";
 }
 let panning = false, px = 0, py = 0, moved = 0;
 if (DOM) {
 world = $("#world"); canvas = $("#canvas");
-canvas.addEventListener("mousedown", e => { if (e.target.closest(".node") || e.target.closest(".legend")) return; panning = true; moved = 0; px = e.clientX; py = e.clientY; canvas.classList.add("panning"); });
-window.addEventListener("mousemove", e => { if (!panning) return; view.x += e.clientX - px; view.y += e.clientY - py; moved += Math.abs(e.clientX - px) + Math.abs(e.clientY - py); px = e.clientX; py = e.clientY; applyView(); });
+buildZoomBar();
+// Overlay chrome (node cards, legend, zoom control) handles its own pointer
+// events, so a pan, a zoom or the blank-click clear starts only on the canvas
+// background.
+const overChrome = t => !!(t.closest && t.closest(".node,.legend,.zoombar"));
+// Panning accumulates pointer deltas into the view and ends every move in
+// applyView, so the boundary applies continuously: a large drag stops at it
+// instead of banking invisible translation. moved distinguishes a drag from a
+// click, which clears the selection.
+canvas.addEventListener("mousedown", e => { if (overChrome(e.target)) return; panning = true; moved = 0; px = e.clientX; py = e.clientY; canvas.classList.add("panning"); });
+window.addEventListener("mousemove", e => { if (!panning) return; view.x += e.clientX - px; view.y += e.clientY - py; moved += Math.abs(e.clientX - px) + Math.abs(e.clientY - py); px = e.clientX; py = e.clientY; viewAdjusted = true; applyView(); });
 window.addEventListener("mouseup", () => { panning = false; canvas.classList.remove("panning"); });
-canvas.addEventListener("touchstart", e => { if (e.target.closest(".node") || e.target.closest(".legend")) return; const t = e.touches[0]; panning = true; moved = 0; px = t.clientX; py = t.clientY; }, { passive: true });
-canvas.addEventListener("touchmove", e => { if (!panning) return; const t = e.touches[0]; view.x += t.clientX - px; view.y += t.clientY - py; moved += Math.abs(t.clientX - px) + Math.abs(t.clientY - py); px = t.clientX; py = t.clientY; applyView(); }, { passive: true });
+canvas.addEventListener("touchstart", e => { if (overChrome(e.target)) return; const t = e.touches[0]; panning = true; moved = 0; px = t.clientX; py = t.clientY; }, { passive: true });
+canvas.addEventListener("touchmove", e => { if (!panning) return; const t = e.touches[0]; view.x += t.clientX - px; view.y += t.clientY - py; moved += Math.abs(t.clientX - px) + Math.abs(t.clientY - py); px = t.clientX; py = t.clientY; viewAdjusted = true; applyView(); }, { passive: true });
 canvas.addEventListener("touchend", () => { panning = false; });
-canvas.addEventListener("click", e => { if (moved > 4) return; if (e.target.closest(".node") || e.target.closest(".legend")) return; if (!sel) return; sel = null; selKey = null; render(); fitContent(0); });
-canvas.addEventListener("dblclick", e => { if (e.target.closest(".node") || e.target.closest(".legend")) return; view.x = view.y = 0; view.z = 1; world.classList.add("anim"); applyView(); setTimeout(() => world.classList.remove("anim"), 300); });
-canvas.addEventListener("wheel", e => { e.preventDefault(); const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top; const nz = Math.min(1.8, Math.max(.5, view.z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))); view.x = mx - (mx - view.x) * nz / view.z; view.y = my - (my - view.y) * nz / view.z; view.z = nz; applyView(); }, { passive: false });
+canvas.addEventListener("click", e => { if (moved > 4) return; if (overChrome(e.target)) return; if (!sel) return; sel = null; selKey = null; render(); });
+canvas.addEventListener("dblclick", e => { if (overChrome(e.target)) return; view.x = view.y = 0; view.z = 1; viewAdjusted = true; world.classList.add("anim"); applyView(); setTimeout(() => world.classList.remove("anim"), 300); });
+// Wheel zoom keeps the pointer as its fixed point: mx/my are the cursor in
+// canvas coordinates and the same p - (p - x) * z'/z transform leaves the world
+// point under the cursor standing still while the scale steps by 1.12.
+canvas.addEventListener("wheel", e => { if (overChrome(e.target)) return; e.preventDefault(); const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top; const nz = Math.min(ZMAX, Math.max(ZMIN, view.z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))); view.x = mx - (mx - view.x) * nz / view.z; view.y = my - (my - view.y) * nz / view.z; view.z = nz; viewAdjusted = true; applyView(); }, { passive: false });
 document.addEventListener("keydown", e => {
 	if (e.key === "Escape") {
 		if ($("#drawer").classList.contains("open")) { closeDrawer(); return; }
 		if ($("#banner").classList.contains("show")) { $("#banner").classList.remove("show"); return; }
-		if (sel) { sel = null; selKey = null; render(); fitContent(0); } return;
+		if (sel) { sel = null; selKey = null; render(); } return;
 	}
 	if (e.target.closest("input,select,textarea")) return;
+	// Arrow keys pan by 40px steps. The delta is expressed as content movement,
+	// so left and up (which reveal content from those sides) carry positive
+	// deltas.
 	const k = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[e.key];
-	if (!k) return; e.preventDefault(); view.x += k[0]; view.y += k[1]; applyView();
+	if (!k) return; e.preventDefault(); view.x += k[0]; view.y += k[1]; viewAdjusted = true; applyView();
 });
 }
 
@@ -485,21 +689,56 @@ function nodeStatusText(resp) {
 	if (!st.enabled) return "已关闭";
 	return "";
 }
+// The graph DOM rebuilds only when its rendered content changes, so the flow
+// animation, hover and focus survive the 2s poll untouched. The signature must
+// therefore name every input renderNodes() reads: node identity, label,
+// subtitle, op/terminal flags and position, the lane groups, the edge list, the
+// selection, and per configurable node its status class, status text, enabled
+// flag and execution choice. An input missing here renders once and then sticks
+// with stale content until some other field happens to change.
+let nodesSig = "";
+function nodesSignature() {
+	return JSON.stringify([
+		graph.nodes.map(n => [n.key, n.resp, n.label, n.sub, n.op, n.terminal, n.x, n.y]),
+		graph.groups, graph.edges, sel, selKey,
+		graph.nodes.map(n => n.op ? null : [nodeStatusClass(n.resp), nodeStatusText(n.resp), nodeEnabled(work, n.resp), execOf(work, n.resp)]),
+	]);
+}
+// renderNodes rebuilds the graph model on every render and compares only the
+// rendered-content signature; prev is the per-responsibility snapshot taken by
+// the last render (lastSigs), used to flash a node whose enabled flag or
+// execution choice changed.
 function renderNodes(prev) {
 	graph = buildGraph();
+	const sig = nodesSignature();
+	if (sig === nodesSig) return;
+	nodesSig = sig;
 	world.querySelectorAll(".node,.group").forEach(n => n.remove());
 	for (const grp of graph.groups || []) {
 		const g = el("div", "group", grp.label); Object.assign(g.style, { left: grp.x + "px", top: grp.y + "px", width: grp.w + "px", height: grp.h + "px" });
 		world.appendChild(g);
 	}
 	for (const n of graph.nodes) {
-		const e = el("div", "node" + (n.op ? " op" : "") + nodeStatusClass(n.resp) + (n.resp && nodeEnabled(work, n.resp) ? "" : " disabled") + (sel === n.resp && RESP.find(r => r.id === n.resp) ? " sel" : ""));
+		// Class order mirrors style.css .node rules. op/terminal come from the
+		// graph node itself; a configurable node adds its runtime status
+		// (running/done) and the disabled mirror of nodeEnabled. sel is keyed by
+		// responsibility, so every repeated instance of the selected responsibility
+		// highlights. An op node never takes disabled: it has no configuration to
+		// switch off, and its resp is empty.
+		const e = el("div", "node" + (n.op ? " op" : "") + (n.terminal ? " terminal" : "") + (n.op ? "" : nodeStatusClass(n.resp))
+			+ (n.resp && !nodeEnabled(work, n.resp) ? " disabled" : "") + (sel === n.resp && RESP.find(r => r.id === n.resp) ? " sel" : ""));
 		e.style.left = n.x + "px"; e.style.top = n.y + "px"; e.dataset.key = n.key; if (n.resp) e.dataset.resp = n.resp; e.tabIndex = n.op ? -1 : 0;
-		const st = nodeStatusText(n.resp);
+		// Title and status share one header row (.head > .t + .st): a long label
+		// wraps inside its own column instead of running under the status pill. A
+		// node without a status renders no pill at all — never an empty capsule —
+		// so the pill's presence alone means "this node has state"; the text is
+		// the runtime status, or 已关闭 for a configurable node switched off.
+		const status = n.op ? "" : nodeStatusText(n.resp) || (nodeEnabled(work, n.resp) ? "" : "已关闭");
+		const head = el("div", "head");
+		head.appendChild(el("div", "t", n.label));
+		if (status) head.appendChild(el("div", "st", status));
+		e.appendChild(head);
 		const ex = n.resp ? execOf(work, n.resp) : {};
-		const stEl = el("div", "st", st || (n.op ? "" : nodeEnabled(work, n.resp) ? "" : "已关闭"));
-		const t = el("div", "t", n.label);
-		e.appendChild(stEl); e.appendChild(t);
 		if (n.sub) e.appendChild(el("div", "d", n.sub));
 		if (n.key.startsWith("sl-dev-") || n.key.startsWith("sl-gate-") || n.key.startsWith("n-dev-") && graph.nodes.filter(x => x.resp === "development").length > 1) {
 			e.appendChild(el("div", "shared", "共享「" + (LABEL[n.resp] || "") + "」配置"));
@@ -513,6 +752,9 @@ function renderNodes(prev) {
 			if (chips.childNodes.length) e.appendChild(chips);
 		}
 		if (!n.op) {
+			// render() opens the inspector for the new selection, so the fit that
+			// follows measures the inset already in effect; swap replays the
+			// slide-in when the panel was open before the click.
 			const pick = ev => { ev.stopPropagation(); const was = $("#insp").classList.contains("open"); sel = n.resp; selKey = n.key; render(); fitContent(inspectorInset()); if (was) { $("#insp").classList.remove("swap"); void $("#insp").offsetWidth; $("#insp").classList.add("swap"); } };
 			e.onclick = pick;
 			e.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") pick(ev); };
@@ -524,36 +766,135 @@ function renderNodes(prev) {
 	drawEdges();
 }
 function nodeSig(resp) { return { on: nodeEnabled(work, resp), ex: execOf(work, resp) }; }
+// anchor returns the attach point of one node box side in world coordinates:
+// r/l sit at mid-height, t/b at mid-width. The height is the measured NODE_H
+// from the last render, with a placeholder before the first layout.
 function anchor(key, side) {
 	const n = graph.nodes.find(n => n.key === key);
 	const h = NODE_H[key] || 90;
-	return side === "r" ? [n.x + 176, n.y + h / 2] : side === "l" ? [n.x, n.y + h / 2] : side === "b" ? [n.x + 88, n.y + h] : [n.x + 88, n.y];
+	return side === "r" ? [n.x + NODE_W, n.y + h / 2] : side === "l" ? [n.x, n.y + h / 2] : side === "b" ? [n.x + NODE_W / 2, n.y + h] : [n.x + NODE_W / 2, n.y];
 }
+// Every connection is an animated dashed line layered by meaning: ordinary
+// flow, dimmed closed/bypass links, the amber repair cycle (.loop, drawn by
+// drawRepairLoops), the teal seal link, and links touching a running (green,
+// fast) or selected (blue) node.
+// The base layer is decided from the edge itself: seal-edge when it enters the
+// seal node, off when either endpoint is a switched-off responsibility, flow
+// otherwise. The hot layer is read back from the rendered node DOM (.running /
+// .sel classes joined through data-key), so the links always agree with the
+// cards; hot() emits at most one of the two and tests running first, so a link
+// touching both kinds of node keeps the running highlight.
 function drawEdges() {
-	const svg = $("#edges"); svg.querySelectorAll("path").forEach(p => p.remove());
-	const add = (d, cls) => {
-		const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	const svg = $("#edges"); svg.querySelectorAll("path,.loop-label").forEach(p => p.remove());
+	const add = (d, cls, marker) => {
+		const p = document.createElementNS(SVG_NS, "path");
 		p.setAttribute("d", d); p.setAttribute("class", "edge " + cls);
-		p.setAttribute("marker-end", cls.includes("bypass") ? "url(#arrB)" : "url(#arr)");
+		p.setAttribute("marker-end", marker);
 		svg.appendChild(p);
+		return p;
 	};
+	const running = new Set([...world.querySelectorAll(".node.running")].map(n => n.dataset.key));
+	const selected = new Set([...world.querySelectorAll(".node.sel")].map(n => n.dataset.key));
+	const hot = (a, b) => running.has(a) || running.has(b) ? " hot-run" : selected.has(a) || selected.has(b) ? " hot-sel" : "";
+	const loops = [];
 	for (const e of graph.edges) {
 		const na = graph.nodes.find(n => n.key === e.a), nb = graph.nodes.find(n => n.key === e.b);
 		if (!na || !nb) continue;
+		if (e.cls === "loop") { loops.push(e); continue; }
 		const [x1, y1] = anchor(e.a, "r"), [x2, y2] = anchor(e.b, "l");
 		const mx = (x1 + x2) / 2;
 		const off = (na.resp && !nodeEnabled(work, na.resp)) || (nb.resp && !nodeEnabled(work, nb.resp));
-		add(`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, e.cls === "loop" ? "loop" : off ? "off" : "flow");
+		const seal = e.b === "v-seal";
+		add(`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`,
+			(seal ? "seal-edge" : off ? "off" : "flow") + hot(e.a, e.b), seal ? "url(#arrSeal)" : "url(#arr)");
 	}
 	for (const n of graph.nodes) {
 		if (!n.resp || nodeEnabled(work, n.resp)) continue;
+		// A switched-off responsibility is stepped over, not disconnected: one
+		// dimmed bypass arc joins each of its predecessors to each of its
+		// successors, arcing above the card (control points at n.y - 70) so the
+		// chain still reads left to right.
 		const ins = graph.edges.filter(e => e.b === n.key).map(e => e.a);
 		const outs = graph.edges.filter(e => e.a === n.key).map(e => e.b);
 		for (const a of ins) for (const b of outs) {
 			const [x1, y1] = anchor(a, "r"), [x2, y2] = anchor(b, "l");
-			add(`M${x1},${y1} C${x1 + 70},${n.y - 70} ${x2 - 70},${n.y - 70} ${x2},${y2}`, "bypass");
+			add(`M${x1},${y1} C${x1 + 70},${n.y - 70} ${x2 - 70},${n.y - 70} ${x2},${y2}`, "bypass" + hot(a, b), "url(#arrB)");
 		}
 	}
+	drawRepairLoops(svg, loops, add);
+}
+// A repair run reruns verification. Drawing that as one return manifold under
+// the verification column keeps the loop out of the node boxes: the line
+// leaves the repair node's bottom, runs below every node, then enters each
+// verification node's bottom with an upward arrow.
+//
+// Geometry in world px, per verification head (heads sorted top to bottom):
+//   sy      repair's bottom edge: the single shared departure line
+//   bottom  the lowest bottom edge of repair and heads; every horizontal run
+//           stays below it, so no run can cross a card
+//   trackY  bottom + 56 + (n-1-i) * 18: one track per head, the topmost head
+//           taking the deepest one, so the horizontal runs nest instead of
+//           coinciding on one line
+//   sx      repair.x + min(150, 54 + i * 36): staggered departures along the
+//           repair bottom keep the vertical drops apart
+//   railX   head.x + NODE_W + 26 + i * 16: the vertical rail just right of the
+//           head card, one 16px further per index so the rails nest as well;
+//           with the three heads this graph has, the 26 + 2*16 worst case stays
+//           left of the repair column, which is 1.45 * X = 362.5px away
+//   cr = 10 corner radius: each segment stops cr short of a corner and a
+//           quadratic with the corner as control point rounds it, so the
+//           manifold reads as one line instead of overlapping right angles
+//   drop = 16 the final approach: the line passes 16px under the head, turns
+//           up and enters the head's bottom edge with its arrow pointing into it
+//
+// These loops cannot use the ordinary r→l anchors: a return edge from repair,
+// which sits right of the verification column, would cross the card it targets
+// and the column between them, whereas the manifold stays outside every box —
+// the canvas probe samples the whole path length to hold that.
+function drawRepairLoops(svg, loops, add) {
+	const repair = graph.nodes.find(n => n.key === "v-repair");
+	if (!repair || !loops.length) return;
+	const heads = loops.map(e => graph.nodes.find(n => n.key === e.b)).filter(Boolean).sort((a, b) => a.y - b.y);
+	if (!heads.length) return;
+	const h = n => NODE_H[n.key] || 96;
+	const sy = repair.y + h(repair);
+	const bottom = Math.max(sy, ...heads.map(n => n.y + h(n)));
+	const cr = 10, drop = 16;
+	heads.forEach((head, i) => {
+		const sx = repair.x + Math.min(150, 54 + i * 36);
+		const railX = head.x + NODE_W + 26 + i * 16;
+		const hx = head.x + NODE_W / 2, hb = head.y + h(head);
+		const trackY = bottom + 56 + (heads.length - 1 - i) * 18;
+		// One path per head: down from the repair bottom, round the corner onto
+		// its own track toward the verification column, up the rail, left to the
+		// head's centre line and straight up into its underside.
+		const d = [
+			`M ${sx} ${sy}`,
+			`V ${trackY - cr}`,
+			`Q ${sx} ${trackY} ${sx - cr} ${trackY}`,
+			`H ${railX + cr}`,
+			`Q ${railX} ${trackY} ${railX} ${trackY - cr}`,
+			`V ${hb + drop + cr}`,
+			`Q ${railX} ${hb + drop} ${railX - cr} ${hb + drop}`,
+			`H ${hx + cr}`,
+			`Q ${hx} ${hb + drop} ${hx} ${hb + drop - cr}`,
+			`V ${hb}`,
+		].join(" ");
+		const p = add(d, "loop", "url(#arrLoop)");
+		const title = document.createElementNS(SVG_NS, "title");
+		title.textContent = "返修后重新验证：" + head.label;
+		p.appendChild(title);
+	});
+	const middle = heads[Math.floor(heads.length / 2)];
+	// The caption sits under the middle head, 20px below the deepest track, so it
+	// touches neither a rail nor a node box.
+	const label = document.createElementNS(SVG_NS, "text");
+	label.setAttribute("class", "loop-label");
+	label.setAttribute("text-anchor", "middle");
+	label.setAttribute("x", String(middle.x + NODE_W / 2));
+	label.setAttribute("y", String(bottom + 56 + (heads.length - 1) * 18 + 20));
+	label.textContent = "返修后重跑验证";
+	svg.appendChild(label);
 }
 
 // ---------- inspector ----------
@@ -574,7 +915,14 @@ function inspectorSignature() {
 		optKey: optCache[sigOptKey()] ? (optCache[sigOptKey()].error ? "err" : "ok") : "none",
 	});
 }
-function sigOptKey() { return editing + "|" + sel + "|" + (execOf(work, sel).provider || "") + "|" + (execOf(work, sel).model || ""); }
+// Options are keyed to the full (configuration, node, provider, model)
+// tuple: each answer is self-contained. A provider's model list is shared
+// across its tuples, so a sibling tuple's cached answer already renders the
+// form while the current model's own answer fills its effort row.
+function sigOptKey() {
+	const ex = execOf(work, sel);
+	return editing + "|" + sel + "|" + (ex.provider || "") + "|" + (ex.model || "");
+}
 // Poll-driven rebuilds keep a focused draft control untouched; a committed
 // control change calls with force so dependent fields refresh immediately.
 async function renderInspector(force) {
@@ -608,7 +956,7 @@ async function renderInspector(force) {
 	const hd = el("div"); hd.appendChild(el("h3", "", meta.t));
 	if (meta.d) hd.appendChild(el("div", "sub", meta.d));
 	const x = el("button", "iconbtn", "✕"); x.style.padding = "4px 9px"; x.title = "收起面板（Esc）";
-	x.onclick = () => { sel = null; selKey = null; render(); fitContent(0); };
+	x.onclick = () => { sel = null; selKey = null; render(); };
 	head.appendChild(hd); head.appendChild(x); i.appendChild(head);
 	if (st && (st.completed || st.bypassed)) {
 		const lm = el("div", "lockmsg"); lm.innerHTML = "<b>这个节点已经结束，不能在面板里修改。</b><br>如需回退，请在对话里向代理提出（reset 或需求变更需确认）。";
@@ -649,9 +997,10 @@ async function renderInspector(force) {
 	}
 }
 
-// Options are keyed to the exact (configuration, node, provider, model) tuple
-// in the draft; a fetch that resolves after the user moved on is discarded.
+// A fetch that resolves after the user moved on still lands in the cache
+// under its own tuple key; only the rendered form treats it as stale.
 const optCache = {};
+const optInflight = {}; // tuple key -> pending fetch promise
 async function fetchOptions(editingName, node, provider, model) {
 	// The catalogue query needs a stored configuration as its base; an unsaved
 	// draft borrows the built-in entry without changing editing identity.
@@ -659,28 +1008,151 @@ async function fetchOptions(editingName, node, provider, model) {
 	const q = new URLSearchParams({ configuration: base, node, platform: provider || "", model: model || "", effort: "" });
 	return api.get("/api/execution-options?" + q);
 }
+// providerOptions returns a cached answer for any tuple that shares the
+// current (configuration, node, provider): a provider's model list is the
+// same across its tuples and an unavailable verdict is provider-wide, so a
+// sibling answer renders the form while the current model's own tuple fills.
+function providerOptions() {
+	const prefix = editing + "|" + sel + "|" + (execOf(work, sel).provider || "") + "|";
+	for (const key in optCache) {
+		const value = optCache[key];
+		if (key.startsWith(prefix) && value && (value.catalogue || value.unavailable)) return value;
+	}
+	return undefined;
+}
 async function optionsFor() {
 	const key = sigOptKey();
 	if (optCache[key] !== undefined) return optCache[key];
+	if (optInflight[key]) return optInflight[key];
 	const seq = ++optSeq;
 	const editingName = editing, node = sel;
-	const provider = execOf(work, node).provider || "", model = execOf(work, node).model || "";
-	let result;
-	try { result = await fetchOptions(editingName, node, provider, model); }
-	catch (e) { result = { error: e.message }; }
+	const ex = execOf(work, sel);
+	const pending = (async () => {
+		let result;
+		try { result = await fetchOptions(editingName, node, ex.provider || "", ex.model || ""); }
+		catch (e) { result = { error: e.message }; }
+		optCache[key] = result;
+		delete optInflight[key];
+		return result;
+	})();
+	optInflight[key] = pending;
+	const result = await pending;
 	if (seq !== optSeq || sel !== node || editing !== editingName) return optCache[sigOptKey()];
-	optCache[key] = result;
 	return result;
+}
+// fillEfforts (re)builds the effort button row from a tuple's own answer.
+// pending marks the wait for the current model's tuple while a sibling
+// tuple's shared catalogue keeps the rest of the form mounted.
+function fillEfforts(efforts, options, ex, locked, pending) {
+	if (pending) { efforts.appendChild(el("span", "hint", "正在获取强度档…")); return; }
+	const cat = (options && options.catalogue) || { models: [] };
+	const eff = (options && options.effective) || {};
+	const effModel = ((ex || {}).model) || eff.model || (cat["default"] && cat["default"].model) || "";
+	const modelEntry = (cat.models || []).find(m => m.value === effModel) || (cat.models || [])[0];
+	const effList = (modelEntry && modelEntry.efforts) || [];
+	const effDefault = ex.reasoningEffort || eff.reasoningEffort || (modelEntry && modelEntry.defaultEffort) || (cat["default"] && cat["default"].effort) || "";
+	for (const e of effList) {
+		const b = el("button", e === effDefault ? "on" : "", e);
+		b.dataset.e = e; b.dataset.f = "effort"; b.type = "button"; b.disabled = locked;
+		b.onclick = () => { const prev = snapshot(); setExec(work, sel, { reasoningEffort: e }); change(prev); renderInspector(true); };
+		efforts.appendChild(b);
+	}
+	if (!effList.length) efforts.appendChild(el("span", "hint", "该平台未报告强度档"));
+}
+// platformOption renders one platform entry; a platform whose executable the
+// backend could not resolve on PATH is marked 未安装 and cannot be picked.
+function platformOption(options, p, selected) {
+	const uninstalled = options.installed && options.installed[p] === false;
+	const o = new Option(uninstalled ? p + "（未安装）" : p, p, false, selected);
+	if (uninstalled) { o.disabled = true; o.title = "可执行文件不在 PATH（未安装或未加环境变量）"; }
+	return o;
+}
+// Backend option errors carry internal framing: a RuntimeBlocked wrapper and
+// a leading UPPER_SNAKE code. The display reason translates the code by its
+// suffix class so no platform is special-cased; unknown shapes fall back.
+function optionsErrorText(error) {
+	const s = String(error || "").replace(/^RuntimeBlocked:\s*/, "");
+	const code = ((/^([A-Z][A-Z0-9_]+):/).exec(s) || [])[1] || "";
+	if (code === "UNREGISTERED_INSTALL") return "运行时未登记安装";
+	if (code === "UNSUPPORTED_NATIVE_HOST") return "该平台不支持原生执行通道";
+	if (code.endsWith("_UNAVAILABLE")) return "平台可执行文件或脚本不可用";
+	if (code.endsWith("_CAPABILITY")) return "平台能力不满足适配要求";
+	if (code.endsWith("_PROTOCOL")) return "平台协议不匹配";
+	if (code.endsWith("_BINDING")) return "会话绑定校验失败";
+	if (code.endsWith("_CONFIG")) return "平台配置未生效";
+	return "平台选项查询失败";
+}
+// The raw error text stays on the block's title for diagnosis; the body
+// shows only the translated reason plus the manual-entry hint.
+function optionsErrorEl(error) {
+	const lm = el("div", "lockmsg");
+	lm.title = error;
+	lm.appendChild(el("b", "", "暂取不到平台选项：" + optionsErrorText(error)));
+	lm.appendChild(el("div", "", "可手工填写平台/模型/强度（原生值）。"));
+	return lm;
 }
 async function renderExecFields(i, meta, locked, editingName, gen) {
 	const wrap = el("div"); i.appendChild(wrap);
-	const options = await optionsFor();
-	if (gen !== inspGen || sel !== meta.id || editing !== editingName) return; // a newer rebuild owns the form now
-	if (options && options.error) {
+	// The catalogue query can take seconds; a cached answer renders at once.
+	// The placeholder only marks a true miss — a new (config, node, provider,
+	// model) tuple with no same-provider sibling — while a sibling tuple's
+	// shared catalogue renders the form and only the effort row waits for the
+	// current model's own answer.
+	const key = sigOptKey();
+	let options = optCache[key];
+	let pending = false;
+	if (options === undefined) {
+		options = providerOptions();
+		pending = options !== undefined;
+	}
+	if (options === undefined) {
+		wrap.appendChild(el("div", "lockmsg load", "正在获取平台/模型选项…"));
+		options = await optionsFor();
+		if (gen !== inspGen || sel !== meta.id || editing !== editingName) return; // a newer rebuild owns the form now
+		if (!options) return; // a stale fetch lost to a newer one; the placeholder stays
+	} else if (pending) {
+		optionsFor().then(landed => {
+			if (gen !== inspGen || sel !== meta.id || editing !== editingName || sigOptKey() !== key) return;
+			const live = $("#insp .efforts");
+			if (!live) return;
+			live.textContent = "";
+			// The current model's tuple answers the row; anything else (error,
+			// unavailable) replaces the sibling-rendered form with its own view.
+			if (landed && landed.catalogue) { fillEfforts(live, landed, execOf(work, sel), locked, false); return; }
+			renderInspector(true);
+		});
+	}
+	wrap.textContent = "";
+	if (options.unavailable) {
+		const ex = execOf(work, sel);
+		const pname = options.platform || ex.provider || (options.effective || {}).provider || "?";
 		const lm = el("div", "lockmsg");
-		lm.appendChild(el("b", "", "暂取不到平台选项：" + options.error));
-		lm.appendChild(el("div", "", "可手工填写平台/模型/强度（原生值）。"));
+		if (options.host) {
+			lm.appendChild(el("b", "", `宿主（主代理）「${pname}」`));
+			lm.appendChild(el("div", "", "宿主负责编排与派发，本身不执行节点；请为节点选择一个执行平台。"));
+		} else {
+			lm.appendChild(el("b", "", `平台「${pname}」不可用`));
+			lm.appendChild(el("div", "", "该平台不提供执行选择，不能作为执行平台；改选其他平台后保存生效。"));
+		}
 		wrap.appendChild(lm);
+		const pf = el("div", "field"); pf.appendChild(el("label", "", "平台"));
+		const selP = document.createElement("select"); selP.disabled = locked; selP.dataset.f = "provider";
+		// The resolved value is not an execution platform, so the select holds
+		// an explicit unset entry and lists only adaptered platforms.
+		selP.appendChild(new Option("未选定执行平台", "", false, true));
+		for (const p of options.platforms || []) selP.appendChild(platformOption(options, p, false));
+		selP.onchange = () => { const prev = snapshot(); setExec(work, sel, { provider: selP.value, model: "", reasoningEffort: "" }); change(prev); renderInspector(true); };
+		pf.appendChild(selP); wrap.appendChild(pf);
+		for (const [key, label] of [["model", "模型"], ["reasoningEffort", "推理强度"]]) {
+			const f = el("div", "field"); f.appendChild(el("label", "", label));
+			const inp = document.createElement("input"); inp.type = "text"; inp.value = ex[key] || ""; inp.disabled = locked; inp.dataset.f = "exec:" + key;
+			inp.onchange = () => { const prev = snapshot(); setExec(work, sel, { [key]: inp.value }); change(prev); renderInspector(true); };
+			f.appendChild(inp); wrap.appendChild(f);
+		}
+		return;
+	}
+	if (options.error) {
+		wrap.appendChild(optionsErrorEl(options.error));
 		const ex = execOf(work, sel);
 		for (const [key, label] of [["provider", "平台"], ["model", "模型"], ["reasoningEffort", "推理强度"]]) {
 			const f = el("div", "field"); f.appendChild(el("label", "", label));
@@ -690,33 +1162,24 @@ async function renderExecFields(i, meta, locked, editingName, gen) {
 		}
 		return;
 	}
-	if (!options) return;
 	const ex = execOf(work, sel);
 	const eff = options.effective || {};
 	const pf = el("div", "field"); pf.appendChild(el("label", "", "平台"));
 	const selP = document.createElement("select"); selP.disabled = locked; selP.dataset.f = "provider";
-	selP.appendChild(new Option("跟随 run 默认（" + (eff.provider || options.platform || "?") + "）", "", false, !ex.provider));
-	for (const p of options.platforms || []) selP.appendChild(new Option(p, p, false, p === ex.provider));
+	const effProvider = eff.provider || options.platform || "?";
+	const effMark = options.installed && options.installed[effProvider] === false ? "·未安装" : "";
+	selP.appendChild(new Option("跟随 run 默认（" + effProvider + effMark + "）", "", false, !ex.provider));
+	for (const p of options.platforms || []) selP.appendChild(platformOption(options, p, p === ex.provider));
 	pf.appendChild(selP); wrap.appendChild(pf);
 	const cat = options.catalogue || { models: [] };
 	const mf = el("div", "field"); mf.appendChild(el("label", "", "模型（按平台实时获取）"));
 	const selM = document.createElement("select"); selM.disabled = locked; selM.dataset.f = "model";
-	const effModel = ex.model || eff.model || (cat["default"] && cat["default"].model) || "";
 	selM.appendChild(new Option("跟随默认（" + (eff.model || "目录默认") + "）", "", false, !ex.model));
 	for (const m of cat.models || []) selM.appendChild(new Option(m.label || m.value, m.value, false, m.value === ex.model));
 	mf.appendChild(selM); wrap.appendChild(mf);
-	const modelEntry = (cat.models || []).find(m => m.value === effModel) || (cat.models || [])[0];
-	const effList = (modelEntry && modelEntry.efforts) || [];
-	const effDefault = ex.reasoningEffort || eff.reasoningEffort || (modelEntry && modelEntry.defaultEffort) || (cat["default"] && cat["default"].effort) || "";
 	const ef = el("div", "field"); ef.appendChild(el("label", "", "推理强度"));
 	const efforts = el("div", "efforts");
-	for (const e of effList) {
-		const b = el("button", e === effDefault ? "on" : "", e);
-		b.dataset.e = e; b.dataset.f = "effort"; b.type = "button"; b.disabled = locked;
-		b.onclick = () => { const prev = snapshot(); setExec(work, sel, { reasoningEffort: e }); change(prev); renderInspector(true); };
-		efforts.appendChild(b);
-	}
-	if (!effList.length) efforts.appendChild(el("span", "hint", "该平台未报告强度档"));
+	fillEfforts(efforts, options, ex, locked, pending);
 	ef.appendChild(efforts); wrap.appendChild(ef);
 	selP.onchange = () => {
 		const prev = snapshot(); setExec(work, sel, { provider: selP.value, model: "", reasoningEffort: "" }); change(prev); renderInspector(true);
@@ -752,8 +1215,19 @@ function snapshot() { const o = {}; for (const n of RESP) o[n.id] = nodeSig(n.id
 function change() { dirty = true; render(); }
 
 // ---------- drawer ----------
-function openDrawer() { $("#drawer").classList.add("open"); $("#scrim").classList.add("show"); }
-function closeDrawer() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("show"); saveMode = false; pendingDo = null; renderSaveBar(); }
+// The library overlays the canvas from the left, so opening it fits the graph
+// again over the narrower band; fitContent also clears viewAdjusted.
+function openDrawer() { $("#drawer").classList.add("open"); $("#scrim").classList.add("show"); fitContent(0); }
+// Closing the library has two branches. Without a user-adjusted view the canvas
+// is refitted over the freed width. With one, the view is kept: applyView only
+// clamps it to the widened band, so the content moves by at most the freed
+// drawer width and never returns to the fit position. The inspector's ✕ and a
+// blank-canvas click close that panel without calling either — the band only
+// gains width there, so the view stays exactly where the user left it.
+function closeDrawer() {
+	$("#drawer").classList.remove("open"); $("#scrim").classList.remove("show"); saveMode = false; pendingDo = null; renderSaveBar();
+	if (!viewAdjusted) fitContent(0); else applyView();
+}
 if (DOM) {
 $("#scrim").onclick = () => closeDrawer();
 $("#libBtn").onclick = () => { $("#drawer").classList.contains("open") ? closeDrawer() : openDrawer(); };
@@ -779,17 +1253,34 @@ function renderDrawer() {
 		const item = el("div", "cfg" + (o.name === editing ? " on" : "") + (saveMode && o.name === BUILTIN ? " skip" : ""));
 		const n = el("div", "n");
 		n.appendChild(el("span", "", o.name));
-		if (o.active) n.appendChild(el("span", "badge cur", "当前"));
+		if (o.name === currentName()) n.appendChild(el("span", "curmark", "（当前）"));
 		if (o.name === BUILTIN) n.appendChild(el("span", "badge end", "内置"));
 		else n.appendChild(el("span", "badge end", o.scope === "user" ? "用户" : "项目"));
 		const bound = boundRuns(o.name);
-		if (bound.length) n.appendChild(el("span", "badge run", `绑定 ${bound.join("、")}`));
+		// Up to two bound runs name themselves inline; more collapse to a count
+		// that expands into a scrollable list inside the card.
+		if (bound.length && bound.length <= 2) {
+			const badge = el("span", "badge run", `绑定 ${bound.map(runRef).join("、")}`);
+			badge.title = bound.join("、");
+			n.appendChild(badge);
+		}
 		if ((o.shadowed || []).length) n.appendChild(el("span", "badge shadow", "有同名遮蔽项被忽略"));
 		item.appendChild(n);
 		const m = el("div", "m");
 		const qs = (o.configuration.qaModes || []).join("+") || "无 QA";
 		m.textContent = `${scopeLabel(o)} · ${qs}`;
 		item.appendChild(m);
+		if (bound.length > 2) {
+			const det = el("details", "boundruns");
+			det.open = !!boundOpen[o.name];
+			const sum = el("summary", "badge run", `绑定 ${bound.length} 个 run`);
+			sum.title = bound.join("、");
+			det.appendChild(sum);
+			for (const id of bound) { const line = el("div", "", runRef(id)); line.title = id; det.appendChild(line); }
+			det.onclick = ev => ev.stopPropagation();
+			det.addEventListener("toggle", () => { boundOpen[o.name] = det.open; });
+			item.appendChild(det);
+		}
 		const acts = el("div", "acts");
 		const isBuiltin = o.name === BUILTIN;
 		const canRD = !isBuiltin && !bound.length;
@@ -832,7 +1323,7 @@ function renderDrawer() {
 			acts.appendChild(del);
 		}
 		if (!o.active) {
-			const use = el("button", "", "设为当前");
+			const use = el("button", "", "设为默认");
 			use.onclick = async ev => {
 				ev.stopPropagation();
 				await guardDirtyThen(async () => {
@@ -923,7 +1414,9 @@ function renderSaveBar() {
 	row1.appendChild(nameInp); row1.appendChild(scopeSel); row1.appendChild(create);
 	box.appendChild(row1);
 	const hint = el("div", "hint");
-	hint.textContent = bound.length ? `「${editing}」被 ${bound.length} 个未结束 run 绑定（${bound.join("、")}）；保存它影响其后续派发。` : "保存到其他配置不影响任何已绑定 run。";
+	const boundNote = bound.length <= 2 ? `（${bound.map(runRef).join("、")}）` : "";
+	hint.textContent = bound.length ? `「${editing}」被 ${bound.length} 个未结束 run 绑定${boundNote}；保存它影响其后续派发。` : "保存到其他配置不影响任何已绑定 run。";
+	hint.title = bound.join("、");
 	box.appendChild(hint);
 	const cancel = el("button", "sm", "取消");
 	cancel.onclick = () => { saveMode = false; pendingDo = null; renderSaveBar(); };
@@ -948,7 +1441,11 @@ function renderRunSelector() {
 	const cur = s.value;
 	s.textContent = "";
 	s.appendChild(new Option("配置库（不选 run）", "", false, runID === ""));
-	for (const r of runs) s.appendChild(new Option(`${r.runId} · ${r.status === "COMPLETE" || r.status === "ABORTED" ? "已结束" : r.status}`, r.runId, false, r.runId === (runID || (selectedRun() || {}).runId)));
+	for (const r of runs) {
+		const opt = new Option(runLabel(r), r.runId, false, r.runId === (runID || (selectedRun() || {}).runId));
+		opt.title = r.runId;
+		s.appendChild(opt);
+	}
 	const eff = s.value;
 	if (runID === null) { runID = eff; }
 	s.value = runID === null ? eff : runID;
@@ -974,16 +1471,20 @@ function renderRunSelector() {
 function renderHeader() {
 	$("#cfgTitle").textContent = editing || "—";
 	const run = selectedRun();
-	$("#curBadge").style.display = state.active === editing ? "" : "none";
+	$("#curBadge").style.display = editing === currentName() ? "" : "none";
 	$("#dirtyBadge").style.display = dirty ? "" : "none";
 	const ri = $("#runinfo"); ri.textContent = "";
 	if (run) {
 		ri.appendChild(el("span", "dot"));
 		const running = (run.nodes || []).filter(n => n.running).map(n => LABEL[n.node] || n.node).join("、");
-		ri.appendChild(el("span", "", `run ${run.runId} · ${run.status} · 绑定「${run.configuration}」` + (running ? " · 正在跑：" + running : "")));
+		const info = el("span", "", `${runLabel(run)} · 绑定「${run.configuration}」` + (running ? " · 正在跑：" + running : ""));
+		info.title = run.runId;
+		ri.appendChild(info);
 	} else if (selectedRunTerminal()) {
 		ri.appendChild(el("span", "dot idle"));
-		ri.appendChild(el("span", "", `run ${runID} · 已结束`));
+		const info = el("span", "", runRef(runID));
+		info.title = runID;
+		ri.appendChild(info);
 	} else {
 		ri.appendChild(el("span", "dot idle"));
 		ri.appendChild(el("span", "", BOOT.mode === "intake" ? "受理阶段/新建run" : "配置库管理"));
@@ -1024,6 +1525,10 @@ function showClosed(text) {
 }
 
 // ---------- polling / window lifecycle ----------
+// A restarted service listens on a new address with a new token this window
+// cannot know, so a poll-failure streak past POLL_DEAD_MS can never recover:
+// the poll switches to the closed state instead of retrying forever.
+const POLL_DEAD_MS = 30000;
 async function pollWindow() {
 	if (!BOOT.window) return;
 	const w = await api.get("/api/window?window=" + BOOT.window);
@@ -1047,6 +1552,7 @@ async function poll() {
 	try {
 		const prevRev = state && state.revisions;
 		await loadState();
+		downSince = 0;
 		ensureDraft();
 		lastLoadError = "";
 		if (prevRev && JSON.stringify(prevRev) !== JSON.stringify(state.revisions)) {
@@ -1060,6 +1566,12 @@ async function poll() {
 		await pollWindow();
 		if (!gone) render();
 	} catch (e) {
+		if (!downSince) downSince = Date.now();
+		if (Date.now() - downSince >= POLL_DEAD_MS) {
+			gone = true;
+			showClosed("面板服务已停止（连接持续失败），此窗口可关闭。");
+			return;
+		}
 		if (e.message !== lastLoadError) {
 			lastLoadError = e.message;
 			banner("状态读取失败（保留当前草稿，将持续重试）：" + e.message, null, false);
@@ -1152,7 +1664,7 @@ if (DOM) $("#apply").onclick = async () => {
 		return;
 	}
 	if (editing === state.active) toast(`「${editing}」已是当前启用配置`);
-	else toast(`当前启用的是「${state.active}」；在列表里用「设为当前」切换。`);
+	else toast(`当前启用的是「${state.active}」；在列表里用「设为默认」切换。`);
 };
 // Internal close posts the window close; it runs through the same dirty guard.
 if (DOM) $("#winClose").onclick = async () => {
@@ -1205,7 +1717,7 @@ async function init() {
 if (DOM) init();
 
 if (typeof module !== "undefined") {
-	module.exports = { RESP, dis, setSel, nodeEnabled, setNodeEnabled, roundKey, roundOf, setRound, execOf, setExec, gatesAll, layersChanged, selectedRun, selectedRunTerminal, settleTerminal, buildGraph, scopeLabel, optionsFor, optCache,
+	module.exports = { RESP, dis, setSel, nodeEnabled, setNodeEnabled, roundKey, roundOf, setRound, execOf, setExec, gatesAll, layersChanged, selectedRun, selectedRunTerminal, settleTerminal, buildGraph, scopeLabel, optionsFor, optCache, optionsErrorText, optionsErrorEl, shortRunId, runLabel, runRef, currentName, poll, POLL_DEAD_MS, NODE_W,
 		env: {
 			get state() { return state; }, set state(v) { state = v; },
 			get winInfo() { return winInfo; }, set winInfo(v) { winInfo = v; },
@@ -1216,6 +1728,8 @@ if (typeof module !== "undefined") {
 			get work() { return work; }, set work(v) { work = v; },
 			get dirty() { return dirty; }, set dirty(v) { dirty = v; },
 			get baselineRev() { return baselineRev; }, set baselineRev(v) { baselineRev = v; },
+			get gone() { return gone; }, set gone(v) { gone = v; },
+			get downSince() { return downSince; }, set downSince(v) { downSince = v; },
 		},
 	};
 }

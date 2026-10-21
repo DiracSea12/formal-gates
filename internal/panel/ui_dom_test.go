@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -121,7 +122,7 @@ func domResults(t *testing.T, dump string) {
 	}
 }
 
-func startDomServer(t *testing.T, b Backend, ready chan struct{}) (*Server, context.CancelFunc) {
+func startDomServer(t *testing.T, b Backend, ready chan struct{}, wraps ...func(http.Handler) http.Handler) (*Server, context.CancelFunc) {
 	t.Helper()
 	server, err := NewServer(b)
 	if err != nil {
@@ -129,6 +130,11 @@ func startDomServer(t *testing.T, b Backend, ready chan struct{}) (*Server, cont
 	}
 	if ready != nil {
 		server.handler = domDriverMiddleware(t, ready)(server.handler)
+	}
+	// Wraps must be in place before Serve captures the handler; assigning
+	// server.handler after startDomServer returns races the goroutine's read.
+	for _, wrap := range wraps {
+		server.handler = wrap(server.handler)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -259,8 +265,7 @@ func TestPanelDOMIntakeIgnoresExistingRun(t *testing.T) {
 	candidate := intakeFixture(t, root)
 	saved := &saveLog{}
 	ready := make(chan struct{}, 4)
-	server, _ := startDomServer(t, Backend{Root: root, Home: home}, ready)
-	server.handler = recordSaves(saved)(server.handler)
+	server, _ := startDomServer(t, Backend{Root: root, Home: home}, ready, recordSaves(saved))
 	window, err := server.NewWindow(candidate)
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +376,7 @@ func TestPanelDOMTwoRuns(t *testing.T) {
 	browser := panelBrowser(t)
 	home := panelHome(t)
 	root, _, _ := panelRun(t, home)
-	panelBoundRun(t, root, home, "panel-run-2", "轻量")
+	panelBoundRun(t, root, home, "panel-run-2", "备选")
 	server, _ := startDomServer(t, Backend{Root: root, Home: home}, make(chan struct{}, 4))
 	window, err := server.NewWindow("")
 	if err != nil {
@@ -457,30 +462,82 @@ func (l *tupleLog) all() []string {
 // execselMiddleware serves a faithful execution-options fixture with distinct
 // per-provider catalogues, records each requested tuple, and delays the codex
 // response so a stale same-node reply can be observed losing to a newer one.
+// Like the native adapters it fills effort options only for the queried
+// model, so a model the page has never asked about carries no effort list.
 func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
+	type entry struct {
+		value   string
+		efforts []string
+		def     string
+	}
 	return func(next http.Handler) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /api/execution-options", func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
 			log.add(q.Get("configuration") + "|" + q.Get("node") + "|" + q.Get("platform") + "|" + q.Get("model"))
 			platform := q.Get("platform")
+			platforms := []string{"codex", "zcode", "devin"}
+			installed := map[string]any{"codex": true, "zcode": true, "devin": false}
+			if platform == "default" {
+				// A descriptor without an execution-selection adapter stays on
+				// the unavailable host path, never a selectable platform.
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"node":        map[string]any{"id": q.Get("node")},
+					"platform":    "default",
+					"platforms":   platforms,
+					"installed":   installed,
+					"effective":   map[string]any{"provider": "default"},
+					"unavailable": true,
+					"host":        true,
+				})
+				return
+			}
+			if platform == "devin" {
+				// devin is adaptered but reports no model or effort catalogue,
+				// and its executable is absent from PATH here.
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"node":      map[string]any{"id": q.Get("node")},
+					"platform":  "devin",
+					"platforms": platforms,
+					"installed": installed,
+					"effective": map[string]any{"provider": "devin"},
+					"catalogue": map[string]any{"models": []any{}, "source": "execsel fixture"},
+				})
+				return
+			}
 			if platform == "codex" {
 				time.Sleep(400 * time.Millisecond)
 			}
-			models := []map[string]any{{"value": "model-A", "label": "model-A", "efforts": []string{"a-low", "a-high"}, "defaultEffort": "a-low"}}
+			entries := []entry{{"model-A", []string{"a-low", "a-high"}, "a-low"}}
 			def := map[string]any{"model": "model-A", "effort": "a-low"}
 			if platform == "zcode" {
-				models = []map[string]any{
-					{"value": "model-B", "label": "model-B", "efforts": []string{"b-low", "b-high"}, "defaultEffort": "b-low"},
-					{"value": "model-B2", "label": "model-B2", "efforts": []string{"b2-low", "b2-high"}, "defaultEffort": "b2-low"},
+				entries = []entry{
+					{"model-B", []string{"b-low", "b-high"}, "b-low"},
+					{"model-B2", []string{"b2-low", "b2-high"}, "b2-low"},
 				}
 				def = map[string]any{"model": "model-B", "effort": "b-low"}
+			}
+			target := q.Get("model")
+			if target == "" {
+				target = def["model"].(string)
+			}
+			models := []map[string]any{}
+			for _, e := range entries {
+				m := map[string]any{"value": e.value, "label": e.value}
+				if e.value == target {
+					m["efforts"] = e.efforts
+					m["defaultEffort"] = e.def
+				}
+				models = append(models, m)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"node":      map[string]any{"id": q.Get("node")},
 				"platform":  platform,
-				"platforms": []string{"codex", "zcode"},
+				"platforms": platforms,
+				"installed": installed,
 				"effective": map[string]any{"provider": platform, "model": q.Get("model")},
 				"catalogue": map[string]any{"models": models, "default": def, "source": "execsel fixture"},
 			})
@@ -505,9 +562,19 @@ func TestPanelDOMDynamicSelect(t *testing.T) {
 	if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 		t.Fatal(err)
 	}
+	// A saved provider whose executable is absent from PATH must stay visible
+	// (marked 未安装), and a saved provider that names the orchestrating host
+	// must render as a clean 宿主（主代理） state, not a dumped internal error.
+	adapterless := settings.Configuration{Execution: map[string]settings.ExecutionChoice{"repair": {Provider: "devin"}}}
+	if _, err := settings.WriteConfiguration(root, home, "project", "devin配置", adapterless, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	hostBound := settings.Configuration{Execution: map[string]settings.ExecutionChoice{"repair": {Provider: "default"}}}
+	if _, err := settings.WriteConfiguration(root, home, "project", "宿主配置", hostBound, false, nil); err != nil {
+		t.Fatal(err)
+	}
 	log := &tupleLog{}
-	server, _ := startDomServer(t, Backend{Root: root, Home: home}, make(chan struct{}, 4))
-	server.handler = execselMiddleware(log)(server.handler)
+	server, _ := startDomServer(t, Backend{Root: root, Home: home}, make(chan struct{}, 4), execselMiddleware(log))
 	window, err := server.NewWindow("")
 	if err != nil {
 		t.Fatal(err)
@@ -529,28 +596,37 @@ func TestPanelDOMDynamicSelect(t *testing.T) {
 		}
 	}()
 	domResults(t, dump)
-	found := false
 	for _, entry := range log.all() {
 		parts := strings.Split(entry, "|")
 		if len(parts) != 4 {
 			t.Fatalf("recorded tuple malformed: %q", entry)
 		}
-		if parts[0] != "默认" {
+		if parts[0] != "默认" && parts[0] != "devin配置" && parts[0] != "宿主配置" {
 			t.Fatalf("unsaved draft did not borrow the builtin base: %q", entry)
 		}
-		if parts[1] == "repair" && parts[2] == "zcode" && parts[3] == "model-B2" {
-			found = true
-		}
 	}
-	if !found {
-		t.Fatalf("model-specific tuple never queried: %v", log.all())
+	// Every queried (configuration, node, provider, model) tuple is its own
+	// cache entry: a cached model tuple answers without a query at all.
+	want := []string{
+		"默认|repair||",
+		"默认|repair|zcode|",
+		"默认|repair|zcode|model-B2",
+		"默认|repair|zcode|model-B",
+		"默认|repair|codex|",
+		"devin配置|repair|devin|",
+		"devin配置|repair|codex|",
+		"宿主配置|repair|default|",
+		"宿主配置|repair|codex|",
+	}
+	if got := log.all(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("option queries = %v, want exactly %v", got, want)
 	}
 }
 
 // injectStateMiddleware serves the real backend state plus the test's extra
-// run summaries so geometry flows can run against a faithful multi-slice
-// projection without seeding run directories.
-func injectStateMiddleware(backend Backend, extra []RunSummary) func(http.Handler) http.Handler {
+// run summaries and binding entries so geometry and badge flows can run
+// against a faithful projection without seeding run directories.
+func injectStateMiddleware(backend Backend, extra []RunSummary, bindings map[string][]string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
@@ -560,6 +636,9 @@ func injectStateMiddleware(backend Backend, extra []RunSummary) func(http.Handle
 				return
 			}
 			state.Runs = append(state.Runs, extra...)
+			for name, ids := range bindings {
+				state.Bindings[name] = append(state.Bindings[name], ids...)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(state)
 		})
@@ -577,7 +656,7 @@ func TestPanelDOMZoomFloorKeepsClickedNode(t *testing.T) {
 	root := t.TempDir()
 	backend := Backend{Root: root, Home: home}
 	injected := RunSummary{
-		RunID: "zoom-run", Status: "RUNNING", Route: "regular", Configuration: "默认",
+		RunID: "zoom-run", Status: "RUNNING", Configuration: "默认",
 		Flow: &protocol.FlowProgress{
 			PlanConfirmed: true,
 			DevelopmentBatches: []protocol.DevelopmentBatchProgress{
@@ -594,13 +673,33 @@ func TestPanelDOMZoomFloorKeepsClickedNode(t *testing.T) {
 				DevelopmentBatches: []protocol.DevelopmentBatchProgress{{ID: "za", Required: true, Status: runtime.TaskTerminal}}}},
 		},
 	}
-	server, _ := startDomServer(t, backend, make(chan struct{}, 4))
-	server.handler = injectStateMiddleware(backend, []RunSummary{injected})(server.handler)
+	server, _ := startDomServer(t, backend, make(chan struct{}, 4), injectStateMiddleware(backend, []RunSummary{injected}, nil))
 	window, err := server.NewWindow("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dump := runDOM(t, browser, window.URL+"&probe=zoomfit")
+	domResults(t, dump)
+}
+
+// TestPanelDOMBoundRunsBadge: a configuration bound by more than two runs
+// collapses the badge to a count that expands into a bounded list inside the
+// card rather than spilling every run label across it.
+func TestPanelDOMBoundRunsBadge(t *testing.T) {
+	browser := panelBrowser(t)
+	home := panelHome(t)
+	root := t.TempDir()
+	if _, err := settings.SaveConfiguration(root, home, "project", "别的", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{Root: root, Home: home}
+	bindings := map[string][]string{"别的": {"ghost-1", "ghost-2", "ghost-3"}}
+	server, _ := startDomServer(t, backend, make(chan struct{}, 4), injectStateMiddleware(backend, nil, bindings))
+	window, err := server.NewWindow("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := runDOM(t, browser, window.URL+"&probe=boundruns")
 	domResults(t, dump)
 }
 
@@ -642,5 +741,328 @@ func TestPanelDOMBadConfigRecovery(t *testing.T) {
 		}
 	}()
 	dump := runDOM(t, browser, window.URL+"&probe=badjson")
+	domResults(t, dump)
+}
+
+// flowCanvasProbe reports through the same RESULT lines the driver uses. It runs
+// inside the page as part of the served app.js (see domProbeMiddleware), so it
+// reads the applied view directly instead of re-deriving it from styles. step
+// names the phase a crash happened in, and each step guards one user-visible
+// behaviour.
+const flowCanvasProbe = `
+(async () => {
+const R = [];
+let step = "init";
+const fin0 = () => { let p = document.querySelector("#probeResult"); if (!p) { p = document.createElement("pre"); p.id = "probeResult"; document.body.appendChild(p); } p.textContent = "RESULT\n" + R.join("\n"); };
+const ok = (n, c) => { R.push((c ? "PASS" : "FAIL") + " " + n); fin0(); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const pace = () => fetch("/api/state").catch(() => {});
+const until = async (fn, n) => { for (let i = 0; i < (n || 240); i++) { const v = await fn(); if (v) return v; await pace(); await sleep(50); } return null; };
+const q = s => document.querySelector(s);
+const click = e => e && e.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+const viewOf = () => ({ x: view.x, y: view.y, z: view.z });
+const same = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z;
+const labelOf = key => { const n = q('.node[data-key="' + key + '"]'); const t = n && n.querySelector(".t"); return t ? t.textContent : null; };
+
+// The injected run renders once init() has loaded state; every step below
+// inspects that render.
+await until(() => document.querySelectorAll(".node").length >= 4);
+// Step "role labels": a confirmed plan with slices names each repeated
+// development box by its role (batch, slice batch, slice gate) and repeats the
+// slice identity in the lane header, so a lane of batches cannot be mistaken for
+// one more review stage.
+step = "role labels";
+ok("master batch label names its role", labelOf("n-dev-b1") === "开发批次 b1");
+ok("slice batch label names its role", labelOf("sl-dev-core-sb1") === "开发分片 core · 批次 sb1");
+ok("slice gate label names its role", labelOf("sl-gate-core") === "开发分片 core · 分片门");
+ok("lane header names its role", [...document.querySelectorAll(".group")].some(g => g.textContent.indexOf("开发分片 core") === 0));
+
+// Step "node header": the status pill sits in the title row and never overlaps
+// the label, every pill carries text, an ended card shows no glyph while a
+// closed card stays solid, responsibility rails keep distinct colours, and the
+// legend matches what the canvas draws.
+step = "node header";
+const nodes = [...document.querySelectorAll(".node")];
+ok("status pill sits in the title row", nodes.every(n => { const st = n.querySelector(".st"); return !st || st.parentElement.classList.contains("head"); }));
+ok("status pills are never empty", nodes.every(n => [...n.querySelectorAll(".st")].every(st => st.textContent.trim() !== "")));
+const overlap = nodes.filter(n => {
+	const t = n.querySelector(".t"), st = n.querySelector(".st");
+	if (!t || !st) return false;
+	const a = t.getBoundingClientRect(), b = st.getBoundingClientRect();
+	return a.width > 0 && b.width > 0 && a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+}).length;
+ok("labels never overlap their status pill", overlap === 0);
+ok("finished nodes drop the lock glyph", !/🔒/.test(String(getComputedStyle(q(".node.done .t"), "::after").content)));
+ok("closed nodes are solid cards", getComputedStyle(q(".node.disabled")).borderTopStyle === "solid");
+const rail = resp => getComputedStyle(q('.node[data-resp="' + resp + '"]'), "::before").backgroundColor;
+ok("responsibility rails carry distinct colours", rail("development") !== rail("gate") && rail("gate") === "rgb(246, 196, 83)" && rail("repair") !== rail("qa-blackbox"));
+ok("legend lists the repair cycle", document.querySelectorAll(".legend span").length === 5 && getComputedStyle(q(".legend .sw.loop")).borderTopStyle === "dashed");
+ok("legend swatch matches the ended node look", getComputedStyle(q(".legend .sw.done")).backgroundColor === getComputedStyle(q(".node.done")).backgroundColor);
+
+// Step "seal node": the seal renders as a non-configurable terminal operation —
+// not focusable, not selectable, and it opens no inspector.
+step = "seal node";
+const seal = q('.node[data-key="v-seal"]');
+ok("terminal seal node rendered", !!seal);
+ok("seal node is a non-configurable operation", !!seal && seal.classList.contains("op") && seal.classList.contains("terminal") && seal.getAttribute("tabindex") === "-1");
+click(seal);
+await sleep(120);
+ok("seal node cannot be selected", !q(".node.sel") && !q(".inspector.open"));
+
+// Step "repair return manifold": one return path per verification head, and no
+// sampled point of any path falls inside a node box; the manifold is captioned.
+step = "repair return manifold";
+const loops = [...document.querySelectorAll("#edges path.loop")];
+const loopEdges = graph.edges.filter(e => e.cls === "loop").length;
+ok("repair loop is drawn as one return path per verification node (" + loops.length + "/" + loopEdges + ")", loopEdges === 3 && loops.length === loopEdges);
+const boxes = () => [...document.querySelectorAll(".node")].map(n => ({ x: parseFloat(n.style.left), y: parseFloat(n.style.top), w: n.offsetWidth, h: n.offsetHeight }));
+let inside = 0, samples = 0;
+for (const p of loops) {
+	const len = p.getTotalLength();
+	for (let d = 0; d <= len; d += 2) {
+		const pt = p.getPointAtLength(d);
+		samples++;
+		for (const b of boxes()) if (pt.x > b.x + 1 && pt.x < b.x + b.w - 1 && pt.y > b.y + 1 && pt.y < b.y + b.h - 1) inside++;
+	}
+}
+ok("repair loop never enters a node box (" + inside + " of " + samples + " samples inside)", samples > 0 && inside === 0);
+ok("manifold is labelled", [...document.querySelectorAll("#edges text.loop-label")].some(t => t.textContent === "返修后重跑验证"));
+
+// Step "edge layers": every link is a dashed animated line (only the hot layers
+// drop the animation under reduced motion), the seal link is teal, a closed node
+// dims its links, a running node brightens them, and a selected node colours its
+// own links.
+step = "edge layers";
+const edges = [...document.querySelectorAll("#edges path.edge")];
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+ok("every connection is a dashed line (animated unless reduced motion: reduce=" + reduce + ")", edges.length > 0 && edges.every(p => {
+	const anim = getComputedStyle(p).animationName, hot = p.classList.contains("hot-run") || p.classList.contains("hot-sel");
+	return parseFloat(getComputedStyle(p).strokeDasharray) > 0 && anim === (reduce && hot ? "none" : "dash");
+}));
+ok("seal link is drawn teal", !!q("#edges path.seal-edge"));
+ok("closed nodes dim their links", document.querySelectorAll("#edges path.off").length > 0);
+ok("running nodes brighten their links", document.querySelectorAll("#edges path.hot-run").length > 0);
+click(q('.node[data-key="v-gate"]'));
+await until(() => q(".inspector.open"));
+ok("selected node colours its links", document.querySelectorAll("#edges path.hot-sel").length > 0);
+
+// Step "pan boundary and view retention": a drag stops with the content one
+// VIEW_PAD inside the visible band (drawer inset to inspector inset), vertically
+// fitting content stays on canvas, closing the inspector keeps the view, an
+// untouched drawer refits on close, an adjusted view is only clamped by the
+// freed width, and the scrim close keeps it as well.
+step = "pan boundary and view retention";
+const canvasEl = q("#canvas");
+const down = (x, y) => canvasEl.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: x, clientY: y }));
+const up = () => window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+const drag = (x0, y0, x1, y1) => { down(x0, y0); window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x1, clientY: y1 })); up(); };
+const settleClick = () => { down(320, 320); up(); click(canvasEl); };
+// The visible canvas band starts at the drawer inset and ends where the
+// inspector starts; the pan boundary keeps the content covering that band, so
+// a drag can leave at most VIEW_PAD of gap at a band edge.
+const band = () => { const L = drawerInset(); return { L, W: canvasEl.clientWidth - inspectorInset() - L }; };
+const contentLeft = () => view.x + contentBox().x0 * view.z;
+const contentRight = () => view.x + contentBox().x1 * view.z;
+drag(300, 300, 3300, 2300);
+const panned = viewOf();
+{
+	const b = band(), left = contentLeft(), right = contentRight();
+	ok("a large drag stops at the pan boundary (content " + Math.round(left) + ".." + Math.round(right) + ", band " + Math.round(b.L) + ".." + Math.round(b.L + b.W) + ", pad " + VIEW_PAD + ")",
+		Math.abs(left - (b.L + VIEW_PAD)) <= 1.5 && right >= b.L + b.W);
+	const box = contentBox(), H = canvasEl.clientHeight, top = view.y + box.y0 * view.z, bottom = view.y + box.y1 * view.z;
+	ok("content that fits vertically stays inside the canvas after a drag", top >= 0 && bottom <= H + 1);
+}
+drag(300, 300, 3300, 2300);
+ok("dragging further cannot cross the boundary", same(viewOf(), panned));
+settleClick();
+await until(() => !q(".inspector.open"));
+ok("blank canvas click closes the inspector and keeps the view", !q(".inspector.open") && same(viewOf(), panned));
+click(q('.node[data-key="v-gate"]'));
+await until(() => q(".inspector.open"));
+const beforeClose = viewOf();
+click(q("#insp .iconbtn"));
+await until(() => !q(".inspector.open"));
+ok("inspector close button keeps the view", same(viewOf(), beforeClose));
+// The band's right edge stops at the inspector, so a drag the other way parks
+// the content's right edge one pad short of the open inspector.
+click(q('.node[data-key="v-gate"]'));
+await until(() => q(".inspector.open"));
+drag(300, 300, -300, 300);
+{
+	const b = band(), right = contentRight();
+	ok("a drag stops at the inspector boundary (content right " + Math.round(right) + ", band " + Math.round(b.L) + ".." + Math.round(b.L + b.W) + ", inset " + inspectorInset() + ")",
+		inspectorInset() > 0 && Math.abs(right - (b.L + b.W - VIEW_PAD)) <= 1.5);
+}
+click(q("#insp .iconbtn"));
+await until(() => !q(".inspector.open"));
+// Open the drawer from either state: the open fits the graph beside it (left
+// edge at the drawer inset plus the margin). Closing that untouched view must
+// re-fit the canvas over the freed width, i.e. to the closed-drawer fit
+// position with drawer inset L=0 and margin m=30.
+if (q("#drawer").classList.contains("open")) { click(q("#libBtn")); await until(() => !q("#drawer").classList.contains("open")); }
+click(q("#libBtn"));
+await until(() => q("#drawer").classList.contains("open"));
+const drawerView = viewOf();
+click(q("#libBtn"));
+await until(() => !q("#drawer").classList.contains("open"));
+let refitLeft = 0;
+{
+	const m = 30, W = canvasEl.clientWidth, box = contentBox(), cw = (box.x1 - box.x0) * view.z;
+	const wantLeft = cw > W - 2 * m ? m : (W - cw) / 2;
+	const drawerLeft = drawerView.x + box.x0 * drawerView.z;
+	refitLeft = contentLeft();
+	ok("closing an untouched drawer refits the canvas (left " + Math.round(drawerLeft) + " -> " + Math.round(refitLeft) + ", want " + Math.round(wantLeft) + ")",
+		Math.abs(refitLeft - wantLeft) <= 1.5 && refitLeft < drawerLeft);
+}
+// Closing after a pan keeps the adjusted view: the boundary moves by exactly
+// the freed drawer width, so the view lands on the closed-drawer boundary
+// instead of the closed-drawer fit position.
+click(q("#libBtn"));
+await until(() => q("#drawer").classList.contains("open"));
+const drawerW = q("#drawer").offsetWidth;
+drag(600, 420, 660, 460);
+const adjustedDrawerView = viewOf();
+const openBoundLeft = contentLeft();
+click(q("#libBtn"));
+await until(() => !q("#drawer").classList.contains("open"));
+{
+	const left = contentLeft();
+	ok("library toggle keeps an adjusted view clamped to the closed boundary (left " + Math.round(left) + ", boundary " + Math.round(openBoundLeft - drawerW) + ", refit " + Math.round(refitLeft) + ", view.y " + Math.round(view.y) + ")",
+		Math.abs(left - (openBoundLeft - drawerW)) <= 1.5 && Math.abs(left - refitLeft) > 1.5 &&
+		view.z === adjustedDrawerView.z && Math.abs(view.y - adjustedDrawerView.y) <= 0.5);
+}
+click(q("#libBtn"));
+await until(() => q("#drawer").classList.contains("open"));
+drag(600, 420, 200, 420);
+const scrimView = viewOf();
+click(q("#scrim"));
+await until(() => !q("#drawer").classList.contains("open"));
+ok("scrim close keeps an adjusted view", same(viewOf(), scrimView) && Math.abs(contentLeft() - refitLeft) > 1.5);
+
+// Step "zoom control": the bar carries four buttons on the canvas, its
+// percentage mirrors the applied scale through zoom-in and the overview, and it
+// steps aside while the inspector is open.
+step = "zoom control";
+ok("desktop viewport for the canvas layout assertions (w=" + window.innerWidth + ")", window.innerWidth > 760);
+const bar = q(".zoombar");
+const pct = bar && bar.querySelector(".pct");
+ok("zoom control sits on the canvas", !!bar && bar.querySelectorAll("button").length === 4);
+ok("zoom percentage reflects the applied scale", !!pct && pct.textContent === Math.round(view.z * 100) + "%");
+const zIn = view.z;
+click(bar.querySelector('[data-z="in"]'));
+ok("zoom in raises the scale", view.z > zIn && pct.textContent === Math.round(view.z * 100) + "%");
+click(bar.querySelector('[data-z="fit"]'));
+ok("overview frames the whole graph", view.z <= 1 && pct.textContent === Math.round(view.z * 100) + "%");
+click(q('.node[data-key="v-gate"]'));
+await until(() => q(".inspector.open"));
+const gap = canvasEl.getBoundingClientRect().right - bar.getBoundingClientRect().right;
+ok("zoom control steps aside for the open inspector (gap " + Math.round(gap) + ")", gap > 300);
+click(q("#insp .iconbtn"));
+await until(() => !q(".inspector.open"));
+
+// Step "render guard": a poll that changes nothing keeps the same node and edge
+// elements, so the flow animation is not restarted, while a selection change
+// rebuilds them.
+step = "render guard";
+const kept = q('.node[data-key="v-qa-b"]');
+kept.dataset.probeMark = "kept";
+const keptEdge = q("#edges path");
+await sleep(4600);
+ok("graph DOM survives state polls", q('.node[data-key="v-qa-b"]') === kept && kept.dataset.probeMark === "kept" && q("#edges path") === keptEdge);
+const gateBefore = q('.node[data-key="v-gate"]');
+click(gateBefore);
+await until(() => q(".inspector.open"));
+ok("a selection change rebuilds the graph DOM", q('.node[data-key="v-gate"]') !== gateBefore);
+
+// Step "configuration rebuild": switching a responsibility off rebuilds the
+// graph, the node reads as a closed card and flashes as changed.
+step = "configuration rebuild";
+const qaBefore = q('.node[data-key="v-qa-b"]');
+click(qaBefore);
+await until(() => q(".inspector .tg"));
+click(q(".inspector .tg"));
+await until(() => q('.node[data-key="v-qa-b"]') !== qaBefore);
+ok("a configuration change rebuilds the graph DOM and its node state",
+	q('.node[data-key="v-qa-b"]') !== qaBefore && q('.node[data-key="v-qa-b"]').classList.contains("disabled"));
+ok("a changed node keeps its flash hint", q('.node[data-key="v-qa-b"]').classList.contains("flash"));
+R.push("END");
+fin0();
+})().catch(e => {
+	const p = document.createElement("pre");
+	p.id = "probeResult";
+	p.textContent = "RESULT\nFAIL probe-crashed step=" + step + " err=" + (e && e.message) + " @" + (e && e.stack && e.stack.split("\n")[1]);
+	document.body.appendChild(p);
+});
+`
+
+// domProbeMiddleware appends one behaviour probe to the served app.js, so the
+// page runs it as part of the real renderer: the probe shares app.js's script
+// scope and reads the renderer's own top-level bindings (view, graph,
+// contentBox, drawerInset, inspectorInset, VIEW_PAD) instead of guessing the
+// applied state from computed styles. No production code path learns about
+// tests.
+func domProbeMiddleware(t *testing.T, probe string) func(http.Handler) http.Handler {
+	t.Helper()
+	app, err := ui.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(next http.Handler) http.Handler {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			w.Write(app)
+			w.Write([]byte(probe))
+		})
+		mux.Handle("/", next)
+		return mux
+	}
+}
+
+// TestPanelDOMFlowCanvasRendering drives the rendered canvas over a confirmed
+// plan with slices: role-explicit labels, the terminal seal node, the repair
+// return manifold geometry, the pan boundary and view retention when a side
+// panel closes, the zoom control, and the render guard that keeps the graph DOM
+// across polls.
+func TestPanelDOMFlowCanvasRendering(t *testing.T) {
+	browser := panelBrowser(t)
+	home := panelHome(t)
+	root := t.TempDir()
+	// Both QA modes on gives the three verification heads the return manifold
+	// has to fan out to; a closed review node keeps a dimmed link on the canvas.
+	configuration := settings.Configuration{
+		QAModes:       []string{"blackbox", "whitebox"},
+		FlowSelection: &settings.FlowSelection{Disabled: []string{"start-readiness"}},
+	}
+	if _, err := settings.WriteConfiguration(root, home, "project", "视觉", configuration, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", "视觉", nil); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{Root: root, Home: home}
+	injected := RunSummary{
+		RunID: "flow-run", Status: "RUNNING", Configuration: "视觉",
+		Nodes: []protocol.ExecutionNodeState{
+			{Node: "development", Enabled: true, Running: true, Editable: true},
+			{Node: "product-review", Enabled: true, Completed: true},
+		},
+		Flow: &protocol.FlowProgress{PlanConfirmed: true, DevelopmentBatches: []protocol.DevelopmentBatchProgress{
+			{ID: "b1", Required: true, Status: runtime.TaskTerminal},
+			{ID: "b2", Required: true, DependsOn: []string{"b1"}, Status: runtime.TaskRunning},
+		}},
+		Slices: []SliceProgress{
+			{ID: "core", RunID: "flow-core", Status: "RUNNING", Flow: &protocol.FlowProgress{PlanConfirmed: true,
+				DevelopmentBatches: []protocol.DevelopmentBatchProgress{{ID: "sb1", Required: true, Status: runtime.TaskRunning}}}},
+		},
+	}
+	server, _ := startDomServer(t, backend, nil,
+		injectStateMiddleware(backend, []RunSummary{injected}, nil),
+		domProbeMiddleware(t, flowCanvasProbe))
+	window, err := server.NewWindow("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := runDOM(t, browser, window.URL+"&probe=flowcanvas", "--window-size=1440,900")
 	domResults(t, dump)
 }
