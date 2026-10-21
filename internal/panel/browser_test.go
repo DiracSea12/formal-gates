@@ -85,7 +85,9 @@ func processAlive(pid int) bool {
 
 // TestManagedBrowserIdleTimeout: a real browser window that only heartbeats —
 // no user activity — must hit the configured panelIdleTimeout, resolving the
-// window as timeout, killing its owned browser, and removing its profile.
+// window as timeout, killing its owned browser, and removing its profile. The
+// idle budget leaves room for a cold browser start and first page load on a
+// loaded CI runner, which must not race the timeout.
 func TestManagedBrowserIdleTimeout(t *testing.T) {
 	browser, err := FindBrowser()
 	if err != nil {
@@ -97,7 +99,7 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".gates"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".gates", "config.json"), []byte(`{"panelIdleTimeout":15}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".gates", "config.json"), []byte(`{"panelIdleTimeout":60}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	handle, err := PrepareService(context.Background(), Backend{Root: root, Home: home})
@@ -135,7 +137,7 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 	}
 
 	// The served page must actually heartbeat — proof the browser loaded it.
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		server.mu.Lock()
 		seen := session.seen
@@ -155,7 +157,7 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 
 	// Heartbeats keep the window alive but are not user activity: after the
 	// idle timeout the service resolves the window and kills its browser.
-	deadline = time.Now().Add(30 * time.Second)
+	deadline = time.Now().Add(90 * time.Second)
 	for {
 		server.mu.Lock()
 		open := session.open

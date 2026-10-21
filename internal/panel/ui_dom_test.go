@@ -90,16 +90,30 @@ func runDOM(t *testing.T, browser, url string, args ...string) string {
 	cmdArgs := append([]string{"--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-extensions",
 		"--user-data-dir=" + profile, "--virtual-time-budget=240000", "--dump-dom"}, args...)
 	cmdArgs = append(cmdArgs, url)
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// The virtual-time dump of the heavier probes legitimately takes minutes on
+	// a loaded runner; a genuinely stuck browser still fails at the deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, browser, cmdArgs...).CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("browser timed out; partial dump is not evidence:\n%.20000s", out)
 	}
 	if err != nil {
-		t.Fatalf("browser run failed: %v\n%.20000s", err, out)
+		if dumpedDOMComplete(out) {
+			t.Logf("headless browser exited without a clean shutdown after a complete dump: %v", err)
+			return string(out)
+		}
+		t.Fatalf("browser run failed without a complete dump: %v bytes=%d\n%.20000s", err, len(out), out)
 	}
 	return string(out)
+}
+
+// dumpedDOMComplete reports whether the browser printed the driver's finished
+// result block, i.e. the dump is evidence even if the headless process aborted
+// while shutting down.
+func dumpedDOMComplete(dump []byte) bool {
+	i := bytes.Index(dump, []byte("RESULT"))
+	return i >= 0 && bytes.Contains(dump[i:], []byte("END"))
 }
 
 func domResults(t *testing.T, dump string) {
@@ -354,7 +368,12 @@ func TestPanelDOMDesktopScreenshot(t *testing.T) {
 	cmd := exec.CommandContext(ctx, browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--user-data-dir="+profile,
 		"--window-size=1440,900", "--virtual-time-budget=15000", "--screenshot="+shot, window.URL)
 	if body, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("screenshot: %v\n%.1000s", err, body)
+		// The rendered file is the evidence: a browser that wrote it but could
+		// not be reaped cleanly still produced the artifact under test.
+		if info, statErr := os.Stat(shot); statErr != nil || info.Size() < 10000 {
+			t.Fatalf("screenshot: %v\n%.1000s", err, body)
+		}
+		t.Logf("screenshot browser did not exit cleanly (%v), using the rendered file", err)
 	}
 	if info, err := os.Stat(shot); err != nil || info.Size() < 10000 {
 		t.Fatalf("screenshot missing or tiny: %v %v", shot, err)

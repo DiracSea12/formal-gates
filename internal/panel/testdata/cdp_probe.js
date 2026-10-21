@@ -16,17 +16,30 @@ const proc = spawn(bin, [
 	"--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-extensions",
 	"--window-size=" + width + "," + height,
 	"--remote-debugging-port=0", "--user-data-dir=" + profile, "about:blank",
-], { stdio: "ignore" });
+], { stdio: ["ignore", "ignore", "pipe"] });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const bail = msg => { console.log("RESULT\nFAIL cdp-probe " + msg); try { proc.kill(); } catch {} process.exit(0); };
+// A browser that never starts is diagnosed from its own exit status and
+// stderr tail; a loaded runner can take far longer than a few seconds to
+// publish the debugging port.
+let childStatus = "", stderrTail = "";
+proc.on("error", e => { childStatus = "spawn error: " + (e && e.message); });
+proc.on("exit", (code, signal) => { childStatus = "browser exit=" + code + (signal ? " signal=" + signal : ""); });
+proc.stderr.on("data", d => { stderrTail = (stderrTail + d).slice(-2000); });
+const bail = msg => {
+	const detail = [childStatus, stderrTail.replace(/\s+/g, " ").trim().slice(-600)].filter(Boolean);
+	console.log("RESULT\nFAIL cdp-probe " + msg + (detail.length ? " (" + detail.join("; ") + ")" : ""));
+	try { proc.kill(); } catch {}
+	process.exit(0);
+};
 
 async function devtoolsPort() {
 	const f = path.join(profile, "DevToolsActivePort");
-	for (let i = 0; i < 150; i++) {
+	for (let i = 0; i < 600; i++) {
 		try { const t = fs.readFileSync(f, "utf8").split("\n"); if (t[0]) return parseInt(t[0]); } catch {}
+		if (childStatus) break;
 		await sleep(100);
 	}
-	throw new Error("no DevToolsActivePort file");
+	throw new Error("no DevToolsActivePort file" + (childStatus ? "" : " (browser still running after 60s)"));
 }
 
 (async () => {

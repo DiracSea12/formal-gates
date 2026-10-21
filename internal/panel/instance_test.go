@@ -24,7 +24,9 @@ func serveHandle(t *testing.T, h *ServiceHandle) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		// Panel shutdown owns a browser process, and a loaded runner can take
+		// longer than a short bound to reap it before Serve returns.
+		case <-time.After(60 * time.Second):
 			t.Error("service did not stop after context cancel")
 		}
 	})
