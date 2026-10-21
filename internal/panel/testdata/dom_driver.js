@@ -156,6 +156,7 @@ if (params.get("probe") === "runs") {
 	if (runs.length !== 2) { fin(); return; }
 	const sel0 = q("#runSel");
 	ok("run selector lists both runs", !!sel0 && sel0.options.length === 3);
+	ok("run selector labels each run by its requirement", !!sel0 && [...sel0.options].every(o => o.value === "" || (/requirements\.md ·/.test(o.textContent) && o.title === o.value)));
 	const shown = q("#cfgTitle").textContent;
 	const bound = runs.find(r => r.configuration === shown);
 	ok("initial view shows a bound config", !!bound);
@@ -163,7 +164,12 @@ if (params.get("probe") === "runs") {
 	step = "run switch loads bound config";
 	sel0.value = other.runId; fire(sel0, "change");
 	ok("run switch loads bound config", (await until(() => q("#cfgTitle").textContent === other.configuration)) !== null);
-	ok("run badge names selected run", (await until(() => q("#runinfo") && q("#runinfo").textContent.includes(other.runId))) !== null);
+	ok("run badge shows the requirement label, not the raw id", (await until(() => { const ri = q("#runinfo"); return ri && /requirements\.md · \d{1,2}-\d{1,2} \d{2}:\d{2} · /.test(ri.textContent) && !ri.textContent.includes(other.runId) ? ri : null; })) !== null);
+	ok("full run id kept in tooltip", !!(q("#runinfo [title]") && q("#runinfo [title]").title === other.runId));
+	ok("selector option carries the requirement label", !!sel0 && [...sel0.options].some(o => o.value === other.runId && /requirements\.md ·/.test(o.textContent)));
+	ok("（当前） badge marks the bound config in run mode", !!(row(other.configuration) && row(other.configuration).querySelector(".curmark")));
+	ok("（当前） badge not left on the pointer target", !(row(bound.configuration) && row(bound.configuration).querySelector(".curmark")));
+	ok("header badge follows the current config", q("#curBadge") && q("#curBadge").style.display !== "none" && q("#curBadge").textContent === "（当前）");
 	step = "locked node read-only on bound config";
 	const lockedNode = (other.nodes || []).find(n => !n.editable);
 	if (lockedNode) {
@@ -174,6 +180,13 @@ if (params.get("probe") === "runs") {
 	} else {
 		skip("locked node read-only on bound config");
 	}
+	step = "disabled node keeps a usable enable switch";
+	click(nodeByResp("qa-blackbox"));
+	const tgOff = await until(() => q(".inspector .tg"), 60);
+	ok("disabled node keeps a usable enable switch", !!tgOff && tgOff.disabled === false);
+	ok("disabled node not reported as ended", !/已经结束/.test((q("#insp") || {}).textContent || ""));
+	esc();
+	await until(() => !q(".inspector.open"), 60);
 	step = "dirty run switch guarded";
 	if (await until(() => q(".inspector .tg"), 30) === null) {
 		click(nodeByResp("qa-blackbox"));
@@ -296,9 +309,12 @@ if (params.get("probe") === "execsel") {
 	click(btn(d, "创建"));
 	ok("new draft becomes editing target", (await until(() => q("#cfgTitle").textContent === "未存配置" && dirtyShown())) !== null);
 	click(nodeByResp("repair"));
+	ok("options fetch shows a loading placeholder", !!q(".inspector .lockmsg.load"));
 	const selP0 = await until(() => q('.inspector select[data-f="provider"]'), 240);
 	ok("unsaved draft renders dynamic provider select", !!selP0);
+	ok("loading placeholder cleared once options land", !q(".inspector .lockmsg.load"));
 	ok("provider select lists fixture platforms", !!selP0 && [...selP0.options].some(o => o.value === "zcode"));
+	ok("uninstalled platform marked and disabled", !!selP0 && [...selP0.options].some(o => o.value === "devin" && o.disabled && /未安装/.test(o.textContent) && o.title === "可执行文件不在 PATH（未安装或未加环境变量）"));
 	if (!selP0) {
 		R.push("FAIL diag selP0-absent " + JSON.stringify({editing, sel, selKey, inspGen, inspSig, active: document.activeElement ? document.activeElement.outerHTML.slice(0, 500) : null, inspector: q("#insp") ? q("#insp").outerHTML.slice(0, 3000) : null, cacheKeys: Object.keys(optCache)}));
 		fin0(); fin(); return;
@@ -310,10 +326,26 @@ if (params.get("probe") === "execsel") {
 	ok("model select refreshed to the committed provider", !!selM);
 	ok("old provider model absent after commit", !!selM && ![...selM.options].some(o => o.value === "model-A"));
 	ok("focus restored on the rebuilt provider select", document.activeElement === q('.inspector select[data-f="provider"]'));
-	step = "committed model change refreshes efforts";
+	step = "committed model change fills only the effort row";
 	selM.focus();
 	selM.value = "model-B2"; fire(selM, "change");
+	ok("model commit keeps the catalogue mounted", !q(".inspector .lockmsg.load") && !!q('.inspector select[data-f="model"]'));
+	ok("model select holds committed value", q('.inspector select[data-f="model"]') && q('.inspector select[data-f="model"]').value === "model-B2");
+	ok("only the effort row waits for the tuple's own answer", !!q(".inspector .efforts .hint") && /正在获取强度档/.test(q(".inspector .efforts .hint").textContent));
 	ok("model-specific efforts rendered", (await until(() => [...document.querySelectorAll(".inspector .efforts button")].some(b => b.textContent === "b2-high"), 240)) !== null);
+	ok("big placeholder never appeared during the fill", !q(".inspector .lockmsg.load"));
+	ok("focus restored on the rebuilt model select", document.activeElement === q('.inspector select[data-f="model"]'));
+	step = "a new model tuple fills its own effort row once";
+	const selM2 = q('.inspector select[data-f="model"]');
+	selM2.value = "model-B"; fire(selM2, "change");
+	ok("new model tuple keeps the catalogue mounted", !q(".inspector .lockmsg.load") && !!q('.inspector select[data-f="model"]'));
+	ok("new model tuple waits only in the effort row", !!q(".inspector .efforts .hint") && /正在获取强度档/.test(q(".inspector .efforts .hint").textContent));
+	ok("new model tuple efforts rendered", (await until(() => [...document.querySelectorAll(".inspector .efforts button")].some(b => b.textContent === "b-high"), 240)) !== null);
+	step = "revisiting a cached model tuple never refetches";
+	const selM3 = q('.inspector select[data-f="model"]');
+	selM3.value = "model-B2"; fire(selM3, "change");
+	ok("cached model tuple renders efforts instantly", (await until(() => [...document.querySelectorAll(".inspector .efforts button")].some(b => b.textContent === "b2-high"), 30)) !== null);
+	ok("cached model tuple keeps the catalogue mounted", !q(".inspector .lockmsg.load"));
 	step = "reversed same-node responses keep only latest form";
 	// The first commit detaches the select synchronously while its slower
 	// response is still in flight; dispatching the next commit on that same
@@ -327,6 +359,47 @@ if (params.get("probe") === "execsel") {
 	ok("stale slower provider response did not overwrite", !!settled);
 	ok("provider select holds latest committed value", settled && q('.inspector select[data-f="provider"]').value === "zcode");
 	ok("round field rendered exactly once", document.querySelectorAll('.inspector input[data-f="round"]').length === 1);
+	// The late codex reply still lands in the cache — under its own tuple,
+	// where it can never reach the rendered zcode form.
+	const staleEntry = await until(() => optCache["未存配置|repair|codex|"] ? optCache["未存配置|repair|codex|"] : null, 240);
+	ok("stale provider response isolated in its own tuple", !!staleEntry && !!staleEntry.catalogue && staleEntry.catalogue.models.some(m => m.value === "model-A"));
+	step = "saved uninstalled provider stays visible marked";
+	click(row("devin配置"));
+	const discard = await until(() => q(".dlg"), 60);
+	if (discard) { click(btn(discard, "放弃修改")); await until(() => !q(".dlg"), 60); }
+	await until(() => q("#cfgTitle").textContent === "devin配置", 60);
+	click(nodeByResp("repair"));
+	const pSel2 = await until(() => q('.inspector select[data-f="provider"]'), 240);
+	const devOpt = pSel2 && [...pSel2.options].find(o => o.value === "devin");
+	ok("saved uninstalled provider marked and disabled", !!devOpt && devOpt.disabled && /未安装/.test(devOpt.textContent));
+	ok("uninstalled platform names the PATH check", !!devOpt && devOpt.title === "可执行文件不在 PATH（未安装或未加环境变量）");
+	ok("saved uninstalled provider stays selected", !!devOpt && devOpt.selected && pSel2.value === "devin");
+	ok("effective provider marked in the default label", !!pSel2 && /未安装/.test(pSel2.options[0].textContent));
+	ok("empty catalogue keeps only the default model entry", !!q('.inspector select[data-f="model"]') && q('.inspector select[data-f="model"]').options.length === 1);
+	ok("unreported effort list noted", (await until(() => { const h = q(".inspector .efforts .hint"); return h && /该平台未报告强度档/.test(h.textContent) ? h : null; }, 60)) !== null);
+	if (pSel2) {
+		pSel2.value = "codex"; fire(pSel2, "change");
+		const fixed = await until(() => { const m = q('.inspector select[data-f="model"]'); return m && [...m.options].some(o => o.value === "model-A") ? m : null; }, 240);
+		ok("switching to an adaptered platform restores the form", !!fixed);
+	}
+	step = "saved host provider renders 宿主（主代理）";
+	click(row("宿主配置"));
+	const discard2 = await until(() => q(".dlg"), 60);
+	if (discard2) { click(btn(discard2, "放弃修改")); await until(() => !q(".dlg"), 60); }
+	await until(() => q("#cfgTitle").textContent === "宿主配置", 60);
+	click(nodeByResp("repair"));
+	const bad = await until(() => { const lm = q(".inspector .lockmsg:not(.load)"); return lm && /宿主（主代理）/.test(lm.textContent) ? lm : null; }, 240);
+	ok("host provider renders 宿主（主代理）", !!bad);
+	ok("host label keeps the provider name", !!bad && /default/.test(bad.textContent));
+	ok("no raw adapter error dumped", !(q("#insp") && /has no execution selection adapter/.test(q("#insp").textContent)));
+	const pSel = await until(() => q('.inspector select[data-f="provider"]'), 60);
+	ok("host never listed as a selectable platform", !!pSel && ![...pSel.options].some(o => /default|宿主/.test(o.textContent)));
+	ok("unset entry shown while value is a host", !!pSel && pSel.selectedIndex >= 0 && /未选定执行平台/.test(pSel.options[pSel.selectedIndex].textContent) && pSel.value === "");
+	if (pSel) {
+		pSel.value = "codex"; fire(pSel, "change");
+		const fixed2 = await until(() => { const m = q('.inspector select[data-f="model"]'); return m && [...m.options].some(o => o.value === "model-A") ? m : null; }, 240);
+		ok("host path also recovers on an adaptered platform", !!fixed2);
+	}
 	fin();
 	return;
 }
@@ -340,7 +413,16 @@ if (params.get("probe") === "zoomfit") {
 	await until(() => document.querySelectorAll(".node").length >= 4);
 	const scale = () => { const m = /scale\(([-0-9.]+)\)/.exec(q("#world").style.transform || ""); return m ? parseFloat(m[1]) : null; };
 	await until(() => scale() !== null, 120);
-	ok("fit zoom never drops below the wheel minimum", scale() >= 0.5);
+	ok("fit zoom stays above the readability floor", scale() >= 0.8);
+	step = "overflowed fit anchors the first column";
+	// The graph is wider than the canvas at the fit floor; with no clicked
+	// node the fit pins the content's left edge to the margin. The drawer is
+	// an overlay that covers the canvas's left edge while open, so the
+	// leftmost column must land right of the drawer's measured width.
+	const leftCol = q('.node[data-key="n-product-review"]');
+	const leftRect = leftCol && leftCol.getBoundingClientRect();
+	const dr = q("#drawer"), edge = dr && dr.classList.contains("open") ? dr.offsetWidth : 0;
+	ok("first column stays clear of the drawer (L" + (leftRect ? Math.round(leftRect.left) : "absent") + ")", !!leftRect && leftRect.left >= edge + 29);
 	step = "clicked repeated node stays visible at minimum fit";
 	const far = q('.node[data-key="sl-dev-z-za"]');
 	ok("repeated slice node instance present", !!far);
@@ -355,7 +437,7 @@ if (params.get("probe") === "zoomfit") {
 			return r && r.width > 0 && getComputedStyle(q("#world")).transform !== "none" ? n : null;
 		}, 240);
 		ok("clicked instance re-rendered", !!again);
-		ok("fit stays at or above the minimum after picking (z=" + scale() + ")", scale() >= 0.5);
+		ok("fit stays at or above the readability floor after picking (z=" + scale() + ")", scale() >= 0.8);
 		const r = again.getBoundingClientRect(), c = q("#canvas").getBoundingClientRect();
 		ok("clicked slice node's center stays inside the canvas (node " + Math.round(r.left) + ".." + Math.round(r.right) + "x" + Math.round(r.top) + ".." + Math.round(r.bottom) + " canvas " + Math.round(c.right) + "x" + Math.round(c.bottom) + ")",
 			r.left + r.width / 2 >= c.left && r.left + r.width / 2 <= c.right &&
@@ -397,11 +479,48 @@ if (params.get("probe") === "intakectx") {
 	const gone = await untilReal(() => !pickShown() && q(".banner.show"), 1200);
 	ok("superseded intake drops the select action", !!gone);
 	ok("superseded restores the run selector", !!(gone && q("#runSel") && q("#runSel").style.display !== "none"));
-	ok("superseded restores the live run context", !!(gone && q("#runinfo") && q("#runinfo").textContent.includes("panel-run")));
+	ok("superseded restores the live run context", !!(gone && q("#runinfo") && /requirements\.md ·/.test(q("#runinfo").textContent) && q("#runinfo [title]") && q("#runinfo [title]").title === "panel-run"));
 	ok("superseded keeps the dirty draft", !!(gone && dirtyShown() && q("#cfgTitle").textContent === "工作"));
 	fin();
 	return;
 }
+if (params.get("probe") === "boundruns") {
+	await until(() => document.querySelectorAll(".cfg").length >= 1);
+	const card = row("别的");
+	// The drawer slide-in is a compositor transform transition that never
+	// produces frames under --dump-dom; pin it to its open state so geometry
+	// asserts measure the resting layout instead of a frozen animation frame.
+	const dr = q("#drawer"); dr.style.transition = "none"; void dr.offsetWidth;
+	const badge = card && card.querySelector(".boundruns summary.badge");
+	ok("crowded binding collapses to a count", !!badge && /绑定 3 个 run/.test(badge.textContent));
+	ok("collapsed badge does not spill run labels", !!badge && !/run ghost/.test(badge.textContent));
+	const title0 = q("#cfgTitle").textContent;
+	click(badge);
+	const cardNow = () => row("别的");
+	const list = await until(() => { const c = cardNow(); const d = c && c.querySelector(".boundruns[open]"); return d && d.querySelectorAll("div").length === 3 ? d : null; }, 60);
+	ok("badge expands the full run list", !!list);
+	ok("expanded list carries every run label", !!list && [...list.querySelectorAll("div")].every(d => /run ghost-\d/.test(d.textContent)));
+	ok("badge click did not pick the configuration", q("#cfgTitle").textContent === title0);
+	if (list) {
+		const c = cardNow();
+		c.scrollIntoView({ block: "nearest" });
+		const d = c.querySelector(".boundruns[open]");
+		const lr = d.getBoundingClientRect(), cr = c.getBoundingClientRect();
+		ok("expanded list stays inside the card (list L" + Math.round(lr.left) + " R" + Math.round(lr.right) + " card L" + Math.round(cr.left) + " R" + Math.round(cr.right) + ")",
+			lr.left >= cr.left - 1 && lr.right <= cr.right + 1);
+	}
+	ok("no horizontal overflow after expansion", document.documentElement.scrollWidth <= window.innerWidth + 1);
+	ok("drawer open for card geometry", !!q(".drawer.open"));
+	insideViewport(cardNow(), "expanded config card");
+	// A state poll rebuilds the list; re-query rather than hold a stale node.
+	const open2 = await until(() => { const c = row("别的"); return c && c.querySelector(".boundruns[open]") ? c : null; }, 50);
+	ok("expansion survives a state poll", !!open2);
+	click(open2 && open2.querySelector("summary.badge"));
+	ok("badge collapses the list again", (await until(() => { const c = row("别的"); return c && !c.querySelector(".boundruns[open]"); }, 40)) !== null);
+	fin();
+	return;
+}
+
 if (window.__PANEL__ && window.__PANEL__.mode === "intake") {
 	await until(() => pickShown() || q(".banner.show"), 300);
 	ok("intake footer shows select", pickShown());
@@ -425,10 +544,12 @@ const idle = q("#setrow input[type=number]");
 setVal(idle, "42"); fire(idle, "change");
 const st1 = await until(async () => { const s = await state(); return s.effective && s.effective.values && s.effective.values.panelIdleTimeout === 42 ? s : null; });
 step="panelIdleTimeout persisted via /api/settings";ok("panelIdleTimeout persisted via /api/settings", !!st1);
+await must(() => !idle.isConnected && q("#setrow input[type=number]")?.value === "42", "panelIdleTimeout refresh completes");
 const sel = q("#setrow input[type=checkbox]");
 click(sel);
 const st2 = await until(async () => { const s = await state(); return s.effective && s.effective.values && s.effective.values.panelSelection === false ? s : null; });
 step="panelSelection persisted via /api/settings";ok("panelSelection persisted via /api/settings", !!st2);
+await must(() => !sel.isConnected && q("#setrow input[type=checkbox]")?.checked === false, "panelSelection refresh completes");
 
 // builtin copy creates an editable copy with a real scope
 click(btn(row("默认"), "复制"));
@@ -506,6 +627,10 @@ setVal(limit, "9");
 await sleep(4600);
 const cur = q(".inspector input[type=number]");
 step="focused input keeps value across polls";ok("focused input keeps value across polls", !!cur && cur.value === "9" && document.activeElement === cur);
+
+step = "chrome text not selectable";
+ok("node text is not user-selectable", !!q(".node") && getComputedStyle(q(".node")).userSelect === "none");
+ok("input text stays selectable", !!cur && getComputedStyle(cur).userSelect !== "none");
 
 // run selector: only a real two-run fixture may claim a switch
 const runSel = q("#runSel");

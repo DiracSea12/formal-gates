@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -298,6 +299,98 @@ func nativeExecutablePath(executable string) (string, string, error) {
 	return path, source, err
 }
 
+// nativeRegularFile reports a regular file: it follows symlinks and refuses
+// directories and anything that fails to stat.
+func nativeRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// nativeAnchorLaunch derives a bundled file inside the install root a PATH
+// launcher anchors: each name found on PATH names its own install directory,
+// joined with relParts, and a regular file there is the hit. The source is
+// "PATH" because the anchor itself came off PATH.
+func nativeAnchorLaunch(names []string, relParts ...string) (string, string, bool) {
+	for _, name := range names {
+		anchor, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		candidate := filepath.Join(append([]string{filepath.Dir(resolveNativePath(anchor))}, relParts...)...)
+		if nativeRegularFile(candidate) {
+			return resolveNativePath(candidate), "PATH", true
+		}
+	}
+	return "", "", false
+}
+
+// compareNativeBundlePaths orders numeric components by value and uses
+// lexical order for the remaining path characters.
+func compareNativeBundlePaths(left, right string) int {
+	originalLeft, originalRight := left, right
+	for left != "" && right != "" {
+		leftDigits, rightDigits := 0, 0
+		for leftDigits < len(left) && left[leftDigits] >= '0' && left[leftDigits] <= '9' {
+			leftDigits++
+		}
+		for rightDigits < len(right) && right[rightDigits] >= '0' && right[rightDigits] <= '9' {
+			rightDigits++
+		}
+		if leftDigits > 0 && rightDigits > 0 {
+			l, r := strings.TrimLeft(left[:leftDigits], "0"), strings.TrimLeft(right[:rightDigits], "0")
+			if len(l) < len(r) {
+				return -1
+			}
+			if len(l) > len(r) {
+				return 1
+			}
+			if order := strings.Compare(l, r); order != 0 {
+				return order
+			}
+			left, right = left[leftDigits:], right[rightDigits:]
+			continue
+		}
+		if order := strings.Compare(left[:1], right[:1]); order != 0 {
+			return order
+		}
+		left, right = left[1:], right[1:]
+	}
+	if order := strings.Compare(left, right); order != 0 {
+		return order
+	}
+	return strings.Compare(originalLeft, originalRight)
+}
+
+// nativeFixedLaunch keeps candidate-list priority; each glob selects its
+// greatest numeric version, with a regular file required for a bundle hit.
+func nativeFixedLaunch(candidates ...string) (string, string, bool) {
+	for _, pattern := range candidates {
+		matches, err := filepath.Glob(pattern)
+		if err != nil || len(matches) == 0 {
+			continue
+		}
+		candidate := slices.MaxFunc(matches, compareNativeBundlePaths)
+		if nativeRegularFile(candidate) {
+			return resolveNativePath(candidate), "bundle", true
+		}
+	}
+	return "", "", false
+}
+
+// nativeEditorExtensionRoots names the per-editor extension directories
+// bundled provider installs ship under.
+func nativeEditorExtensionRoots() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	roots := make([]string, 0, 4)
+	for _, name := range []string{".vscode", ".cursor", ".windsurf", ".vscode-server"} {
+		roots = append(roots, filepath.Join(home, name, "extensions"))
+	}
+	return roots
+}
+
 func nativeUserHome(home string) (string, string, error) {
 	if home != "" {
 		return home, "configured", nil
@@ -375,6 +468,17 @@ func buildCaptureBinding(provider string, launch map[string]any) (map[string]any
 		files[path] = proof
 	}
 	return map[string]any{"provider": provider, "launch": launch, "files": files}, nil
+}
+
+// nativeArgv is the spawn argv for a captured launch: the executable, its
+// script operand when the binding names one, then the command's arguments.
+func nativeArgv(launch map[string]any, args ...string) []string {
+	executable, _ := getOf(launch, "executable").(string)
+	argv := []string{executable}
+	if script, _ := getOf(launch, "script").(string); script != "" {
+		argv = append(argv, script)
+	}
+	return append(argv, args...)
 }
 
 // validateNativeBinding is the proof-checking body behind every adapter's

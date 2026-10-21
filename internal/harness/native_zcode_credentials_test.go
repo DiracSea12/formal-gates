@@ -419,6 +419,50 @@ func TestZcodePathFreezePreservesExplicitHomeAndHostCatalogueResolution(t *testi
 	}
 }
 
+func TestZcodeResolvePathsDerivesScriptFromPathAnchor(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	node = resolveNativePath(node)
+	root := resolveNativePath(t.TempDir())
+	for _, name := range []string{"ZCode", "ZCode.exe"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("launcher"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(root, "resources", "glm", "zcode.cjs")
+	if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("not a protocol script"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if original, exists := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT"); exists {
+		t.Cleanup(func() { _ = os.Setenv("FORMAL_GATES_ZCODE_SCRIPT", original) })
+	}
+	_ = os.Unsetenv("FORMAL_GATES_ZCODE_SCRIPT")
+	t.Setenv("PATH", root)
+	t.Setenv("PATHEXT", ".EXE")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("ZCODE_DATA_BASE_DIR", t.TempDir())
+	t.Setenv(zcodeCredentialHelperEnv, "")
+	t.Setenv(zcodeBuiltinCatalogueEnv, "")
+	t.Setenv(zcodePersonalConfigEnv, "")
+	native, sources := map[string]string{"zcodeExecutable": node}, map[string]string{}
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["zcodeScript"] != script {
+		t.Fatalf("zcodeScript = %q, want the PATH-anchored %q", native["zcodeScript"], script)
+	}
+	if sources["zcodeScript"] != "PATH" {
+		t.Fatalf("zcodeScript source = %q, want PATH", sources["zcodeScript"])
+	}
+}
+
 func TestZcodePathFreezeKeepsInheritedCatalogueValues(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -524,5 +568,151 @@ func TestZcodePathFreezeKeepsNativeProviderPairOverBundledSeed(t *testing.T) {
 	t.Setenv(zcodePersonalConfigEnv, "other-personal.json")
 	if err := zcodeResolvePaths(native, sources); err != nil || native["zcodeBuiltinCatalogue"] != active || native["zcodePersonalConfig"] != personal || native["zcodeCataloguePinned"] != "true" {
 		t.Fatalf("frozen provider pair followed ambient paths: %v %v", native, err)
+	}
+}
+
+// The install.sh CLI is the app-server itself: a `zcode` name on PATH beside
+// no desktop resources is a direct launch with no script operand, and it
+// outranks the ZCode desktop anchor while a named script still outranks it.
+func TestZcodeResolvePathsBindsPathCLI(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	cliDir := resolveNativePath(t.TempDir())
+	for _, name := range []string{"zcode", "zcode.exe"} {
+		if err := os.WriteFile(filepath.Join(cliDir, name), []byte("cli"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The desktop anchor's payload sits in a second directory behind the CLI
+	// on PATH: the CLI tier still wins.
+	anchorDir := resolveNativePath(t.TempDir())
+	for _, name := range []string{"ZCode", "ZCode.exe"} {
+		if err := os.WriteFile(filepath.Join(anchorDir, name), []byte("launcher"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	anchorScript := filepath.Join(anchorDir, "resources", "glm", "zcode.cjs")
+	if err := os.MkdirAll(filepath.Dir(anchorScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(anchorScript, []byte("not a protocol script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if original, exists := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT"); exists {
+		t.Cleanup(func() { _ = os.Setenv("FORMAL_GATES_ZCODE_SCRIPT", original) })
+	}
+	_ = os.Unsetenv("FORMAL_GATES_ZCODE_SCRIPT")
+	t.Setenv("PATH", cliDir+string(os.PathListSeparator)+anchorDir+string(os.PathListSeparator)+filepath.Dir(node))
+	t.Setenv("PATHEXT", ".EXE")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("ZCODE_DATA_BASE_DIR", t.TempDir())
+	t.Setenv(zcodeCredentialHelperEnv, "")
+	t.Setenv(zcodeBuiltinCatalogueEnv, "")
+	t.Setenv(zcodePersonalConfigEnv, "")
+
+	cli, err := exec.LookPath("zcode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, sources := map[string]string{}, map[string]string{}
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["zcodeExecutable"] != resolveNativePath(cli) {
+		t.Fatalf("zcodeExecutable = %q, want the PATH CLI %q", native["zcodeExecutable"], resolveNativePath(cli))
+	}
+	if native["zcodeScript"] != "" {
+		t.Fatalf("zcodeScript = %q, want none for a direct CLI", native["zcodeScript"])
+	}
+	if sources["zcodeExecutable"] != "PATH" || sources["zcodeScript"] != "PATH" {
+		t.Fatalf("sources = %v, want PATH", sources)
+	}
+	binding, err := zcodeConfiguredBinding(settings.Values{Native: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := objectOrEmpty(getOf(binding, "launch"))
+	if textOf(getOf(launch, "executable")) != resolveNativePath(cli) {
+		t.Fatalf("binding launch = %v, want the CLI executable", launch)
+	}
+	if _, present := launch["script"]; present {
+		t.Fatalf("binding launch = %v, want no script operand", launch)
+	}
+
+	// A named script still outranks the CLI: the env script form keeps the
+	// node + script launch shape.
+	script := filepath.Join(cliDir, "glm", "zcode.cjs")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("not a protocol script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FORMAL_GATES_ZCODE_SCRIPT", script)
+	native, sources = map[string]string{}, map[string]string{}
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["zcodeExecutable"] != resolveNativePath(node) || native["zcodeScript"] != script {
+		t.Fatalf("resolved = %q + %q, want node + the env script", native["zcodeExecutable"], native["zcodeScript"])
+	}
+}
+
+// A `zcode` lookup can land on the desktop shell — Windows LookPath is
+// case-insensitive — and its sibling resources tree resolves the same
+// node + script launch the ZCode anchor derives, never a direct shell start.
+func TestZcodeResolvePathsDerivesScriptFromDesktopShellLookup(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	node = resolveNativePath(node)
+	root := resolveNativePath(t.TempDir())
+	for _, name := range []string{"ZCode", "ZCode.exe"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("launcher"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(root, "resources", "glm", "zcode.cjs")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("not a protocol script"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if original, exists := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT"); exists {
+		t.Cleanup(func() { _ = os.Setenv("FORMAL_GATES_ZCODE_SCRIPT", original) })
+	}
+	_ = os.Unsetenv("FORMAL_GATES_ZCODE_SCRIPT")
+	t.Setenv("PATH", root+string(os.PathListSeparator)+filepath.Dir(node))
+	t.Setenv("PATHEXT", ".EXE")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("ZCODE_DATA_BASE_DIR", t.TempDir())
+	t.Setenv(zcodeCredentialHelperEnv, "")
+	t.Setenv(zcodeBuiltinCatalogueEnv, "")
+	t.Setenv(zcodePersonalConfigEnv, "")
+	native, sources := map[string]string{}, map[string]string{}
+	if err := zcodeResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["zcodeExecutable"] != node || native["zcodeScript"] != script {
+		t.Fatalf("resolved = %q + %q, want node + the bundled script", native["zcodeExecutable"], native["zcodeScript"])
+	}
+	if sources["zcodeExecutable"] != "PATH" || sources["zcodeScript"] != "PATH" {
+		t.Fatalf("sources = %v, want PATH", sources)
+	}
+	binding, err := zcodeConfiguredBinding(settings.Values{Native: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := objectOrEmpty(getOf(binding, "launch"))
+	if textOf(getOf(launch, "executable")) != node || textOf(getOf(launch, "script")) != script {
+		t.Fatalf("binding launch = %v, want node + the bundled script", launch)
 	}
 }

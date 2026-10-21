@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -140,10 +141,48 @@ func codexToolSchemas(tools *nativeWorkspaceTools) ([]any, error) {
 
 var codexCaptureBinding = nativeCapture(codexResolvePaths, codexConfiguredBinding)
 
+// codexExtensionBinDirs is the chatgpt extension's platform binary directory
+// naming: GOOS/GOARCH mapped onto the bundle's own triples.
+var codexExtensionBinDirs = map[string]string{
+	"windows/amd64": "windows-x86_64",
+	"windows/arm64": "windows-aarch64",
+	"darwin/amd64":  "darwin-x86_64",
+	"darwin/arm64":  "darwin-aarch64",
+	"linux/amd64":   "linux-x86_64",
+	"linux/arm64":   "linux-aarch64",
+}
+
+// codexBundleCandidates names the bundled install forms in probe order: the
+// chatgpt editor extension's platform binary under every editor root, then
+// the desktop app's versioned release directory.
+func codexBundleCandidates() []string {
+	binary := "codex"
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	candidates := []string{}
+	if platform := codexExtensionBinDirs[runtime.GOOS+"/"+runtime.GOARCH]; platform != "" {
+		for _, root := range nativeEditorExtensionRoots() {
+			candidates = append(candidates, filepath.Join(root, "openai.chatgpt-*", "bin", platform, binary))
+		}
+	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		candidates = append(candidates, filepath.Join(local, "OpenAI", "Codex", "bin", "*", "codex.exe"))
+	}
+	return candidates
+}
+
 func codexResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("codexExecutable")
 	path, executableSource, err := nativeExecutablePath(executable)
+	if err != nil && executable == "codex" {
+		// The extension and desktop-app bundles are other install forms of
+		// the same CLI.
+		if candidate, source, ok := nativeFixedLaunch(codexBundleCandidates()...); ok {
+			path, executableSource, err = candidate, source, nil
+		}
+	}
 	if err != nil {
 		return &blockedError{message: "CODEX_UNAVAILABLE: codex is not on PATH"}
 	}

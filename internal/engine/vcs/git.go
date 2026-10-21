@@ -310,7 +310,7 @@ func (p *Provider) verifyRoot() error {
 	}
 	resolved, err := p.runner.Run(p.root, "git", "rev-parse", "--show-toplevel")
 	if err != nil {
-		return fmt.Errorf("cannot resolve git working root (the directory may not be a git working copy): %w", err)
+		return fmt.Errorf("cannot resolve git working root (the directory is not a git working copy; run `git init` and commit the current state first): %w", err)
 	}
 	if !SamePath(resolved, p.root) {
 		return fmt.Errorf("git working root %q does not match repository root %q", resolved, p.root)

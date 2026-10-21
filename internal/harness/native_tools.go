@@ -1033,7 +1033,7 @@ func ServeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(st
 	return serveTools(context.Background(), in, out, errout, schemas,
 		func(_ context.Context, name string, arguments json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
 			return call(name, arguments, confirm, metadata)
-		}, record, true)
+		}, record, true, nil)
 }
 
 // mcpFrame is one decoded inbound message on the transport.
@@ -1066,18 +1066,36 @@ type toolCallResult struct {
 	err     error
 }
 
+// ServePinger is the serve's server-initiated ping channel: a supervisor
+// probes the host through it while the serve blocks. Ping fails when no
+// serve holds the channel, the transport is closed, or the context expires.
+type ServePinger struct {
+	impl atomic.Pointer[func(context.Context) error]
+}
+
+func (p *ServePinger) Ping(ctx context.Context) error {
+	if impl := p.impl.Load(); impl != nil {
+		return (*impl)(ctx)
+	}
+	return fmt.Errorf("the serve transport is not running")
+}
+
+func (p *ServePinger) bind(impl func(context.Context) error) { p.impl.Store(&impl) }
+func (p *ServePinger) unbind()                               { p.impl.Store(nil) }
+
 // ServeToolsWithContext serves the workflow-control MCP surface with caller
 // context and a dedicated reader: while one tool callback runs, the
 // dispatcher still answers pings, routes notifications/cancelled by the
 // exact original request ID, and replies busy to other tool requests instead
 // of queueing workflow control calls behind a long configure. A request
 // cancellation cancels only that callback's context; closing stdin (EOF)
-// cancels the active call so the owner-facing cleanup runs.
-func ServeToolsWithContext(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
-	return serveTools(ctx, in, out, errout, schemas, call, record, false)
+// cancels the active call so the owner-facing cleanup runs. A non-nil pinger
+// stays bound for the serve's lifetime so the caller can probe the host.
+func ServeToolsWithContext(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error, pinger *ServePinger) int {
+	return serveTools(ctx, in, out, errout, schemas, call, record, false, pinger)
 }
 
-func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error, queueOrdinary bool) int {
+func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schemas []any, call func(context.Context, string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error, queueOrdinary bool, pinger *ServePinger) int {
 	frames := make(chan mcpFrame, 64)
 	decodeDone := make(chan error, 1)
 	go func() {
@@ -1146,8 +1164,46 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 	foreignReply := false
 	transportEOF := false
 	var active *toolCall
+	configureCalls := map[string]*toolCall{}
 	// Ordinary requests queued behind the active call in legacy mode.
 	var queued []mcpFrame
+	// Server-initiated ping replies route to their own request IDs.
+	pendingOutbound := map[string]chan mcpFrame{}
+	var outboundID atomic.Int64
+	pingRequest := func(reqCtx context.Context) error {
+		id := "formal-gates-ping-" + strconv.FormatInt(outboundID.Add(1), 10)
+		reply := make(chan mcpFrame, 1)
+		confirmMu.Lock()
+		if transportEOF {
+			confirmMu.Unlock()
+			return io.EOF
+		}
+		pendingOutbound[id] = reply
+		confirmMu.Unlock()
+		defer func() {
+			confirmMu.Lock()
+			delete(pendingOutbound, id)
+			confirmMu.Unlock()
+		}()
+		if err := encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "ping"}); err != nil {
+			return err
+		}
+		select {
+		case frame := <-reply:
+			if len(frame.Error) != 0 {
+				return fmt.Errorf("host ping failed: %s", frame.Error)
+			}
+			return nil
+		case <-reqCtx.Done():
+			return reqCtx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if pinger != nil {
+		pinger.bind(pingRequest)
+		defer pinger.unbind()
+	}
 	// confirmNumber reads the sequence suffix of our own form IDs; the
 	// boolean answers whether the ID was issued this serve run at all.
 	confirmNumber := func(raw json.RawMessage) (int64, bool) {
@@ -1294,6 +1350,10 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			fmt.Fprintln(errout, err)
 			return 1
 		}
+		if _, waiting := configureCalls[string(request.ID)]; waiting {
+			delete(configureCalls, string(request.ID))
+			return -1
+		}
 		confirmMu.Lock()
 		active = nil
 		foreignReply = false
@@ -1332,11 +1392,20 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			if callErr == nil {
 				callCtx, cancel := context.WithCancelCause(ctx)
 				confirmMu.Lock()
-				active = &toolCall{id: frame.ID, cancel: cancel, confirmBase: confirmationID.Load()}
-				foreignReply = false
-				earlyReplies = map[string]mcpFrame{}
+				invocation := &toolCall{id: frame.ID, cancel: cancel, confirmBase: confirmationID.Load()}
+				panelWait := !queueOrdinary && params.Name == "configure"
+				if panelWait {
+					configureCalls[string(frame.ID)] = invocation
+				} else {
+					active = invocation
+					foreignReply = false
+					earlyReplies = map[string]mcpFrame{}
+				}
 				confirmMu.Unlock()
 				confirmFunc := makeConfirm(callCtx)
+				if panelWait {
+					confirmFunc = func(any) error { return fmt.Errorf("panel configuration does not request native confirmation") }
+				}
 				request := frame.Raw
 				go func() {
 					value, err := call(callCtx, params.Name, params.Arguments, confirmFunc, params.Metadata)
@@ -1372,11 +1441,20 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 					delete(pendingConfirm, id)
 					waiter.reply <- mcpFrame{Error: json.RawMessage(strconv.Quote("native confirmation was not received: transport closed"))}
 				}
+				for id, waiter := range pendingOutbound {
+					delete(pendingOutbound, id)
+					waiter <- mcpFrame{Error: json.RawMessage(strconv.Quote("host ping was not received: transport closed"))}
+				}
 				confirmMu.Unlock()
 				// The owner pipe is gone: cancel the active call so owner
 				// cleanup (controller close, owned service EOF) runs now.
+				for _, waiting := range configureCalls {
+					waiting.cancel(io.EOF)
+				}
 				if active != nil {
 					active.cancel(io.EOF)
+				}
+				if active != nil || len(configureCalls) != 0 {
 					continue
 				}
 				select {
@@ -1412,6 +1490,17 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 					confirmMu.Unlock()
 					continue
 				}
+				// Our own ping reply resolves its waiter; a stale one is still
+				// ours, so it never counts as a foreign response.
+				if strings.HasPrefix(id, "formal-gates-ping-") {
+					confirmMu.Lock()
+					if waiter, waiting := pendingOutbound[id]; waiting {
+						delete(pendingOutbound, id)
+						waiter <- frame
+					}
+					confirmMu.Unlock()
+					continue
+				}
 				confirmMu.Lock()
 				hadPending := len(pendingConfirm) > 0
 				for waitingID, waiter := range pendingConfirm {
@@ -1426,6 +1515,9 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			}
 			if frame.Method == "notifications/cancelled" {
 				var cancelled string
+				if waiting := configureCalls[string(frame.RequestID)]; waiting != nil {
+					waiting.cancel(context.Canceled)
+				}
 				callCancelled := active != nil && bytes.Equal(frame.RequestID, active.id)
 				if callCancelled {
 					active.cancel(context.Canceled)
@@ -1484,7 +1576,7 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 					break
 				}
 			}
-			if eof && active == nil {
+			if eof && active == nil && len(configureCalls) == 0 {
 				select {
 				case err := <-decodeDone:
 					fmt.Fprintln(errout, err)
@@ -1494,10 +1586,14 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 				}
 			}
 		case <-ctx.Done():
+			for _, waiting := range configureCalls {
+				waiting.cancel(context.Canceled)
+			}
 			if active != nil {
 				active.cancel(context.Canceled)
-				outcome := <-callDone
-				if code := finishCall(outcome); code >= 0 {
+			}
+			for active != nil || len(configureCalls) != 0 {
+				if code := finishCall(<-callDone); code >= 0 {
 					return code
 				}
 			}

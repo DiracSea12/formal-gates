@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible formal workflow package with a default one-time reminder and an on-request formal flow driven by the saved workflow-node selection, including a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, ZCode, WorkBuddy, and Devin. Devin currently provides host integration only. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible formal workflow package with a default one-time reminder and an on-request formal flow driven by the saved workflow-node selection. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, ZCode, WorkBuddy, and Devin. Devin currently provides host integration only. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Devin",

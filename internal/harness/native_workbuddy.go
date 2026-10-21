@@ -18,9 +18,9 @@ import (
 
 var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", capture: workbuddyCaptureBinding, probe: workbuddyProbe, selectionOptions: workbuddySelectionOptions, arguments: workbuddyArguments, selection: streamSelection, checkSelection: workbuddyCheckSelection, sessionUnavailable: streamSessionUnavailable, stdinPrompt: true, cleanup: workbuddyCleanup, checkResult: workbuddyCheckResult, checkMessage: workbuddyCheckMessage, repeatedInit: workbuddyRepeatedInit, usageTranscript: workbuddyUsageTranscript}
 
-func workbuddySelectionOptions(executable, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
+func workbuddySelectionOptions(launch map[string]any, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
 	catalogue := host.SelectionCatalogue{Source: "WorkBuddy initialize and get_available_models"}
-	client, err := nativeSelectionControl(executable, workspace, directory, environment)
+	client, err := nativeSelectionControl(launch, workspace, directory, environment)
 	if err != nil {
 		return catalogue, err
 	}
@@ -51,7 +51,7 @@ func workbuddySelectionOptions(executable, workspace, directory string, environm
 		if option.Value == target {
 			option.Efforts = nativeStringValues(getOf(reasoning, "supportedEfforts"), "")
 			if option.Efforts == nil && getOf(entry, "supportsReasoning") == true {
-				option.Efforts, err = workbuddyCLIEfforts(executable, workspace, environment)
+				option.Efforts, err = workbuddyCLIEfforts(launch, workspace, environment)
 				if err != nil {
 					return catalogue, err
 				}
@@ -68,8 +68,9 @@ func workbuddySelectionOptions(executable, workspace, directory string, environm
 
 // WorkBuddy's native selector uses the CLI effort choices when the selected
 // reasoning model does not publish a narrower supportedEfforts list.
-func workbuddyCLIEfforts(executable, workspace string, environment map[string]string) ([]string, error) {
-	cmd := exec.Command(executable, "--help")
+func workbuddyCLIEfforts(launch map[string]any, workspace string, environment map[string]string) ([]string, error) {
+	argv := nativeArgv(launch, "--help")
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = workspace
 	cmd.Env = nativeChildEnvironment(environment)
 	output, err := cmd.Output()
@@ -103,6 +104,20 @@ func workbuddyResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("workbuddyExecutable")
 	path, executableSource, err := nativeExecutablePath(executable)
+	script := ""
+	if err != nil && executable == "codebuddy" {
+		// cbc is the same CLI's second entry name.
+		path, executableSource, err = nativeExecutablePath("cbc")
+	}
+	if err != nil && executable == "codebuddy" {
+		// The WorkBuddy desktop launcher on PATH anchors the install root; the
+		// bundled CLI is a node script inside its own resources tree.
+		if candidate, _, ok := nativeAnchorLaunch([]string{"WorkBuddy"}, "resources", "app.asar.unpacked", "cli", "bin", "codebuddy"); ok {
+			if node, nodeSource, nodeErr := nativeExecutablePath("node"); nodeErr == nil {
+				path, script, executableSource, err = node, candidate, nodeSource, nil
+			}
+		}
+	}
 	if err != nil && executable == "codebuddy" && runtime.GOOS == "darwin" {
 		path = "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
 		_, err = os.Stat(path)
@@ -142,13 +157,18 @@ func workbuddyResolvePaths(native, sources map[string]string) error {
 		product = filepath.Join(nativeHome, "cache", "acc-product-config-v3.json")
 		productSource = "workbuddyConfigRoot"
 	}
-	recordNativePaths(native, sources, map[string]string{
+	paths := map[string]string{
 		"workbuddyExecutable": resolveNativePath(path), "workbuddyHome": home,
 		"workbuddyConfigRoot": nativeHome, "workbuddyProductConfig": resolveNativePath(product),
-	}, map[string]string{
+	}
+	origins := map[string]string{
 		"workbuddyExecutable": executableSource, "workbuddyHome": homeSource,
 		"workbuddyConfigRoot": rootSource, "workbuddyProductConfig": productSource,
-	})
+	}
+	if script != "" {
+		paths["workbuddyScript"], origins["workbuddyScript"] = script, "PATH"
+	}
+	recordNativePaths(native, sources, paths, origins)
 	return nil
 }
 
@@ -168,7 +188,13 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 	if runtime.GOOS == "windows" {
 		environment["USERPROFILE"] = home
 	}
-	binding, err := buildCaptureBinding("workbuddy", map[string]any{"executable": path})
+	// A PATH-anchored desktop install binds its bundled node script as the
+	// launch's script operand; a directly installed CLI leaves it absent.
+	launch := map[string]any{"executable": path}
+	if script := config.Native["workbuddyScript"]; script != "" {
+		launch["script"] = script
+	}
+	binding, err := buildCaptureBinding("workbuddy", launch)
 	if err != nil {
 		return nil, err
 	}
@@ -177,13 +203,14 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 	for key, value := range environment {
 		env[key] = textOf(value)
 	}
-	if _, err := workbuddyProbe(path, home, env); err != nil {
+	if _, err := workbuddyProbe(launch, home, env); err != nil {
 		return nil, err
 	}
 	return binding, nil
 }
-func workbuddyProbe(executable, workspace string, environment map[string]string) (map[string]any, error) {
-	cmd := exec.Command(executable, "--help")
+func workbuddyProbe(launch map[string]any, workspace string, environment map[string]string) (map[string]any, error) {
+	argv := nativeArgv(launch, "--help")
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = workspace
 	cmd.Env = nativeChildEnvironment(environment)
 	output, err := cmd.Output()
@@ -195,7 +222,7 @@ func workbuddyProbe(executable, workspace string, environment map[string]string)
 			return nil, &blockedError{message: "WORKBUDDY_CAPABILITY: native CLI lacks " + capability}
 		}
 	}
-	return map[string]any{"provider": "workbuddy", "executable": executable, "capabilities": map[string]any{"source": "native-cli-help", "selection_observed": false}, "selection": map[string]any{}, "model_calls": 0}, nil
+	return map[string]any{"provider": "workbuddy", "executable": argv[0], "capabilities": map[string]any{"source": "native-cli-help", "selection_observed": false}, "selection": map[string]any{}, "model_calls": 0}, nil
 }
 func workbuddyValidateBinding(binding any) error { return validateNativeBinding(binding, "workbuddy") }
 func workbuddyVerifySource(directory string, source any) error {
@@ -220,7 +247,7 @@ func workbuddyReconcile(directory string, process any, services ...ExecutionServ
 	}
 	return streamReconcile(workbuddyStream, directory, process)
 }
-func workbuddyArguments(request any, directory, executable, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
+func workbuddyArguments(request any, directory string, launch map[string]any, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
 	effort, _ := getOf(request, "reasoning_effort").(string)
 	identity, _ := getOf(request, "identity").(string)
 	resume := identity != ""
@@ -270,7 +297,7 @@ func workbuddyArguments(request any, directory, executable, workspace string, en
 	if getOf(request, "read_only") == true {
 		permission = "dontAsk"
 	}
-	argv := []string{executable, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics"}
+	argv := nativeArgv(launch, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics")
 	if model, _ := getOf(request, "model").(string); model != "" {
 		argv = append(argv, "--model", model)
 	}

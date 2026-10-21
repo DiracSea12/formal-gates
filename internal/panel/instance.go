@@ -192,11 +192,6 @@ func OpenWindowOn(ctx context.Context, instance Instance, intakePath string) (Wi
 	return (&ServiceHandle{Instance: instance}).OpenWindow(ctx, intakePath)
 }
 
-// WindowStatusOn reads one delegated window's open flag and result.
-func WindowStatusOn(ctx context.Context, instance Instance, id string) (bool, *Result, error) {
-	return (&ServiceHandle{Instance: instance}).WindowStatus(ctx, id)
-}
-
 // instanceReady confirms the recorded process actually serves on its own
 // address: the token-authenticated identity endpoint answers regardless of
 // whether the project's configuration happens to parse right now, so a bad
@@ -293,8 +288,20 @@ func (h *ServiceHandle) CloseWindow(ctx context.Context, id string) error {
 
 // WindowStatus reads one window's open flag and resolved result.
 func (h *ServiceHandle) WindowStatus(ctx context.Context, id string) (bool, *Result, error) {
-	request, err := http.NewRequestWithContext(ctx, "GET",
-		"http://"+h.Instance.Addr+"/api/window?window="+id, nil)
+	return h.windowStatus(ctx, id, false)
+}
+
+// WaitWindowOn waits on the original session result without periodic polling.
+func WaitWindowOn(ctx context.Context, instance Instance, id string) (bool, *Result, error) {
+	return (&ServiceHandle{Instance: instance}).windowStatus(ctx, id, true)
+}
+
+func (h *ServiceHandle) windowStatus(ctx context.Context, id string, wait bool) (bool, *Result, error) {
+	address := "http://" + h.Instance.Addr + "/api/window?window=" + id
+	if wait {
+		address += "&wait=true"
+	}
+	request, err := http.NewRequestWithContext(ctx, "GET", address, nil)
 	if err != nil {
 		return false, nil, err
 	}
@@ -316,4 +323,55 @@ func (h *ServiceHandle) WindowStatus(ctx context.Context, id string) (bool, *Res
 		return false, nil, fmt.Errorf("window status: %s", view.Error)
 	}
 	return view.Open, view.Result, nil
+}
+
+// SelectOpenIntake applies a conversation choice to an existing intake window.
+// It neither starts a service nor opens a window when no panel is active.
+func SelectOpenIntake(ctx context.Context, root, intakePath, configuration string) error {
+	canonical, err := CanonicalRoot(root)
+	if err != nil {
+		return err
+	}
+	_, recordPath := instancePaths(canonical)
+	data, err := os.ReadFile(recordPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var instance Instance
+	if err := json.Unmarshal(data, &instance); err != nil {
+		return err
+	}
+	if !instanceReady(ctx, instance) {
+		return nil
+	}
+	body, err := json.Marshal(windowSelectRequest{Intake: intakePath, Configuration: configuration})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, "POST", "http://"+instance.Addr+"/api/window/select", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	request.Host = instance.Addr
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://"+instance.Addr)
+	request.Header.Set("X-Formal-Gates-Token", instance.Token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		var reply struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&reply); err != nil {
+			return err
+		}
+		return fmt.Errorf("select open intake: %s", reply.Error)
+	}
+	return nil
 }

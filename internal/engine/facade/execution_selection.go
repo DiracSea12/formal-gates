@@ -25,7 +25,18 @@ type ExecutionOptions struct {
 	Effective protocol.ExecutionChoice `json:"effective"`
 	Platforms []string                 `json:"platforms"`
 	Platform  string                   `json:"platform"`
-	Catalogue host.SelectionCatalogue  `json:"catalogue"`
+	// Unavailable marks a platform with no execution-selection adapter; it is
+	// a state of the saved/effective value, not a query failure, so the
+	// catalogue stays empty. Host marks the unavailable platform whose name
+	// still resolves to a registered descriptor: the lookup succeeded but
+	// its adapter is not a SelectionAdapter.
+	Unavailable bool                    `json:"unavailable,omitempty"`
+	Host        bool                    `json:"host,omitempty"`
+	Catalogue   host.SelectionCatalogue `json:"catalogue"`
+	// Installed reports, per execution platform name, whether its own
+	// executable resolution succeeds on PATH. The API surface fills it; the
+	// catalogue query itself never probes.
+	Installed map[string]bool `json:"installed,omitempty"`
 }
 
 func executionNode(value string) (definition.FlowNode, error) {
@@ -128,6 +139,11 @@ func QueryExecutionOptions(root, runtimeTarget string, native map[string]string,
 	if platform != effective.Provider {
 		model = ""
 	}
+	if adapter, err := host.LookupAdapter(platform); err != nil {
+		return ExecutionOptions{Node: node, Effective: effective, Platforms: executionPlatforms(), Platform: platform, Unavailable: true}, nil
+	} else if _, ok := adapter.(host.SelectionAdapter); !ok {
+		return ExecutionOptions{Node: node, Effective: effective, Platforms: executionPlatforms(), Platform: platform, Unavailable: true, Host: true}, nil
+	}
 	catalogue, err := selectionCatalogue(root, runtimeTarget, native, platform, model)
 	if err != nil {
 		return ExecutionOptions{}, err
@@ -195,6 +211,9 @@ func PrepareExecutionSelection(root, runtimeTarget string, native map[string]str
 	options, err := QueryExecutionOptions(root, runtimeTarget, native, current, input)
 	if err != nil {
 		return nil, err
+	}
+	if options.Unavailable {
+		return nil, fmt.Errorf("platform %q has no execution selection adapter (available: %v)", options.Platform, options.Platforms)
 	}
 	choice := options.Effective
 	if options.Platform != choice.Provider {

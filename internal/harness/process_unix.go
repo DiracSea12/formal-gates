@@ -7,6 +7,7 @@ package harness
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -73,4 +74,15 @@ func signalSupervisedChild(cmd *exec.Cmd, kill bool) {
 		signal = syscall.SIGKILL
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, signal)
+}
+
+// The native wrapper has its own process group. Both recorded groups must
+// be gone; a missing wrapper record does not prove its execution stopped.
+func nativeProcessTreeStopped(directory string, pgid int) bool {
+	process, err := readJSONFile(filepath.Join(directory, "native-process.json"))
+	if err != nil {
+		return false
+	}
+	nativePGID := intOf(getOf(process, "pgid"))
+	return pgid > 0 && nativePGID > 0 && syscall.Kill(-pgid, 0) == syscall.ESRCH && syscall.Kill(-nativePGID, 0) == syscall.ESRCH
 }

@@ -44,7 +44,7 @@ func TestUserRequirementEditsConfirmCompleteSourceAtBusinessBoundaries(t *testin
 					t.Fatal(err)
 				}
 				ensureEditableConfiguration(t, root)
-				f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "user-edit-runtime", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "user-edit", Route: "regular", BaseSnapshot: base, IntakeConfirmationReceipt: intake.IntakeCandidate}})
+				f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "user-edit-runtime", "sha256:package", DefaultProvider), Request: StartRequest{RunID: "user-edit", BaseSnapshot: base, IntakeConfirmationReceipt: intake.IntakeCandidate}})
 				if err != nil {
 					t.Fatal(err)
 				}

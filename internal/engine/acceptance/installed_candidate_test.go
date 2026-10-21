@@ -83,7 +83,7 @@ func newCandidateDriver(t *testing.T, mode string, requirementPath ...string) *c
 	p.prepareIntake(t, path)
 	p.install(t, "codex", "global")
 	saveCandidateConfiguration(t, p, mode)
-	runID := p.start(t, "regular")
+	runID := p.start(t)
 	d := &candidateDriver{p: p, t: t, mode: mode, runID: runID}
 	d.drive()
 	return d

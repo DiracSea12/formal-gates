@@ -2,6 +2,8 @@ package panel
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -227,6 +229,25 @@ func TestPanelHTTPMutationsRequireBothRevisionsAndConflictWritesNothing(t *testi
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("state after failed options = %d", response.StatusCode)
+	}
+}
+
+// TestOpenWindowErrorText: a missing managed browser appends the non-panel
+// settings path to the window-open failure; other launch failures keep their
+// own text.
+func TestOpenWindowErrorText(t *testing.T) {
+	var unavailable error = &ErrBrowserUnavailable{Reason: "no desktop session"}
+	for _, err := range []error{unavailable, fmt.Errorf("launch: %w", unavailable)} {
+		text := openWindowErrorText(err)
+		for _, want := range []string{"managed browser unavailable", "settings set", "--execution-node", "only when the platform reports"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("browser-unavailable text for %v missing %q: %s", err, want, text)
+			}
+		}
+	}
+	other := errors.New("profile directory locked")
+	if got := openWindowErrorText(other); got != other.Error() {
+		t.Fatalf("ordinary launch error rewritten: %q", got)
 	}
 }
 

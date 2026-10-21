@@ -25,7 +25,7 @@ func TestRequirementChangeRetiresPendingPlanConfirmation(t *testing.T) {
 			}
 			configureFlowNodes(t, root, "product-review", "start-readiness", "qa", "gate", "repair")
 			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
-				RunID: "development-confirmation", Route: "regular", BaseSnapshot: base,
+				RunID: "development-confirmation", BaseSnapshot: base,
 				IntakeConfirmationReceipt: intake.IntakeCandidate,
 			}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 			if err != nil {

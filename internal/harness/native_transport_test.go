@@ -643,3 +643,80 @@ func TestResolveNativePath(t *testing.T) {
 		t.Fatalf("created path identity changed = %q, want %q", got, want)
 	}
 }
+
+// The PATH-anchored install form derives a bundled file from the launcher's
+// own directory: an anchor with its payload binds the resolved path, a
+// missing payload or a missing anchor is simply not that install form.
+func TestNativeAnchorLaunch(t *testing.T) {
+	writeLauncher := func(dir, name string) {
+		t.Helper()
+		for _, file := range []string{name, name + ".exe"} {
+			if err := os.WriteFile(filepath.Join(dir, file), []byte("launcher"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	first, second := resolveNativePath(t.TempDir()), resolveNativePath(t.TempDir())
+	writeLauncher(first, "Anchor")
+	writeLauncher(second, "Other")
+	payload := filepath.Join(second, "resources", "pkg", "tool.cjs")
+	if err := os.MkdirAll(filepath.Dir(payload), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payload, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	t.Setenv("PATHEXT", ".EXE")
+
+	path, source, ok := nativeAnchorLaunch([]string{"Anchor", "Other"}, "resources", "pkg", "tool.cjs")
+	if !ok || path != payload || source != "PATH" {
+		t.Fatalf("anchor launch = %q %q %v, want %q PATH true", path, source, ok, payload)
+	}
+	if _, _, ok := nativeAnchorLaunch([]string{"Anchor"}, "resources", "pkg", "tool.cjs"); ok {
+		t.Fatal("an anchor without its payload resolved as a hit")
+	}
+	if _, _, ok := nativeAnchorLaunch([]string{"Absent"}, "resources", "pkg", "tool.cjs"); ok {
+		t.Fatal("a missing anchor resolved as a hit")
+	}
+}
+
+// The fixed-candidate form probes bounded paths and globs: a glob match picks
+// the last sorted version directory, and only a regular file is a hit.
+func TestNativeFixedLaunch(t *testing.T) {
+	root := resolveNativePath(t.TempDir())
+	for _, version := range []string{"896a0166b774037a", "ce4759538b7f2f1a"} {
+		tool := filepath.Join(root, "versions", version, "tool.exe")
+		if err := os.MkdirAll(filepath.Dir(tool), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tool, []byte(version), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A sorted-last miss does not stop the probe at the candidate level: the
+	// earlier literal candidate still wins by list order.
+	literal := filepath.Join(root, "fixed", "tool")
+	if err := os.MkdirAll(filepath.Dir(literal), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(literal, []byte("literal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, source, ok := nativeFixedLaunch(filepath.Join(root, "versions", "*", "tool.exe"))
+	want := filepath.Join(root, "versions", "ce4759538b7f2f1a", "tool.exe")
+	if !ok || path != want || source != "bundle" {
+		t.Fatalf("glob launch = %q %q %v, want %q bundle true", path, source, ok, want)
+	}
+	path, _, ok = nativeFixedLaunch(literal, filepath.Join(root, "versions", "*", "tool.exe"))
+	if !ok || path != literal {
+		t.Fatalf("list order = %q %v, want the literal candidate first", path, ok)
+	}
+	if _, _, ok := nativeFixedLaunch(filepath.Join(root, "versions", "*", "absent.exe")); ok {
+		t.Fatal("no regular file resolved as a hit")
+	}
+	if _, _, ok := nativeFixedLaunch(filepath.Join(root, "absent")); ok {
+		t.Fatal("a missing path resolved as a hit")
+	}
+}

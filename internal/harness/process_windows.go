@@ -5,6 +5,8 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"formal-gates/internal/coordination"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -136,4 +138,18 @@ func signalSupervisedChild(cmd *exec.Cmd, kill bool) {
 		return
 	}
 	_ = windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(cmd.Process.Pid))
+}
+
+// The supervisor owns a KILL_ON_JOB_CLOSE job. Its recorded native child
+// must also be gone before acknowledging the stopped tree.
+func nativeProcessTreeStopped(directory string, _ int) bool {
+	process, err := readJSONFile(filepath.Join(directory, "native-process.json"))
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	pid := intOf(getOf(process, "pid"))
+	return pid > 0 && !coordination.ProcessAlive(pid)
 }

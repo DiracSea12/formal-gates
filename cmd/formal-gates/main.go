@@ -13,6 +13,8 @@ import (
 func main() {
 	facade.NativeSourceVerifier = harness.NativeResultEvidence
 	facade.NativeStartVerifier = harness.NativeStartEvidence
+	facade.NativeJobAlive = harness.NativeJobAlive
+	facade.NativeJobStopped = harness.NativeJobStopped
 	if len(os.Args) > 1 && os.Args[1] == "harness" {
 		if len(os.Args) > 2 && os.Args[2] == "supervise" {
 			// The supervisor CLI owns cancellation signals until os.Exit.

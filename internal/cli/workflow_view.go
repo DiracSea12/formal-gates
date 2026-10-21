@@ -25,7 +25,7 @@ func workflowRunView(run facade.Run) map[string]any {
 			next["detail"] = run.Next.Wait.Detail
 		}
 	}
-	view := map[string]any{"runId": run.RunID, "status": run.Status, "route": run.Route, "revision": run.Revision, "next": next, "unverified": run.Unverified}
+	view := map[string]any{"runId": run.RunID, "status": run.Status, "revision": run.Revision, "next": next}
 	view["nodeStates"] = run.NodeStates
 	if run.SummaryPath != "" {
 		view["summaryPath"] = run.SummaryPath
@@ -274,7 +274,7 @@ func workflowReviewChoices(review facade.ReviewFace) []map[string]any {
 func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any {
 	current := workflowRunView(candidate.Run)
 	run := map[string]any{}
-	for _, key := range []string{"runId", "revision", "route", "status"} {
+	for _, key := range []string{"runId", "revision", "status"} {
 		run[key] = current[key]
 	}
 	questions := []map[string]any{}

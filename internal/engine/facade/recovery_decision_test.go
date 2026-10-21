@@ -514,3 +514,69 @@ func TestWorkerRecoveryCarryKeepsOriginalAskAndWork(t *testing.T) {
 		t.Fatal("carried recovery lost original work or workspace")
 	}
 }
+
+// A FAILED spawn receipt lives only in SpawnFailures (the dispatch never left
+// the host). Recovery decisions must still land their bookkeeping consequence:
+// no native effect is signed for a session that never existed — the owed work
+// is re-dispatched through the normal retry channel instead of deadlocking.
+func TestFailedSpawnDecisionInstallsReplacement(t *testing.T) {
+	t.Parallel()
+	for _, choice := range []string{"fresh", "resume"} {
+		t.Run(choice, func(t *testing.T) {
+			d := newValidationDriver(t, "blackbox", "quality")
+			id, input := d.action("engine.development.batch.v6")
+			original := d.run.Attempts[input.Binding.Task]
+			failure, err := protocol.NewSpawnReceiptWithFailureClass(d.eventID(), id, d.host(), id, protocol.SpawnStatusFailed, "USER_ACTION_REQUIRED")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(failure)
+			d.drive()
+			snapshot, err := d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, known := snapshot.State.SpawnReceipts[id]; known || len(snapshot.State.SpawnFailures[id]) != 1 {
+				t.Fatal("fixture precondition failed: failed spawn must live only in the failure ledger")
+			}
+			var request string
+			for _, ask := range d.run.PendingAsks {
+				if ask.Control == protocol.ControlRecovery {
+					request = ask.RequestID
+				}
+			}
+			if request == "" {
+				t.Fatal("failed spawn produced no recovery ask")
+			}
+			token, err := d.f.Freshness(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := protocol.NewDecideEvent(d.eventID(), protocol.RequestID(request), token, protocol.AskOptionID(choice))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.submit(decision)
+			d.drive()
+			snapshot, err = d.f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, intent := range snapshot.State.PendingHostActions {
+				if intent.Correlation == request {
+					t.Fatalf("failed spawn signed a native effect for a session that never started: %+v", intent)
+				}
+			}
+			next, ok := snapshot.State.Attempts[input.Binding.Task]
+			if !ok || next.ActionID == id || next.Attempts != original.Attempts+1 {
+				t.Fatalf("%s on a failed spawn did not land a replacement attempt: %+v", choice, next)
+			}
+			if _, issued := snapshot.State.PendingActions[next.ActionID]; !issued {
+				t.Fatal("replacement attempt was never issued")
+			}
+			if _, _, err := snapshot.State.WorkerExecutionIdentity(next.ActionID, next.ID, "", d.f.definition); err != nil {
+				t.Fatalf("replacement worker stays blocked on the original recovery: %v", err)
+			}
+		})
+	}
+}

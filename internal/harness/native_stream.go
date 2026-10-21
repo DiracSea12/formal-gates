@@ -18,9 +18,9 @@ type streamAdapter struct {
 	repeatedInit       func(map[string]any, map[string]any) bool
 	provider, prefix   string
 	capture            func() (map[string]any, error)
-	probe              func(string, string, map[string]string) (map[string]any, error)
-	selectionOptions   func(string, string, string, map[string]string, string) (host.SelectionCatalogue, error)
-	arguments          func(any, string, string, string, map[string]string, string) ([]string, string, error)
+	probe              func(map[string]any, string, map[string]string) (map[string]any, error)
+	selectionOptions   func(map[string]any, string, string, map[string]string, string) (host.SelectionCatalogue, error)
+	arguments          func(any, string, map[string]any, string, map[string]string, string) ([]string, string, error)
 	selection          func(any) map[string]any
 	checkSelection     func(any, map[string]any) error
 	sessionUnavailable func(string, string) error
@@ -35,18 +35,18 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	if err != nil {
 		return nil, err
 	}
-	executable, _ := getOf(getOf(binding, "launch"), "executable").(string)
-	if executable == "" {
+	launch := objectOrEmpty(getOf(binding, "launch"))
+	if executable, _ := getOf(launch, "executable").(string); executable == "" {
 		return nil, &bindingError{message: adapter.prefix + "_BINDING: missing executable"}
 	}
 	environment := nativeBindingEnvironment(binding)
 	workspace, _ := getOf(request, "workspace").(string)
 	if probe {
 		if getOf(request, "selection_options") == true && adapter.selectionOptions != nil {
-			catalogue, err := adapter.selectionOptions(executable, workspace, directory, environment, nativeSelectionString(getOf(request, "selection_model")))
+			catalogue, err := adapter.selectionOptions(launch, workspace, directory, environment, nativeSelectionString(getOf(request, "selection_model")))
 			return map[string]any{"selection_options": catalogue, "model_calls": 0}, err
 		}
-		return adapter.probe(executable, workspace, environment)
+		return adapter.probe(launch, workspace, environment)
 	}
 	prompt, ok := getOf(request, "prompt").(string)
 	if !ok {
@@ -56,7 +56,7 @@ func streamExecute(adapter streamAdapter, request any, directory string, probe b
 	if !ok {
 		return nil, fmt.Errorf("read_only must be a boolean")
 	}
-	argv, nativeWorkspace, err := adapter.arguments(request, directory, executable, workspace, environment, prompt)
+	argv, nativeWorkspace, err := adapter.arguments(request, directory, launch, workspace, environment, prompt)
 	if err != nil {
 		return nil, err
 	}

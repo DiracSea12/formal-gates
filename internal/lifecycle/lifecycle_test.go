@@ -8,7 +8,7 @@ import (
 
 func TestNativeLifecycleRetainsBoundIdentityAcrossRepeatedObservations(t *testing.T) {
 	for _, descriptor := range host.All() {
-		if !descriptor.Installable {
+		if !descriptor.LifecycleRequired {
 			continue
 		}
 		t.Run(descriptor.ID, func(t *testing.T) {
@@ -88,12 +88,24 @@ func TestRunLifecycleActiveMarkerEndsIdempotently(t *testing.T) {
 }
 
 func TestLifecycleUnavailableProviderDoesNotInventEvents(t *testing.T) {
-	root := t.TempDir()
-	if err := BindDispatchWithProvider(root, "run", "dispatch", "identity", host.Default); err != nil {
-		t.Fatal(err)
-	}
-	got, err := VerifyDispatch(root, "run", "dispatch")
-	if err != nil || got.Outcome != Unavailable || got.StartObserved || got.StopObserved {
-		t.Fatal(got, err)
+	for _, descriptor := range host.All() {
+		if descriptor.LifecycleRequired {
+			continue
+		}
+		t.Run(descriptor.ID, func(t *testing.T) {
+			root := t.TempDir()
+			if err := BindDispatchWithProvider(root, "run", "dispatch", "identity", descriptor.ID); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				got, err := VerifyDispatch(root, "run", "dispatch")
+				if err != nil || got.Outcome != Unavailable || got.Provider != descriptor.ID || got.DispatchID != "dispatch" || got.Identity != "identity" || got.StartObserved || got.StopObserved {
+					t.Fatal(got, err)
+				}
+			}
+			if err := BindDispatchWithProvider(root, "run", "dispatch", "different", descriptor.ID); err == nil {
+				t.Fatal("binding identity changed")
+			}
+		})
 	}
 }

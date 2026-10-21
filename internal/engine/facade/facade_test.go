@@ -38,29 +38,15 @@ func testReceipt() IntakeConfirmationReceipt {
 	}
 }
 
-func TestLightweightVerticalLoopAndReplay(t *testing.T) {
+func TestTerminalRunRetainsOnlyDurableEvidenceAndReplaysReadOnly(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	configureLightweight(t, root)
-	request := StartRequest{
-		RunID: "lightweight-replay", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
-		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}
-	f, run, err := Start(StartOptions{Root: root, Request: request, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	if run.Status != "ACTIVE" || run.IntakeReceipt != nil {
-		t.Fatalf("initial projection = %+v", run)
-	}
-	completed, err := f.Drive()
-	if err != nil {
-		t.Fatalf("drive: %v", err)
-	}
-	if completed.Status != "COMPLETE" || !completed.Unverified || string(completed.Next.Kind) != "COMPLETE" {
+	d := concludePromoted(t)
+	f := d.f
+	completed := d.run
+	if completed.Status != "COMPLETE" || string(completed.Next.Kind) != "COMPLETE" {
 		t.Fatalf("terminal projection = %+v", completed)
 	}
-	stateDir := filepath.Join(root, EngineNamespace, request.RunID)
+	stateDir := f.stateDir
 	statePath := filepath.Join(stateDir, "state.json")
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("terminal drive retained active state: %v", err)
@@ -85,21 +71,21 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 		t.Fatalf("terminal replay mutated state: first=%d second=%d", completed.Revision, second.Revision)
 	}
 	var summary TerminalSummary
-	data, err := os.ReadFile(filepath.Join(root, EngineNamespace, request.RunID, "terminal-summary.json"))
+	data, err := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(data, &summary); err != nil {
 		t.Fatal(err)
 	}
-	if !summary.Unverified || string(summary.Next.Kind) != "COMPLETE" {
+	if summary.Status != "COMPLETE" || string(summary.Next.Kind) != "COMPLETE" {
 		t.Fatalf("summary = %+v", summary)
 	}
 	firstSummary := string(data)
 	if _, err := f.Drive(); err != nil {
 		t.Fatalf("second terminal replay drive: %v", err)
 	}
-	secondSummary, err := os.ReadFile(filepath.Join(root, EngineNamespace, request.RunID, "terminal-summary.json"))
+	secondSummary, err := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +101,11 @@ func TestLightweightVerticalLoopAndReplay(t *testing.T) {
 func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	receipt := testReceipt()
 	receipt.RequirementRevision = ""
-	_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: "invalid-intake", Route: "lightweight",
+	_, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+		RunID: "invalid-intake", BaseSnapshot: testkit.FrozenSnapshot,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
@@ -131,34 +117,12 @@ func TestStartRejectsInvalidReceiptBeforeStateWrite(t *testing.T) {
 	}
 }
 
-func TestStartRejectsInconsistentRouteBeforeRunWrite(t *testing.T) {
-	t.Parallel()
-	for _, route := range []string{"regular", " ", "unsupported"} {
-		t.Run(fmt.Sprintf("route=%q", route), func(t *testing.T) {
-			root := t.TempDir()
-			configureLightweight(t, root)
-			admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
-			for attempt := 0; attempt < 2; attempt++ {
-				f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
-					RunID: "explicit-route", Route: route, IntakeConfirmationReceipt: testReceipt(),
-				}, Admission: admission})
-				if err == nil || !strings.Contains(err.Error(), "differs from configuration route") || f != nil || run.RunID != "" {
-					t.Fatalf("inconsistent route started a run: %+v %v", run, err)
-				}
-				if _, err := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(err) {
-					t.Fatalf("inconsistent route wrote run files: %v", err)
-				}
-			}
-		})
-	}
-}
-
 func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	request := StartRequest{
-		RunID: "concurrent-start", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		RunID: "concurrent-start", DefinitionSource: DefaultDefinitionSource, BaseSnapshot: testkit.FrozenSnapshot,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}
 	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
@@ -175,7 +139,7 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			f, run, err := Start(StartOptions{Root: root, Request: request, Admission: admission})
+			f, run, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: request, Admission: admission})
 			results <- result{f: f, run: run, err: err}
 		}()
 	}
@@ -203,16 +167,16 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 	if winner == nil || failures != 1 {
 		t.Fatalf("concurrent starts yielded winner=%v failures=%d", winner != nil, failures)
 	}
-	completed, err := winner.Drive()
-	if err != nil || completed.Status != "COMPLETE" {
-		t.Fatalf("winning run after loser rejection = %+v err=%v", completed, err)
+	driven, err := winner.Drive()
+	if err != nil || driven.Status != "ACTIVE" {
+		t.Fatalf("winning run after loser rejection = %+v err=%v", driven, err)
 	}
 }
 
 func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	runID := "recover-start-intent"
 	stateDir := filepath.Join(root, EngineNamespace, runID)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -224,8 +188,8 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID, Admission: *testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)}); err != nil {
 		t.Fatal(err)
 	}
-	f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+	f, run, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+		RunID: runID, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil || f == nil || run.Status != "ACTIVE" {
@@ -242,20 +206,10 @@ func TestStartRecoversIncompleteStartIntent(t *testing.T) {
 // 用、过期 intent 被清。
 func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	configureLightweight(t, root)
-	options := StartOptions{Root: root, Request: StartRequest{
-		RunID: "summary-retention", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
-		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)}
-	f, _, err := Start(options)
-	if err != nil {
-		t.Fatalf("initial start: %v", err)
-	}
-	run, err := f.Drive()
-	if err != nil || run.Status != "COMPLETE" {
-		t.Fatalf("drive to completion = %+v err=%v", run, err)
-	}
+	d := concludePromoted(t)
+	f := d.f
+	root := f.root
+	run := d.run
 	summaryPath := filepath.Join(root, EngineNamespace, run.RunID, "terminal-summary.json")
 	before, err := os.ReadFile(summaryPath)
 	if err != nil {
@@ -267,7 +221,11 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 	if err := writeJSONAtomic(startIntentPath(root, run.RunID), startIntent{RunID: run.RunID, Admission: f.admission}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Start(options); err == nil || !strings.Contains(err.Error(), "already exists") {
+	retry := StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+		RunID: run.RunID, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &f.admission}
+	if _, _, err := Start(retry); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("same-ID start on the completed run = %v", err)
 	}
 	after, readErr := os.ReadFile(summaryPath)
@@ -285,7 +243,7 @@ func TestCompletedRunEvidenceSurvivesSameIDStartRetry(t *testing.T) {
 func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	admission := testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)
 	unlock, err := coordination.AcquirePath(admission.RegistryPath+".lock", "admission")
 	if err != nil {
@@ -293,8 +251,8 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-			RunID: "admission-lock", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		_, _, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+			RunID: "admission-lock", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
 		}, Admission: admission})
 		result <- err
@@ -335,30 +293,19 @@ func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
 
 func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	configureLightweight(t, root)
-	runID := "recover-terminal-intent"
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
-		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
-		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
-	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
+	// 模拟摘要发布后、intent 清理前崩溃留下的持久面：intent 是恢复的唯
+	// 一权威，summary 与 state.json 已被清理。
+	d := concludePromoted(t)
+	f := d.f
+	summary, err := f.readSummary()
 	if err != nil {
-		t.Fatalf("start: %v", err)
+		t.Fatal(err)
 	}
-	receipt := testReceipt()
-	digest, err := IntakeDigest(receipt)
-	if err != nil {
-		t.Fatalf("intake digest: %v", err)
+	if err := os.Remove(terminalSummaryPath(f.stateDir)); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, protocol.Observation{}); err != nil {
-		t.Fatalf("record intake receipt: %v", err)
-	}
-	if _, err := f.engine.CompleteAll(protocol.Observation{}); err != nil {
-		t.Fatalf("complete engine: %v", err)
-	}
-	run, err := f.project(nil)
-	if err != nil {
-		t.Fatalf("project complete run: %v", err)
+	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summary); err != nil {
+		t.Fatalf("write terminal intent: %v", err)
 	}
 	checkWaiting := func(reader *Facade) {
 		t.Helper()
@@ -373,24 +320,7 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 			t.Fatalf("unpublished Next: %+v %v", next, err)
 		}
 	}
-	checkWaiting(f)
-	if _, err := os.Stat(terminalIntentPath(f.stateDir)); !os.IsNotExist(err) {
-		t.Fatal("read created cleanup intent")
-	}
-	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run, ownerInterval{})); err != nil {
-		t.Fatalf("write terminal intent: %v", err)
-	}
-	pending, err := f.Show()
-	if err != nil || pending.Status != "FINALIZING_CLEANUP" || pending.Next.Kind != decision.KindWait || pending.Next.Wait.Reason != decision.WaitEngineInternal {
-		t.Fatalf("terminal cleanup projection = %+v err=%v", pending, err)
-	}
-	if err := f.store.CleanupTerminal(); err != nil {
-		t.Fatalf("simulate cleanup: %v", err)
-	}
-	if _, err := os.Stat(terminalSummaryPath(f.stateDir)); !os.IsNotExist(err) {
-		t.Fatalf("summary unexpectedly exists before recovery: %v", err)
-	}
-	opened, err := Open(root, runID)
+	opened, err := Open(f.root, f.runID)
 	if err != nil {
 		t.Fatalf("open terminal intent: %v", err)
 	}
@@ -453,8 +383,8 @@ func TestIntakeDigestCanonicalizesArtifactOrderAndBindsAuthorityAndTransport(t *
 func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
-	requirement := []byte("# requirement\n")
+	verifiedStartFixture(t, root)
+	requirement := []byte(validationDocument)
 	solution := []byte("# solution\n")
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), requirement, 0o600); err != nil {
 		t.Fatal(err)
@@ -470,8 +400,8 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	receipt.RequirementSource = "./requirements.md"
 	receipt.Artifacts[0], receipt.Artifacts[1] = receipt.Artifacts[1], receipt.Artifacts[0]
 	receipt.Artifacts[0].Path = "./requirements.md"
-	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Request: StartRequest{
-		RunID: "canonical-artifacts", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+	f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+		RunID: "canonical-artifacts", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, root, "target-1", "sha256:package", DefaultProvider)})
 	if err != nil {
@@ -494,6 +424,9 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	if _, err := f.Drive(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := abortVerifiedRun(t, f); err != nil {
+		t.Fatal(err)
+	}
 	var summary TerminalSummary
 	data, err = os.ReadFile(filepath.Join(root, EngineNamespace, "canonical-artifacts", "terminal-summary.json"))
 	if err != nil {
@@ -507,7 +440,7 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 	}
 
 	badRoot := t.TempDir()
-	configureLightweight(t, badRoot)
+	verifiedStartFixture(t, badRoot)
 	if err := os.WriteFile(filepath.Join(badRoot, "requirements.md"), requirement, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -515,8 +448,8 @@ func TestStartCanonicalizesArtifactsAndChecksSolutionDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt.SolutionDigest = "sha256:" + fmt.Sprintf("%064d", 0)
-	_, _, err = Start(StartOptions{Root: badRoot, ArtifactRoot: badRoot, Request: StartRequest{
-		RunID: "bad-solution-digest", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+	_, _, err = Start(StartOptions{Root: badRoot, ArtifactRoot: badRoot, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{
+		RunID: "bad-solution-digest", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource,
 		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
 	}, Admission: testAdmission(t, badRoot, "target-1", "sha256:package", DefaultProvider)})
 	if err == nil || !strings.Contains(err.Error(), InvalidIntakeConfirmation) {
@@ -558,7 +491,7 @@ func newEngineRouteFacade(t *testing.T, runID string) *Facade {
 		SolutionRevision: "s1", SolutionDigest: "sha256:solution",
 	}
 	fp := protocol.Observation{}
-	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, "", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, "provider.test", fp, runID, confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, fp); err != nil {
@@ -653,13 +586,15 @@ func TestFacadeProjectsThePendingRequirementAsk(t *testing.T) {
 func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
 	t.Parallel()
 	f := newEngineRouteFacade(t, "pending-asks-face")
-	options := []protocol.AskOption{{ID: "no-split", Label: "不拆分"}, {ID: "split", Label: "拆分"}}
-	topology, err := protocol.NewRequestEvent("req-face-topology", protocol.ControlConfirmTopology, options...)
+	// 拓扑/路线 Ask 在本夹具前置审查未满足时不落为可决 Ask；终止 Ask
+	// 无前置门，承担「普通控制 Ask 也投影」的覆盖。
+	options := []protocol.AskOption{{ID: "abort", Label: "终止"}, {ID: "cancel", Label: "取消"}}
+	abortAsk, err := protocol.NewRequestEvent("req-face-abort", protocol.ControlAbort, options...)
 	if err != nil {
-		t.Fatalf("topology ask event: %v", err)
+		t.Fatalf("abort ask event: %v", err)
 	}
-	if _, _, err := f.Submit(topology); err != nil {
-		t.Fatalf("submit topology ask: %v", err)
+	if _, _, err := f.Submit(abortAsk); err != nil {
+		t.Fatalf("submit abort ask: %v", err)
 	}
 	grant, err := protocol.NewRequestEvent("req-face-grant", protocol.ControlReviewRoundGrant,
 		protocol.AskOption{ID: "grant", Label: "授权恰好一轮"}, protocol.AskOption{ID: "decline", Label: "拒绝"})
@@ -678,15 +613,15 @@ func TestFacadeProjectsEveryPendingAsk(t *testing.T) {
 		t.Fatalf("pending ask faces = %+v, want both asks", run.PendingAsks)
 	}
 	// 确定性输出：按 requestID 排序。
-	if run.PendingAsks[0].RequestID != "req-face-grant" || run.PendingAsks[1].RequestID != "req-face-topology" {
+	if run.PendingAsks[0].RequestID != "req-face-abort" || run.PendingAsks[1].RequestID != "req-face-grant" {
 		t.Fatalf("pending ask faces are not sorted: %+v", run.PendingAsks)
 	}
-	topologyFace := run.PendingAsks[1]
-	if topologyFace.Control != protocol.ControlConfirmTopology || len(topologyFace.Options) != 2 ||
-		topologyFace.Options[0].ID != options[0].ID || topologyFace.Options[1].ID != options[1].ID {
-		t.Fatalf("topology ask face = %+v", topologyFace)
+	abortFace := run.PendingAsks[0]
+	if abortFace.Control != protocol.ControlAbort || len(abortFace.Options) != 2 ||
+		abortFace.Options[0].ID != options[0].ID || abortFace.Options[1].ID != options[1].ID {
+		t.Fatalf("abort ask face = %+v", abortFace)
 	}
-	grantFace := run.PendingAsks[0]
+	grantFace := run.PendingAsks[1]
 	if grantFace.Control != protocol.ControlReviewRoundGrant || len(grantFace.Options) != 2 {
 		t.Fatalf("grant ask face = %+v", grantFace)
 	}
@@ -799,3 +734,42 @@ func testAdmission(t *testing.T, root, recordID, packageDigest, provider string)
 
 var admissionFixtures = map[string]*Admission{}
 var admissionFixtureMutex sync.Mutex
+
+// decideAbort 提交并决定 abort 控制，返回未驱动的最新投影（ABORTING）。
+func decideAbort(t *testing.T, f *Facade) Run {
+	t.Helper()
+	ask, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "abort"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := f.Submit(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ""
+	for _, pending := range run.PendingAsks {
+		if pending.RequestID == "abort-request" {
+			token = pending.Token
+		}
+	}
+	if token == "" {
+		t.Fatal("abort request did not raise a pending ask")
+	}
+	decide, err := protocol.NewDecideEvent("abort-decide", "abort-request", token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err = f.Submit(decide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// abortVerifiedRun 提交并决定 abort 控制，驱动 run 到已发布终态（ABORTED）：
+// request→decide 两段后 Drive 完成终态清理与摘要发布。
+func abortVerifiedRun(t *testing.T, f *Facade) (Run, error) {
+	t.Helper()
+	decideAbort(t, f)
+	return f.Drive()
+}

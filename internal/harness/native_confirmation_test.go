@@ -151,7 +151,7 @@ func TestServeToolsWithContextCancelStopsActiveCall(t *testing.T) {
 				close(started)
 				<-callCtx.Done()
 				return nil, callCtx.Err()
-			}, nil)
+			}, nil, nil)
 	}()
 	<-started
 	cancel()
@@ -183,7 +183,7 @@ func TestServeToolsWithContextEOFCancelsActiveCall(t *testing.T) {
 				close(started)
 				<-callCtx.Done()
 				return nil, callCtx.Err()
-			}, nil)
+			}, nil, nil)
 	}()
 	fmt.Fprint(feed, `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}`+"\n")
 	fmt.Fprint(feed, `{"id":2,"method":"tools/call","params":{"name":"wait","arguments":{}}}`+"\n")
@@ -371,5 +371,84 @@ func TestNativeConfirmationScopingAcrossCalls(t *testing.T) {
 	<-decoded
 	if getOf(final["result"], "isError") != false {
 		t.Fatal("leftover replies poisoned the next call's confirmation", final)
+	}
+}
+
+// A server-initiated ping is written on the transport under its own request
+// ID and resolved when the host replies to that exact ID.
+func TestServeToolsWithContextHostPingRoundTrip(t *testing.T) {
+	input, feed := io.Pipe()
+	outR, outW := io.Pipe()
+	var errors bytes.Buffer
+	pinger := &ServePinger{}
+	done := make(chan int, 1)
+	go func() {
+		done <- ServeToolsWithContext(context.Background(), input, outW, &errors, nil,
+			func(_ context.Context, name string, arguments json.RawMessage, _ func(any) error, _ json.RawMessage) (any, error) {
+				return nil, fmt.Errorf("unexpected call %s", name)
+			}, nil, pinger)
+	}()
+	frames := json.NewDecoder(outR)
+	fmt.Fprint(feed, `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}`+"\n")
+	var initialize map[string]any
+	if err := frames.Decode(&initialize); err != nil {
+		t.Fatal(err)
+	}
+	pinged := make(chan error, 1)
+	go func() { pinged <- pinger.Ping(context.Background()) }()
+	var outbound map[string]any
+	if err := frames.Decode(&outbound); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := outbound["id"].(string)
+	if outbound["method"] != "ping" || !ok || !strings.HasPrefix(id, "formal-gates-ping-") {
+		t.Fatal("outbound frame is not an identified ping", outbound)
+	}
+	body, err := json.Marshal(map[string]any{"id": id, "result": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feed.Write(append(body, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-pinged:
+		if err != nil {
+			t.Fatal("host ping was not resolved by its reply", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("host ping never resolved")
+	}
+	if err := feed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 || errors.Len() != 0 {
+			t.Fatalf("code=%d stderr=%s", code, errors.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("service did not exit after input close")
+	}
+}
+
+// A reply carrying one of our ping IDs but awaiting no request is ignored:
+// it is never a foreign response that could poison a pending confirmation.
+func TestServeToolsIgnoresStalePingReply(t *testing.T) {
+	wire := `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}` + "\n" +
+		`{"id":2,"method":"tools/call","params":{"name":"confirm","arguments":{}}}` + "\n" +
+		`{"id":"formal-gates-ping-9","result":{}}` + "\n" +
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+	var out, errors bytes.Buffer
+	executed := false
+	code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
+		if err := confirm(map[string]any{"operation": "original"}); err != nil {
+			return nil, err
+		}
+		executed = true
+		return "done", nil
+	}, nil)
+	if code != 0 || !executed || errors.Len() != 0 {
+		t.Fatalf("code=%d executed=%v stderr=%s", code, executed, errors.String())
 	}
 }

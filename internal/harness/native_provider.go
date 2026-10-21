@@ -27,12 +27,13 @@ func init() {
 		provider string
 		nativeImplementation
 	}{
-		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, captureConfigured: dshConfiguredBinding, verifySource: dshVerifySource, verifyStart: dshVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
+		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, captureConfigured: dshConfiguredBinding, verifySource: dshVerifySource, verifyStart: acpVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
 		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, captureConfigured: zcodeConfiguredBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
 		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, captureConfigured: claudeConfiguredBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
 		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, captureConfigured: codexConfiguredBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
 		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, cleanup: workbuddyInvocationCleanup, captureConfigured: workbuddyConfiguredBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
 		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, captureConfigured: cursorConfiguredBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
+		{"devin", nativeImplementation{resolvePaths: devinResolvePaths, captureConfigured: devinConfiguredBinding, verifySource: devinVerifySource, verifyStart: acpVerifyStart, reconcile: devinReconcile, execute: devinExecute}},
 	}
 
 	for _, entry := range platforms {

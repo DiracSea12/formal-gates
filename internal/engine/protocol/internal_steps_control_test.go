@@ -20,7 +20,7 @@ func TestInternalStepRequirementBarrierStopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
+	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	request, err := NewRequestEvent("begin-change", ControlRequestRequirementChange, requirementOptions()...)
@@ -95,7 +95,7 @@ func TestInternalStepAcceptedAbortStopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
+	if err = engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	request, err := NewRequestEvent("stop", ControlAbort, AskOption{ID: "abort", Label: "Abort run"})

@@ -84,7 +84,7 @@ func preparedEngine(t *testing.T) (*Engine, string, *decision.Plan, *compiler.Co
 			t.Fatalf("complete %s: %v", step, err)
 		}
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	plan, _, err := engine.Plan(Observation{})
@@ -116,7 +116,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new view: %v", err)
 	}
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	snap, err := engine.Load()
@@ -130,7 +130,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 		t.Fatalf("view not persisted: %+v", snap.State.State)
 	}
 	before := stateBytesOf(t, dir)
-	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err == nil {
+	if err := engine.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err == nil {
 		t.Fatal("re-init accepted")
 	} else if code := rejectionCode(t, err); code != CodeAlreadyInitialized {
 		t.Fatalf("re-init code = %q", code)
@@ -138,7 +138,7 @@ func TestInitLoadLifecycle(t *testing.T) {
 	if after := stateBytesOf(t, dir); !reflect.DeepEqual(before, after) {
 		t.Fatal("rejected re-init changed state bytes")
 	}
-	if err := engine.InitWithMetadata(nil, testProvider, Observation{}, "", "", nil, "", "", nil); err == nil {
+	if err := engine.InitWithMetadata(nil, testProvider, Observation{}, "", nil, "", "", nil); err == nil {
 		t.Fatal("nil view accepted")
 	}
 }
@@ -296,7 +296,7 @@ func TestIssueNegativePaths(t *testing.T) {
 		t.Fatalf("issue before init code = %q", code)
 	}
 	// 初始化后同一非 Ready 计划：SelectIssued 的派生拒绝原样上抛。
-	if err := fresh.InitWithMetadata(view, testProvider, Observation{}, "", "", nil, "", "", nil); err != nil {
+	if err := fresh.InitWithMetadata(view, testProvider, Observation{}, "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	waitPlan, _, err = fresh.Plan(Observation{})

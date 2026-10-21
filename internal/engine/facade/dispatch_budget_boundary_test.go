@@ -343,7 +343,7 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "unknown-attach", Route: "regular", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "unknown-attach", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -442,8 +442,8 @@ func TestUnknownReceiptAttachesMeteredIdentityAndRecordsUsage(t *testing.T) {
 func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
-	f, run, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "terminal-lifecycle", Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	verifiedStartFixture(t, root)
+	f, run, err := Start(StartOptions{Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "terminal-lifecycle", BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,10 +453,10 @@ func TestTerminalRunEndsLifecycleAttribution(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".gates", "tmp", "terminal-lifecycle", "lifecycle", "active")); err != nil {
 		t.Fatalf("active marker missing while the run is active: %v", err)
 	}
-	if run, err = f.Drive(); err != nil {
+	if run, err = abortVerifiedRun(t, f); err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "COMPLETE" {
+	if run.Status != "ABORTED" {
 		t.Fatalf("run status = %s", run.Status)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".gates", "tmp", "terminal-lifecycle", "lifecycle", "active")); !os.IsNotExist(err) {
@@ -747,11 +747,11 @@ func TestSingleRetryExtensionAcrossBudgetAndRetryAsks(t *testing.T) {
 func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	transcript := filepath.Join(root, "shared.jsonl")
 	writeTranscript(t, transcript, []string{`{"type":"assistant","uuid":"base","message":{"usage":{"input_tokens":9,"output_tokens":4}}}`})
 	start := func(id string) *Facade {
-		f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+		f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: id, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -764,15 +764,15 @@ func TestOwnerOverlapMarksBothRunsUnavailable(t *testing.T) {
 		`{"type":"assistant","uuid":"during-both","message":{"usage":{"input_tokens":15,"output_tokens":8}}}`,
 	})
 	// second 先终态：自身检测＝UNAVAILABLE。
-	secondRun, err := second.Drive()
+	secondRun, err := abortVerifiedRun(t, second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondRun.Cost.Owner == nil || secondRun.Cost.Owner.Source != "unavailable" || secondRun.Cost.Owner.TotalInputTokens != 0 {
+	if secondRun.Status != "ABORTED" || secondRun.Cost == nil || secondRun.Cost.Owner == nil || secondRun.Cost.Owner.Source != "unavailable" || secondRun.Cost.Owner.TotalInputTokens != 0 {
 		t.Fatalf("second owner interval = %+v, want UNAVAILABLE with zero numbers", secondRun.Cost.Owner)
 	}
 	// first 后终态：重叠事实由 second 启动时经协议入口补写，不得报精确区间。
-	firstRun, err := first.Drive()
+	firstRun, err := abortVerifiedRun(t, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestStagedNativeCostObservationSettlesThroughDrive(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 				t.Fatal(err)
 			}
-			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Route: "regular", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+			f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1080,7 +1080,7 @@ func TestAttachedReceiptPreservesAuthorizedResumeIdentity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "requirements.md"), []byte(validationDocument), 0600); err != nil {
 		t.Fatal(err)
 	}
-	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Route: "regular", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
+	f, r, err := Start(StartOptions{Capacity: 1, Root: root, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "staged-native-ready", Provider: meteredProvider, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", meteredProvider)})
 	if err != nil {
 		t.Fatal(err)
 	}

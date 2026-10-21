@@ -408,14 +408,14 @@ func TestClaudeArgumentsRequireFrozenConfigRoot(t *testing.T) {
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", b)
 	t.Setenv("HOME", b)
-	args, cwd, err := claudeArguments(map[string]any{"identity": "original-session"}, root, "frozen-executable", root, map[string]string{"CLAUDE_CONFIG_DIR": a}, "exact prompt")
+	args, cwd, err := claudeArguments(map[string]any{"identity": "original-session"}, root, map[string]any{"executable": "frozen-executable"}, root, map[string]string{"CLAUDE_CONFIG_DIR": a}, "exact prompt")
 	if err != nil || cwd != root {
 		t.Fatal(args, cwd, err)
 	}
 	if !reflect.DeepEqual(args[len(args)-4:], []string{"--resume", "original-session", "--settings", filepath.Join(a, "settings.json")}) {
 		t.Fatal("arguments lost frozen config root/session", args)
 	}
-	if _, _, err := claudeArguments(map[string]any{}, root, "frozen-executable", root, map[string]string{}, "prompt"); err == nil {
+	if _, _, err := claudeArguments(map[string]any{}, root, map[string]any{"executable": "frozen-executable"}, root, map[string]string{}, "prompt"); err == nil {
 		t.Fatal("missing frozen root used ambient environment")
 	}
 }

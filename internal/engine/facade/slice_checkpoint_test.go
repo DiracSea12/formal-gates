@@ -492,11 +492,11 @@ func TestSliceReceiptRemainsFrozenAcrossReplayAndLaterCommits(t *testing.T) {
 	}
 	later := startIntervalRun(t, child.f.root, "later-owner", path)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine, intervalLaterLine, `{"type":"assistant","uuid":"last","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":1,"output_tokens":2}}}`})
-	laterRun, err := later.Drive()
+	laterRun, err := abortVerifiedRun(t, later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if laterRun.Cost.Owner == nil || *laterRun.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 6, InputCacheHitTokens: 1, InputCacheMissTokens: 5, OutputTokens: 2}) {
+	if laterRun.Cost == nil || laterRun.Cost.Owner == nil || *laterRun.Cost.Owner != (cost.OwnerCost{Source: cost.SourceTranscript, TotalInputTokens: 6, InputCacheHitTokens: 1, InputCacheMissTokens: 5, OutputTokens: 2}) {
 		t.Fatalf("closed child interval overlaps later owner: %+v", laterRun.Cost.Owner)
 	}
 	child.drive()

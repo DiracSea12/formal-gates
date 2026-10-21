@@ -136,8 +136,8 @@ func (s *State) resetRequestID() string {
 }
 
 // stopControlledWorkers retains responsibility until exact lifecycle evidence
-// permits retirement. Both reset and requirement REDO use this existing typed
-// termination protocol; UNKNOWN spawn receipts remain for ordinary reconcile.
+// or a confirmed native stop permits retirement. Missing agent identity is not
+// lifecycle evidence; its original execution must be observed independently.
 func (e *Engine) stopControlledWorkers(s *State, request, reason string, revision uint64, all bool) (bool, error) {
 	ids := []string{}
 	for id := range s.PendingActions {
@@ -157,15 +157,28 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 		receipt, known := s.SpawnReceipts[id]
 		stopped := known && (receipt.Status == SpawnStatusFailed || s.hasCorrelatedLifecycleEvent(receipt.Provider, s.workerLifecycleCorrelation(id), receipt.agentIdentity(), LifecycleStop))
 		resume := s.workerResume(id)
+		nativeStopped := false
+		missingStart := resume.Resume != nil && !s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStart)
+		if !stopped && e.cfg.WorkerExecutionStopped != nil && (!known || receipt.Status == SpawnStatusUnknown || missingStart) {
+			pending, attempt, ok := s.workerActionTarget(id)
+			if ok && pending.AttemptID == attempt.ID {
+				var err error
+				nativeStopped, err = e.cfg.WorkerExecutionStopped(pending, attempt)
+				if err != nil {
+					return changed, err
+				}
+				stopped = nativeStopped
+			}
+		}
 		if resume.Resume != nil {
-			stopped = s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStop)
+			stopped = nativeStopped || s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStop)
 			if !stopped && !s.hasCorrelatedLifecycleEvent(s.actionProvider(id), resume.ActionID, resume.Resume.Identity, LifecycleStart) {
 				continue
 			}
 		}
 		if !known {
 			failures := s.SpawnFailures[id]
-			stopped = len(failures) > 0 && failures[len(failures)-1].FailureClass != authoring.FailureSideEffectUnknown
+			stopped = stopped || len(failures) > 0 && failures[len(failures)-1].FailureClass != authoring.FailureSideEffectUnknown
 			if !stopped && e.cfg.WorkerExecution != nil {
 				pending, attempt, _ := s.workerActionTarget(id)
 				observed, err := e.cfg.WorkerExecution(pending, attempt)
@@ -197,6 +210,19 @@ func (e *Engine) stopControlledWorkers(s *State, request, reason string, revisio
 			}
 		}
 		if stopped {
+			if nativeStopped {
+				digest, err := e.facts().Digest()
+				if err != nil {
+					return changed, err
+				}
+				for _, intent := range s.PendingHostActions {
+					if intent.Resume != nil && intent.Resume.WorkerActionID == id {
+						s.retireNative(intent, "WITHDRAWN", digest, nil, revision)
+					} else if intent.Terminate != nil && intent.Terminate.WorkerActionID == id {
+						s.retireNative(intent, "FULFILLED", digest, nil, revision)
+					}
+				}
+			}
 			p, retired := s.retireAction(id, "", reason+request)
 			if retired {
 				if err := s.terminalizeTask(p.Task); err != nil {

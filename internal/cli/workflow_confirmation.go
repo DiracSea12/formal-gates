@@ -41,6 +41,7 @@ func confirmSavedFile(path string, confirm func(any) error) (func(any) error, er
 
 func runWorkflowServe(args []string, streams IO) (int, error) {
 	flags := newFlagSet("workflow serve", streams)
+	root := flags.String("root", "", "repository root")
 	packageRoot := flags.String("package-root", "", "installed formal-gates package root")
 	if code, err, done := parseFlagSet(flags, args, streams.Stdout); done {
 		return code, err
@@ -54,6 +55,14 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// The liveness guard cancels the serve when the host is gone: a dead
+	// parent process or consecutive unanswered pings.
+	pinger := &harness.ServePinger{}
+	guard := newServeLivenessGuard(serveLivenessDeps{ping: pinger.Ping, onDead: cancel})
+	guard.Start()
+	defer guard.Stop()
 	return harness.ServeToolsWithContext(ctx, streams.Stdin, streams.Stdout, streams.Stderr, confirmationTools(), func(callCtx context.Context, name string, raw json.RawMessage, confirm func(any) error, metadata json.RawMessage) (any, error) {
 		var context struct {
 			Owner *facade.OwnerBinding `json:"formal-gates/owner"`
@@ -76,8 +85,8 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 		current.owner = context.Owner
 		current.Context = callCtx
 		current.panelCtl = controller
-		return callConfirmationTool(name, raw, current, confirm, *packageRoot)
-	}, nil), nil
+		return callConfirmationTool(name, raw, current, confirm, *root, *packageRoot)
+	}, nil, pinger), nil
 }
 
 func confirmationTools() []any {
@@ -92,8 +101,7 @@ func confirmationTools() []any {
 		tool("confirm_start", "Request native confirmation of the complete saved intake and start operation. The host's response directly starts the run.", map[string]any{
 			"root": root, "intake": position("Original intake position published by workflow start --precheck"),
 			"summary":       map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
-			"route":         map[string]any{"type": "string", "enum": []string{"regular", "lightweight"}},
-			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for a regular run; the program validates and displays it. Omitted uses the current native snapshot; lightweight ignores it."},
+			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for the run; the program validates and displays it. Omitted uses the current native snapshot."},
 			"vcs":           map[string]any{"type": "string", "description": "Native VCS name, using the existing workflow start selection when omitted."},
 			"configuration": map[string]any{"type": "string", "description": "Saved configuration name or displayed position"},
 		}, "intake"),
@@ -109,7 +117,7 @@ func confirmationTools() []any {
 			"question": position("Original pending question position published by native show"),
 			"decision": position("Original saved decision position published by native respond"),
 		}, "question", "decision"),
-		tool("configure", "Open the flow configuration panel and wait for its result. Before intake selection, tell the user that this graphical panel is available now and later: ask the agent to call configure, or run formal-gates config in a terminal; disabling panelSelection switches selection to conversation. With intake, selected/timeout returns a saved configuration and derived route for confirm_start; the panel does not approve startup. Never call confirm_start after cancelled or superseded. If disabled/unavailable, explain the reason and offer equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
+		tool("configure", "Open flow configuration panel and wait for its result without occupying the ordinary control-call slot; native confirmations remain exclusive. Before intake selection, use settings show, settings show --gates and settings execution-options to enumerate current nodes and each choice/configuration option and its consequences; never hardcode node or value lists. Tell the user panel and conversation are not exclusive: while panel is open they may reply with choices, ask the agent to call configure, or run formal-gates config in a terminal; the panel remains available later. panelSelection controls default opening: still open the panel when enabled, while accepting conversation choices without disabling panelSelection or closing the panel first. Save conversation choices through existing settings and pass the original intake and saved configuration to confirm_start; existing selection validation closes that intake window and resolves this configure waiter as selected before independent native startup confirmation. Do not wait for timeout or ask the user to click the panel again. With no open window, conversation selection does not start a panel service or open a window. For an explicitly requested panel, use force if needed. With intake, selected/timeout returns saved configuration for confirm_start; neither panel save nor conversation selection approves startup or starts a formal workflow. Keep native confirm_start and confirm_control confirmation; cancelled startup creates no run. Cancelled or superseded panel results alone do not start anything; a later explicit conversation choice must revalidate the current candidate, refresh/display it if stale, and use independent native confirmation. If disabled/unavailable, explain the reason and use equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
 			"root":   map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory."},
 			"intake": position("Original intake position published by workflow start --precheck"),
 			"force":  map[string]any{"type": "boolean", "description": "Open the panel even when panelSelection is disabled"},
@@ -117,13 +125,13 @@ func confirmationTools() []any {
 	}
 }
 
-func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm func(any) error, packageRoot string) (any, error) {
+func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm func(any) error, serveRoot, packageRoot string) (any, error) {
 	var output, errors bytes.Buffer
 	invocation := IO{Stdin: bytes.NewReader(nil), Stdout: &output, Stderr: &errors, Context: streams.Context, confirmation: confirm, owner: streams.owner}
 	// The serve's own installed package selects the host and its confirmation
 	// channel. A permission-gate host decides before the call arrives, so the
 	// arrived call is confirmed without an interactive form.
-	if admission, err := validate.ResolveEngineAdmission("", packageRoot); err == nil {
+	if admission, err := validate.ResolveEngineAdmission(serveRoot, packageRoot); err == nil {
 		if descriptor, derr := host.Lookup(admission.Provider); derr == nil {
 			invocation.confirmationChannel = descriptor.Confirmation
 		}
@@ -131,9 +139,17 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 	if invocation.confirmationChannel == host.ConfirmationHostPermission {
 		invocation.confirmation = func(any) error { return nil }
 	}
+	// The serve's -root is the service's project directory: an omitted call
+	// root means it, and relative call roots resolve against it.
 	rootPath := func(root string) (string, error) {
+		base := serveRoot
+		if base == "" {
+			base = "."
+		}
 		if root == "" {
-			root = "."
+			root = base
+		} else if !filepath.IsAbs(root) {
+			root = filepath.Join(base, root)
 		}
 		return filepath.Abs(root)
 	}
@@ -179,7 +195,6 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 			Root          string `json:"root"`
 			Intake        int    `json:"intake"`
 			Summary       string `json:"summary"`
-			Route         string `json:"route"`
 			BaseSnapshot  string `json:"baseSnapshot"`
 			VCS           string `json:"vcs"`
 			Configuration string `json:"configuration"`
@@ -199,18 +214,26 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 			return nil, err
 		}
 		args = []string{"--root", root, "--run-id", fmt.Sprintf("run-%x", identity), "--intake", strconv.Itoa(input.Intake)}
-		if input.Route != "" {
-			args = append(args, "--route", input.Route)
-		}
 		if input.BaseSnapshot != "" {
 			args = append(args, "--base-snapshot", input.BaseSnapshot)
 		}
 		if input.VCS != "" {
 			args = append(args, "--vcs", input.VCS)
 		}
-		if input.Configuration != "" {
-			args = append(args, "--configuration", input.Configuration)
+		configuration, err := facade.StartConfiguration(root, input.Configuration)
+		if err != nil {
+			return nil, err
 		}
+		if streams.panelCtl != nil {
+			ctx := streams.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := streams.panelCtl.selectConfiguration(ctx, root, input.Intake, configuration.ConfigurationName); err != nil {
+				return nil, err
+			}
+		}
+		args = append(args, "--configuration", configuration.ConfigurationName)
 		if packageRoot != "" {
 			args = append(args, "--package-root", packageRoot)
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -265,6 +266,7 @@ func (h *handler) intakeCheck(w http.ResponseWriter, r *http.Request) {
 // windowStatusRequest and windowActivityRequest are the typed bodies and query
 // for the window session endpoints.
 type windowSelectRequest struct {
+	Intake        string `json:"intake,omitempty"`
 	Window        string `json:"window"`
 	Configuration string `json:"configuration"`
 }
@@ -315,11 +317,22 @@ func (h *handler) windowOpen(w http.ResponseWriter, r *http.Request) {
 	if !reused {
 		if err := h.server.launchBrowser(window); err != nil {
 			h.server.closeWindow(window.session, Result{Status: "closed"})
-			writeError(w, http.StatusServiceUnavailable, err.Error())
+			writeError(w, http.StatusServiceUnavailable, openWindowErrorText(err))
 			return
 		}
 	}
 	writeJSON(w, map[string]any{"window": window.ID, "url": window.URL, "reused": reused})
+}
+
+// openWindowErrorText appends the non-panel settings path when the launch
+// failed because no managed browser exists; any other failure keeps its own
+// message.
+func openWindowErrorText(err error) string {
+	var unavailable *ErrBrowserUnavailable
+	if !errors.As(err, &unavailable) {
+		return err.Error()
+	}
+	return err.Error() + "; without the panel, per-node platform/model/effort can be set via: formal-gates settings set --execution-node <node> --platform <platform> --model <model> --effort <effort> (model and effort apply only when the platform reports them)"
 }
 
 // instance reports the serving process identity to a lifecycle client that
@@ -342,6 +355,15 @@ func (h *handler) windowGet(w http.ResponseWriter, r *http.Request) {
 	}
 	h.server.mu.Lock()
 	session, known := h.server.windows[r.URL.Query().Get("window")]
+	if known && r.URL.Query().Get("wait") == "true" && session.result == nil {
+		h.server.mu.Unlock()
+		select {
+		case <-session.done:
+		case <-r.Context().Done():
+			return
+		}
+		h.server.mu.Lock()
+	}
 	view := map[string]any{}
 	if known {
 		view = map[string]any{
@@ -395,6 +417,20 @@ func (h *handler) windowSelect(w http.ResponseWriter, r *http.Request) {
 	}
 	h.server.mu.Lock()
 	session, known := h.server.windows[request.Window]
+	if request.Intake != "" {
+		known = false
+		for _, current := range h.server.windows {
+			if current.open && current.mode == "intake" && current.intakePath == request.Intake {
+				session, known = current, true
+				break
+			}
+		}
+		if !known {
+			h.server.mu.Unlock()
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+	}
 	open := known && session.open && session.mode == "intake"
 	if known && session.open && session.mode == "library" && session.result != nil {
 		result := *session.result
@@ -442,7 +478,7 @@ func (h *handler) windowSelect(w http.ResponseWriter, r *http.Request) {
 		supersede(check.Reason)
 		return
 	}
-	result := Result{Status: "selected", Configuration: check.Selection.Configuration, Disabled: check.Selection.Disabled, Route: check.Selection.Route}
+	result := Result{Status: "selected", Configuration: check.Selection.Configuration, Disabled: check.Selection.Disabled}
 	h.server.closeWindow(session, result)
 	writeJSON(w, map[string]any{"ok": true, "result": result})
 }

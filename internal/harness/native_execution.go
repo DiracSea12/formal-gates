@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/authoring"
 	"os"
 	"os/exec"
@@ -23,6 +24,61 @@ func nativeBindingEnvironment(binding any) map[string]string {
 		environment[key] = textOf(value)
 	}
 	return environment
+}
+
+// nativeDispatch is an execute request's shared front: the evidence
+// directory, the captured (or fresh) binding and its launch executable, the
+// issued workspace, read_only and the bound environment.
+type nativeDispatch struct {
+	request     any
+	directory   string
+	binding     map[string]any
+	executable  string
+	workspace   string
+	readOnly    bool
+	environment map[string]string
+}
+
+// newNativeDispatch reads an execute request's shared inputs: the evidence
+// directory exists, the captured (or fresh) binding names the launch
+// executable, and the request's workspace and read_only decode.
+func newNativeDispatch(request any, directory string, capture func() (map[string]any, error)) (*nativeDispatch, error) {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return nil, err
+	}
+	binding, err := nativeExecutionBinding(request, capture)
+	if err != nil {
+		return nil, err
+	}
+	launch, err := mustEntry(binding, "launch")
+	if err != nil {
+		return nil, err
+	}
+	executableValue, err := mustEntry(launch, "executable")
+	if err != nil {
+		return nil, err
+	}
+	workspaceValue, err := mustEntry(request, "workspace")
+	if err != nil {
+		return nil, err
+	}
+	readOnlyValue, err := mustEntry(request, "read_only")
+	if err != nil {
+		return nil, err
+	}
+	readOnly, isBool := readOnlyValue.(bool)
+	if !isBool {
+		return nil, fmt.Errorf("read_only must be a boolean")
+	}
+	return &nativeDispatch{
+		request:     request,
+		directory:   directory,
+		binding:     binding,
+		executable:  textOf(executableValue),
+		workspace:   resolveNativePath(textOf(workspaceValue)),
+		readOnly:    readOnly,
+		environment: nativeBindingEnvironment(binding),
+	}, nil
 }
 
 // StopNativeJob uses the original supervisor observation/cancellation path.
@@ -80,6 +136,39 @@ func NativeJobSource(provider, directory string, services ...ExecutionServices) 
 }
 
 func NativeJobAlive(directory string) bool { return supervisorAlive(directory) }
+
+// NativeJobStopped requires the original supervisor claim and a stopped
+// process tree. Missing or unreadable evidence remains unresolved.
+func NativeJobStopped(directory string) bool {
+	process, err := readJSONFile(filepath.Join(directory, "process.json"))
+	if err != nil {
+		return false
+	}
+	pid, pgid := intOf(getOf(process, "pid")), intOf(getOf(process, "pgid"))
+	started := floatOf(getOf(process, "started_at"))
+	if pid <= 0 || pgid <= 0 || started <= 0 {
+		return false
+	}
+	request, err := readJSONFile(filepath.Join(directory, "request.json"))
+	if err != nil {
+		return false
+	}
+	digest, err := CanonicalDigest(request)
+	if err != nil || digest != textOf(getOf(process, "request_digest")) {
+		return false
+	}
+	if coordination.ProcessAlive(pid) {
+		created, ok := processCreationTime(pid)
+		if !ok {
+			return false
+		}
+		delta := created.Unix() - int64(started)
+		if delta >= -2 && delta <= 2 {
+			return false
+		}
+	}
+	return nativeProcessTreeStopped(directory, pgid)
+}
 
 // NativeStartEvidence consumes the adapter's actual create/resume/init
 // acknowledgement, saved with identity before the model turn is issued.

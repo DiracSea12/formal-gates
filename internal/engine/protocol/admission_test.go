@@ -64,7 +64,7 @@ func TestBoundedTransientRetryExhaustionUsesCompiledStepPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	observedInput := Observation{}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", nil, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	plan, _, err := engine.Plan(Observation{})
@@ -361,7 +361,7 @@ func refillEngine(t *testing.T) (*Engine, string, string) {
 		t.Fatalf("complete prep: %v", err)
 	}
 	observedInput := Observation{}
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "", nil, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	plan, _, err := engine.Plan(Observation{})
@@ -813,6 +813,85 @@ func TestFailedSpawnReceiptRoutesAndAllowsRetry(t *testing.T) {
 	}
 	if retried, err := engine.Submit(spawnReceipt(t, "evt-spawn-retried", reviewAction, "agent-review-1"), observedInput); err != nil || retried.Status != "ACCEPTED" {
 		t.Fatalf("SPAWNED retry = %+v err=%v", retried, err)
+	}
+}
+
+// TestFailedSpawnAskDecisionInstallsReplacement：USER_ACTION_REQUIRED 的
+// FAILED spawn 回执只进 SpawnFailures（不占 SpawnReceipts），其恢复决定
+// （fresh/resume）在收尾事务照常落成替换 attempt——FAILED 回执的
+// correlation 即该次派发身份，原会话从未存在，不制造终止 intent，新执行
+// 不再等待原恢复决定。
+func TestFailedSpawnAskDecisionInstallsReplacement(t *testing.T) {
+	t.Parallel()
+	for _, choice := range []AskOptionID{"fresh", "resume"} {
+		t.Run(string(choice), func(t *testing.T) {
+			t.Parallel()
+			engine, _, plan, _ := preparedEngine(t)
+			observedInput := Observation{}
+			if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, observedInput); err != nil {
+				t.Fatalf("issue: %v", err)
+			}
+			failed, err := NewSpawnReceiptWithFailureClass("evt-failed-spawn", reviewAction, testProvider, "agent-failed-spawn", SpawnStatusFailed, authoring.FailureUserActionRequired)
+			if err != nil {
+				t.Fatalf("failed spawn event: %v", err)
+			}
+			acceptance, err := engine.Submit(failed, observedInput)
+			if err != nil || acceptance.RecoveryAction != string(RecoveryAsk) {
+				t.Fatalf("failed spawn acceptance = %+v err=%v", acceptance, err)
+			}
+			snap := engine.LoadMustSucceed(t)
+			if len(snap.State.SpawnFailures[reviewAction]) != 1 {
+				t.Fatalf("failure ledger = %+v", snap.State.SpawnFailures)
+			}
+			if _, kept := snap.State.SpawnReceipts[reviewAction]; kept {
+				t.Fatal("FAILED receipt occupied the final receipt slot")
+			}
+			var requestID string
+			for id, ask := range snap.State.PendingAsks {
+				if ask.Control == ControlRecovery && !ask.Resolved {
+					requestID = id
+				}
+			}
+			if requestID == "" {
+				t.Fatalf("failed spawn did not raise a recovery ask: %+v", snap.State.PendingAsks)
+			}
+			original := snap.State.PendingActions[reviewAction]
+			if recovery, waiting := snap.State.pendingAttemptRecovery(reviewAction, original.AttemptID); !waiting || recovery.Action != RecoveryAsk {
+				t.Fatalf("undecided recovery = %+v waiting=%t", recovery, waiting)
+			}
+			token, err := engine.Freshness(RequestID(requestID))
+			if err != nil {
+				t.Fatalf("freshness: %v", err)
+			}
+			decide, err := NewDecideEvent(EventID("evt-decide-"+string(choice)), RequestID(requestID), token, choice)
+			if err != nil {
+				t.Fatalf("decide event: %v", err)
+			}
+			if _, err := engine.Submit(decide, observedInput); err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			snap = engine.LoadMustSucceed(t)
+			if !snap.State.PendingAsks[requestID].Resolved {
+				t.Fatal("recovery ask unresolved after the decision")
+			}
+			replacement := pendingActionID(t, engine)
+			replacementPending := snap.State.PendingActions[replacement]
+			if replacement == reviewAction || replacementPending.Task != original.Task {
+				t.Fatalf("recovery decision installed no replacement for the task: %+v", snap.State.PendingActions)
+			}
+			if snap.State.ObsoleteActions[reviewAction].ReplacedBy != replacement {
+				t.Fatalf("retired action did not record its replacement: %+v", snap.State.ObsoleteActions[reviewAction])
+			}
+			if attempt := snap.State.Attempts[original.Task]; attempt.Attempts != 1 || attempt.MaxAttempts != 2 || attempt.RetryExhausted {
+				t.Fatalf("replacement did not continue the attempt ledger: %+v", attempt)
+			}
+			if len(snap.State.PendingHostActions) != 0 {
+				t.Fatalf("a host effect was manufactured for a session that never spawned: %+v", snap.State.PendingHostActions)
+			}
+			if recovery, waiting := snap.State.pendingAttemptRecovery(replacement, replacementPending.AttemptID); waiting {
+				t.Fatalf("replacement still waits on the original recovery: %+v", recovery)
+			}
+		})
 	}
 }
 

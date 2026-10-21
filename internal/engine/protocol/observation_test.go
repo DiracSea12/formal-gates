@@ -162,7 +162,7 @@ func TestCostObservationBeforeSaveRejectsChangeWithoutStateEffects(t *testing.T)
 			if err = view.CompleteStep("prep.parse", cd); err != nil {
 				t.Fatal(err)
 			}
-			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", "", nil, "", "", nil); err != nil {
+			if err = engine.InitWithMetadata(view, testProvider, Observation{}, "cost-run", nil, "", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			plan, _, err := engine.Plan(Observation{})
@@ -292,5 +292,47 @@ func TestWorkerExecutionChangeBeforeSaveRejectsResetWithoutStateEffects(t *testi
 	}
 	if engine.observation != nil {
 		t.Fatal("observation leaked into shared engine")
+	}
+}
+
+func TestWorkerStoppedObservationSharesSampleWithoutChangingSourceBindings(t *testing.T) {
+	engine, _, _, _ := preparedEngine(t)
+	pending := PendingAction{ActionID: "native", AttemptID: "attempt"}
+	attempt := Attempt{ID: "attempt"}
+	stopped, reads := true, 0
+	engine.cfg.WorkerExecutionStopped = func(p PendingAction, a Attempt) (bool, error) {
+		if p != pending || a.ID != attempt.ID {
+			t.Fatal("wrong stopped worker", p, a)
+		}
+		reads++
+		return stopped, nil
+	}
+	source := decision.Observation{Facts: []decision.Fact{{Source: decision.SourceHost, Key: "binding", Value: "fixed"}}}
+	local := engine.observing(Observation{Facts: source, Read: func() (decision.Observation, error) { return source, nil }})
+	for i := 0; i < 2; i++ {
+		value, err := local.cfg.WorkerExecutionStopped(pending, attempt)
+		if err != nil || !value {
+			t.Fatal(value, err)
+		}
+	}
+	if reads != 1 || !reflect.DeepEqual(local.sourceFacts, source) || len(source.Facts) != 1 {
+		t.Fatal("stop sampling changed bindings or repeated source read", reads, local.sourceFacts)
+	}
+	expected, err := local.observation.Facts.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := local.observation.Fingerprint()
+	if err != nil || observed != expected || reads != 2 {
+		t.Fatal("stopped fact not rechecked", observed, expected, reads, err)
+	}
+	stopped = false
+	value, err := local.cfg.WorkerExecutionStopped(pending, attempt)
+	if err != nil || !value || reads != 2 {
+		t.Fatal("operation resampled stopped fact", value, reads, err)
+	}
+	observed, err = local.observation.Fingerprint()
+	if err != nil || observed == expected || reads != 3 {
+		t.Fatal("changed source not observed", observed, reads, err)
 	}
 }

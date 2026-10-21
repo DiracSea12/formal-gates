@@ -48,8 +48,8 @@ intake begins only when the user explicitly requests it.
    resources, and prove no leftovers before Complete. Seal, integration, actual canaries, and
    global cutover have distinct evidence.
 
-lightweight records an explicit unverified result without development, snapshots, QA, or gates.
-A regular run cannot downgrade to lightweight during development.
+Execution behavior is decided solely by the saved configuration's enabled nodes.
+A configuration with no enabled nodes is rejected before startup.
 
 The [public workflow contract](references/formal-flow.md) owns receipt fields and invocation forms.
 See the [example](references/example-run.md), [slicing](references/sliced-runs.md), and
@@ -78,7 +78,7 @@ UNKNOWN before another spawn or VCS side effect.
 
 Named workflow configurations save nodes and execution-group choices. `confirm_start.configuration`
 selects one for this run. Node switches, QA groups, gate sets, and execution choices are only changed
-through saved configurations. Saved changes
+through saved configurations; a configuration needs at least one enabled node to start. Saved changes
 take effect for unfinished nodes at the next dispatch evaluation while claimed calls keep their original
 bindings. Enabled past or skipped nodes can be continued through the original node control. Saved defaults do not
 automatically change existing runs; recovery preserves sources, claimed calls and budgets. See

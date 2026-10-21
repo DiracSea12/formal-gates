@@ -178,7 +178,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 			t.Fatal(loadErr)
 		}
 		effective.Values.Native = s.nativeSettings().Native
-		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, Route: "regular", VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
 	}
 	if err != nil {
 		t.Fatal(err)

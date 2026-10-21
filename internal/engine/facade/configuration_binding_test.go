@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/settings"
 )
 
@@ -60,7 +61,7 @@ func TestConfigurationChangesRejectACommittingStart(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			admission := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
-			configureLightweight(t, root)
+			verifiedStartFixture(t, root)
 			effective, err := settings.Load(root, home)
 			if err != nil {
 				t.Fatal(err)
@@ -78,8 +79,8 @@ func TestConfigurationChangesRejectACommittingStart(t *testing.T) {
 			}()
 			started := make(chan error, 1)
 			go func() {
-				_, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Configuration: name, Admission: admission, Request: StartRequest{
-					RunID: "binding-start", IntakeConfirmationReceipt: receipt,
+				_, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Configuration: name, Admission: admission, Request: StartRequest{
+					RunID: "binding-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: receipt,
 				}})
 				started <- err
 			}()
@@ -148,9 +149,9 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 			if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 				t.Fatal(err)
 			}
-			configureLightweight(t, root)
-			options := StartOptions{Root: root, ArtifactRoot: root, Configuration: "工作", Admission: admission, Request: StartRequest{
-				RunID: "configured-start", IntakeConfirmationReceipt: configurationBindingIntake(t, root),
+			verifiedStartFixture(t, root)
+			options := StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Configuration: "工作", Admission: admission, Request: StartRequest{
+				RunID: "configured-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: configurationBindingIntake(t, root),
 			}}
 			revisions, err := settings.Revisions(root, home)
 			if err != nil {
@@ -182,8 +183,8 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 			confirmed := make(chan struct{})
 			options.Confirm = func(value any) error {
 				confirmations++
-				if value.(map[string]any)["route"] != "lightweight" {
-					return fmt.Errorf("confirmation lost the selected route")
+				if value.(map[string]any)["runId"] != options.Request.RunID || value.(map[string]any)["baseSnapshot"] != options.Request.BaseSnapshot {
+					return fmt.Errorf("confirmation lost the displayed start binding")
 				}
 				close(confirmed)
 				return nil
@@ -229,7 +230,7 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 			if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 				t.Fatal(err)
 			}
-			configureLightweight(t, root)
+			verifiedStartFixture(t, root)
 			options.Confirm = func(any) error { confirmations++; return nil }
 			f, run, err := Start(options)
 			if err != nil || run.Status != "ACTIVE" || run.Configuration.Name != "工作" || confirmations != 2 {
@@ -243,25 +244,25 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 	}
 }
 
-func TestStartRechecksRouteAndInitialApplicationAfterConfirmation(t *testing.T) {
-	for _, changeRoute := range []bool{false, true} {
-		t.Run(fmt.Sprintf("route-changed=%t", changeRoute), func(t *testing.T) {
+func TestStartRevalidatesSelectionAndInitialApplicationAfterConfirmation(t *testing.T) {
+	for _, disableAll := range []bool{false, true} {
+		t.Run(fmt.Sprintf("selection-disabled=%t", disableAll), func(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			admission := testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)
-			configureLightweight(t, root)
+			verifiedStartFixture(t, root)
 			effective, err := settings.Load(root, home)
 			if err != nil {
 				t.Fatal(err)
 			}
 			updated := settings.CloneConfiguration(effective.Configuration)
 			updated.RoundLimits = map[string]int{"product-review": 5}
-			if changeRoute {
-				updated.FlowSelection = nil
+			if disableAll {
+				updated.FlowSelection = &settings.FlowSelection{Disabled: []string{"product-review", "start-readiness", "development", "qa", "gate", "repair"}}
 			}
-			options := StartOptions{Root: root, ArtifactRoot: root, Configuration: effective.ConfigurationName, Admission: admission, Request: StartRequest{
-				RunID: "confirmed-start", IntakeConfirmationReceipt: configurationBindingIntake(t, root),
+			options := StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Configuration: effective.ConfigurationName, Admission: admission, Request: StartRequest{
+				RunID: "confirmed-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: configurationBindingIntake(t, root),
 			}, Confirm: func(any) error {
 				_, err := settings.EditConfiguration(root, home, "project", effective.ConfigurationName, nil, func(configuration *settings.Configuration) error {
 					*configuration = updated
@@ -283,12 +284,12 @@ func TestStartRechecksRouteAndInitialApplicationAfterConfirmation(t *testing.T) 
 				return fmt.Errorf("capacity field is missing")
 			}}
 			f, _, err := Start(options)
-			if changeRoute {
-				if err == nil || !strings.Contains(err.Error(), "route changed") {
-					t.Fatal("changed route reached startup commit", err)
+			if disableAll {
+				if err == nil || !strings.Contains(err.Error(), "at least one enabled") {
+					t.Fatal("an all-disabled selection reached startup commit", err)
 				}
 				if _, err := os.Stat(filepath.Join(root, EngineNamespace, options.Request.RunID)); !os.IsNotExist(err) {
-					t.Fatal("changed route left run state", err)
+					t.Fatal("disabled selection left run state", err)
 				}
 				return
 			}
@@ -307,7 +308,7 @@ func TestStartRechecksRouteAndInitialApplicationAfterConfirmation(t *testing.T) 
 	}
 }
 
-func TestRegularStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
+func TestStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -316,12 +317,12 @@ func TestRegularStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.RunID, request.FlowSelection = "confirmed-regular", nil
+	request.RunID, request.FlowSelection = "confirmed-start", nil
 	confirmations := 0
 	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Configuration: "工作", Admission: &original.admission, Request: request, Confirm: func(value any) error {
 		confirmations++
-		if value.(map[string]any)["route"] != "regular" {
-			return fmt.Errorf("confirmation lost the regular route")
+		if value.(map[string]any)["runId"] != "confirmed-start" || value.(map[string]any)["baseSnapshot"] != request.BaseSnapshot {
+			return fmt.Errorf("confirmation lost the displayed start binding")
 		}
 		for _, path := range []string{
 			filepath.Join(home, ".config", "formal-gates", "config.json.lock"),
@@ -340,11 +341,11 @@ func TestRegularStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
 		return err
 	}})
 	if err != nil || confirmations != 1 || run.Status != "ACTIVE" || run.Configuration.Name != "工作" {
-		t.Fatalf("regular configuration startup failed: confirmations=%d status=%s binding=%q error=%v", confirmations, run.Status, run.Configuration.Name, err)
+		t.Fatalf("configuration startup failed: confirmations=%d status=%s binding=%q error=%v", confirmations, run.Status, run.Configuration.Name, err)
 	}
 	snapshot, err := f.engine.Load()
 	if err != nil || snapshot.State.ConfigurationName() != "工作" || snapshot.State.AppliedConfigurations[0].Configuration.RoundLimit("product-review") != 5 {
-		t.Fatal("regular startup did not persist the current initial application", err)
+		t.Fatal("startup did not persist the current initial application", err)
 	}
 }
 
@@ -352,14 +353,14 @@ func TestStartRequiresAConfigurationBindingName(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	effective, err := settings.Load(root, home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	effective.ConfigurationName = ""
-	_, _, err = Start(StartOptions{Root: root, Settings: &effective, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{
-		RunID: "unnamed-start", IntakeConfirmationReceipt: configurationBindingIntake(t, root),
+	_, _, err = Start(StartOptions{Root: root, Settings: &effective, VCSRunner: testkit.NewFrozenGitRepo(), Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{
+		RunID: "unnamed-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: configurationBindingIntake(t, root),
 	}})
 	if err == nil || !strings.Contains(err.Error(), "configuration binding name is required") {
 		t.Fatal("startup accepted an empty configuration binding", err)

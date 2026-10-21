@@ -82,8 +82,8 @@ func nativeControlRequest(client *nativeClient, subtype string) (any, error) {
 	}
 }
 
-func nativeSelectionControl(executable, workspace, directory string, environment map[string]string) (*nativeClient, error) {
-	return newNativeClientWithEnv(nativeHooks{transportPrefix: "NATIVE_SELECTION"}, []string{executable, "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--settings", `{"disableAllHooks":true}`}, workspace, directory, environment)
+func nativeSelectionControl(launch map[string]any, workspace, directory string, environment map[string]string) (*nativeClient, error) {
+	return newNativeClientWithEnv(nativeHooks{transportPrefix: "NATIVE_SELECTION"}, nativeArgv(launch, "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--settings", `{"disableAllHooks":true}`), workspace, directory, environment)
 }
 
 func nativeStringValues(values any, key string) []string {

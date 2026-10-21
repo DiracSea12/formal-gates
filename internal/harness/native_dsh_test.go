@@ -13,8 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/settings"
 )
 
 func writeDSHLookupTarget(t *testing.T, directory string) string {
@@ -40,7 +43,7 @@ func TestDSHDispatch(t *testing.T) {
 		}
 	}
 	_, err := nativeImplementationFor("ghost")
-	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor" {
+	if err == nil || err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor, devin" {
 		t.Fatalf("unsupported text = %v", err)
 	}
 }
@@ -54,7 +57,7 @@ func TestDSHSelectionParsing(t *testing.T) {
 		{"id": "reasoning_effort"},
 		{"id": "model", "currentValue": null}
 	]}`)
-	selection, err := dshSelection(raw)
+	selection, err := acpSelection(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +65,12 @@ func TestDSHSelectionParsing(t *testing.T) {
 		t.Fatalf("selection = %s", got)
 	}
 
-	if _, err := dshSelection(decodeTestJSON(t, `{"configOptions": [{"currentValue": "x"}]}`)); err == nil ||
+	if _, err := acpSelection(decodeTestJSON(t, `{"configOptions": [{"currentValue": "x"}]}`)); err == nil ||
 		err.Error() != `missing JSON field "id"` {
 		t.Fatalf("missing id: %v", err)
 	}
 	// A non-object configOptions list is simply empty.
-	selection, err = dshSelection(decodeTestJSON(t, `{"configOptions": null}`))
+	selection, err = acpSelection(decodeTestJSON(t, `{"configOptions": null}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +513,7 @@ func TestRunNativeEntryFailureShapes(t *testing.T) {
 		{"numeric provider", `{"provider": 5}`,
 			"provider must be a string"},
 		{"unsupported provider", `{"provider": "ghost"}`,
-			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor"},
+			"RuntimeBlocked: UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor, devin"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -651,5 +654,97 @@ func TestDSHObservesDelivered(t *testing.T) {
 		if got := dshObservesDelivered(hold, decodeTestJSON(t, test.message).(map[string]any)); got != test.want {
 			t.Errorf("%s: got %v", test.name, got)
 		}
+	}
+}
+
+// The desktop shell is another dsh install form: its Electron binary runs as
+// node (ELECTRON_RUN_AS_NODE) over the bundled harness entry, and the
+// session argv slots the ACP app between the entry and the acp flags.
+func TestDSHResolvePathsBindsDesktopInstall(t *testing.T) {
+	install := resolveNativePath(t.TempDir())
+	exe := filepath.Join(install, "DSH Desktop.exe")
+	resources := filepath.Join(install, "resources")
+	entry := filepath.Join(resources, "harness-node-entry.mjs")
+	binJS := filepath.Join(resources, "app.asar", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
+	for _, file := range []string{exe, entry, binJS} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("bundled"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := dshDesktopInstall
+	dshDesktopInstall = func() (string, string) { return exe, resources }
+	t.Cleanup(func() { dshDesktopInstall = original })
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("DSH_HOME", "")
+
+	native, sources := map[string]string{}, map[string]string{}
+	if err := dshResolvePaths(native, sources); err != nil {
+		t.Fatal(err)
+	}
+	if native["dshExecutable"] != exe || native["dshScript"] != entry {
+		t.Fatalf("resolved = %q + %q, want %q + %q", native["dshExecutable"], native["dshScript"], exe, entry)
+	}
+	if sources["dshExecutable"] != "bundle" || sources["dshScript"] != "bundle" {
+		t.Fatalf("sources = %v, want bundle", sources)
+	}
+	binding, err := dshConfiguredBinding(settings.Values{Native: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := objectOrEmpty(getOf(binding, "launch"))
+	if textOf(getOf(launch, "executable")) != exe || textOf(getOf(launch, "script")) != entry {
+		t.Fatalf("binding launch = %v, want the shell + harness entry", launch)
+	}
+	if textOf(getOf(getOf(binding, "environment"), "ELECTRON_RUN_AS_NODE")) != "1" {
+		t.Fatalf("binding environment = %v, want ELECTRON_RUN_AS_NODE=1", binding["environment"])
+	}
+	argv := dshArgv(launch, "patch.json")
+	want := []string{exe, entry, binJS, "--profile", "acp", "--patch", "patch.json"}
+	if !slices.Equal(argv, want) {
+		t.Fatalf("session argv = %v, want %v", argv, want)
+	}
+}
+
+// A desktop shell without its harness entry is not a usable install form;
+// the resolve keeps the honest unavailable refusal.
+func TestDSHResolvePathsDesktopInstallMissesEntry(t *testing.T) {
+	install := resolveNativePath(t.TempDir())
+	exe := filepath.Join(install, "DSH Desktop.exe")
+	resources := filepath.Join(install, "resources")
+	if err := os.MkdirAll(resources, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("shell"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := dshDesktopInstall
+	dshDesktopInstall = func() (string, string) { return exe, resources }
+	t.Cleanup(func() { dshDesktopInstall = original })
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("DSH_HOME", "")
+	err := dshResolvePaths(map[string]string{}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "DSH_UNAVAILABLE") {
+		t.Fatalf("resolve = %v, want DSH_UNAVAILABLE", err)
+	}
+}
+
+// A script-less CLI launch is the executable plus the acp flags only: the
+// desktop-shell argv inserts the bundled app only when the bound launch
+// carries the harness entry.
+func TestDSHArgvWithoutScript(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "dsh")
+	patch := filepath.Join(t.TempDir(), "profile.json")
+	argv := dshArgv(map[string]any{"executable": exe}, patch)
+	if want := []string{exe, "--profile", "acp", "--patch", patch}; !slices.Equal(argv, want) {
+		t.Fatalf("cli argv = %v, want %v", argv, want)
 	}
 }

@@ -14,8 +14,8 @@ func (f *Facade) PrepareReplan(input RequirementChangeInput) (ControlCandidate, 
 	if err != nil {
 		return ControlCandidate{}, err
 	}
-	if run.Route != "regular" || run.Status != "ACTIVE" || run.PendingRequirementAsk != nil {
-		return ControlCandidate{}, fmt.Errorf("replan requires an active regular run without a requirement barrier")
+	if run.Status != "ACTIVE" || run.PendingRequirementAsk != nil {
+		return ControlCandidate{}, fmt.Errorf("replan requires an active run without a requirement barrier")
 	}
 	if input.Classification != "" && input.Classification != protocol.RequirementClassificationPreserved || len(input.Redo) != 0 {
 		return ControlCandidate{}, fmt.Errorf("replan keeps the requirement and topology; use ordinary requirement change for a changed requirement")

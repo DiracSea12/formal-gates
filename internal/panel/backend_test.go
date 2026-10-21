@@ -202,7 +202,7 @@ func panelRun(t *testing.T, home string) (string, *facade.Facade, facade.Run) {
 	base := panelGit(t, root, "rev-parse", "HEAD")
 	admission, _ := panelAdmission(t, root, "panel-target", "zcode")
 	f, run, err := facade.Start(facade.StartOptions{Root: root,
-		Request: facade.StartRequest{RunID: "panel-run", Route: "regular", Provider: "zcode", VCS: "git",
+		Request: facade.StartRequest{RunID: "panel-run", Provider: "zcode", VCS: "git",
 			BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: panelReceipt(root, "requirements.md")},
 		Admission: admission, Capacity: 2})
@@ -223,7 +223,7 @@ func panelBoundRun(t *testing.T, root, home, runID, configName string) facade.Ru
 	base := panelGit(t, root, "rev-parse", "HEAD")
 	admission, _ := panelAdmission(t, root, runID+"-target", "zcode")
 	_, run, err := facade.Start(facade.StartOptions{Root: root, Configuration: configName,
-		Request: facade.StartRequest{RunID: runID, Route: "regular", Provider: "zcode", VCS: "git",
+		Request: facade.StartRequest{RunID: runID, Provider: "zcode", VCS: "git",
 			BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: panelReceipt(root, "requirements.md")},
 		Admission: admission, Capacity: 2})
@@ -276,6 +276,19 @@ func nodeState(states []protocol.ExecutionNodeState, node string) protocol.Execu
 	return protocol.ExecutionNodeState{Node: node}
 }
 
+func TestRunSummaryRequirementUsesIntakeSourceBasename(t *testing.T) {
+	got := runSummary(facade.Run{RunID: "r1", IntakeConfirmationReceipt: &facade.IntakeConfirmationReceipt{RequirementSource: "docs/需求说明.md"}})
+	if got.Requirement != "需求说明.md" {
+		t.Fatalf("nested requirement source = %q", got.Requirement)
+	}
+	if got := runSummary(facade.Run{RunID: "r1"}); got.Requirement != "" {
+		t.Fatalf("missing receipt must leave requirement empty: %q", got.Requirement)
+	}
+	if got := runSummary(facade.Run{RunID: "r1", IntakeConfirmationReceipt: &facade.IntakeConfirmationReceipt{}}); got.Requirement != "" {
+		t.Fatalf("empty requirement source must leave requirement empty: %q", got.Requirement)
+	}
+}
+
 func TestPanelStateReadsMergedLibraryBindingsAndRuns(t *testing.T) {
 	home := panelHome(t)
 	root := t.TempDir()
@@ -313,6 +326,9 @@ func TestPanelStateReadsMergedLibraryBindingsAndRuns(t *testing.T) {
 	}
 	if run.Configuration.Name != "工作" || len(state.Runs) != 1 || state.Runs[0].RunID != run.RunID || state.Runs[0].Status != "ACTIVE" || state.Runs[0].Configuration != "工作" {
 		t.Fatalf("run projection = %+v", state.Runs)
+	}
+	if state.Runs[0].Requirement != "requirements.md" {
+		t.Fatalf("run requirement label = %q", state.Runs[0].Requirement)
 	}
 	if len(state.Runs[0].Nodes) == 0 || !nodeState(state.Runs[0].Nodes, "product-review").Owed {
 		t.Fatalf("run node states = %+v", state.Runs[0].Nodes)
@@ -450,22 +466,26 @@ func TestPanelSaveGuardsBoundRunResponsibilities(t *testing.T) {
 	beforeUser, beforeProject := overlayBytes(t, root, home)
 	current := run.Configuration.Configuration
 
-	// Completed responsibilities are locked: repair never owed work in this run
-	// and the QA modes were never enabled, so their fields cannot change.
+	// Completed responsibilities are locked: repair is enabled yet never owed
+	// work in this run, so its fields cannot change.
 	locked := settings.CloneConfiguration(current)
 	locked.Execution = map[string]settings.ExecutionChoice{"repair": {Provider: "zcode", Model: "late"}}
 	if _, err := b.Save("project", "工作", locked, true, panelRevisions(t, b), run.RunID); err == nil {
 		t.Fatal("completed responsibility change wrote")
 	}
-	enabledQA := settings.CloneConfiguration(current)
-	enabledQA.QAModes = []string{"blackbox"}
-	if _, err := b.Save("project", "工作", enabledQA, true, panelRevisions(t, b), run.RunID); err == nil {
-		t.Fatal("completed QA responsibility change wrote")
-	}
 	afterUser, afterProject := overlayBytes(t, root, home)
 	if string(beforeUser) != string(afterUser) || string(beforeProject) != string(afterProject) {
 		t.Fatal("locked rejection changed overlay bytes")
 	}
+
+	// A disabled node is a configuration state, not a completed verdict:
+	// enabling blackbox QA writes and takes effect at the next dispatch.
+	enabledQA := settings.CloneConfiguration(current)
+	enabledQA.QAModes = []string{"blackbox"}
+	if _, err := b.Save("project", "工作", enabledQA, true, panelRevisions(t, b), run.RunID); err != nil {
+		t.Fatalf("disabled-node enable rejected: %v", err)
+	}
+	_, savedProject := overlayBytes(t, root, home)
 
 	// The gate owes future work, so development cannot be closed under it.
 	tail := settings.CloneConfiguration(current)
@@ -481,7 +501,7 @@ func TestPanelSaveGuardsBoundRunResponsibilities(t *testing.T) {
 		t.Fatal("zero-dispatchable candidate wrote")
 	}
 	_, afterProject = overlayBytes(t, root, home)
-	if string(beforeProject) != string(afterProject) {
+	if string(savedProject) != string(afterProject) {
 		t.Fatal("stuck rejection changed overlay bytes")
 	}
 
@@ -602,7 +622,7 @@ func TestPanelIntakeCheckReportsSupersededAndSelection(t *testing.T) {
 	if err != nil || check.Superseded || check.Preview == nil || check.Selection == nil {
 		t.Fatalf("valid check = %+v %v", check, err)
 	}
-	if check.Selection.Configuration != "默认" || check.Selection.Route != "regular" || len(check.Selection.Disabled) != 0 {
+	if check.Selection.Configuration != "默认" || len(check.Selection.Disabled) != 0 {
 		t.Fatalf("selection = %+v", check.Selection)
 	}
 
@@ -622,7 +642,7 @@ func TestPanelIntakeCheckReportsSupersededAndSelection(t *testing.T) {
 	base := panelGit(t, root, "rev-parse", "HEAD")
 	admission, _ := panelAdmission(t, root, "panel-intake", "zcode")
 	if _, _, err := facade.Start(facade.StartOptions{Root: root,
-		Request: facade.StartRequest{RunID: "intake-consumer", Route: "regular", Provider: "zcode", VCS: "git",
+		Request: facade.StartRequest{RunID: "intake-consumer", Provider: "zcode", VCS: "git",
 			BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: panelReceipt(root, "requirements.md")},
 		Admission: admission}); err != nil {
@@ -643,8 +663,8 @@ func TestPanelIntakeCheckReportsSupersededAndSelection(t *testing.T) {
 		t.Fatalf("missing candidate = %+v %v", check, err)
 	}
 
-	// A malformed requirement fails the regular route's structured check even
-	// when its bindings are fresh.
+	// A malformed requirement fails the structured check even when its
+	// bindings are fresh.
 	putJSON(t, filepath.Join(root, "broken.md"), "# nothing here\n")
 	writeReceipt(panelReceipt(root, "broken.md"))
 	receipt := panelReceipt(root, "broken.md")
@@ -653,28 +673,25 @@ func TestPanelIntakeCheckReportsSupersededAndSelection(t *testing.T) {
 	putJSON(t, candidate, string(data))
 	check, err = b.CheckIntake(candidate, "默认")
 	if err == nil || check.Superseded {
-		t.Fatalf("malformed regular candidate = %+v %v", check, err)
+		t.Fatalf("malformed candidate = %+v %v", check, err)
 	}
 }
 
-func TestPanelIntakeCheckAllDisabledIsLightweight(t *testing.T) {
+func TestPanelIntakeCheckRejectsAllDisabledConfiguration(t *testing.T) {
 	home := panelHome(t)
 	root := t.TempDir()
 	putJSON(t, filepath.Join(root, "requirements.md"), "# plain notes, no requirement structure\n")
 	b := Backend{Root: root, Home: home}
 	disabled := settings.Configuration{FlowSelection: &settings.FlowSelection{Disabled: []string{"product-review", "start-readiness", "development", "qa", "gate", "repair"}}}
-	if _, err := settings.WriteConfiguration(root, home, "project", "轻量", disabled, false, nil); err != nil {
+	if _, err := settings.WriteConfiguration(root, home, "project", "全禁", disabled, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(root, "intake-candidate.json")
 	data, _ := json.Marshal(panelReceipt(root, "requirements.md"))
 	putJSON(t, candidate, string(data))
-	check, err := b.CheckIntake(candidate, "轻量")
-	if err != nil || check.Superseded || check.Selection.Route != "lightweight" {
-		t.Fatalf("lightweight check = %+v %v", check, err)
-	}
-	if !slices.Equal(check.Selection.Disabled, disabled.FlowSelection.Disabled) {
-		t.Fatalf("selection disabled = %v", check.Selection.Disabled)
+	check, err := b.CheckIntake(candidate, "全禁")
+	if err == nil || !strings.Contains(err.Error(), "at least one enabled") {
+		t.Fatalf("all-disabled check = %+v %v", check, err)
 	}
 }
 

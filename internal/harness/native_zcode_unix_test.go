@@ -995,7 +995,7 @@ func TestZcodeTurnWaitsForItsTerminalEvent(t *testing.T) {
 		return script
 	}
 	scenario := newZcodeScenario(t, steps, nil)
-	req, err := zcodeParseRequest(scenario.request)
+	req, err := zcodeParseRequest(scenario.request, scenario.directory)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,5 +121,38 @@ func (e *Engine) observing(input Observation) *Engine {
 			return value, nil
 		}
 	}
+	if read := e.cfg.WorkerExecutionStopped; read != nil {
+		samples := map[string]bool{}
+		local.cfg.WorkerExecutionStopped = func(pending PendingAction, attempt Attempt) (bool, error) {
+			key := digestOfCanonical(struct{ Action, Attempt string }{pending.ActionID, attempt.ID})
+			if value, ok := samples[key]; ok {
+				return value, nil
+			}
+			value, err := read(pending, attempt)
+			if err != nil {
+				return false, err
+			}
+			samples[key] = value
+			input.Facts.Facts = append(input.Facts.Facts, decision.Fact{Source: decision.SourceHost, Key: "execution-stopped:" + key, Value: digestOfCanonical(value)})
+			previous := input.Read
+			input.Read = func() (decision.Observation, error) {
+				facts := decision.Observation{}
+				if previous != nil {
+					var err error
+					facts, err = previous()
+					if err != nil {
+						return facts, err
+					}
+				}
+				value, err := read(pending, attempt)
+				if err != nil {
+					return facts, err
+				}
+				facts.Facts = append(facts.Facts, decision.Fact{Source: decision.SourceHost, Key: "execution-stopped:" + key, Value: digestOfCanonical(value)})
+				return facts, nil
+			}
+			return value, nil
+		}
+	}
 	return &local
 }

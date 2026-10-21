@@ -362,7 +362,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	var displayedID string
 	check := func(value map[string]any) {
 		materials := value["materials"].(map[string]any)
-		if value["root"] != root || value["route"] != "regular" || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
+		if value["root"] != root || value["configuration"] == nil || value["flowSelection"] == nil || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
 			t.Fatal("start confirmation omitted its actual operation or complete source", value)
 		}
 		displayedID = value["runId"].(string)
@@ -396,7 +396,7 @@ func TestWorkflowConfirmationStartsOnlyTheDisplayedCompleteMaterial(t *testing.T
 	}
 	var request facade.StartRequest
 	body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, displayedID, "request.json"))
-	if err != nil || json.Unmarshal(body, &request) != nil || request.Route != "regular" || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+	if err != nil || json.Unmarshal(body, &request) != nil || request.RunID != displayedID || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 		t.Fatal("started run lost its exact displayed inputs", request, err)
 	}
 }
@@ -432,7 +432,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 			_, starts[i].err = callConfirmationTool("confirm_start", arguments, IO{}, func(value any) error {
 				starts[i].id = value.(map[string]any)["runId"].(string)
 				return nil
-			}, "")
+			}, "", "")
 		}(i)
 	}
 	close(ready)
@@ -448,7 +448,7 @@ func TestWorkflowConfirmationStartsBindIndependentRunIdentities(t *testing.T) {
 		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, start.id, "request.json"), &request); err != nil {
 			t.Fatal(err)
 		}
-		if request.RunID != start.id || request.Route != "regular" || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+		if request.RunID != start.id || request.FlowSelection == nil || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
 			t.Fatal("started run lost its exact displayed identity or intake", request, start.id)
 		}
 	}
@@ -720,14 +720,14 @@ func TestConfirmStartPackageRootSelectsRegisteredHost(t *testing.T) {
 	}
 	arguments := mustJSON(t, map[string]any{"root": root, "intake": position, "configuration": "仅评审"})
 	confirm := func(any) error { return nil }
-	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, ""); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
+	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, "", ""); err == nil || !strings.Contains(err.Error(), "conflicting active registry records") {
 		t.Fatalf("shared launcher admission did not conflict: %v", err)
 	}
 	admission, err := validate.ResolveEngineAdmission(root, codexTarget)
 	if err != nil || admission.Provider != "codex" {
 		t.Fatalf("package root did not select the codex record: %+v %v", admission, err)
 	}
-	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, codexTarget); err != nil && strings.Contains(err.Error(), "conflicting active registry records") {
+	if _, err := callConfirmationTool("confirm_start", arguments, IO{}, confirm, "", codexTarget); err != nil && strings.Contains(err.Error(), "conflicting active registry records") {
 		t.Fatalf("package root admission still conflicts: %v", err)
 	}
 }
@@ -942,5 +942,38 @@ func TestElicitationHostWithoutCapabilityRejectsConfirmStart(t *testing.T) {
 	entries, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("unconfirmed start created run files: %v %v", entries, err)
+	}
+}
+
+// A serve started with -root owns that project directory: a confirmation call
+// that omits its own root still displays and starts the serve's project.
+func TestWorkflowServeRootSuppliesOmittedProjectRoot(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	startAdmittedEngineRun(t, root)
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
+	preview, err := facade.PrepareIntake(root, "requirements.md", "", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, position, err := facade.SaveOriginalPayload(workflowPayloadDirectory(root, "", "intake"), mustJSON(t, preview.IntakeCandidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runID string
+	result := serveConfirmationCall(t, []string{"--root", root}, "confirm_start", map[string]any{"intake": position, "configuration": "仅评审"}, true, "accept", func(value map[string]any) {
+		if value["root"] != root {
+			t.Fatal("the confirmation did not show the serve's project root", value)
+		}
+		runID = value["runId"].(string)
+	}, nil)
+	if result["isError"] != false || runID == "" {
+		t.Fatal("an omitted call root did not start the serve's project", result)
+	}
+	if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, runID, "state.json")); err != nil {
+		t.Fatal("the serve's project did not receive its run", err)
 	}
 }

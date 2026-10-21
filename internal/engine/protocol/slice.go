@@ -181,8 +181,8 @@ func (e *Engine) CheckpointSlice(snapshot, tree string, owner *cost.OwnerCost, e
 	if state == nil {
 		return &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
-	if state.SliceChild == nil || state.Route != "regular" {
-		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "slice checkpoint requires a regular child run"}
+	if state.SliceChild == nil {
+		return &RejectedError{Code: CodeEventSchemaInvalid, Detail: "slice checkpoint requires a slice child run"}
 	}
 	if state.SliceReceipt != nil {
 		if state.SliceReceipt.Receipt.Snapshot == snapshot && state.SliceReceipt.Receipt.Tree == tree {

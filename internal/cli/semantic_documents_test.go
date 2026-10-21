@@ -70,7 +70,8 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 		t.Fatal("explicit global and automatic project admissions are indistinguishable")
 	}
 	candidate := writerIntakeReceipt(t, root)
-	saveLightweightConfiguration(t, root)
+	saveReviewOnlyConfiguration(t, root)
+	cliStartRepo(t, root)
 	candidatePath := filepath.Join(t.TempDir(), "intake.json")
 	if err := saveWorkflowCandidate(candidatePath, candidate); err != nil {
 		t.Fatal(err)
@@ -90,13 +91,13 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var out, stderr bytes.Buffer
 			runID := strings.ReplaceAll(test.name, " ", "-")
-			args := []string{"workflow", "start", "--root", root, "--run-id", runID, "--route", "lightweight", "--intake-receipt", candidatePath, "--machine"}
+			args := []string{"workflow", "start", "--root", root, "--run-id", runID, "--configuration", "仅评审", "--intake-receipt", candidatePath, "--machine"}
 			args = append(args, test.flags...)
 			if code := runWithHostConfirmation(t, args, IO{Stdout: &out, Stderr: &stderr}); code != 0 || stderr.Len() != 0 {
 				t.Fatalf("start: %d %s %s", code, &out, &stderr)
 			}
 			var run facade.Run
-			if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.RunID != runID || run.Route != "lightweight" || run.Status != "ACTIVE" {
+			if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.RunID != runID || run.FlowSelection == nil || run.Status != "ACTIVE" {
 				t.Fatalf("start output: %+v %v", run, err)
 			}
 			data, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, runID, "request.json"))
@@ -177,73 +178,6 @@ func TestWorkflowStartBindsConfigurationAfterStructuredPrecheck(t *testing.T) {
 	}
 }
 
-func TestWorkflowStartDerivesRouteAfterStructuredPrecheck(t *testing.T) {
-	if testkit.RunNativePackageTest(t) {
-		return
-	}
-	root := t.TempDir()
-	startAdmittedEngineRun(t, root)
-	for _, args := range [][]string{{"init"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "requirements.md"}, {"commit", "-m", "Confirmed input"}} {
-		cliGit(t, root, args...)
-	}
-	before := snapshotEngineRunTree(t, root, "writer-exclusive")
-	var out, stderr bytes.Buffer
-	streams := IO{Stdout: &out, Stderr: &stderr}
-	candidatePath := filepath.Join(t.TempDir(), "intake.json")
-	if code := runWithHostConfirmation(t, []string{"workflow", "start", "--precheck", "--root", root, "--requirement", "requirements.md", "--save-candidate", candidatePath}, streams); code != 0 {
-		t.Fatal(code, stderr.String())
-	}
-	var preview facade.IntakePreview
-	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.RequirementDocument == nil || preview.IntakeCandidate.RequirementRevision != preview.RequirementDocument.ContentDigest {
-		t.Fatalf("omitted precheck route lost structured binding: %+v %v", preview, err)
-	}
-	raw, err := os.ReadFile(candidatePath)
-	var candidate facade.IntakeConfirmationReceipt
-	if err != nil || json.Unmarshal(raw, &candidate) != nil || !reflect.DeepEqual(candidate, preview.IntakeCandidate) {
-		t.Fatal("saved candidate differs from displayed material", err)
-	}
-	for _, args := range [][]string{
-		{"workflow", "start", "--root", root, "--run-id", "missing-route", "--intake-receipt", candidatePath},
-		{"workflow", "start", "--root", root, "--run-id", "missing-route", "--intake-receipt", candidatePath, "--route", " "},
-	} {
-		out.Reset()
-		stderr.Reset()
-		if code := Run("formal-gates", args, streams); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") || out.Len() != 0 {
-			t.Fatalf("derived route bypassed native confirmation: %d %s %s", code, &out, &stderr)
-		}
-		if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "missing-route")); !os.IsNotExist(err) {
-			t.Fatal("missing route wrote run files", err)
-		}
-	}
-	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
-		t.Fatal("precheck or rejected start changed existing authority")
-	}
-	for _, route := range []string{"", "regular", "lightweight"} {
-		expectedRoute := route
-		if expectedRoute == "" {
-			expectedRoute = "regular"
-		}
-		if route == "lightweight" {
-			saveLightweightConfiguration(t, root)
-		}
-		out.Reset()
-		stderr.Reset()
-		args := []string{"workflow", "start", "--root", root, "--run-id", "selected-" + route, "--intake-receipt", candidatePath, "--route", route, "--vcs", "git", "--machine"}
-		if code := runWithHostConfirmation(t, args, streams); code != 0 {
-			t.Fatalf("explicit %s start: %d %s", route, code, &stderr)
-		}
-		var run facade.Run
-		if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.Route != expectedRoute || run.Unverified != (expectedRoute == "lightweight") || run.Status != "ACTIVE" || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &candidate) {
-			t.Fatalf("explicit mode or material changed: %+v %v", run, err)
-		}
-		body, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, run.RunID, "request.json"))
-		var request facade.StartRequest
-		if err != nil || json.Unmarshal(body, &request) != nil || request.Route != expectedRoute || !reflect.DeepEqual(request.IntakeConfirmationReceipt, candidate) {
-			t.Fatal("persisted route or confirmed binding changed", err)
-		}
-	}
-}
-
 func TestRequirementParsesFlagsBeforeSelectingExistingRuns(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
@@ -286,7 +220,20 @@ func TestRequirementParsesFlagsBeforeSelectingExistingRuns(t *testing.T) {
 			t.Fatalf("invalid flags reached run choices: %d %s %s", code, &out, &stderr)
 		}
 	}
-	for _, flags := range [][]string{{"--run", "1"}, {"--run-id", "writer-exclusive"}, {"--run", "2", "--document", "1"}} {
+	documents, err := requirementDocuments(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var documentPosition int
+	for _, document := range documents {
+		if document.Path == request.IntakeConfirmationReceipt.RequirementSource {
+			documentPosition = document.Position
+		}
+	}
+	if documentPosition == 0 {
+		t.Fatal("run requirement missing from published documents", documents)
+	}
+	for _, flags := range [][]string{{"--run", "1"}, {"--run-id", "writer-exclusive"}, {"--run", "2", "--document", strconv.Itoa(documentPosition)}} {
 		out.Reset()
 		stderr.Reset()
 		args := append([]string{"requirement", "show", "--root", t.TempDir(), "--root", root}, flags...)
@@ -361,6 +308,87 @@ func TestRequirementCommandsCreateAndEditUsingPublishedPositions(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(root, choices[0].Path))
 	if err != nil || string(data) != strings.Replace(strings.Replace(before, "读取一致。", "可重复读取。", 1), "保存", "保留", 1) {
 		t.Fatalf("published title edit changed unrelated bytes: %q %v", data, err)
+	}
+}
+
+func TestRequirementAndMaterialSelectionsSharePublishedPositions(t *testing.T) {
+	root := t.TempDir()
+	ordinary := "Ordinary confirmation material.\r\n"
+	mustWriteCLI(t, filepath.Join(root, "aaa.txt"), ordinary)
+	mustWriteCLI(t, filepath.Join(root, "need.md"), cliStructuredRequirement("Keep the selected requirement."))
+	mustWriteCLI(t, filepath.Join(root, "zzz.txt"), "Original reference.\n")
+	var out, stderr bytes.Buffer
+	invoke := func(args ...string) {
+		t.Helper()
+		out.Reset()
+		stderr.Reset()
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+			t.Fatalf("%v: %s", args, &stderr)
+		}
+	}
+	invoke("requirement", "show", "--root", root)
+	var documents []requirementDocumentChoice
+	if err := json.Unmarshal(out.Bytes(), &documents); err != nil || len(documents) != 1 || documents[0].Path != "need.md" {
+		t.Fatal("published requirement choices", out.String(), err)
+	}
+	invoke("workflow", "start", "--precheck", "--root", root, "--materials")
+	var materials []requirementDocumentChoice
+	if err := json.Unmarshal(out.Bytes(), &materials); err != nil || len(materials) != 3 || materials[0].Path != "aaa.txt" {
+		t.Fatal("published material choices", out.String(), err)
+	}
+	if documents[0] != materials[1] {
+		t.Errorf("one file has different published positions: requirement=%+v material=%+v", documents[0], materials[1])
+	}
+	document := strconv.Itoa(documents[0].Position)
+	for attempt := 0; attempt < 2; attempt++ {
+		invoke("workflow", "start", "--precheck", "--root", root, "--document", document,
+			"--solution-document", strconv.Itoa(materials[0].Position), "--artifact-document", strconv.Itoa(materials[2].Position))
+		var preview facade.IntakePreview
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.RequirementDocument == nil || preview.IntakeCandidate.RequirementSource != "need.md" || preview.IntakeCandidate.SolutionSource != "aaa.txt" || len(preview.Materials) != 3 {
+			t.Errorf("published requirement position selected another material: %+v %v", preview, err)
+		}
+		assertIntakePayloadWithoutRun(t, root, preview.IntakeCandidate)
+	}
+	invoke("requirement", "show", "--root", root, "--document", document)
+	var shown facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &shown); err != nil || shown.IntakeCandidate.RequirementSource != "need.md" {
+		t.Fatal("published position did not show requirement", out.String(), err)
+	}
+	invoke("requirement", "edit", "--root", root, "--document", document, "--item", "1", "--title", "Selected requirement")
+	data, err := os.ReadFile(filepath.Join(root, "need.md"))
+	if err != nil || !strings.Contains(string(data), "Selected requirement") {
+		t.Fatal("published position did not edit requirement", string(data), err)
+	}
+	invoke("requirement", "append", "--root", root, "--document", document, "--title", "Additional requirement",
+		"--requirement", "Keep the document binding.", "--acceptance", "The same file is selected.", "--source", "User request")
+	data, err = os.ReadFile(filepath.Join(root, "need.md"))
+	if err != nil || !strings.Contains(string(data), "Additional requirement") {
+		t.Fatal("published position did not append requirement", string(data), err)
+	}
+	invoke("requirement", "remove", "--root", root, "--document", document, "--item", "2")
+	data, err = os.ReadFile(filepath.Join(root, "need.md"))
+	if err != nil || strings.Contains(string(data), "Additional requirement") || !strings.Contains(string(data), "Selected requirement") {
+		t.Fatal("published position did not remove selected requirement", string(data), err)
+	}
+	invoke("workflow", "start", "--precheck", "--root", root, "--document", document)
+	var updated facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := facade.CheckIntakeCandidate(root, updated.IntakeCandidate, true); err != nil {
+		t.Fatal("strict confirmation rejected selected structured material", err)
+	}
+	invoke("workflow", "start", "--precheck", "--root", root, "--document", strconv.Itoa(materials[0].Position))
+	var ordinaryPreview facade.IntakePreview
+	if err := json.Unmarshal(out.Bytes(), &ordinaryPreview); err != nil || ordinaryPreview.RequirementDocument != nil || ordinaryPreview.IntakeCandidate.RequirementSource != "aaa.txt" || ordinaryPreview.Content != strings.ReplaceAll(ordinary, "\r\n", "\n") {
+		t.Fatal("ordinary material position lost its binding", out.String(), err)
+	}
+	if _, err := facade.CheckIntakeCandidate(root, ordinaryPreview.IntakeCandidate, true); err == nil {
+		t.Fatal("strict confirmation accepted ordinary material")
+	}
+	data, err = os.ReadFile(filepath.Join(root, "aaa.txt"))
+	if err != nil || string(data) != ordinary {
+		t.Fatal("requirement editing changed ordinary material", string(data), err)
 	}
 }
 
@@ -649,7 +677,7 @@ func TestProjectDocumentsExcludeRepositoryMetadataAndPreserveUserFiles(t *testin
 					},
 					{
 						[]string{"requirement", "show", "--root", root},
-						[]requirementDocumentChoice{{1, ".gates/requirements.md"}, {2, "requirements.md"}},
+						[]requirementDocumentChoice{{2, ".gates/requirements.md"}, {5, "requirements.md"}},
 					},
 				} {
 					out.Reset()

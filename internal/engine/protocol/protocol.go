@@ -486,8 +486,8 @@ type State struct {
 	NativeHandle          vcs.WorkspaceHandle       `json:"nativeHandle,omitempty"`
 	NativeRoot            string                    `json:"nativeRoot,omitempty"`
 	NativeResources       map[string]NativeResource `json:"nativeResources,omitempty"`
-	// BaseSnapshot 是 regular 路线经原生 VCS provider 校验过的不可变基线身份
-	// （启动时 verify＋ancestor-or-equal；lightweight 无 VCS 语义，恒空）。
+	// BaseSnapshot 是经原生 VCS provider 校验过的不可变基线身份（启动时
+	// verify＋ancestor-or-equal）。
 	BaseSnapshot string `json:"baseSnapshot,omitempty"`
 	// InitialSnapshot is the immutable native HEAD accepted at Start.
 	// It owns the first development source and target identity before a promotion.
@@ -513,7 +513,6 @@ type State struct {
 	// writer.  Confirmation is captured at start; IntakeReceipt is populated by
 	// the first drive and is intentionally not a second confirmation event.
 	RunID                     string                      `json:"runId,omitempty"`
-	Route                     string                      `json:"route,omitempty"`
 	IntakeConfirmationReceipt *IntakeConfirmationReceipt  `json:"intakeConfirmationReceipt,omitempty"`
 	IntakeReceipt             *IntakeReceipt              `json:"intakeReceipt,omitempty"`
 	Expected                  []runtime.TaskKey           `json:"expected"`

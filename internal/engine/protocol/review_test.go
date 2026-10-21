@@ -138,7 +138,7 @@ func reviewEngineCapacity(t *testing.T, cd *compiler.CompiledDefinition, reg *co
 	}
 	observedInput := Observation{}
 	confirmation := reviewConfirmation()
-	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-review", "", confirmation, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, testProvider, observedInput, "run-review", confirmation, "", "", nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if _, err := engine.RecordIntakeReceipt(IntakeReceipt{Confirmation: *confirmation, IntakeDigest: "sha256:intake"}, observedInput); err != nil {
@@ -924,13 +924,36 @@ func TestReviewGatingNegatives(t *testing.T) {
 		engine, dir := reviewEngine(t, cd, reg)
 		product := issueReady(t, engine)[0]
 		submitVerifiedReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
-		// phase TECHNICAL_REVIEW：start-readiness 尚未 PASS，拓扑须拒绝。
-		if err := askAndDecideRejecting(t, engine, dir, ControlConfirmTopology, "req-topo-early", topologyOptions(), "no-split", &ReviewDecisionPayload{Topology: &TopologyDecision{
+		// phase TECHNICAL_REVIEW：start-readiness 尚未 PASS，拓扑 Ask 不落为
+		// 可决——请求落账后同一事务收尾将其作废，拓扑保持未绑定。
+		request, err := NewRequestEvent("req-topo-early", ControlConfirmTopology, topologyOptions()...)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if _, err := engine.Submit(request, Observation{}); err != nil {
+			t.Fatalf("submit request: %v", err)
+		}
+		if _, err := engine.Freshness("req-topo-early"); err == nil || rejectionCode(t, err) != CodeRequestResolved {
+			t.Fatalf("early topology ask stayed decidable: %v", err)
+		}
+		snap := engine.LoadMustSucceed(t)
+		if snap.State.Topology != nil || !snap.State.PendingAsks["req-topo-early"].Resolved {
+			t.Fatal("topology bound or ask left pending before readiness PASS")
+		}
+		decide, err := NewReviewDecideEvent("evt-topo-early", "req-topo-early", "any", "no-split", ReviewDecisionPayload{Topology: &TopologyDecision{
 			Decision: "no-split", Note: "建议不拆：尚无 readiness",
-		}}); err == nil {
-			t.Fatal("topology accepted before readiness PASS")
-		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
-			t.Fatalf("early topology code = %q", code)
+		}})
+		if err != nil {
+			t.Fatalf("decide: %v", err)
+		}
+		durable := stateBytesOf(t, dir)
+		if _, err := engine.Submit(decide, Observation{}); err == nil {
+			t.Fatal("topology decide accepted on the superseded ask")
+		} else if code := rejectionCode(t, err); code != CodeRequestResolved {
+			t.Fatalf("superseded topology decide code = %q", code)
+		}
+		if !bytes.Equal(durable, stateBytesOf(t, dir)) {
+			t.Fatal("decide on the superseded ask changed state bytes")
 		}
 	})
 
@@ -964,26 +987,24 @@ func TestReviewGatingNegatives(t *testing.T) {
 		if state.RouteConfirmationDue(cd) || state.ReviewSeries.ProductReview.Effective.Status != "PENDING" {
 			t.Fatal("product invalidation did not close the route prerequisite")
 		}
-		token, err := engine.Freshness("req-route-before-invalidation")
-		if err != nil {
-			t.Fatal(err)
+		if !state.PendingAsks["req-route-before-invalidation"].Resolved {
+			t.Fatal("invalidated prerequisite left the route ask decidable")
 		}
-		approve, err := NewReviewDecideEvent("evt-route-after-invalidation", "req-route-before-invalidation", token, "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: gates}})
+		approve, err := NewReviewDecideEvent("evt-route-after-invalidation", "req-route-before-invalidation", "stale", "approve", ReviewDecisionPayload{Route: &RouteDecision{Gates: gates, Selected: gates}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		before := stateBytesOf(t, dir)
 		if _, err := engine.Submit(approve, Observation{}); err == nil {
 			t.Fatal("route decision accepted after its product prerequisite was invalidated")
-		} else if code := rejectionCode(t, err); code != CodeReviewDecisionRejected {
+		} else if code := rejectionCode(t, err); code != CodeRequestResolved {
 			t.Fatalf("invalidated-prerequisite decision code = %q (%v)", code, err)
 		}
 		if !bytes.Equal(before, stateBytesOf(t, dir)) {
 			t.Fatal("rejected route decision changed persisted state")
 		}
-		state = engine.LoadMustSucceed(t).State
-		if state.RouteConfirmed || state.PendingAsks["req-route-before-invalidation"].Resolved {
-			t.Fatal("rejected decision opened the route or consumed its Ask")
+		if engine.LoadMustSucceed(t).State.RouteConfirmed {
+			t.Fatal("rejected decision opened the route")
 		}
 	})
 
@@ -1104,9 +1125,14 @@ func TestReviewGatingNegatives(t *testing.T) {
 	})
 
 	t.Run("review control decide without payload", func(t *testing.T) {
-		cd, reg := reviewStepsFixture(t, "product.review")
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
 		observedInput := Observation{}
+		// 前置审查须先满足，拓扑 Ask 才是可决的当前 Ask。
+		product := issueReady(t, engine)[0]
+		submitVerifiedReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitVerifiedReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
 		request, err := NewRequestEvent("req-topology-nopayload", ControlConfirmTopology, topologyOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
@@ -1239,9 +1265,13 @@ func TestReviewGatingNegatives(t *testing.T) {
 	})
 
 	t.Run("stale freshness on a review decide", func(t *testing.T) {
-		cd, reg := reviewStepsFixture(t, "product.review")
+		cd, reg := reviewStepsFixture(t, "product.review", "start.readiness")
 		engine, dir := reviewEngine(t, cd, reg)
 		observedInput := Observation{}
+		product := issueReady(t, engine)[0]
+		submitVerifiedReviewResult(t, engine, "result-product-1", product, reviewEvidence(review.ProductReview, "dispatch-product-1", "", "PASS", "clean", nil))
+		readiness := pendingActionID(t, engine)
+		submitVerifiedReviewResult(t, engine, "result-readiness-1", readiness, reviewEvidence(review.StartReadiness, "dispatch-readiness-1", "", "PASS", "ready", nil))
 		request, err := NewRequestEvent("req-stale", ControlConfirmTopology, topologyOptions()...)
 		if err != nil {
 			t.Fatalf("request: %v", err)
@@ -1931,7 +1961,7 @@ func TestReviewPhaseDialPastRejectedAtCommit(t *testing.T) {
 	if err := view.CompleteStep("prep.parse", cd); err != nil {
 		t.Fatalf("complete prep: %v", err)
 	}
-	err = engine.InitWithMetadata(view, testProvider, Observation{}, "run-dial", "", reviewConfirmation(), "", "", nil)
+	err = engine.InitWithMetadata(view, testProvider, Observation{}, "run-dial", reviewConfirmation(), "", "", nil)
 	if err == nil {
 		t.Fatal("dial-past init accepted")
 	} else if code := rejectionCode(t, err); code != CodeStateIntegrityInvalid {

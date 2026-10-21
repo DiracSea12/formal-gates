@@ -189,7 +189,9 @@ func (e *Engine) executionNodeStatesFor(s *State, configuration settings.Configu
 	for _, id := range ExecutionNodeIDs() {
 		enabled := configurationNodeEnabled(configuration, id)
 		remaining := owed[id] && !bypassed
-		completed := !remaining && !running[id]
+		// Completion is a verdict on an enabled path: a disabled node is a
+		// configuration state and keeps its enable switch, never "completed".
+		completed := enabled && !remaining && !running[id]
 		nodes = append(nodes, ExecutionNodeState{Node: id, Enabled: enabled, Owed: remaining, Dispatchable: remaining && projected.nodeDispatchEnabled(configuration, id), Completed: completed, Running: running[id], Editable: !completed && !running[id] && !bypassed, Closing: !enabled && running[id] || slices.Contains(closing, id), Bypassed: bypassed})
 	}
 	return nodes, nil

@@ -204,6 +204,10 @@ func TestSettingsNamedConfigurationCommandsUsePublishedChoices(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	shown := settingsCommand(t, root, home, "show")
 	var view struct {
+		Effective      settings.Effective             `json:"effective"`
+		Fields         []settings.EditableField       `json:"fields"`
+		QAModes        []json.RawMessage              `json:"qaModes"`
+		RoundLimits    []json.RawMessage              `json:"roundLimits"`
 		Configurations []settings.ConfigurationOption `json:"configurations"`
 		FlowNodes      []struct {
 			Node int `json:"node"`
@@ -212,7 +216,7 @@ func TestSettingsNamedConfigurationCommandsUsePublishedChoices(t *testing.T) {
 			Node int `json:"node"`
 		} `json:"executionNodes"`
 	}
-	if err := json.Unmarshal(shown, &view); err != nil || len(view.Configurations) != 1 || view.Configurations[0].Name != "默认" || len(view.FlowNodes) != len(definition.MainFlowNodes()) || len(view.ExecutionNodes) != len(definition.ExecutionNodes()) {
+	if err := json.Unmarshal(shown, &view); err != nil || !view.Effective.Values.PanelSelection || len(view.Fields) == 0 || len(view.QAModes) == 0 || len(view.RoundLimits) != len(settings.RoundLimitNodes) || len(view.Configurations) != 1 || view.Configurations[0].Name != "默认" || len(view.FlowNodes) != len(definition.MainFlowNodes()) || len(view.ExecutionNodes) != len(definition.ExecutionNodes()) {
 		t.Fatalf("initial named choices: %s %v", shown, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
@@ -225,7 +229,7 @@ func TestSettingsNamedConfigurationCommandsUsePublishedChoices(t *testing.T) {
 	settingsCommand(t, root, home, "set", "--configuration", "中文 名称", "--no-gates")
 	settingsCommand(t, root, home, "use", "--configuration", "2")
 	effective, err := settings.Load(root, home)
-	if err != nil || effective.ConfigurationName != "中文 名称" || !reflect.DeepEqual(effective.Configuration.FlowSelection.Disabled, []string{definition.MainFlowNodes()[0].ID}) || !reflect.DeepEqual(effective.Configuration.QAModes, []string{"blackbox", "whitebox"}) || effective.Configuration.Gates == nil || len(*effective.Configuration.Gates) != 0 {
+	if err != nil || !effective.Values.PanelSelection || effective.ConfigurationName != "中文 名称" || !reflect.DeepEqual(effective.Configuration.FlowSelection.Disabled, []string{definition.MainFlowNodes()[0].ID}) || !reflect.DeepEqual(effective.Configuration.QAModes, []string{"blackbox", "whitebox"}) || effective.Configuration.Gates == nil || len(*effective.Configuration.Gates) != 0 {
 		t.Fatalf("configuration choices: %+v %v", effective, err)
 	}
 	settingsCommand(t, root, home, "delete", "--configuration", "中文 名称")

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -34,9 +35,12 @@ type Backend struct {
 // progress, and the engine's node obligations. It never carries tokens or raw
 // run state.
 type RunSummary struct {
-	RunID         string                        `json:"runId"`
-	Status        string                        `json:"status"`
-	Route         string                        `json:"route"`
+	RunID     string `json:"runId"`
+	Status    string `json:"status"`
+	StartedAt string `json:"startedAt,omitempty"`
+	// Requirement is the run's requirement document display name: the
+	// basename of the confirmed intake source path, e.g. "requirements.md".
+	Requirement   string                        `json:"requirement,omitempty"`
 	Configuration string                        `json:"configuration"`
 	Next          decision.NextResult           `json:"next"`
 	Nodes         []protocol.ExecutionNodeState `json:"nodes"`
@@ -82,7 +86,6 @@ type State struct {
 type IntakeSelection struct {
 	Configuration string   `json:"configuration"`
 	Disabled      []string `json:"disabled"`
-	Route         string   `json:"route"`
 }
 
 // IntakeCheck reports a saved confirmation candidate's current validity and
@@ -159,10 +162,15 @@ func openRun(root, runID string) (facade.Run, error) {
 }
 
 func runSummary(run facade.Run) RunSummary {
+	requirement := ""
+	if receipt := run.IntakeConfirmationReceipt; receipt != nil && receipt.RequirementSource != "" {
+		requirement = path.Base(receipt.RequirementSource)
+	}
 	return RunSummary{
 		RunID:         run.RunID,
 		Status:        run.Status,
-		Route:         run.Route,
+		StartedAt:     run.StartedAt,
+		Requirement:   requirement,
 		Configuration: run.Configuration.Name,
 		Next:          run.Next,
 		Nodes:         run.NodeStates,
@@ -386,8 +394,8 @@ func (b Backend) EditPanelSetting(name, value string, expected map[string]string
 	return settings.Effective{}, fmt.Errorf("unknown setting %q", name)
 }
 
-// Gates lists the gate candidates for the selected configuration's route the
-// same way the CLI does: package candidates minus the QA gates.
+// Gates lists the gate candidates for the selected configuration the same way
+// the CLI does: package candidates minus the QA gates.
 func (b Backend) Gates() ([]string, error) {
 	admission, err := validate.ResolveEngineAdmission(b.Root, "")
 	if err != nil {
@@ -430,7 +438,12 @@ func (b Backend) ExecutionOptions(configurationName string, input facade.Executi
 		Model:           effective.Values.Model,
 		ReasoningEffort: effective.Values.ReasoningEffort,
 	})
-	return facade.QueryExecutionOptions(b.Root, admission.Target, effective.Values.Native, current, input)
+	result, err := facade.QueryExecutionOptions(b.Root, admission.Target, effective.Values.Native, current, input)
+	if err != nil {
+		return result, err
+	}
+	result.Installed = installedExecutables(effective.Values.Native, result.Platforms)
+	return result, nil
 }
 
 // executionNodeID resolves a panel node selection (id, description, or
@@ -471,11 +484,10 @@ func (b Backend) CheckIntake(candidatePath, configurationName string) (IntakeChe
 	if selected == nil {
 		return IntakeCheck{}, fmt.Errorf("unknown configuration %q", configurationName)
 	}
-	route, err := facade.ConfigurationRoute(selected.Configuration)
-	if err != nil {
+	if err := facade.ValidateStartConfiguration(selected.Configuration); err != nil {
 		return IntakeCheck{}, err
 	}
-	preview, err := facade.CheckIntakeCandidate(b.Root, receipt, route == "regular")
+	preview, err := facade.CheckIntakeCandidate(b.Root, receipt, true)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), facade.InvalidIntakeConfirmation) {
 			return IntakeCheck{Superseded: true, Reason: err.Error()}, nil
@@ -488,7 +500,7 @@ func (b Backend) CheckIntake(candidatePath, configurationName string) (IntakeChe
 	}
 	return IntakeCheck{
 		Preview:   &preview,
-		Selection: &IntakeSelection{Configuration: configurationName, Disabled: disabled, Route: route},
+		Selection: &IntakeSelection{Configuration: configurationName, Disabled: disabled},
 	}, nil
 }
 
@@ -514,8 +526,8 @@ func (b Backend) intakeReceipt(candidatePath string) (facade.IntakeConfirmationR
 }
 
 // CheckIntakeFreshness validates the candidate's artifact bindings ahead of any
-// configuration route, so a stale candidate surfaces as superseded instead of
-// being hidden behind an invalid draft.
+// configuration selection, so a stale candidate surfaces as superseded instead
+// of being hidden behind an invalid draft.
 func (b Backend) CheckIntakeFreshness(candidatePath string) (IntakeCheck, error) {
 	receipt, check, err := b.intakeReceipt(candidatePath)
 	if err != nil || check.Superseded {

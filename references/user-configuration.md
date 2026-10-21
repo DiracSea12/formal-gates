@@ -6,8 +6,15 @@
 其他名称由用户提供或复制时自动生成。并发、token cap、认证和原生路径不打包进命名配置。
 
 图形面板、MCP `configure` 与 `settings` 使用同一配置库。用户在项目目录运行
-`formal-gates config`，或让代理调用 `configure` 打开面板；没有桌面时用对话与
-`settings` 完成同等操作。面板不代替启动或回退的真人确认。
+`formal-gates config`，或让代理调用 `configure` 打开面板；也可直接在对话指定选择，由代理用
+既有 `settings` 与配置准备入口完成同等操作。两种方式不互斥；按 `panelSelection` 默认弹出的面板
+已经打开时，也随时接受对话选择，不要求先关开关或面板、不等超时、不要求再点面板。
+对话选好后用 `confirm_start` 的原 `intake` 与 `configuration` 经既有校验接纳，
+关闭对应受理窗口并让原 `configure` 返回 `selected`；随后独立请求原生启动确认，取消不创建 run。
+无已开面板时，不为对话选择启动服务或开窗口。选择前代理须用 `settings show`、
+`settings show --gates` 和 `settings execution-options` 读取并列出当前可选节点及每项选择、
+配置选项与后果，节点和取值只取程序当前枚举。面板保存与对话选择都不代表启动批准，
+不自行触发正式流程；启动或回退仍须既有原生真人确认。
 
 ## 图形面板
 
@@ -23,7 +30,7 @@
 
 受理面板的“选好了”要求先保存修改，再校验原材料与配置组合。它只把配置选择交给代理，
 随后仍由 `confirm_start` 展示完整启动操作并等待真人确认。
-`panelSelection=false` 改为对话选择；明确要求面板时代理可传 `force`，
+`panelSelection` 只决定是否默认呼出面板，不使面板和对话互斥；面板已开时对话选好也会关闭对应窗口。明确要求面板时代理可传 `force`，
 用户终端运行 `formal-gates config` 始终不受该开关限制。
 空闲计时只看用户操作，不看后台刷新；超时丢弃未保存内容，0 表示不按空闲时间关闭。
 
@@ -150,7 +157,7 @@ formal-gates settings remove --root <repo> --scope project --field <原序号>
 | `reasoningEffort` | 未设置则不覆盖；可写 minimal/low/medium/high/xhigh/max/ultra，由所选宿主核其实际支持。 |
 | `tokenCap` | 未设置为 unavailable；非负 token 数。0 停止自动治理调用，继续须原 typed 额度处置。 |
 | `panelIdleTimeout` | 300 秒；整数 0–86400，0 表示不超时。供受理、运行中与配置库管理面板共用，非 worker 超时。 |
-| `panelSelection` | true；布尔值，只决定受理选择是否默认弹面板，不替代启动确认。 |
+| `panelSelection` | true；布尔值，只决定是否默认弹面板；面板已开时仍可对话选择，不替代启动确认。 |
 
 两项 panel 设置已加入全局标量编辑路径，不属于命名配置；也可按字段名编辑：
 
@@ -161,8 +168,9 @@ formal-gates settings remove panelSelection --root <repo> --scope project
 ```
 
 面板消费这些设置将在第二阶段接入：超时按页面最后一次用户操作计算，丢弃未保存修改并关窗；
-受理超时将使用启用指针目标，但仍须 `confirm_start` 真人确认。关闭 panelSelection 时受理改走
-对话选择，不禁用用户主动呼出面板的能力。当前修改这两项不会打开窗口或启动 run。
+受理超时将使用启用指针目标，但仍须 `confirm_start` 真人确认。`panelSelection=false` 默认走
+对话选择，true 默认弹面板；两者不互斥，面板已开时也可直接对话选好并关闭对应窗口。对话选择不以关闭此开关为前提，
+该开关也不禁用用户主动呼出面板的能力。当前修改这两项不会打开窗口或启动 run。
 
 原生路径也是平面 JSON 字段，由对应 adapter 读取：
 
@@ -173,7 +181,7 @@ formal-gates settings remove panelSelection --root <repo> --scope project
 | Cursor | `cursorExecutable`: cursor-agent；`cursorHome`: 当前用户 HOME。 |
 | DSH | `dshExecutable`: dsh。 |
 | ZCode | `zcodeExecutable`: node；`zcodeScript`: 原环境指定或标准 app-server；`zcodeHome`: 原宿主数据 HOME。 |
-| WorkBuddy | `workbuddyExecutable`: codebuddy（PATH 不存在时核标准 macOS app bundle）；`workbuddyHome`: 原用户 HOME；`workbuddyProductConfig`: 原桌面 product config。 |
+| WorkBuddy | `workbuddyExecutable`: codebuddy（PATH 不存在时核 PATH 上的 WorkBuddy 桌面安装锚点，取其 resources 内包内 CLI 经 node 运行，再核标准 macOS app bundle）；`workbuddyHome`: 原用户 HOME；`workbuddyProductConfig`: 原桌面 product config。 |
 
 原生 home 留空继承当前宿主环境；显式字段须非空。路径配置只传入对应子进程，不改
 进程全局环境，不复制认证文件。WorkBuddy 默认配置根是原 `.workbuddy`；product config
@@ -207,7 +215,7 @@ cost/guard owner 持有，设置展示只投影其当前有效值。这些执行
 ## 绑定与运行中生效
 
 启动用 `confirm_start.configuration` 选择保存配置（省略取启用指针），不改变指针；
-run 固定绑定这个名字，child 继承名字并同样现读，不能运行中换绑。路线按保存配置节点推导，
+run 固定绑定这个名字，child 继承名字并同样现读，不能运行中换绑。执行行为由保存配置的启用节点决定，
 详见[启动前受理](formal-flow.md#启动前受理)。初始路线仍确认精确拓扑与开发计划，
 不逐 run/分片选择门、QA 或节点；批准时从库当前值重算。
 

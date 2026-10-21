@@ -145,7 +145,7 @@ func TestWorkBuddySelectionOptionsKeepNativeModelEfforts(t *testing.T) {
 		{On: `"subtype":"initialize"`, Send: selectionControlReply("models-1", `{"currentModelId":"original","account":{"token":"must-not-return"}}`)},
 		{On: `"subtype":"get_available_models"`, Send: selectionControlReply("models-2", `{"rawModels":[{"id":"original","name":"Original","supportsReasoning":false},{"id":"selected","name":"Selected","supportsReasoning":true,"reasoning":{"defaultEffort":"native-high","supportedEfforts":["native-low","native-high"]}}]}`)},
 	}})
-	catalogue, err := workbuddySelectionOptions(executable, root, t.TempDir(), map[string]string{}, "selected")
+	catalogue, err := workbuddySelectionOptions(map[string]any{"executable": executable}, root, t.TempDir(), map[string]string{}, "selected")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestWorkBuddyReasoningSelectorUsesNativeCLIChoices(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s\\n' '  --effort <level> Reasoning effort level (native-small, native-large)'\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	choices, err := workbuddyCLIEfforts(executable, root, map[string]string{})
+	choices, err := workbuddyCLIEfforts(map[string]any{"executable": executable}, root, map[string]string{})
 	if err != nil || !reflect.DeepEqual(choices, []string{"native-small", "native-large"}) {
 		t.Fatalf("native choices: %v %v", choices, err)
 	}

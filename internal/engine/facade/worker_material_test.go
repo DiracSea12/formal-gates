@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/settings"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/definition"
@@ -23,6 +25,477 @@ import (
 	"formal-gates/internal/harness"
 	"formal-gates/internal/prompts"
 )
+
+func TestClaimedWorkerProcess(t *testing.T) {
+	if os.Getenv("FORMAL_GATES_CLAIMED_PROCESS") == "1" {
+		time.Sleep(time.Minute)
+	}
+}
+
+func TestDriveRecoversUnstartedWorkerClaim(t *testing.T) {
+	previousAlive, previousStopped := NativeJobAlive, NativeJobStopped
+	NativeJobAlive, NativeJobStopped = harness.NativeJobAlive, harness.NativeJobStopped
+	t.Cleanup(func() { NativeJobAlive, NativeJobStopped = previousAlive, previousStopped })
+	for _, resumed := range []bool{false, true} {
+		for _, choice := range []string{"fresh", "abort"} {
+			t.Run(fmt.Sprintf("resumed=%t/%s", resumed, choice), func(t *testing.T) {
+				f, _ := workerMaterialFacade(t)
+				run, err := f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var ref WorkerMaterial
+				for _, material := range run.WorkerMaterials {
+					ref = material
+				}
+				resumeID := ""
+				if resumed {
+					spawn, err := protocol.NewSpawnReceiptEvent("original-spawn", ref.ActionID, "zcode", "original-worker", protocol.SpawnStatusSpawned)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, _, err := f.Submit(spawn); err != nil {
+						t.Fatal(err)
+					}
+					for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+						event, err := protocol.NewLifecycleEventEvent(protocol.EventID("original-"+edge), "zcode", "original-worker", edge)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, _, err := f.Submit(event); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, _, err := f.engine.RecoverAttempt(ref.ActionID, protocol.Interruption{Class: authoring.FailureUserActionRequired}, protocol.Observation{}); err != nil {
+						t.Fatal(err)
+					}
+					run, err = f.Drive()
+					if err != nil {
+						t.Fatal(err)
+					}
+					candidate, err := f.PrepareControl(ControlInput{Ask: askPosition(t, run, protocol.ControlRecovery), Choice: "resume", Reason: "Continue the original native identity"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, run, err = submitControlWithHost(t, f, candidate)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, intent := range run.AdapterIntents {
+						if intent.Resume != nil {
+							resumeID = intent.ActionID
+						}
+					}
+					if resumeID == "" {
+						t.Fatal("resume was not issued")
+					}
+				}
+				request, _, directory, _, err := f.WorkerExecutionRequest(ref, resumeID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				body, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "native-request.json"), body, 0600); err != nil {
+					t.Fatal(err)
+				}
+				release, err := AdmitExecution(directory, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = os.WriteFile(filepath.Join(directory, "owner"), nil, 0600)
+				release()
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err = f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := f.engine.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !resumed {
+					failures := snapshot.State.SpawnFailures[ref.ActionID]
+					if len(failures) != 1 || failures[0].Status != protocol.SpawnStatusFailed {
+						t.Fatal("unstarted claim did not retain its failed dispatch")
+					}
+					if _, unknown := snapshot.State.SpawnReceipts[ref.ActionID]; unknown {
+						t.Fatal("unstarted claim was recorded as an unknown execution")
+					}
+				}
+				before := readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))
+				f, err = Open(f.root, f.runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err = f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
+					t.Fatal("reopening duplicated the unstarted claim")
+				}
+				candidate, err := f.PrepareControl(ControlInput{Ask: askPosition(t, run, protocol.ControlRecovery), Choice: choice, Reason: "Resolve the unstarted invocation"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := submitControlWithHost(t, f, candidate); err != nil {
+					t.Fatal(err)
+				}
+				run, err = f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, pending := run.PendingActions[ref.ActionID]; pending {
+					t.Fatal("unstarted invocation kept the original action pending")
+				}
+				if choice == "abort" && run.Status != "ABORTED" {
+					t.Fatal("abort did not complete")
+				}
+				for _, name := range []string{"process.json", "exit.json", "identity.json"} {
+					if _, err := os.Stat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+						t.Fatalf("recovery manufactured %s: %v", name, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDriveObservesLateNativeEvidence(t *testing.T) {
+	previousAlive, previousStart, previousStopped := NativeJobAlive, NativeStartVerifier, NativeJobStopped
+	t.Cleanup(func() {
+		NativeJobAlive, NativeStartVerifier, NativeJobStopped = previousAlive, previousStart, previousStopped
+	})
+	for _, completion := range []bool{false, true} {
+		t.Run(fmt.Sprintf("completion=%t", completion), func(t *testing.T) {
+			f, _ := workerMaterialFacade(t)
+			run, err := f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ref WorkerMaterial
+			for _, material := range run.WorkerMaterials {
+				ref = material
+			}
+			request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			write := func(name string, value any) {
+				t.Helper()
+				body, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("native-request.json", request)
+			write("owner", nil)
+			write("process.json", map[string]any{"request_digest": "original-invocation", "pid": 1})
+			NativeJobStopped = func(string) bool { return false }
+			NativeStartVerifier = func(provider, observed string) (string, error) {
+				if provider != "zcode" || observed != directory {
+					t.Fatal("late evidence lost original invocation")
+				}
+				return "late-native-identity", nil
+			}
+			NativeJobAlive = func(observed string) bool {
+				if observed != directory {
+					t.Fatal("liveness checked another invocation")
+				}
+				if completion {
+					write("identity.json", map[string]any{"identity": "late-native-identity"})
+					write("exit.json", map[string]any{"exit_code": 0, "request_digest": "original-invocation"})
+				}
+				return false
+			}
+			run, err = f.Drive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !completion {
+				write("identity.json", map[string]any{"identity": "late-native-identity"})
+				run, err = f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+				write("exit.json", map[string]any{"exit_code": 0, "request_digest": "original-invocation"})
+				run, err = f.Drive()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot, err := f.engine.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := snapshot.State.SpawnReceipts[ref.ActionID]
+			want := protocol.SpawnStatusSpawned
+			if !completion {
+				want = protocol.SpawnStatusAttached
+			}
+			if receipt.Status != want {
+				t.Fatalf("late evidence did not retain the original receipt: %+v", receipt)
+			}
+			if completion {
+				if _, recorded := snapshot.State.Events[string(WorkerFailureEventID(ref, ""))]; recorded {
+					t.Fatal("normal completion was recorded as an interruption")
+				}
+				for _, ask := range run.PendingAsks {
+					if ask.Control == protocol.ControlRecovery {
+						t.Fatal("normal completion prompted recovery")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDriveObservesClaimedWorkerDeath(t *testing.T) {
+	previousAlive, previousStart, previousStopped := NativeJobAlive, NativeStartVerifier, NativeJobStopped
+	NativeJobAlive = harness.NativeJobAlive
+	NativeJobStopped = harness.NativeJobStopped
+	t.Cleanup(func() {
+		NativeJobAlive, NativeStartVerifier, NativeJobStopped = previousAlive, previousStart, previousStopped
+	})
+	for _, choice := range []string{"fresh", "abort", "terminate"} {
+		for _, resumed := range []bool{false, true} {
+			for _, acknowledged := range []bool{false, true} {
+				for _, alive := range []bool{false, true} {
+					if alive && choice == "abort" {
+						continue
+					}
+					if choice == "terminate" && (resumed || !acknowledged || alive) {
+						continue
+					}
+					t.Run(fmt.Sprintf("%s/resumed=%t/acknowledged=%t/alive=%t", choice, resumed, acknowledged, alive), func(t *testing.T) {
+						NativeJobStopped = harness.NativeJobStopped
+						if choice == "terminate" {
+							NativeJobStopped = func(string) bool { return false }
+						}
+						f, _ := workerMaterialFacade(t)
+						run, err := f.Drive()
+						if err != nil {
+							t.Fatal(err)
+						}
+						var ref WorkerMaterial
+						for _, material := range run.WorkerMaterials {
+							ref = material
+						}
+						resumeID := ""
+						if resumed {
+							spawn, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+ref.ActionID), ref.ActionID, "zcode", "claimed-worker", protocol.SpawnStatusSpawned)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if _, _, err := f.Submit(spawn); err != nil {
+								t.Fatal(err)
+							}
+							for _, edge := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+								event, err := protocol.NewLifecycleEventEvent(protocol.EventID("original-"+edge), "zcode", "claimed-worker", edge)
+								if err != nil {
+									t.Fatal(err)
+								}
+								if _, _, err := f.Submit(event); err != nil {
+									t.Fatal(err)
+								}
+							}
+							if _, _, err := f.engine.RecoverAttempt(ref.ActionID, protocol.Interruption{Class: authoring.FailureUserActionRequired}, protocol.Observation{}); err != nil {
+								t.Fatal(err)
+							}
+							run, err = f.Drive()
+							if err != nil {
+								t.Fatal(err)
+							}
+							candidate, err := f.PrepareControl(ControlInput{Ask: askPosition(t, run, protocol.ControlRecovery), Choice: "resume", Reason: "Continue the original native identity"})
+							if err != nil {
+								t.Fatal(err)
+							}
+							_, run, err = submitControlWithHost(t, f, candidate)
+							if err != nil {
+								t.Fatal(err)
+							}
+							for _, intent := range run.AdapterIntents {
+								if intent.Resume != nil {
+									resumeID = intent.ActionID
+								}
+							}
+							if resumeID == "" {
+								t.Fatal("original recovery did not issue a resume intent")
+							}
+						}
+						request, supervised, directory, _, err := f.WorkerExecutionRequest(ref, resumeID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := os.MkdirAll(directory, 0700); err != nil {
+							t.Fatal(err)
+						}
+						write := func(name string, value any) {
+							t.Helper()
+							body, err := json.Marshal(value)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+								t.Fatal(err)
+							}
+						}
+						write("native-request.json", request)
+						write("request.json", supervised)
+						release, err := AdmitExecution(directory, request)
+						if err != nil {
+							t.Fatal(err)
+						}
+						process := exec.Command(os.Args[0], "-test.run=^TestClaimedWorkerProcess$")
+						harness.DetachSupervisor(process)
+						process.Env = append(os.Environ(), "FORMAL_GATES_CLAIMED_PROCESS=1")
+						started := time.Now()
+						if err := process.Start(); err != nil {
+							release()
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { _ = process.Process.Kill(); _ = process.Wait() })
+						write("owner", nil)
+						var recordedRequest map[string]any
+						if err := json.Unmarshal(readWorkerFile(t, filepath.Join(directory, "request.json")), &recordedRequest); err != nil {
+							t.Fatal(err)
+						}
+						digest, err := harness.CanonicalDigest(recordedRequest)
+						if err != nil {
+							t.Fatal(err)
+						}
+						write("process.json", map[string]any{"pid": process.Process.Pid, "pgid": process.Process.Pid, "started_at": float64(started.UnixNano()) / 1e9, "request_digest": digest})
+						release()
+						if !harness.NativeJobAlive(directory) {
+							t.Fatal("fixture owner does not match its live process")
+						}
+						if acknowledged {
+							write("identity.json", map[string]any{"identity": "claimed-worker"})
+						}
+						NativeStartVerifier = func(provider, observedDirectory string) (string, error) {
+							if provider != "zcode" || observedDirectory != directory {
+								t.Fatalf("start verification lost original provider/directory: %s %s", provider, observedDirectory)
+							}
+							return "claimed-worker", nil
+						}
+						if !alive {
+							if err := process.Process.Kill(); err != nil {
+								t.Fatal(err)
+							}
+							_ = process.Wait()
+						}
+						run, err = f.Drive()
+						if err != nil {
+							t.Fatal(err)
+						}
+						snap, err := f.engine.Load()
+						if err != nil {
+							t.Fatal(err)
+						}
+						receipt, received := snap.State.SpawnReceipts[ref.ActionID]
+						recovery := false
+						for _, ask := range run.PendingAsks {
+							recovery = recovery || ask.Control == protocol.ControlRecovery
+						}
+						if alive {
+							if recovery || received && receipt.Status == protocol.SpawnStatusUnknown {
+								t.Fatal("live claim was mistaken for an interrupted invocation")
+							}
+							return
+						}
+						if !received || !resumed && !acknowledged && receipt.Status != protocol.SpawnStatusUnknown {
+							t.Fatalf("dead claim did not reach original spawn ledger: %+v", receipt)
+						}
+						if !recovery {
+							t.Fatalf("dead claim did not expose an actionable recovery ask: next=%+v", run.Next)
+						}
+						before := readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))
+						f, err = Open(f.root, f.runID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := f.Drive(); err != nil {
+							t.Fatal(err)
+						}
+						if !bytes.Equal(before, readWorkerFile(t, filepath.Join(f.stateDir, "state.json"))) {
+							t.Fatal("reopened observation changed a recorded interruption")
+						}
+						run, err = f.Show()
+						if err != nil {
+							t.Fatal(err)
+						}
+						selected := choice
+						if selected == "terminate" {
+							selected = "fresh"
+						}
+						candidate, err := f.PrepareControl(ControlInput{Ask: askPosition(t, run, protocol.ControlRecovery), Choice: selected, Reason: "Resolve the interrupted original invocation"})
+						if err != nil {
+							t.Fatal(err)
+						}
+						_, run, err = submitControlWithHost(t, f, candidate)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if choice == "terminate" {
+							issued := false
+							for _, intent := range run.AdapterIntents {
+								issued = issued || intent.Terminate != nil && intent.Terminate.WorkerActionID == ref.ActionID
+							}
+							if !issued {
+								t.Fatal("fixture did not issue the original termination intent")
+							}
+							NativeJobStopped = harness.NativeJobStopped
+						}
+						run, err = f.Drive()
+						if err != nil {
+							t.Fatal(err)
+						}
+						for position, ask := range run.PendingAsks {
+							if ask.Validation != nil && ask.Validation.Kind == protocol.KindDispatchBudgetDisposition {
+								if _, pending := run.PendingActions[ref.ActionID]; !pending {
+									t.Fatal("recovery bypassed its retry budget")
+								}
+								budget, err := f.PrepareControl(ControlInput{Ask: position + 1, Choice: "retry", Reason: "Allow the requested fresh attempt"})
+								if err != nil {
+									t.Fatal(err)
+								}
+								if _, _, err := submitControlWithHost(t, f, budget); err != nil {
+									t.Fatal(err)
+								}
+								run, err = f.Drive()
+								if err != nil {
+									t.Fatal(err)
+								}
+								break
+							}
+						}
+						if _, pending := run.PendingActions[ref.ActionID]; pending {
+							t.Fatalf("confirmed %s recovery left the dead original action pending", choice)
+						}
+						if choice == "abort" && run.Status != "ABORTED" {
+							t.Fatalf("confirmed abort did not terminate the run: %s", run.Status)
+						}
+					})
+				}
+			}
+		}
+	}
+
+}
 
 func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
 	t.Parallel()
@@ -121,7 +594,7 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Route: "regular", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

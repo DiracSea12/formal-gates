@@ -27,7 +27,7 @@ func TestBoundConfigurationsListUnfinishedRunsUnderTheirMaster(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := settings.EditConfiguration(root, home, "project", "工作", nil, func(configuration *settings.Configuration) error {
-		configuration.FlowSelection = &settings.FlowSelection{Disabled: protocol.FlowNodeIDs()}
+		configuration.FlowSelection = &settings.FlowSelection{Disabled: []string{"start-readiness", "development", "qa", "gate", "repair"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestBoundConfigurationsListUnfinishedRunsUnderTheirMaster(t *testing.T) {
 	}
 	start := func(id string) *Facade {
 		t.Helper()
-		request := StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}
+		request := StartRequest{RunID: id, BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}
 		f, _, err := Start(StartOptions{Root: root, Configuration: "工作", Request: request, Admission: admission})
 		if err != nil {
 			t.Fatal(err)
@@ -57,8 +57,8 @@ func TestBoundConfigurationsListUnfinishedRunsUnderTheirMaster(t *testing.T) {
 	}
 	start("named-run")
 	finished := start("finished-run")
-	if run, err := finished.Drive(); err != nil || run.Status != "COMPLETE" {
-		t.Fatal("lightweight run did not finish", run.Status, err)
+	if run, err := abortVerifiedRun(t, finished); err != nil || run.Status != "ABORTED" {
+		t.Fatal("run did not reach its terminal state", run.Status, err)
 	}
 	broken := filepath.Join(root, EngineNamespace, "broken-run")
 	if err := os.MkdirAll(broken, 0700); err != nil {

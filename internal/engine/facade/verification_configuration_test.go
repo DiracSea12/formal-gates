@@ -153,7 +153,7 @@ func TestSavedDisjointVerificationRouteAppliesAtDispatch(t *testing.T) {
 				if node.Node == "development" && (!node.Completed || node.Editable || node.Owed) {
 					t.Fatal("completed development was reopened", node)
 				}
-				if pair[0] != "quality" && node.Node == "qa-"+pair[0] && (!node.Completed || node.Owed || node.Editable) {
+				if pair[0] != "quality" && node.Node == "qa-"+pair[0] && (node.Owed || node.Dispatchable || node.Completed || !node.Editable) {
 					t.Fatal("retired verification kept an obsolete dispatch obligation", node)
 				}
 			}
@@ -268,10 +268,11 @@ func TestClosedVerificationObligationsWaitAndResumeWithoutReopeningCompletedNode
 			t.Fatal("closing every remaining obligation did not stop dispatch")
 		}
 		for _, node := range d.run.NodeStates {
-			if node.Node == "development" || node.Node == "qa-blackbox" {
-				if !node.Completed || node.Owed || node.Editable {
-					t.Fatal("completed responsibility was used to bypass the stop guard", node)
-				}
+			if node.Node == "development" && (!node.Completed || node.Owed || node.Editable) {
+				t.Fatal("completed responsibility was used to bypass the stop guard", node)
+			}
+			if node.Node == "qa-blackbox" && (node.Owed || node.Dispatchable || node.Completed || !node.Editable) {
+				t.Fatal("closed verification kept a dispatch obligation", node)
 			}
 		}
 	}

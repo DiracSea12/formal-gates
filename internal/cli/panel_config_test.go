@@ -190,6 +190,7 @@ func TestWorkflowServeListsConfigureTool(t *testing.T) {
 	}
 	type toolDecl struct {
 		Name        string `json:"name"`
+		Description string `json:"description"`
 		InputSchema struct {
 			Properties           map[string]json.RawMessage `json:"properties"`
 			AdditionalProperties bool                       `json:"additionalProperties"`
@@ -221,6 +222,11 @@ func TestWorkflowServeListsConfigureTool(t *testing.T) {
 		}
 	}
 	configure := names["configure"]
+	for _, guidance := range []string{"settings show", "execution-options", "panel and conversation are not exclusive", "while panel is open", "panelSelection controls default opening", "without disabling panelSelection", "resolves this configure waiter as selected", "confirm_start", "confirm_control"} {
+		if !strings.Contains(configure.Description, guidance) {
+			t.Errorf("configure guidance missing %q: %s", guidance, configure.Description)
+		}
+	}
 	if configure.InputSchema.AdditionalProperties {
 		t.Fatalf("configure schema is not closed: %+v", configure.InputSchema)
 	}
@@ -410,10 +416,10 @@ func TestWorkflowServeEOFReleasesOwnedPanel(t *testing.T) {
 // An explicit intake of zero is an invalid position, not an omitted library
 // open; the handler rejects it before the controller or any window exists.
 func TestConfigureRejectsExplicitZeroIntake(t *testing.T) {
-	if _, err := callConfirmationTool("configure", json.RawMessage(`{"intake":0}`), IO{}, nil, ""); err == nil || !strings.Contains(err.Error(), "select an original intake position") {
+	if _, err := callConfirmationTool("configure", json.RawMessage(`{"intake":0}`), IO{}, nil, "", ""); err == nil || !strings.Contains(err.Error(), "select an original intake position") {
 		t.Fatalf("explicit zero intake was not rejected first: %v", err)
 	}
-	if _, err := callConfirmationTool("configure", json.RawMessage(`{}`), IO{}, nil, ""); err == nil || !strings.Contains(err.Error(), "panel controller unavailable") {
+	if _, err := callConfirmationTool("configure", json.RawMessage(`{}`), IO{}, nil, "", ""); err == nil || !strings.Contains(err.Error(), "panel controller unavailable") {
 		t.Fatalf("omitted intake did not reach the controller check: %v", err)
 	}
 }

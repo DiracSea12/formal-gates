@@ -10,15 +10,55 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 var claudeCaptureBinding = nativeCapture(claudeResolvePaths, claudeConfiguredBinding)
 
+// claudeBundleCandidates names the editor-extension install forms in probe
+// order: the current layout's native binary under every editor root, then
+// the earlier layout's cli.js (a node script, not a direct executable).
+func claudeBundleCandidates() []string {
+	binary := "claude"
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	candidates := []string{}
+	for _, leaf := range []string{filepath.Join("native-binary", binary), filepath.Join("claude-code", "cli.js")} {
+		for _, root := range nativeEditorExtensionRoots() {
+			candidates = append(candidates, filepath.Join(root, "anthropic.claude-code-*", "resources", leaf))
+		}
+	}
+	return candidates
+}
+
 func claudeResolvePaths(native, sources map[string]string) error {
 	config := settings.Values{Native: native}
 	executable := config.NativeString("claudeExecutable")
 	path, executableSource, err := nativeExecutablePath(executable)
+	script := ""
+	if err != nil && executable == "claude" {
+		// The extension bundle is another install form: the native binary
+		// launches directly; a cli.js hit runs under node as the script
+		// operand.
+		for _, pattern := range claudeBundleCandidates() {
+			candidate, source, ok := nativeFixedLaunch(pattern)
+			if !ok {
+				continue
+			}
+			if strings.HasSuffix(candidate, ".js") {
+				node, _, nodeErr := nativeExecutablePath("node")
+				if nodeErr != nil {
+					continue
+				}
+				path, script, executableSource, err = node, candidate, "PATH", nil
+			} else {
+				path, executableSource, err = candidate, source, nil
+			}
+			break
+		}
+	}
 	if err != nil {
 		return &blockedError{message: "CLAUDE_UNAVAILABLE: claude is not on PATH"}
 	}
@@ -42,10 +82,12 @@ func claudeResolvePaths(native, sources map[string]string) error {
 			nativeHome = filepath.Join(home, ".claude")
 		}
 	}
-	recordNativePaths(native, sources,
-		map[string]string{"claudeExecutable": resolveNativePath(path), "claudeHome": home, "claudeConfigRoot": resolveNativePath(nativeHome)},
-		map[string]string{"claudeExecutable": executableSource, "claudeHome": homeSource, "claudeConfigRoot": rootSource},
-	)
+	paths := map[string]string{"claudeExecutable": resolveNativePath(path), "claudeHome": home, "claudeConfigRoot": resolveNativePath(nativeHome)}
+	origins := map[string]string{"claudeExecutable": executableSource, "claudeHome": homeSource, "claudeConfigRoot": rootSource}
+	if script != "" {
+		paths["claudeScript"], origins["claudeScript"] = script, "bundle"
+	}
+	recordNativePaths(native, sources, paths, origins)
 	return nil
 }
 
@@ -54,7 +96,12 @@ func claudeConfiguredBinding(config settings.Values) (map[string]any, error) {
 	if executable == "" || home == "" || nativeHome == "" {
 		return nil, &blockedError{message: "CLAUDE_CONFIG: frozen native paths required"}
 	}
-	binding, err := buildCaptureBinding("claude", map[string]any{"executable": executable})
+	// An extension cli.js binding runs under node with the script operand.
+	launch := map[string]any{"executable": executable}
+	if script := config.Native["claudeScript"]; script != "" {
+		launch["script"] = script
+	}
+	binding, err := buildCaptureBinding("claude", launch)
 	if err != nil {
 		return nil, err
 	}
@@ -93,9 +140,9 @@ func claudeCheckSelection(request any, selection map[string]any) error {
 
 var claudeStream = streamAdapter{provider: "claude", prefix: "CLAUDE", capture: claudeCaptureBinding, probe: claudeProbe, selectionOptions: claudeSelectionOptions, arguments: claudeArguments, selection: streamSelection, checkSelection: claudeCheckSelection, sessionUnavailable: streamSessionUnavailable}
 
-func claudeSelectionOptions(executable, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
+func claudeSelectionOptions(launch map[string]any, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
 	catalogue := host.SelectionCatalogue{Source: "Claude SDK initialize and get_settings"}
-	client, err := nativeSelectionControl(executable, workspace, directory, environment)
+	client, err := nativeSelectionControl(launch, workspace, directory, environment)
 	if err != nil {
 		return catalogue, err
 	}
@@ -159,8 +206,10 @@ func claudeExecute(request any, directory string, probe bool, services ...Execut
 func claudeReconcile(directory string, process any, services ...ExecutionServices) (map[string]any, error) {
 	return streamReconcile(claudeStream, directory, process)
 }
-func claudeProbe(executable, workspace string, environment map[string]string) (map[string]any, error) {
-	command := exec.Command(executable, "--version")
+func claudeProbe(launch map[string]any, workspace string, environment map[string]string) (map[string]any, error) {
+	executable, _ := getOf(launch, "executable").(string)
+	argv := nativeArgv(launch, "--version")
+	command := exec.Command(argv[0], argv[1:]...)
 	command.Dir = workspace
 	command.Env = os.Environ()
 	for key, value := range environment {
@@ -172,8 +221,8 @@ func claudeProbe(executable, workspace string, environment map[string]string) (m
 	}
 	return map[string]any{"provider": "claude", "executable": executable, "version": strings.TrimSpace(string(version)), "capabilities": map[string]any{"source": "cli-version", "selection_observed": false}, "selection": map[string]any{}, "model_calls": 0}, nil
 }
-func claudeArguments(request any, directory, executable, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
-	argv := []string{executable, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-hook-events"}
+func claudeArguments(request any, directory string, launch map[string]any, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
+	argv := nativeArgv(launch, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-hook-events")
 	server, err := nativeToolServer(directory)
 	if err != nil {
 		return nil, "", err

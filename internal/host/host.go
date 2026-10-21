@@ -169,6 +169,7 @@ var descriptors = []*Descriptor{
 	{
 		ID: Devin, InstallName: "devin", ManifestName: "Devin",
 		Aliases: []string{"devin"}, Installable: true,
+		Configuration: []ConfigField{StringConfig("devinExecutable", "devin")},
 		Paths: PathLayout{
 			ProjectBase: ".devin/skills", ProjectHookConfig: ".devin/config.json", ProjectManaged: "AGENTS.md",
 		},
@@ -187,6 +188,13 @@ var descriptors = []*Descriptor{
 }
 
 type Adapter interface{ HostDescriptor() *Descriptor }
+
+// NativePathResolver is the shared contract for each platform's own native
+// path resolution: the adapter resolves its configured values into concrete
+// paths and records where each value came from.
+type NativePathResolver interface {
+	ResolveNativePaths(native, sources map[string]string) error
+}
 
 func (d *Descriptor) HostDescriptor() *Descriptor { return d }
 

@@ -91,7 +91,7 @@ func installGitProjectAt(t *testing.T, root string) string {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	installWriteFile(t, filepath.Join(root, "requirements.md"), []byte("sample requirement\n"), 0o600)
+	installWriteFile(t, filepath.Join(root, "requirements.md"), []byte(testRequirementDocument("The workflow uses the registered installation bound to its project.")), 0o600)
 	installRun(t, root, "git", "init")
 	installRun(t, root, "git", "config", "user.email", "install-fixture@example.invalid")
 	installRun(t, root, "git", "config", "user.name", "Install Boundaries Test")

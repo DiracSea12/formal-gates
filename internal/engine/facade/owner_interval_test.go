@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/testkit"
 )
 
 // 本文件覆盖 owner 区间协调在同代 engine run 之间的并发与消失交错：并行启动
@@ -24,8 +25,8 @@ const intervalLaterLine = `{"type":"assistant","uuid":"later","message":{"usage"
 
 func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 	t.Helper()
-	configureLightweight(t, root)
-	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, Request: StartRequest{RunID: id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+	verifiedStartFixture(t, root)
+	f, _, err := Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: transcript, Provider: meteredProvider}, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: id, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 	if err != nil {
 		t.Fatalf("start %s: %v", id, err)
 	}
@@ -38,7 +39,7 @@ func startIntervalRun(t *testing.T, root, id, transcript string) *Facade {
 func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
+	verifiedStartFixture(t, root)
 	type entry struct {
 		id         string
 		transcript string
@@ -63,7 +64,7 @@ func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 		wg.Add(1)
 		go func(i int, e entry) {
 			defer wg.Done()
-			facades[i], _, errs[i] = Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: e.transcript, Provider: meteredProvider}, Request: StartRequest{RunID: e.id, Route: "lightweight", DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
+			facades[i], _, errs[i] = Start(StartOptions{Root: root, Owner: OwnerBinding{Transcript: e.transcript, Provider: meteredProvider}, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: e.id, BaseSnapshot: testkit.FrozenSnapshot, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt()}, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider)})
 		}(i, e)
 	}
 	wg.Wait()
@@ -76,6 +77,7 @@ func TestConcurrentOwnerStartsSerializeAndReportTrueIntervals(t *testing.T) {
 		writeTranscript(t, e.transcript, []string{intervalBaseLine, intervalDuringLine})
 	}
 	for i, f := range facades {
+		decideAbort(t, f)
 		run, err := f.Drive()
 		if err != nil {
 			t.Fatalf("drive %s: %v", entries[i].id, err)
@@ -119,6 +121,7 @@ func TestVanishedPeerBeforeTerminalStillMarksBothUnavailable(t *testing.T) {
 		t.Fatalf("owner overlap markers after peer start: first=%t peer=%t, want both persisted", firstSnapshot.State.OwnerOverlapped, peerSnapshot.State.OwnerOverlapped)
 	}
 	writeTranscript(t, transcript, []string{intervalBaseLine, intervalDuringLine})
+	decideAbort(t, peer)
 	peerRun, err := peer.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +136,7 @@ func TestVanishedPeerBeforeTerminalStillMarksBothUnavailable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(peer.stateDir, "terminal-summary.json")); err != nil {
 		t.Fatalf("peer terminal summary missing: %v", err)
 	}
+	decideAbort(t, first)
 	firstRun, err := first.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +155,7 @@ func TestTerminalPeerDoesNotOverlapLaterRun(t *testing.T) {
 	writeTranscript(t, transcript, []string{intervalBaseLine})
 	earlier := startIntervalRun(t, root, "earlier", transcript)
 	writeTranscript(t, transcript, []string{intervalBaseLine, intervalDuringLine})
+	decideAbort(t, earlier)
 	earlierRun, err := earlier.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +165,7 @@ func TestTerminalPeerDoesNotOverlapLaterRun(t *testing.T) {
 	}
 	later := startIntervalRun(t, root, "later", transcript)
 	writeTranscript(t, transcript, []string{intervalBaseLine, intervalDuringLine, intervalLaterLine})
+	decideAbort(t, later)
 	laterRun, err := later.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -214,16 +220,41 @@ func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) 
 		t.Fatal(err)
 	}
 	first.store, first.engine = store, engine
-	// 正常 Drive 在持久 TERMINAL 提交响应丢失处中断，owner 尚未量取。
-	if _, err := first.Drive(); !errors.Is(err, persistence.ErrInjectedCrash) || !reachedTerminal {
+	// abort 决定的接纳事务已推进到 TERMINAL 提交点——注入崩溃恰好在持久
+	// 终态写落盘、响应丢失处中断，owner 尚未量取。
+	ask, err := protocol.NewRequestEvent("abort-request", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "abort"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, run, err := first.Submit(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := ""
+	for _, pending := range run.PendingAsks {
+		if pending.RequestID == "abort-request" {
+			token = pending.Token
+		}
+	}
+	if token == "" {
+		t.Fatal("abort request did not raise a pending ask")
+	}
+	decide, err := protocol.NewDecideEvent("abort-decide", "abort-request", token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := first.Submit(decide); !errors.Is(err, persistence.ErrInjectedCrash) || !reachedTerminal {
 		t.Fatalf("terminal commit interruption: %v, reached terminal=%t", err, reachedTerminal)
+	}
+	if _, err := first.Drive(); !errors.Is(err, persistence.ErrInjectedCrash) {
+		t.Fatalf("terminal checkpoint drive: %v", err)
 	}
 	checkpoint, err := originalEngine.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.State.Phase != runtime.PhaseTerminal || checkpoint.State.Route != "lightweight" || checkpoint.State.IntakeReceipt == nil {
-		t.Fatalf("terminal checkpoint = %+v, want lightweight TERMINAL with intake receipt", checkpoint.State)
+	if checkpoint.State.Phase != runtime.PhaseTerminal || checkpoint.State.IntakeReceipt == nil {
+		t.Fatalf("terminal checkpoint = %+v, want TERMINAL with intake receipt", checkpoint.State)
 	}
 	for _, name := range []string{"terminal-summary.json", terminalIntentName} {
 		if _, err := os.Stat(filepath.Join(first.stateDir, name)); !os.IsNotExist(err) {
@@ -232,6 +263,7 @@ func TestTerminalCheckpointRecoveryDoesNotDoubleAttributeInterval(t *testing.T) 
 	}
 	peer := startIntervalRun(t, root, "peer", path)
 	writeTranscript(t, path, []string{intervalBaseLine, intervalDuringLine})
+	decideAbort(t, peer)
 	peerRun, err := peer.Drive()
 	if err != nil {
 		t.Fatal(err)

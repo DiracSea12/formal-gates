@@ -3,14 +3,12 @@ package definition
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
@@ -98,8 +96,8 @@ func TestGenerateDeterministic(t *testing.T) {
 }
 
 // TestWriteGeneratedAtomic：writeGenerated 必须以
-// temp+rename 原子替换——并发读者只能观察到完整的旧字节或完整的新字节，
-// 不存在撕裂中间态；不得残留临时文件，权限保持 0644。字节内容与直写
+// temp+rename 原子替换：已开的读句柄保留完整旧字节，发布后重新打开读取
+// 完整新字节；不得残留临时文件，权限保持 0644。字节内容与直写
 // 逐字节相同由 TestGenerateFreshness 对 checked-in 交付物的零 diff 保证。
 func TestWriteGeneratedAtomic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "artifact.json")
@@ -109,56 +107,37 @@ func TestWriteGeneratedAtomic(t *testing.T) {
 		t.Fatalf("seed write: %v", err)
 	}
 
-	stop := make(chan struct{})
-	torn := make(chan string, 1)
-	var reader sync.WaitGroup
-	reader.Add(1)
-	go func() {
-		defer reader.Done()
-		for {
-			file, err := openGeneratedReader(path)
-			var b []byte
-			if err == nil {
-				b, err = io.ReadAll(file)
-				err = errors.Join(err, file.Close())
-			}
+	old := stale
+	for range 300 {
+		for _, next := range [][]byte{fresh, stale} {
+			reader, err := openGeneratedReader(path)
 			if err != nil {
-				select {
-				case torn <- fmt.Sprintf("read generated artifact: %v", err):
-				default:
-				}
-				return
+				t.Fatalf("open current artifact: %v", err)
 			}
-			if !bytes.Equal(b, stale) && !bytes.Equal(b, fresh) {
-				select {
-				case torn <- fmt.Sprintf("torn read observed partial bytes: %q", b):
-				default:
-				}
-				return
+			if err := writeGenerated(path, next); err != nil {
+				t.Fatalf("replace artifact with open reader: %v", errors.Join(err, reader.Close()))
 			}
-			select {
-			case <-stop:
-				return
-			default:
+			observed, readErr := io.ReadAll(reader)
+			if err := errors.Join(readErr, reader.Close()); err != nil {
+				t.Fatalf("read retained artifact: %v", err)
 			}
-		}
-	}()
-	for i := 0; i < 300; i++ {
-		if err := writeGenerated(path, fresh); err != nil {
-			t.Fatalf("write fresh: %v", err)
-		}
-		if err := writeGenerated(path, stale); err != nil {
-			t.Fatalf("write stale: %v", err)
+			if !bytes.Equal(observed, old) {
+				t.Fatalf("retained artifact = %q, want %q", observed, old)
+			}
+			published, err := openGeneratedReader(path)
+			if err != nil {
+				t.Fatalf("open published artifact: %v", err)
+			}
+			observed, readErr = io.ReadAll(published)
+			if err := errors.Join(readErr, published.Close()); err != nil {
+				t.Fatalf("read published artifact: %v", err)
+			}
+			if !bytes.Equal(observed, next) {
+				t.Fatalf("published artifact = %q, want %q", observed, next)
+			}
+			old = next
 		}
 	}
-	close(stop)
-	reader.Wait()
-	select {
-	case msg := <-torn:
-		t.Fatal(msg)
-	default:
-	}
-
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
 		t.Fatal(err)

@@ -23,7 +23,6 @@ type Result struct {
 	Status        string   `json:"status"` // selected | timeout | cancelled | closed | superseded
 	Configuration string   `json:"configuration,omitempty"`
 	Disabled      []string `json:"disabled,omitempty"`
-	Route         string   `json:"route,omitempty"`
 	Reason        string   `json:"reason,omitempty"`
 }
 
@@ -245,7 +244,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			s.closeAll()
-			srv.Close()
+			srv.Shutdown(context.Background())
 			<-failed
 			return ctx.Err()
 		case err := <-failed:
@@ -374,8 +373,8 @@ func (s *Server) endResult(w *windowSession, intake string) Result {
 }
 
 // timeoutResult resolves an intake timeout to the current active pointer's
-// target and its derived route; an unreadable or invalid active value reports
-// the reason instead of inventing a selection.
+// target; an unreadable or invalid active value reports the reason instead of
+// inventing a selection.
 func (s *Server) timeoutResult(w *windowSession) Result {
 	s.mu.Lock()
 	mode := w.mode
@@ -394,15 +393,14 @@ func (s *Server) timeoutResult(w *windowSession) Result {
 		if !option.Active {
 			continue
 		}
-		route, err := facade.ConfigurationRoute(option.Configuration)
-		if err != nil {
+		if err := facade.ValidateStartConfiguration(option.Configuration); err != nil {
 			return Result{Status: "timeout", Reason: err.Error()}
 		}
 		disabled := []string{}
 		if option.Configuration.FlowSelection != nil {
 			disabled = option.Configuration.FlowSelection.Disabled
 		}
-		return Result{Status: "timeout", Configuration: option.Name, Disabled: disabled, Route: route}
+		return Result{Status: "timeout", Configuration: option.Name, Disabled: disabled}
 	}
 	return Result{Status: "timeout", Reason: "no active configuration"}
 }

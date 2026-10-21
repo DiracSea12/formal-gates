@@ -314,7 +314,7 @@ func startValidationDriverAtVCS(t *testing.T, root, provider string, runner vcs.
 		f, r, err = abstractValidationFacade(t, root, provider, runner, base, receipt)
 	} else {
 		ensureEditableConfiguration(t, root)
-		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Route: "regular", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+		f, r, err = Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", provider), Request: StartRequest{RunID: "validation", Provider: provider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	}
 	if err != nil {
 		t.Fatal(err)

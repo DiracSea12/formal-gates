@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"time"
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/harness"
@@ -241,23 +240,34 @@ func (c *panelController) configure(ctx context.Context, root string, intake int
 	if err != nil {
 		return panel.Result{Status: "unavailable", Reason: err.Error()}, nil
 	}
-	for {
-		open, result, err := panel.WindowStatusOn(ctx, instance, desc.Window)
-		if err != nil {
-			return panel.Result{}, err
-		}
-		if result != nil {
-			return *result, nil
-		}
-		if !open {
-			return panel.Result{Status: "closed"}, nil
-		}
-		select {
-		case <-ctx.Done():
-			// Cancelling this configure detaches only the result wait; the
-			// window, browser, and service owner stay alive for the user.
-			return panel.Result{Status: "cancelled", Reason: "configure call cancelled; the panel window remains open"}, nil
-		case <-time.After(2 * time.Second):
-		}
+	open, result, err := panel.WaitWindowOn(ctx, instance, desc.Window)
+	if ctx.Err() != nil {
+		// Request cancellation detaches the waiter, not the panel window.
+		return panel.Result{Status: "cancelled", Reason: "configure call cancelled; panel window remains open"}, nil
 	}
+	if err != nil {
+		return panel.Result{}, err
+	}
+	if result != nil {
+		return *result, nil
+	}
+	if !open {
+		return panel.Result{Status: "closed"}, nil
+	}
+	return panel.Result{}, fmt.Errorf("panel wait ended without a window result")
+}
+
+func (c *panelController) selectConfiguration(ctx context.Context, root string, intake int, configuration string) error {
+	canonical, err := panel.CanonicalRoot(root)
+	if err != nil {
+		return err
+	}
+	candidate, done, err := selectOriginalPayload(workflowPayloadDirectory(canonical, "", "intake"), intake, io.Discard)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return fmt.Errorf("no saved intake candidates exist for this project")
+	}
+	return panel.SelectOpenIntake(ctx, root, candidate, configuration)
 }

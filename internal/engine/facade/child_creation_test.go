@@ -373,7 +373,7 @@ func nativeMasterAt(t *testing.T, root, base string, inventory *protocol.Coverag
 			t.Fatal(err)
 		}
 	}
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: admission, Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, Admission: admission, Request: StartRequest{RunID: "validation", Provider: host.Default, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,12 +641,9 @@ func TestControllerCreatesIndependentChildrenFromAcceptedContent(t *testing.T) {
 func TestPublicStartRejectsChildBeforeRunLockOrWrites(t *testing.T) {
 	t.Parallel()
 	d := splitMaster(t)
-	for _, route := range []string{"regular", "lightweight", ""} {
-		opts := sliceChildStart(d, "caller-child", "lane-core", sliceChildReceipt(d.revision))
-		opts.Request.Route = route
-		if _, _, err := Start(opts); err == nil || !strings.Contains(err.Error(), "master controller") {
-			t.Fatal("public child start accepted", err)
-		}
+	opts := sliceChildStart(d, "caller-child", "lane-core", sliceChildReceipt(d.revision))
+	if _, _, err := Start(opts); err == nil || !strings.Contains(err.Error(), "master controller") {
+		t.Fatal("public child start accepted", err)
 	}
 	if _, err := os.Stat(filepath.Join(d.f.root, EngineNamespace, "caller-child")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("public child start wrote a prefix")
@@ -1194,7 +1191,7 @@ func TestChildCreationPreservesPreparedMaterialConfirmation(t *testing.T) {
 				t.Fatal(err)
 			}
 			ensureEditableConfiguration(t, root)
-			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Route: "regular", Provider: host.Default, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
+			f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, Admission: testAdmission(t, root, "candidate", "sha256:package", host.Default), Request: StartRequest{RunID: "validation", Provider: host.Default, VCS: "git", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -356,12 +356,11 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "current engine run id")
 	vcsName := fs.String("vcs", "", "external VCS name")
-	base := fs.String("base-snapshot", "", "native base identity for a regular run")
-	route := fs.String("route", "", "regular or lightweight")
+	base := fs.String("base-snapshot", "", "native base identity for the run")
 	configuration := fs.String("configuration", "", "saved configuration name or position for this run; omitted uses the active default")
 	intakePath := fs.String("intake-receipt", "", "program integration: exact original intake candidate file")
 	intakeChoice := fs.Int("intake", 0, "original displayed intake candidate position")
-	document := fs.Int("document", 0, "original displayed requirement document or lightweight material position")
+	document := fs.Int("document", 0, "original displayed requirement document or material position")
 	solutionDocument := fs.Int("solution-document", 0, "original displayed confirmation material position")
 	var artifactDocuments positionListFlag
 	fs.Var(&artifactDocuments, "artifact-document", "original displayed confirmation material position; repeatable")
@@ -374,10 +373,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs.Var(&artifacts, "artifact", "additional confirmation material for --precheck; repeat as needed")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
-	}
-	routeName := strings.ToLower(strings.TrimSpace(*route))
-	if routeName != "" && routeName != "regular" && routeName != "lightweight" {
-		return 1, fmt.Errorf("workflow start supports --route regular or lightweight")
 	}
 	if *precheck {
 		if *listMaterials {
@@ -441,39 +436,31 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	if streams.confirmation == nil {
-		return 1, fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: request confirm_start through the current host's formal-gates MCP service")
+		return 1, fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: run `formal-gates workflow serve` and call the confirm_start tool through the current host's formal-gates MCP service (CLI start does not accept self-reported approval)")
 	}
 	confirmation, err := confirmSavedFile(*intakePath, streams.confirmation)
 	if err != nil {
 		return 1, err
 	}
-	baseIdentity := ""
 	effective, err := facade.StartConfiguration(*root, *configuration)
 	if err != nil {
 		return 1, err
 	}
-	derivedRoute, err := facade.ConfigurationRoute(effective.Configuration)
-	if err != nil {
+	if err := facade.ValidateStartConfiguration(effective.Configuration); err != nil {
 		return 1, err
 	}
-	if routeName != "" && routeName != derivedRoute {
-		return 1, fmt.Errorf("route %q differs from configuration route %q", routeName, derivedRoute)
-	}
-	routeName = derivedRoute
-	if routeName == "regular" {
-		baseIdentity = *base
-		if baseIdentity == "" {
-			baseIdentity, err = vcs.NewNative(*root, *vcsName, nil).Resolve()
-			if err != nil {
-				return 1, err
-			}
+	baseIdentity := *base
+	if baseIdentity == "" {
+		baseIdentity, err = vcs.NewNative(*root, *vcsName, nil).Resolve()
+		if err != nil {
+			return 1, err
 		}
 	}
 	var owner facade.OwnerBinding
 	if streams.owner != nil {
 		owner = *streams.owner
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), Route: routeName, BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}

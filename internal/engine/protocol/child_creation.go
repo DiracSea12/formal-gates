@@ -147,7 +147,7 @@ func (s *State) preparedChild(child ChildPreparation, actual *State) bool {
 	expected := s.ChildStart(child)
 	return actual.NativeVCS() == s.NativeVCS() &&
 		actual.NativeHandle == s.NativeResources[child.ResourceID].Handle &&
-		actual.RunID == child.RunID && actual.Route == "regular" &&
+		actual.RunID == child.RunID &&
 		actual.BaseSnapshot == s.BaseSnapshot &&
 		actual.NativeRoot == s.NativeResources[child.ResourceID].Path &&
 		actual.SliceChild.MasterRunID == expected.Binding.MasterRunID &&

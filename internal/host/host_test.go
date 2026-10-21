@@ -52,7 +52,7 @@ func TestInstallableListsComeFromRegistry(t *testing.T) {
 	}
 }
 
-func TestDevinDescriptorExposesOnlyHostInstallation(t *testing.T) {
+func TestDevinDescriptorExposesItsExecutableAndHostContract(t *testing.T) {
 	d, err := Lookup("devin")
 	if err != nil {
 		t.Fatal(err)
@@ -66,13 +66,18 @@ func TestDevinDescriptorExposesOnlyHostInstallation(t *testing.T) {
 	if d.Confirmation != ConfirmationHostPermission {
 		t.Fatalf("devin confirmation channel: %q", d.Confirmation)
 	}
-	if d.ReadUsage != nil || d.LifecycleRequired || len(d.Configuration) != 0 {
+	if d.ReadUsage != nil || d.LifecycleRequired {
 		t.Fatalf("unsupported capabilities advertised: %+v", d)
+	}
+	if len(d.Configuration) != 1 || d.Configuration[0].Name != "devinExecutable" || d.Configuration[0].Default != "devin" {
+		t.Fatalf("devin executable configuration: %+v", d.Configuration)
 	}
 	adapter, err := LookupAdapter("devin")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The bare descriptor (no registered native adapter in this binary) keeps
+	// the adapter-less contract: never an execution-selection platform.
 	if _, ok := adapter.(SelectionAdapter); ok {
 		t.Fatal("unverified native model catalogue advertised")
 	}

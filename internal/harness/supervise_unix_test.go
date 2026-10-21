@@ -430,3 +430,58 @@ func TestSuperviseBareArgv0FallsBackToDefpath(t *testing.T) {
 		t.Fatalf("exit_code = %v, want 0", rec["exit_code"])
 	}
 }
+
+func TestNativeJobStoppedRequiresBothOriginalProcessGroups(t *testing.T) {
+	directory := t.TempDir()
+	start := func() *exec.Cmd {
+		cmd := exec.Command("/bin/sh", "-c", "exec sleep 300")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
+		return cmd
+	}
+	supervisor, wrapper := start(), start()
+	created, ok := processCreationTime(supervisor.Process.Pid)
+	if !ok {
+		t.Fatal("process creation unavailable")
+	}
+	request := map[string]any{"kind": "native", "engine": map[string]any{"action_id": "original"}}
+	digest, err := CanonicalDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := map[string]any{"pid": supervisor.Process.Pid, "pgid": supervisor.Process.Pid, "started_at": float64(created.UnixNano()) / 1e9, "request_digest": digest}
+	for name, value := range map[string]any{"request.json": request, "process.json": process} {
+		if err := writeAtomicJSON(filepath.Join(directory, name), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("live supervisor reported stopped")
+	}
+	if err := supervisor.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = supervisor.Wait()
+	if NativeJobAlive(directory) {
+		t.Fatal("killed supervisor reported alive")
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("missing wrapper process group treated as stopped")
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-process.json"), map[string]any{"pid": wrapper.Process.Pid, "pgid": wrapper.Process.Pid}); err != nil {
+		t.Fatal(err)
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("live separate native process group reported stopped")
+	}
+	if err := wrapper.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = wrapper.Wait()
+	if !NativeJobStopped(directory) {
+		t.Fatal("both original groups exited but still reported live")
+	}
+}

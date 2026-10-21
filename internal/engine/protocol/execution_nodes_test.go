@@ -137,6 +137,9 @@ func TestConfigurationNodeStatesPreviewsCandidateWithoutWriting(t *testing.T) {
 	if review := executionNodeState(t, nodes, "product-review"); !review.Owed || review.Enabled || review.Completed || review.Dispatchable || review.Running || !review.Editable {
 		t.Fatal("a candidate-disabled node lost or closed its owed obligation", review)
 	}
+	if blackbox := executionNodeState(t, nodes, "qa-blackbox"); blackbox.Enabled || blackbox.Completed || blackbox.Owed || !blackbox.Editable {
+		t.Fatal("a disabled node was projected as a completed verdict instead of staying editable", blackbox)
+	}
 	unchanged()
 
 	action := issueReady(t, e)[0]

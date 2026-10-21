@@ -150,7 +150,7 @@ func driverState(t *testing.T, d *validationDriver) *protocol.State {
 // 夹具 runner；child 身份与受理均由 master 账本派生，不由本载荷证明）。
 func sliceChildStart(d *validationDriver, childRunID, sliceID string, receipt IntakeConfirmationReceipt) StartOptions {
 	return StartOptions{Capacity: 16, Root: d.f.root, VCSRunner: d.f.vcsRunner, Request: StartRequest{
-		RunID: childRunID, Route: "regular", Provider: d.host(), BaseSnapshot: d.run.BaseSnapshot,
+		RunID: childRunID, Provider: d.host(), BaseSnapshot: d.run.BaseSnapshot,
 		DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest,
 		IntakeConfirmationReceipt: receipt, MasterRunID: d.f.runID, SliceID: sliceID,
 	}, Admission: &d.f.admission}

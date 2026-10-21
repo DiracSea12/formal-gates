@@ -303,7 +303,7 @@ func TestRepairGateFailureKeepsObligationAndFiniteAuthorization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &State{RunID: "run", Route: "regular", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
+			s := &State{RunID: "run", RouteConfirmed: true, SelectedGates: []string{"quality"}, Results: map[string]WorkerResult{}, DispatchBindings: map[string]WorkBinding{}, DispatchIssueRevisions: map[string]uint64{}, PendingAsks: map[string]PendingAsk{}, Decisions: map[string]RecordedDecision{}}
 			s.Tasks = map[runtime.TaskKey]runtime.TaskStatus{}
 			task := pipelineTask(cd, "engine.repair.v7", "candidate")
 			s.Validation = &Validation{Generation: 1, RequirementRevision: "req", Findings: map[string]*ValidationFinding{}, Problems: map[string]*ValidationProblem{}, Waves: []ValidationWave{{ID: "wave", Generation: 1, RequirementRevision: "req", Status: "REPAIR", Counted: true, Repair: &ValidationRepair{Task: task, Problems: []string{"original"}}}}}

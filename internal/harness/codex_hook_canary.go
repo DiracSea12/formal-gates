@@ -124,7 +124,7 @@ func bindCodexHookOwner(workspace, thread string) error {
 		return err
 	}
 	state := protocol.NewState(*view)
-	state.RunID, state.Route, state.OwnerSession = "hook-canary", "regular", thread
+	state.RunID, state.OwnerSession = "hook-canary", thread
 	state.RequirementRevisions = []protocol.ConfirmedRevision{{Revision: "canary"}}
 	state.IntakeConfirmationReceipt = &protocol.IntakeConfirmationReceipt{RequirementRevision: "canary", Artifacts: []protocol.IntakeArtifact{{Path: "requirements.md", Revision: "canary"}}}
 	state.DispatchBindings["development"] = protocol.WorkBinding{RequirementRevision: "canary", PlanRequest: "confirmed-plan", BatchID: "owned-work"}

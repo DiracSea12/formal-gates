@@ -73,71 +73,69 @@ func (s *State) BusinessNodes(cd *compiler.CompiledDefinition, parents ...Snapsh
 	add := func(kind string, missing ...string) {
 		nodes = append(nodes, BusinessNode{ID: kind, Kind: kind, Missing: missing})
 	}
-	if s.Route == "regular" {
-		if s.SliceChild == nil {
-			add("intake")
-			add("product-review")
-			add("start-readiness")
-			add("topology")
-		}
-		if !s.mergeMaster() {
-			add("route")
-		}
-		_, plan, _ := s.confirmedDevelopmentPlan()
-		if plan == nil && !s.mergeMaster() {
-			add("development", "先取得并确认开发计划及路线")
-		} else if plan != nil {
-			for _, batch := range plan.Batches {
-				if s.developmentBatchRequired(batch) {
-					nodes = append(nodes, BusinessNode{ID: "development:" + batch.ID, Kind: "development", Batch: batch.ID, Label: batch.Deliverable})
-				}
+	if s.SliceChild == nil {
+		add("intake")
+		add("product-review")
+		add("start-readiness")
+		add("topology")
+	}
+	if !s.mergeMaster() {
+		add("route")
+	}
+	_, plan, _ := s.confirmedDevelopmentPlan()
+	if plan == nil && !s.mergeMaster() {
+		add("development", "先取得并确认开发计划及路线")
+	} else if plan != nil {
+		for _, batch := range plan.Batches {
+			if s.developmentBatchRequired(batch) {
+				nodes = append(nodes, BusinessNode{ID: "development:" + batch.ID, Kind: "development", Batch: batch.ID, Label: batch.Deliverable})
 			}
 		}
-		if s.SliceChild == nil {
-			if s.mergeMaster() {
-				add("mainline-integration")
-			} else if s.Topology == nil {
-				add("mainline-integration", "先确认拆分拓扑并取得全部子运行收据")
-			}
+	}
+	if s.SliceChild == nil {
+		if s.mergeMaster() {
+			add("mainline-integration")
+		} else if s.Topology == nil {
+			add("mainline-integration", "先确认拆分拓扑并取得全部子运行收据")
 		}
-		modes := s.validationKinds()
-		if s.SliceChild == nil && !s.RouteConfirmed {
-			modes = []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox}
-		}
-		for _, mode := range modes {
-			for _, kind := range []string{"qa-design", "qa-review", "qa-execution"} {
-				n := BusinessNode{ID: kind + ":" + string(mode), Kind: kind, Mode: mode}
-				if s.Validation == nil || kind != "qa-design" && s.Validation.Sets[mode] == nil {
-					n.Missing = []string{"先完成该模式的用例设计"}
-				} else if kind == "qa-execution" && s.Validation.Candidate == nil {
-					n.Missing = []string{"先冻结批准用例和最终验证候选"}
-				}
-				nodes = append(nodes, n)
-			}
-		}
-		for _, gate := range s.SelectedGates {
-			if gate == "blackbox" || gate == "whitebox" || gate == mergeQAGateID {
-				continue
-			}
-			n := BusinessNode{ID: "gate:" + gate, Kind: "gate", Gate: gate}
-			if s.Validation == nil || s.Validation.Candidate == nil {
-				n.Missing = []string{"先冻结最终验证候选"}
+	}
+	modes := s.validationKinds()
+	if s.SliceChild == nil && !s.RouteConfirmed {
+		modes = []coverage.ReviewKind{coverage.ReviewBlackbox, coverage.ReviewWhitebox}
+	}
+	for _, mode := range modes {
+		for _, kind := range []string{"qa-design", "qa-review", "qa-execution"} {
+			n := BusinessNode{ID: kind + ":" + string(mode), Kind: kind, Mode: mode}
+			if s.Validation == nil || kind != "qa-design" && s.Validation.Sets[mode] == nil {
+				n.Missing = []string{"先完成该模式的用例设计"}
+			} else if kind == "qa-execution" && s.Validation.Candidate == nil {
+				n.Missing = []string{"先冻结批准用例和最终验证候选"}
 			}
 			nodes = append(nodes, n)
 		}
-		add("candidate")
-		add("post-review")
-		if s.nextRepairWork() == nil {
-			add("repair", "先核实并处置真实返修义务")
-		} else {
-			for _, work := range s.repairWork() {
-				task := work.task
-				nodes = append(nodes, BusinessNode{ID: "repair:" + task.String(), Kind: "repair", Task: &task})
-			}
+	}
+	for _, gate := range s.SelectedGates {
+		if gate == "blackbox" || gate == "whitebox" || gate == mergeQAGateID {
+			continue
 		}
-		if s.SliceChild != nil {
-			add("slice-ready")
+		n := BusinessNode{ID: "gate:" + gate, Kind: "gate", Gate: gate}
+		if s.Validation == nil || s.Validation.Candidate == nil {
+			n.Missing = []string{"先冻结最终验证候选"}
 		}
+		nodes = append(nodes, n)
+	}
+	add("candidate")
+	add("post-review")
+	if s.nextRepairWork() == nil {
+		add("repair", "先核实并处置真实返修义务")
+	} else {
+		for _, work := range s.repairWork() {
+			task := work.task
+			nodes = append(nodes, BusinessNode{ID: "repair:" + task.String(), Kind: "repair", Task: &task})
+		}
+	}
+	if s.SliceChild != nil {
+		add("slice-ready")
 	}
 	add("cleanup")
 	add("abort")
@@ -667,7 +665,7 @@ func (s *State) nodeInputsReady(n BusinessNode, cd *compiler.CompiledDefinition)
 	case "slice-ready":
 		return s.SliceChild != nil && s.DeliveryComplete(cd)
 	case "cleanup":
-		return s.DeliveryComplete(cd) || s.Route == "lightweight"
+		return s.DeliveryComplete(cd)
 	case "abort":
 		return true
 	}

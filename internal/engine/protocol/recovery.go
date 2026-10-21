@@ -328,6 +328,11 @@ func (s *State) pendingAttemptRecovery(actionID, attemptID string) (RecoveryPlan
 			return RecoveryPlan{Action: RecoveryAsk, RequestID: record.RequestID, Options: recoveryAskOptions(), Detail: record.Detail}, true
 		}
 		completed := false
+		for _, effect := range s.ReconciledEffects {
+			if effect.Intent != nil && effect.Intent.Correlation == record.RequestID && (effect.Status == "WITHDRAWN" || effect.Status == "FULFILLED") {
+				completed = true
+			}
+		}
 		for _, receipt := range s.HostActionReceipts {
 			if receipt.Correlation == record.RequestID && receipt.Status == HostActionStatusExecuted {
 				completed = true
@@ -485,6 +490,36 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			Action: RecoveryReconcile,
 			Detail: "host action was reconciled as " + effect.Status,
 		}, revision, nil
+	}
+	if intent, pending := state.PendingHostActions[actionID]; pending && (intent.Resume != nil || intent.Terminate != nil) && e.cfg.WorkerExecutionStopped != nil {
+		target := intent.Resume
+		if target == nil {
+			target = intent.Terminate
+		}
+		worker, attempt, ok := state.workerActionTarget(target.WorkerActionID)
+		if ok {
+			stopped, err := e.cfg.WorkerExecutionStopped(worker, attempt)
+			if err != nil {
+				return RecoveryPlan{}, 0, err
+			}
+			if stopped {
+				digest, err := e.facts().Digest()
+				if err != nil {
+					return RecoveryPlan{}, 0, err
+				}
+				status := "WITHDRAWN"
+				if intent.Terminate != nil {
+					status = "FULFILLED"
+				}
+				state.retireNative(intent, status, digest, nil, revision+1)
+				plan := RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryReconcile, Detail: "original native invocation stopped: " + status}
+				committed, _, err := e.commitEffects(state, revision, input, nil)
+				return plan, committed, err
+			}
+			if !state.abortRequested() && !state.resetPending() && !state.NodeContinuationWithdraws(intent) {
+				return RecoveryPlan{Class: authoring.FailureSideEffectUnknown, Action: RecoveryWait, Detail: "original native invocation is not confirmed stopped"}, revision, nil
+			}
+		}
 	}
 	if intent, pending := state.PendingHostActions[actionID]; pending && intent.Resume != nil {
 		_, obsolete := state.ObsoleteActions[intent.Resume.WorkerActionID]

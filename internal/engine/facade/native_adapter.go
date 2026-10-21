@@ -2,6 +2,8 @@ package facade
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,20 +154,107 @@ func (f *Facade) observeWorkerExecutions(state *protocol.State) (bool, error) {
 	slices.Sort(directories)
 	for _, directory := range directories {
 		invocation := observed[directory]
-		if NativeStartVerifier == nil {
-			continue
+		_, identityErr := os.Stat(filepath.Join(directory, "identity.json"))
+		if identityErr != nil && !os.IsNotExist(identityErr) {
+			return false, identityErr
 		}
-		if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); os.IsNotExist(err) {
+		_, exitErr := os.Stat(filepath.Join(directory, "exit.json"))
+		if exitErr != nil && !os.IsNotExist(exitErr) {
+			return false, exitErr
+		}
+		interrupted := os.IsNotExist(exitErr) && NativeJobAlive != nil && !NativeJobAlive(directory)
+		if interrupted {
+			// Completion may land between the receipt read and process observation.
+			_, exitErr = os.Stat(filepath.Join(directory, "exit.json"))
+			if exitErr != nil && !os.IsNotExist(exitErr) {
+				return false, exitErr
+			}
+			interrupted = os.IsNotExist(exitErr)
+			_, identityErr = os.Stat(filepath.Join(directory, "identity.json"))
+			if identityErr != nil && !os.IsNotExist(identityErr) {
+				return false, identityErr
+			}
+		}
+		if !interrupted && (identityErr != nil || NativeStartVerifier == nil) {
 			continue
-		} else if err != nil {
-			return false, err
 		}
 		before, err := f.engine.Load()
 		if err != nil {
 			return false, err
 		}
-		if err := f.observeWorkerExecution(*invocation.binding.WorkerMaterial, invocation.directory, NativeStartVerifier); err != nil {
-			return false, err
+		ref := *invocation.binding.WorkerMaterial
+		process, processErr := os.ReadFile(filepath.Join(directory, "process.json"))
+		unstarted := os.IsNotExist(processErr)
+		if processErr != nil && !unstarted {
+			return false, processErr
+		}
+		if unstarted && invocation.binding.ResumeActionID == "" {
+			if workerInvocationDelivered(before.State, invocation) {
+				continue
+			}
+			if _, received := before.State.SpawnReceipts[ref.ActionID]; !received {
+				failure, err := protocol.NewSpawnReceiptWithFailureClass(WorkerSpawnFailureEventID(ref), ref.ActionID, invocation.material.Input.Provider, directory, protocol.SpawnStatusFailed, authoring.FailureUserActionRequired)
+				if err != nil {
+					return false, err
+				}
+				_, err = f.engine.Submit(failure, protocol.Observation{})
+				return err == nil, err
+			}
+		}
+		if !unstarted && identityErr == nil && NativeStartVerifier != nil {
+			if err := f.observeWorkerExecution(ref, directory, NativeStartVerifier); err != nil {
+				return false, err
+			}
+		} else if _, received := before.State.SpawnReceipts[ref.ActionID]; !unstarted && !received {
+			event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+ref.ActionID), ref.ActionID, invocation.material.Input.Provider, directory, protocol.SpawnStatusUnknown)
+			if err != nil {
+				return false, err
+			}
+			if _, err := f.engine.Submit(event, protocol.Observation{}); err != nil {
+				return false, err
+			}
+		}
+		if interrupted {
+			current, err := f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			for id, intent := range current.State.PendingHostActions {
+				if intent.Resume != nil && id == invocation.binding.ResumeActionID || intent.Terminate != nil && intent.Terminate.WorkerActionID == ref.ActionID && intent.Terminate.AttemptID == ref.AttemptID {
+					if _, _, err := f.engine.ReconcileHostAction(id, "", false, false, protocol.Observation{}); err != nil {
+						return false, err
+					}
+				}
+			}
+			current, err = f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			reason := "Native invocation lost its process writer before the exit receipt: " + directory
+			_, pending := current.State.PendingActions[ref.ActionID]
+			_, aborted := current.State.AbortDecision()
+			known := workerInvocationDelivered(current.State, invocation)
+			if pending && !aborted && !current.State.ResetPending() && !known {
+				// A stopped writer does not prove the native semantic outcome.
+				if unstarted {
+					process, err = os.ReadFile(filepath.Join(directory, "native-request.json"))
+					if err != nil {
+						return false, err
+					}
+				}
+				digest := sha256.Sum256(process)
+				failure, err := protocol.NewWorkerResultEvent(WorkerFailureEventID(ref, invocation.binding.ResumeActionID), ref.ActionID, invocation.material.Input.Provider, protocol.OutcomeRuntimeError, "sha256:"+hex.EncodeToString(digest[:]), authoring.FailureUserActionRequired)
+				if err != nil {
+					return false, err
+				}
+				failure.Result.InterruptionReason = reason
+				if _, err := f.engine.Submit(failure, protocol.Observation{}); err != nil {
+					return false, err
+				}
+				if _, _, err := f.engine.RecoverAttempt(ref.ActionID, protocol.Interruption{InterruptionReason: reason, Class: authoring.FailureUserActionRequired}, protocol.Observation{}); err != nil {
+					return false, err
+				}
+			}
 		}
 		after, err := f.engine.Load()
 		if err != nil {

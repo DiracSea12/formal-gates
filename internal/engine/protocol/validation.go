@@ -374,7 +374,7 @@ func pipelineStep(cd *compiler.CompiledDefinition, handler string) (compiler.Com
 }
 func pipelineEnabled(s *State, cd *compiler.CompiledDefinition) bool {
 	_, ok := pipelineStep(cd, "engine.development.batch.v6")
-	return ok && s.Route != "lightweight"
+	return ok
 }
 func pipelineTask(cd *compiler.CompiledDefinition, handler, scope string) runtime.TaskKey {
 	step, _ := pipelineStep(cd, handler)

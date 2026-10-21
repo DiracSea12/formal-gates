@@ -241,7 +241,7 @@ func startNativeProviderDriver(t *testing.T, name string) (*validationDriver, *n
 	receipt := testReceipt()
 	receipt.RequirementSource, receipt.Artifacts[0].Path = ".gates/requirements.md", ".gates/requirements.md"
 	receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
-	f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: name, RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+	f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: name, RunID: "validation", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func reopenNativeProviderDriver(t *testing.T, d *validationDriver, name string, 
 
 // Startup metadata and persisted state carry the selected native provider into
 // reopened workspace planning and creation on real repositories.
-func TestRegularStartPersistsSelectedVCS(t *testing.T) {
+func TestStartPersistsSelectedVCS(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
@@ -293,7 +293,7 @@ func TestRegularStartPersistsSelectedVCS(t *testing.T) {
 			}
 			for i, input := range inputs {
 				runID := fmt.Sprintf("selected-%s-%d", name, i)
-				f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: admission, Request: StartRequest{VCS: input, RunID: runID, Route: "regular", BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
+				f, _, err := Start(StartOptions{Root: root, ArtifactRoot: root, Capacity: 16, VCSRunner: runner, Admission: admission, Request: StartRequest{VCS: input, RunID: runID, BaseSnapshot: base, IntakeConfirmationReceipt: preview.IntakeCandidate}})
 				if err != nil {
 					t.Fatalf("start with VCS %q: %v", input, err)
 				}
@@ -341,29 +341,11 @@ func TestRegularStartPersistsSelectedVCS(t *testing.T) {
 	}
 }
 
-func TestLightweightStartDoesNotSelectNativeVCS(t *testing.T) {
+func TestStartRejectsUnsupportedNativeVCS(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	configureLightweight(t, root)
-	f, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "SVN", RunID: "lightweight", Route: "lightweight", IntakeConfirmationReceipt: testReceipt()}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := f.request()
-	if err != nil || request.VCS != "SVN" || f.vcs != nil {
-		t.Fatalf("lightweight selected a native provider: %+v %v", request, err)
-	}
-	reopened, err := Open(root, f.runID)
-	if err != nil || reopened.vcs != nil {
-		t.Fatalf("reopened lightweight native provider: %+v %v", reopened, err)
-	}
-}
-
-func TestRegularStartRejectsUnsupportedNativeVCS(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	ensureEditableConfiguration(t, root)
-	_, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "unsupported-vcs", RunID: "bad-vcs", Route: "regular", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: testReceipt()}})
+	verifiedStartFixture(t, root)
+	_, _, err := Start(StartOptions{Root: root, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "unsupported-vcs", RunID: "bad-vcs", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: testReceipt()}})
 	if err == nil || !strings.Contains(err.Error(), `unsupported VCS "unsupported-vcs"`) {
 		t.Fatalf("unsupported native provider was accepted: %v", err)
 	}
@@ -718,7 +700,7 @@ func TestP4PublicDeletionPreservesCandidateAndDelivery(t *testing.T) {
 			receipt := testReceipt()
 			receipt.RequirementSource, receipt.Artifacts[0].Path = ".gates/requirements.md", ".gates/requirements.md"
 			receipt.RequirementRevision, receipt.Artifacts[0].Revision = revision, revision
-			f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "p4", RunID: "validation", Route: "regular", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
+			f, run, err := Start(StartOptions{Root: root, Capacity: 16, VCSRunner: runner, Admission: testAdmission(t, root, "candidate", "sha256:package", DefaultProvider), Request: StartRequest{VCS: "p4", RunID: "validation", Provider: DefaultProvider, BaseSnapshot: base, IntakeConfirmationReceipt: receipt}})
 			if err != nil {
 				t.Fatal(err)
 			}

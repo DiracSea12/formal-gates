@@ -99,9 +99,9 @@ func intakeFixture(t *testing.T, root string) string {
 	return candidate
 }
 
-func lightweightConfig(t *testing.T, root, home, name string) {
+func selectionConfig(t *testing.T, root, home, name string) {
 	t.Helper()
-	cfg := settings.Configuration{FlowSelection: &settings.FlowSelection{Disabled: []string{"product-review", "start-readiness", "development", "qa", "gate", "repair"}}}
+	cfg := settings.Configuration{FlowSelection: &settings.FlowSelection{Disabled: []string{"repair"}}}
 	if _, err := settings.WriteConfiguration(root, home, "project", name, cfg, false, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -180,13 +180,13 @@ func TestServerIntakeSelectResolvesCallerAndClosesWindow(t *testing.T) {
 	home := panelHome(t)
 	root := t.TempDir()
 	candidate := intakeFixture(t, root)
-	lightweightConfig(t, root, home, "轻量")
+	selectionConfig(t, root, home, "面板")
 	server, _, _ := startPanelServer(t, Backend{Root: root, Home: home})
 	window, err := server.NewWindow(candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := serverPost(t, server, "/api/window/select", fmt.Sprintf(`{"window":%q,"configuration":"轻量"}`, window.ID))
+	response := serverPost(t, server, "/api/window/select", fmt.Sprintf(`{"window":%q,"configuration":"面板"}`, window.ID))
 	out := bodyJSON(t, response)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("select = %d %v", response.StatusCode, out)
@@ -197,14 +197,14 @@ func TestServerIntakeSelectResolvesCallerAndClosesWindow(t *testing.T) {
 		t.Fatal("select did not resolve the waiter")
 	}
 	result := window.Result()
-	if result.Status != "selected" || result.Configuration != "轻量" || result.Route != "lightweight" || len(result.Disabled) == 0 {
+	if result.Status != "selected" || result.Configuration != "面板" || len(result.Disabled) == 0 {
 		t.Fatalf("result = %+v", result)
 	}
 	closed := false
 	if err := server.AttachWindowCloser(window.ID, func() error { closed = true; return nil }); err != nil || !closed {
 		t.Fatalf("attach after close = %v closed=%v", err, closed)
 	}
-	response = serverPost(t, server, "/api/window/select", fmt.Sprintf(`{"window":%q,"configuration":"轻量"}`, window.ID))
+	response = serverPost(t, server, "/api/window/select", fmt.Sprintf(`{"window":%q,"configuration":"面板"}`, window.ID))
 	response.Body.Close()
 	if response.StatusCode == http.StatusOK {
 		t.Fatal("select on a closed window was accepted")
@@ -215,7 +215,7 @@ func TestServerSupersededIntakeResolvesButKeepsWindowOpen(t *testing.T) {
 	home := panelHome(t)
 	root := t.TempDir()
 	candidate := intakeFixture(t, root)
-	lightweightConfig(t, root, home, "轻量")
+	selectionConfig(t, root, home, "面板")
 	server, _, _ := startPanelServer(t, Backend{Root: root, Home: home})
 	window, err := server.NewWindow(candidate)
 	if err != nil {
@@ -262,8 +262,8 @@ func TestServerHeartbeatLossCancelsIntakeAndHeartbeatIsNotActivity(t *testing.T)
 	root := t.TempDir()
 	putJSON(t, userConfigPath(home), `{"panelIdleTimeout":60}`)
 	candidate := intakeFixture(t, root)
-	lightweightConfig(t, root, home, "轻量")
-	if _, err := settings.UseConfiguration(root, home, "project", "轻量", nil); err != nil {
+	selectionConfig(t, root, home, "面板")
+	if _, err := settings.UseConfiguration(root, home, "project", "面板", nil); err != nil {
 		t.Fatal(err)
 	}
 	server, clock, _ := startPanelServer(t, Backend{Root: root, Home: home})
@@ -279,7 +279,7 @@ func TestServerHeartbeatLossCancelsIntakeAndHeartbeatIsNotActivity(t *testing.T)
 	server.sweep()
 	<-window.Done
 	result := window.Result()
-	if result.Status != "timeout" || result.Configuration != "轻量" || result.Route != "lightweight" {
+	if result.Status != "timeout" || result.Configuration != "面板" {
 		t.Fatalf("timeout result = %+v", result)
 	}
 
@@ -381,7 +381,7 @@ func TestPanelPreviewServer(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	candidate := intakeFixture(t, root)
-	lightweightConfig(t, root, home, "轻量")
+	selectionConfig(t, root, home, "面板")
 	server, err := NewServer(Backend{Root: root, Home: home})
 	if err != nil {
 		t.Fatal(err)

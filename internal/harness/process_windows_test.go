@@ -38,6 +38,19 @@ func TestSupervisedWindowsPeer(t *testing.T) {
 			t.Fatal(err)
 		}
 		os.Exit(0)
+	case "native-claim":
+		directory := os.Getenv("SUPERVISED_WINDOWS_DIRECTORY")
+		request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareNativeInvocation(directory, objectOrEmpty(request), nativeImplementation{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv("SUPERVISED_WINDOWS_READY"), []byte("claimed"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Hour)
 	case "wait":
 		if err := os.WriteFile(os.Getenv("SUPERVISED_WINDOWS_READY"), []byte("started"), 0600); err != nil {
 			t.Fatal(err)
@@ -303,5 +316,145 @@ func TestSuperviseWindowsSettlesOwnedDescendants(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNativeJobStoppedRequiresOriginalClaimAndStoppedChild(t *testing.T) {
+	directory := t.TempDir()
+	if NativeJobStopped(directory) {
+		t.Fatal("missing claim counted as stopped")
+	}
+	ready := filepath.Join(directory, "ready")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestSupervisedWindowsPeer$")
+	cmd.Env = append(os.Environ(), "SUPERVISED_WINDOWS_PEER=wait", "SUPERVISED_WINDOWS_READY="+ready)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("peer not ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	created, ok := processCreationTime(cmd.Process.Pid)
+	if !ok {
+		t.Fatal("process creation unavailable")
+	}
+	request := map[string]any{"kind": "native", "engine": map[string]any{"action_id": "original"}}
+	digest, err := CanonicalDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := map[string]any{"pid": cmd.Process.Pid, "pgid": cmd.Process.Pid, "started_at": float64(created.UnixNano()) / 1e9, "request_digest": digest}
+	for name, value := range map[string]any{"request.json": request, "process.json": process} {
+		if err := writeAtomicJSON(filepath.Join(directory, name), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("live original process counted as stopped")
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if !NativeJobStopped(directory) {
+		t.Fatal("dead claimed process not observed")
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-process.json"), map[string]any{"pid": os.Getpid(), "pgid": cmd.Process.Pid}); err != nil {
+		t.Fatal(err)
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("live recorded child counted as stopped")
+	}
+	if err := os.Remove(filepath.Join(directory, "native-process.json")); err != nil {
+		t.Fatal(err)
+	}
+	process["request_digest"] = "different"
+	if err := writeAtomicJSON(filepath.Join(directory, "process.json"), process); err != nil {
+		t.Fatal(err)
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("another request's process counted as stopped")
+	}
+}
+
+func TestNativeDirectClaimDoesNotBorrowSupervisorStopProof(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "native")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := map[string]any{"workerMaterial": map[string]any{"actionId": "original", "attemptId": "attempt"}}
+	native := map[string]any{"kind": "native", "provider": "zcode", "engine": engine}
+	outer := map[string]any{"kind": "native", "argv": []string{executable, "harness", "native", directory}, "engine": engine}
+	for name, value := range map[string]any{"native-request.json": native, "request.json": outer} {
+		if err := writeAtomicJSON(filepath.Join(directory, name), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready := filepath.Join(directory, "ready")
+	cmd := exec.Command(executable, "-test.run=^TestSupervisedWindowsPeer$")
+	cmd.Env = append(os.Environ(), "SUPERVISED_WINDOWS_PEER=native-claim", "SUPERVISED_WINDOWS_DIRECTORY="+directory, "SUPERVISED_WINDOWS_READY="+ready)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("direct native claim not ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	process, err := readJSONFile(filepath.Join(directory, "process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeDigest, err := CanonicalDigest(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerRecorded, err := readJSONFile(filepath.Join(directory, "request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerDigest, err := CanonicalDigest(outerRecorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intOf(getOf(process, "pid")) != cmd.Process.Pid || getOf(process, "request_digest") != nativeDigest || nativeDigest == outerDigest {
+		t.Fatal("direct claim did not retain original native request binding", process)
+	}
+	if !NativeJobAlive(directory) {
+		t.Fatal("direct owner not observed alive")
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if NativeJobAlive(directory) {
+		t.Fatal("dead direct owner reported alive")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "native-process.json")); !os.IsNotExist(err) {
+		t.Fatal("fixture unexpectedly has provider process proof", err)
+	}
+	if NativeJobStopped(directory) {
+		t.Fatal("direct owner death borrowed unrelated outer supervisor job guarantee")
 	}
 }

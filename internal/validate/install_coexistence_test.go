@@ -8,6 +8,7 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/settings"
 )
 
@@ -59,15 +60,10 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := settings.EditConfiguration(project, home, "project", name, nil, func(configuration *settings.Configuration) error {
-		for _, node := range definition.MainFlowNodes() {
-			configuration.SetFlowNodeEnabled(node.ID, false)
-		}
-		return nil
-	}); err != nil {
+	if _, err := settings.UseConfiguration(project, home, "project", name, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := settings.UseConfiguration(project, home, "project", name, nil); err != nil {
+	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(testRequirementDocument("Sample requirement.")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	receipt := facade.IntakeConfirmationReceipt{
@@ -100,10 +96,11 @@ func coexistenceCandidateActiveState(t *testing.T, project, runID string) string
 		}
 	}
 	_, run, err := facade.Start(facade.StartOptions{
-		Root: project,
+		Root:      project,
+		VCSRunner: testkit.NewFrozenGitRepo(),
 		Request: facade.StartRequest{
 			RunID:                     runID,
-			Route:                     "lightweight",
+			BaseSnapshot:              testkit.FrozenSnapshot,
 			DefinitionSource:          facade.DefaultDefinitionSource,
 			DefinitionDigest:          definition.WorkflowDefinitionDigest,
 			IntakeConfirmationReceipt: receipt,

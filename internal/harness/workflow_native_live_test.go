@@ -152,7 +152,7 @@ func TestWorkflowAutomaticNativeReachesUserDecision(t *testing.T) {
 	if err := os.WriteFile(intakePath, body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	call("start", "workflow", "start", "--root", c.project, "--run-id", "automatic-text", "--route", "regular", "--vcs", "git", "--base-snapshot", base, "--intake-receipt", intakePath)
+	call("start", "workflow", "start", "--root", c.project, "--run-id", "automatic-text", "--vcs", "git", "--base-snapshot", base, "--intake-receipt", intakePath)
 	if err := c.recordIsolation(); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func runAutomaticNativeFlow(t *testing.T, packageRoot, provider, topology string
 	if provider == "git" && !split {
 		c.promotion = installCanaryPromotionRecovery(c)
 	}
-	f.command(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--route", "regular", "--vcs", provider, "--base-snapshot", base, "--intake-receipt", intakePath)
+	f.command(nil, "workflow", "start", "--root", c.project, "--run-id", "engine-canary", "--vcs", provider, "--base-snapshot", base, "--intake-receipt", intakePath)
 	if err := c.recordIsolation(); err != nil {
 		t.Fatal(err)
 	}

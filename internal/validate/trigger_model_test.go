@@ -45,13 +45,13 @@ func skillDescription(t *testing.T, text string) string {
 
 func TestSkillDescriptionDeclaresTriggerModel(t *testing.T) {
 	description := skillDescription(t, readWorktreeFile(t, "SKILL.md"))
-	for _, rule := range []string{"用户明确要求走正式流程时才进入完整受理流程", "默认提醒一次", "若需走 formal-gates 流程，可直接提出", "大/复杂需求在需求与方案确认、准备开做时再额外强调一次", "轻量路线"} {
+	for _, rule := range []string{"用户明确要求走正式流程时才进入完整受理流程", "默认提醒一次", "若需走 formal-gates 流程，可直接提出", "大/复杂需求在需求与方案确认、准备开做时再额外强调一次", "执行行为由保存配置的启用节点决定"} {
 		assertHasText(t, description, rule)
 	}
 }
 func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
-	for _, rule := range []string{"默认提醒一次", "检测到复杂需求，建议走 formal-gates 流程", "非修改性的提问、解释、诊断和 review 不触发正式流程", "主代理不得自行触发", "先做材料预检并读取结构投影，再展示该文件全文与精确 revision", "自然语言只提出申请", "调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run", "模型不能填写批准值、制作确认收据或用 CLI 自报确认"} {
+	for _, rule := range []string{"默认提醒一次", "检测到复杂需求，建议走 formal-gates 流程", "非修改性的提问、解释、诊断和 review 不触发正式流程", "主代理不得自行触发", "先做材料预检并读取结构投影，再展示该文件全文与精确 revision", "REQ/AC 结构须在启动确认前通过校验", "自然语言只提出申请", "调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run", "模型不能填写批准值、制作确认收据或用 CLI 自报确认"} {
 		assertHasText(t, skill, rule)
 	}
 }
@@ -63,14 +63,12 @@ func TestSkillDelegatesAdvancementToCurrentCLI(t *testing.T) {
 	assertHasText(t, skill, "workflow drive")
 	for _, rule := range []string{
 		"预检自动保存完整 intake 载荷并公布 `intake` 序号",
-		"传入 `intake` 原序号、`configuration` 与推导出的 `route`，程序核对路线后由原生弹窗确认完整启动操作",
+		"传入 `intake` 原序号与 `configuration`，原生弹窗确认完整启动操作",
 		"真人在原生表单确认后由程序直接提交原对象",
 		"没有真人交互能力时明确不可执行，不以模型回包、自动批准 hook 或 NativeRespond 代替",
 		"不抄取或重拼已知路径、身份、摘要、全文和收据",
-		"预检不按 route 分流",
-		"普通材料序号由 `--precheck --materials` 发布",
-		"记录 unverified",
-		"不把它当验证通过",
+		"配置须至少启用一个节点才能启动",
+		"全部节点关闭的选择被拒绝",
 	} {
 		assertHasText(t, skill, rule)
 	}
@@ -105,7 +103,7 @@ func TestManifestDescriptionStatesModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertHasText(t, manifest.Description, "on-request formal flow")
-	assertHasText(t, manifest.Description, "record-only lightweight route")
+	assertHasText(t, manifest.Description, "saved workflow-node selection")
 }
 func TestInstallPreservesSkillAndManagedRule(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {

@@ -67,9 +67,7 @@ func Freeze(provider string, effective Effective) (Effective, error) {
 	if len(adapter.HostDescriptor().Configuration) == 0 {
 		return effective, nil
 	}
-	resolver, ok := adapter.(interface {
-		ResolveNativePaths(map[string]string, map[string]string) error
-	})
+	resolver, ok := adapter.(host.NativePathResolver)
 	if !ok {
 		return effective, fmt.Errorf("native path resolver unavailable for %s", adapter.HostDescriptor().ID)
 	}

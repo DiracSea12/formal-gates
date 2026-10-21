@@ -125,20 +125,9 @@ func dshHooks() nativeHooks {
 		interactions:    []nativeInteractionSpec{dshPermissionInteraction},
 		observes:        dshObservesDelivered,
 		identify:        func(c *nativeClient) any { return c.nextCounter() },
-		envelope: func(value map[string]any) map[string]any {
-			framed := map[string]any{"jsonrpc": "2.0"}
-			for key, item := range value {
-				framed[key] = item
-			}
-			return framed
-		},
-		classify: dshClassifySessionUnavailable,
+		envelope:        acpEnvelope,
+		classify:        dshClassifySessionUnavailable,
 	}
-}
-
-// newDSHClient spawns the host with DSH's transport configuration.
-func newDSHClient(argv []string, workspace, directory string, environment map[string]string) (*nativeClient, error) {
-	return newNativeClientWithEnv(dshHooks(), argv, workspace, directory, environment)
 }
 
 // dshClassifySessionUnavailable is the narrow DSH error classification: never
@@ -163,20 +152,6 @@ func dshClassifySessionUnavailable(method string, errValue any, params map[strin
 		}
 	}
 	return nil
-}
-
-// dshSelection maps configOptions to {id: currentValue}, a missing
-// currentValue becoming null.
-func dshSelection(raw any) (map[string]any, error) {
-	out := map[string]any{}
-	for _, option := range listOf(getOf(raw, "configOptions")) {
-		id, err := mustEntry(option, "id")
-		if err != nil {
-			return nil, err
-		}
-		out[textOf(id)] = getOf(option, "currentValue")
-	}
-	return out, nil
 }
 
 func dshSelectionOptions(raw any) host.SelectionCatalogue {
@@ -410,207 +385,157 @@ func dshReconcile(directory string, process any, services ...ExecutionServices) 
 	return recoverNativeSource(directory, process, "DSH", recover)
 }
 
-// configuredIs reports whether the selection currently holds the requested
-// value for one option; selection values are strings or null.
-func configuredIs(configured map[string]any, option, requested string) bool {
-	current, _ := configured[option].(string)
-	return current == requested
+// dshSessionCapabilities is the host's advertised session-capability object.
+func dshSessionCapabilities(initialize any) map[string]any {
+	return objectOrEmpty(getOf(objectOrEmpty(getOf(initialize, "agentCapabilities")), "sessionCapabilities"))
+}
+
+// dshCapable is DSH's handshake gate over the host's initialize answer: this
+// adapter's session lifecycle relies on the host's resume and close
+// capabilities under ACP protocol version 1.
+func dshCapable(initialize any) error {
+	capabilities := dshSessionCapabilities(initialize)
+	_, hasResume := capabilities["resume"]
+	_, hasClose := capabilities["close"]
+	if !valuesEqual(getOf(initialize, "protocolVersion"), 1) || !hasResume || !hasClose {
+		return &blockedError{message: "DSH_CAPABILITY: ACP v1 resume/close required"}
+	}
+	return nil
 }
 
 // dshExecute runs DSH’s ACP sequence for one request.
-func dshExecute(request any, directory string, probe bool, services ...ExecutionServices) (result map[string]any, err error) {
-	if mkdirErr := os.MkdirAll(directory, 0o755); mkdirErr != nil {
-		return nil, mkdirErr
-	}
-	binding, err := nativeExecutionBinding(request, dshCaptureBinding)
+func dshExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
+	dispatch, err := newACPDispatch(request, directory, dshCaptureBinding)
 	if err != nil {
 		return nil, err
 	}
-	launch, entryErr := mustEntry(binding, "launch")
-	if entryErr != nil {
-		return nil, entryErr
-	}
-	executableValue, entryErr := mustEntry(launch, "executable")
-	if entryErr != nil {
-		return nil, entryErr
-	}
-	executable := textOf(executableValue)
-	workspaceValue, entryErr := mustEntry(request, "workspace")
-	if entryErr != nil {
-		return nil, entryErr
-	}
-	workspace := resolveNativePath(textOf(workspaceValue))
-	readOnlyValue, entryErr := mustEntry(request, "read_only")
-	if entryErr != nil {
-		return nil, entryErr
-	}
-	readOnly, isBool := readOnlyValue.(bool)
-	if !isBool {
-		return nil, fmt.Errorf("read_only must be a boolean")
-	}
-	patch, err := makeDSHPatch(directory, readOnly, probe, services...)
+	patch, err := makeDSHPatch(directory, dispatch.readOnly, probe, services...)
 	if err != nil {
 		return nil, err
 	}
-	environment := nativeBindingEnvironment(binding)
-	client, err := newDSHClient([]string{executable, "--profile", "acp", "--patch", patch}, workspace, directory, environment)
+	session, err := dispatch.connect(acpSessionSpec{
+		prefix: "DSH",
+		argv:   dshArgv(objectOrEmpty(getOf(dispatch.binding, "launch")), patch),
+		hooks:  dshHooks(),
+		resume: "session/resume",
+		// The tool surface mounts in the agent scope through the profile
+		// patch; the empty list removes nothing from the native profile.
+		servers:      []any{},
+		sessionClose: true,
+		capable:      dshCapable,
+	})
 	if err != nil {
 		return nil, err
 	}
-	identity := textOf(getOrOf(request, "identity", ""))
-	attached := false
-	var configured map[string]any
-	defer func() {
-		if attached {
-			closeNativeSession(client, identity)
-		}
-		client.close()
-	}()
-	run := func() (map[string]any, error) {
-		initialize, err := client.request("initialize",
-			map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}})
-		if err != nil {
-			return nil, err
-		}
-		capabilities := objectOrEmpty(getOf(
-			objectOrEmpty(getOf(initialize, "agentCapabilities")), "sessionCapabilities"))
-		_, hasResume := capabilities["resume"]
-		_, hasClose := capabilities["close"]
-		if !valuesEqual(getOf(initialize, "protocolVersion"), 1) || !hasResume || !hasClose {
-			return nil, &blockedError{message: "DSH_CAPABILITY: ACP v1 resume/close required"}
-		}
-		// ACP requires the additional server list. DSH mounts it in the agent
-		// scope; an empty list does not remove servers from the native profile.
-		params := map[string]any{"cwd": workspace, "mcpServers": []any{}}
-		method := "session/new"
-		if identity != "" {
-			params["sessionId"] = identity
-			method = "session/resume"
-		}
-		created, err := client.request(method, params)
-		if err != nil {
-			return nil, err
-		}
-		observed, _ := getOrOf(created, "sessionId", any(identity)).(string)
-		if observed == "" || (identity != "" && observed != identity) {
-			return nil, &blockedError{message: "DSH_BINDING: missing or changed identity"}
-		}
-		identity = observed
-		attached = true
-		if getOf(request, "selection_options") == true {
-			catalogue := dshSelectionOptions(created)
-			target := nativeSelectionString(getOf(request, "selection_model"))
-			for _, option := range catalogue.Models {
-				if option.Value != target || target == catalogue.Current.Model {
-					continue
-				}
-				changed, err := client.request("session/set_config_option", map[string]any{"sessionId": identity, "configId": "model", "value": target}, nativeUnbounded)
-				if err != nil {
-					return nil, err
-				}
-				updated := dshSelectionOptions(changed)
-				if updated.Current.Model != target {
-					return nil, fmt.Errorf("DSH_CONFIG: queried model selection was not applied")
-				}
-				catalogue.Models = updated.Models
-				break
-			}
-			if _, err := client.request("session/close", map[string]any{"sessionId": identity}, nativeUnbounded); err != nil {
-				return nil, err
-			}
-			attached = false
-			return map[string]any{"selection_options": catalogue, "model_calls": 0}, nil
-		}
-		configured, err = dshSelection(created)
-		if err != nil {
-			return nil, err
-		}
-		if err := writeAtomicJSON(filepath.Join(directory, "identity.json"), map[string]any{
-			"identity": identity, "workspace": workspace, "selection": configured, "acknowledgement": created}); err != nil {
-			return nil, err
-		}
-		for _, name := range []string{"model", "reasoning_effort"} {
-			requested, _ := getOrOf(request, name, "").(string)
-			if requested == "" || configuredIs(configured, name, requested) {
+	defer session.close()
+	if err := session.open(); err != nil {
+		return nil, err
+	}
+	if getOf(request, "selection_options") == true {
+		catalogue := dshSelectionOptions(session.created)
+		target := nativeSelectionString(getOf(request, "selection_model"))
+		for _, option := range catalogue.Models {
+			if option.Value != target || target == catalogue.Current.Model {
 				continue
 			}
-			changed, err := client.request("session/set_config_option",
-				map[string]any{"sessionId": identity, "configId": name, "value": requested})
+			changed, err := session.client.request("session/set_config_option", map[string]any{"sessionId": session.identity, "configId": "model", "value": target}, nativeUnbounded)
 			if err != nil {
 				return nil, err
 			}
-			updated, err := dshSelection(changed)
-			if err != nil {
-				return nil, err
+			updated := dshSelectionOptions(changed)
+			if updated.Current.Model != target {
+				return nil, fmt.Errorf("DSH_CONFIG: queried model selection was not applied")
 			}
-			for key, value := range updated {
-				configured[key] = value
-			}
-			if !configuredIs(configured, name, requested) {
-				return nil, &blockedError{
-					message: "DSH_CONFIG: " + name + " selection was not applied",
-				}
-			}
+			catalogue.Models = updated.Models
+			break
 		}
-		if probe {
-			if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
-				return nil, err
-			}
-			attached = false
-			return map[string]any{
-				"provider":     "dsh",
-				"executable":   resolveNativePath(executable),
-				"capabilities": capabilities,
-				"selection":    configured,
-				"model_calls":  0,
-			}, nil
-		}
-		promptValue, entryErr := mustEntry(request, "prompt")
-		if entryErr != nil {
-			return nil, entryErr
-		}
-		promptText, isString := promptValue.(string)
-		if !isString {
-			return nil, fmt.Errorf("prompt must be a string")
-		}
-
-		response, err := client.request("session/prompt",
-			map[string]any{"sessionId": identity,
-				"prompt": []any{map[string]any{"type": "text", "text": promptText}}},
-			nativeUnbounded)
-		if err != nil {
+		if err := session.detach(nativeUnbounded); err != nil {
 			return nil, err
 		}
-		if err := settleQueuedMessages(directory, request, nil, services); err != nil {
-			return nil, err
-		}
-		if !valuesEqual(getOf(response, "stopReason"), "end_turn") {
-			return nil, &blockedError{message: "DSH_STOP: " + textOf(getOf(response, "stopReason"))}
-		}
-		// close flushes the native source. It does not delete persisted session
-		// history.
-		if _, err := client.request("session/close", map[string]any{"sessionId": identity}); err != nil {
-			return nil, err
-		}
-		attached = false
-		source, err := observeNative(directory, identity)
-		if err != nil {
-			return nil, err
-		}
-		source["selection"] = configured
-		if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
-			return nil, err
-		}
-		return source, nil
+		return map[string]any{"selection_options": catalogue, "model_calls": 0}, nil
 	}
-	return run()
+	if err := session.configure(); err != nil {
+		return nil, err
+	}
+	if probe {
+		if err := session.detach(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"provider":     "dsh",
+			"executable":   resolveNativePath(dispatch.executable),
+			"capabilities": dshSessionCapabilities(session.initialize),
+			"selection":    session.configured,
+			"model_calls":  0,
+		}, nil
+	}
+	response, err := session.turn(services)
+	if err != nil {
+		return nil, err
+	}
+	if err := session.endTurn(response); err != nil {
+		return nil, err
+	}
+	// close flushes the native source. It does not delete persisted session
+	// history.
+	if err := session.detach(); err != nil {
+		return nil, err
+	}
+	source, err := observeNative(directory, session.identity)
+	if err != nil {
+		return nil, err
+	}
+	source["selection"] = session.configured
+	if err := writeAtomicJSON(filepath.Join(directory, "source.json"), source); err != nil {
+		return nil, err
+	}
+	return source, nil
 }
 
 var dshCaptureBinding = nativeCapture(dshResolvePaths, dshConfiguredBinding)
 
+// dshDesktopInstall names the installed desktop shell's executable and the
+// resources directory its harness entry ships under; a variable so tests can
+// point it at a fixture install. Linux has no desktop install.
+var dshDesktopInstall = func() (exe, resources string) {
+	switch runtime.GOOS {
+	case "windows":
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			exe = filepath.Join(local, "Programs", "DSH Desktop", "DSH Desktop.exe")
+			return exe, filepath.Join(filepath.Dir(exe), "resources")
+		}
+	case "darwin":
+		exe = filepath.Join("/Applications", "DSH Desktop.app", "Contents", "MacOS", "DSH Desktop")
+		return exe, filepath.Join(filepath.Dir(filepath.Dir(exe)), "Resources")
+	}
+	return "", ""
+}
+
+// dshArgv is the session spawn argv: the bound launch, then — for the
+// desktop-shell form — the bundled ACP app next to the harness entry in the
+// resources tree, then the acp profile flags.
+func dshArgv(launch map[string]any, patch string) []string {
+	argv := nativeArgv(launch)
+	if script, _ := getOf(launch, "script").(string); script != "" {
+		argv = append(argv, filepath.Join(filepath.Dir(script), "app.asar", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"))
+	}
+	return append(argv, "--profile", "acp", "--patch", patch)
+}
+
 func dshResolvePaths(native, sources map[string]string) error {
 	executable := settings.Values{Native: native}.NativeString("dshExecutable")
 	path, executableSource, err := nativeExecutablePath(executable)
+	script := ""
+	if err != nil && executable == "dsh" {
+		// The desktop shell is another install form: it runs as node over its
+		// bundled harness entry (ELECTRON_RUN_AS_NODE).
+		if exe, resources := dshDesktopInstall(); exe != "" {
+			entry := filepath.Join(resources, "harness-node-entry.mjs")
+			if resolved, source, ok := nativeFixedLaunch(exe); ok && nativeRegularFile(entry) {
+				path, script, executableSource, err = resolved, resolveNativePath(entry), source, nil
+			}
+		}
+	}
 	if err != nil {
 		return &blockedError{message: "DSH_UNAVAILABLE: dsh is not on PATH"}
 	}
@@ -633,10 +558,12 @@ func dshResolvePaths(native, sources map[string]string) error {
 			nativeHome = filepath.Join(home, nativeHome[2:])
 		}
 	}
-	recordNativePaths(native, sources,
-		map[string]string{"dshExecutable": resolveNativePath(path), "dshHome": home, "dshConfigRoot": resolveNativePath(nativeHome)},
-		map[string]string{"dshExecutable": executableSource, "dshHome": homeSource, "dshConfigRoot": rootSource},
-	)
+	paths := map[string]string{"dshExecutable": resolveNativePath(path), "dshHome": home, "dshConfigRoot": resolveNativePath(nativeHome)}
+	origins := map[string]string{"dshExecutable": executableSource, "dshHome": homeSource, "dshConfigRoot": rootSource}
+	if script != "" {
+		paths["dshScript"], origins["dshScript"] = script, "bundle"
+	}
+	recordNativePaths(native, sources, paths, origins)
 	return nil
 }
 
@@ -645,11 +572,20 @@ func dshConfiguredBinding(config settings.Values) (map[string]any, error) {
 	if executable == "" || home == "" || nativeHome == "" {
 		return nil, &blockedError{message: "DSH_CONFIG: frozen native paths required"}
 	}
-	binding, err := buildCaptureBinding("dsh", map[string]any{"executable": executable})
+	// A desktop-shell launch runs the Electron binary as node over the
+	// bundled harness entry, so the binding names the script operand and the
+	// official run-as-node switch.
+	launch := map[string]any{"executable": executable}
+	environment := map[string]any{"HOME": home, "DSH_HOME": nativeHome}
+	if script := config.Native["dshScript"]; script != "" {
+		launch["script"] = script
+		environment["ELECTRON_RUN_AS_NODE"] = "1"
+	}
+	binding, err := buildCaptureBinding("dsh", launch)
 	if err != nil {
 		return nil, err
 	}
-	binding["environment"] = map[string]any{"HOME": home, "DSH_HOME": nativeHome}
+	binding["environment"] = environment
 	if runtime.GOOS == "windows" {
 		binding["environment"].(map[string]any)["USERPROFILE"] = home
 	}
@@ -660,13 +596,6 @@ func dshConfiguredBinding(config settings.Values) (map[string]any, error) {
 // match and every bound file proof must still hold.
 func dshValidateBinding(binding any) error {
 	return validateNativeBinding(binding, "dsh")
-}
-
-func dshVerifyStart(_ any, acknowledgement any, identity string) error {
-	if getOf(acknowledgement, "sessionId") != identity {
-		return fmt.Errorf("native session acknowledgement differs")
-	}
-	return nil
 }
 
 // dshVerifySource checks the bound provider, identity and required evidence

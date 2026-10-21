@@ -25,6 +25,12 @@ import (
 // the provider's acknowledgement validation without workflow state.
 var NativeStartVerifier func(string, string) (string, error)
 
+// NativeJobAlive matches the native owner's PID and process creation time.
+var NativeJobAlive func(string) bool
+
+// NativeJobStopped confirms that the original invocation has no remaining process.
+var NativeJobStopped func(string) bool
+
 type nativeWorkerBinding struct {
 	Root           string          `json:"root"`
 	RunID          string          `json:"runId"`
@@ -136,6 +142,31 @@ func workerExecutionBridge(root, runID string) func(protocol.PendingAction, prot
 			return fact, nil
 		}
 		return nil, nil
+	}
+}
+
+func workerExecutionStoppedBridge(root, runID string) func(protocol.PendingAction, protocol.Attempt) (bool, error) {
+	return func(pending protocol.PendingAction, attempt protocol.Attempt) (bool, error) {
+		if NativeJobStopped == nil {
+			return false, nil
+		}
+		invocations, err := claimedWorkerInvocations(root, runID, pending.ActionID, attempt.ID)
+		if err != nil {
+			return false, err
+		}
+		for _, invocation := range invocations {
+			// Claim writes owner then process while holding the native window;
+			// execution starts only after both. Missing process here is unstarted.
+			if _, err := os.Stat(filepath.Join(invocation.directory, "process.json")); os.IsNotExist(err) {
+				continue
+			} else if err != nil {
+				return false, err
+			}
+			if !NativeJobStopped(invocation.directory) {
+				return false, nil
+			}
+		}
+		return len(invocations) != 0, nil
 	}
 }
 
@@ -455,17 +486,26 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 	if err != nil {
 		return err
 	}
-	event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+material.ActionID), material.ActionID, value.Input.Provider, identity, protocol.SpawnStatusSpawned)
+	snap, err := f.engine.Load()
 	if err != nil {
 		return err
 	}
-	if _, err := f.engine.Submit(event, protocol.Observation{}); err != nil {
-		return err
+	receipt := snap.State.SpawnReceipts[material.ActionID]
+	if receipt.Status != protocol.SpawnStatusUnknown && receipt.Status != protocol.SpawnStatusAttached {
+		event, err := protocol.NewSpawnReceiptEvent(protocol.EventID("native-spawn:"+material.ActionID), material.ActionID, value.Input.Provider, identity, protocol.SpawnStatusSpawned)
+		if err != nil {
+			return err
+		}
+		if _, err := f.engine.Submit(event, protocol.Observation{}); err != nil {
+			return err
+		}
 	}
 	resumeID := invocation.binding.ResumeActionID
 	correlation := identity
 	if resumeID != "" {
 		correlation = resumeID
+	} else if receipt.Status == protocol.SpawnStatusUnknown || receipt.Status == protocol.SpawnStatusAttached {
+		correlation = receipt.Correlation
 	}
 	start, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-start:"+material.Digest+":"+resumeID), value.Input.Provider, correlation, identity, protocol.LifecycleStart)
 	if err != nil {
@@ -474,10 +514,16 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 	if _, err = f.engine.Submit(start, protocol.Observation{}); err != nil {
 		return err
 	}
-	if err := f.admission.write(func() error {
-		return lifecycle.ObserveNativeStart(f.root, f.runID, material.ActionID, value.Input.Provider, identity)
-	}); err != nil {
+	snap, err = f.engine.Load()
+	if err != nil {
 		return err
+	}
+	if snap.State.SpawnReceipts[material.ActionID].Status != protocol.SpawnStatusUnknown {
+		if err := f.admission.write(func() error {
+			return lifecycle.ObserveNativeStart(f.root, f.runID, material.ActionID, value.Input.Provider, identity)
+		}); err != nil {
+			return err
+		}
 	}
 	if resumeID != "" {
 		snap, err := f.engine.Load()
@@ -504,33 +550,35 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 	}
 	body, err := atomicfile.ReadFile(filepath.Join(directory, "exit.json"))
 	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(body, &exit); err != nil || exit.ExitCode == nil {
-		return fmt.Errorf("native terminal observation requires its original exit receipt")
-	}
-	var process struct {
-		RequestDigest string `json:"request_digest"`
-	}
-	body, err = atomicfile.ReadFile(filepath.Join(directory, "process.json"))
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(body, &process); err != nil || process.RequestDigest == "" || exit.RequestDigest != process.RequestDigest {
-		return fmt.Errorf("native terminal observation differs from its original owned process")
-	}
-	if err := f.ObserveWorkerTerminal(material, identity); err != nil {
-		return err
+		if NativeJobStopped == nil || !NativeJobStopped(directory) {
+			return nil
+		}
+	} else {
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(body, &exit); err != nil || exit.ExitCode == nil {
+			return fmt.Errorf("native terminal observation requires its original exit receipt")
+		}
+		var process struct {
+			RequestDigest string `json:"request_digest"`
+		}
+		body, err = atomicfile.ReadFile(filepath.Join(directory, "process.json"))
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(body, &process); err != nil || process.RequestDigest == "" || exit.RequestDigest != process.RequestDigest {
+			return fmt.Errorf("native terminal observation differs from its original owned process")
+		}
 	}
 	stop, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-stopped:"+material.Digest+":"+resumeID), value.Input.Provider, correlation, identity, protocol.LifecycleStop)
 	if err != nil {
 		return err
 	}
-	_, err = f.engine.Submit(stop, protocol.Observation{})
-	return err
+	if _, err = f.engine.Submit(stop, protocol.Observation{}); err != nil {
+		return err
+	}
+	return f.ObserveWorkerTerminal(material, identity)
 }
 
 // RequestWorkflowChoice creates only an original control Ask. The current
@@ -905,7 +953,7 @@ func (f *Facade) registerIntakeRequirement() error {
 		return err
 	}
 	s := snapshot.State
-	if s.Route != "regular" || s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
+	if s.RequirementGuarantee == nil || s.Validation != nil || s.IntakeConfirmationReceipt == nil || s.RequirementBarrierActive() || s.ResetPending() {
 		return nil
 	}
 	if _, aborted := s.AbortDecision(); aborted || s.Phase == runtime.PhaseTerminal || s.Phase == runtime.PhasePreparing {

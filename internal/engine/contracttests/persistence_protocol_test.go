@@ -72,7 +72,7 @@ func protocolEngine(t *testing.T, collect func() (string, error)) (*protocol.Eng
 		t.Fatalf("decision.NewState: %v", err)
 	}
 	input := protocolObservation(collect)
-	if err := engine.InitWithMetadata(view, protocolProvider, input, "", "", nil, "", "", nil); err != nil {
+	if err := engine.InitWithMetadata(view, protocolProvider, input, "", nil, "", "", nil); err != nil {
 		t.Fatalf("Engine.InitWithMetadata: %v", err)
 	}
 	return engine, input

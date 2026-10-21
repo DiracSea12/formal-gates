@@ -122,11 +122,25 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 		}
 	}
 	var executed bool
+	for _, effect := range s.ReconciledEffects {
+		if effect.Intent == nil || effect.Intent.Correlation != correlation {
+			continue
+		}
+		if effect.Operation == HostActionResumeAgent {
+			return nil
+		}
+		if effect.Operation == HostActionTerminateAgent && effect.Status == "FULFILLED" {
+			operation, executed = effect.Operation, true
+		}
+	}
 	for _, receipt := range s.HostActionReceipts {
 		if receipt.Correlation != correlation {
 			continue
 		}
 		if receipt.Status != HostActionStatusExecuted || receipt.LifecycleEvidence == nil {
+			if executed {
+				continue
+			}
 			return nil
 		}
 		operation = receipt.Operation
@@ -145,12 +159,35 @@ func (e *Engine) applyAttemptRecovery(s *State, pending PendingAction, attempt A
 		return nil
 	}
 	receipt, known := s.SpawnReceipts[pending.ActionID]
-	if !known || receipt.Status == SpawnStatusUnknown {
-		return nil
+	if !known {
+		// FAILED spawn 回执只进 SpawnFailures：其 correlation 承载同一派发
+		// 边界的身份，恢复簿记照常取用。
+		if failures := s.SpawnFailures[pending.ActionID]; len(failures) > 0 {
+			receipt, known = failures[len(failures)-1], true
+		}
+	}
+	stopped := false
+	if e.cfg.WorkerExecutionStopped != nil {
+		var err error
+		stopped, err = e.cfg.WorkerExecutionStopped(pending, attempt)
+		if err != nil {
+			return err
+		}
 	}
 	identity := receipt.agentIdentity()
+	if receipt.Status == SpawnStatusUnknown {
+		identity = receipt.LifecycleIdentity
+	}
+	if operation == HostActionResumeAgent && identity == "" && stopped {
+		return validationError("resume requires a recorded agent identity; choose fresh or abort")
+	}
+	if (!known || receipt.Status == SpawnStatusUnknown) && !stopped {
+		return nil
+	}
 	lifecycleCorrelation := s.workerLifecycleCorrelation(pending.ActionID)
-	if !executed && (operation == HostActionResumeAgent || !s.hasCorrelatedLifecycleEvent(receipt.Provider, lifecycleCorrelation, identity, LifecycleStop)) {
+	// FAILED 回执即该次派发自身的终止边界：原会话从未存在，无可恢复或
+	// 可终止的宿主执行，直接落换新簿记（与已观察到终止同一形状）。
+	if !executed && receipt.Status != SpawnStatusFailed && (operation == HostActionResumeAgent || (!stopped && !s.hasCorrelatedLifecycleEvent(receipt.Provider, lifecycleCorrelation, identity, LifecycleStop))) {
 		if operation == HostActionResumeAgent && e.guardEffectBudget(s, pending.ActionID, revision) != nil {
 			// 预算边界＝Ask 已落账（本函数运行在事务收尾内，随外层提交），
 			// 效果不创建、返回 nil——Ask 即进展，不是错误。

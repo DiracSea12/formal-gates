@@ -1261,7 +1261,7 @@ func TestZcodeImplementationRouting(t *testing.T) {
 		t.Fatalf("zcode implementation = %+v", impl)
 	}
 	if _, err := nativeImplementationFor("ghost"); err == nil ||
-		err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor" {
+		err.Error() != "UNSUPPORTED_NATIVE_HOST: ghost; execution adapters: dsh, zcode, claude, codex, workbuddy, cursor, devin" {
 		t.Fatalf("unknown provider: %v", err)
 	}
 }

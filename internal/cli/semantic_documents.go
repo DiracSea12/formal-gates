@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"formal-gates/internal/engine/facade"
@@ -75,10 +76,11 @@ func runRequirement(args []string, streams IO) (int, error) {
 		if *documentPosition == 0 && command == "show" {
 			return printJSON(streams.Stdout, documents)
 		}
-		if *documentPosition < 1 || *documentPosition > len(documents) {
+		index := slices.IndexFunc(documents, func(document requirementDocumentChoice) bool { return document.Position == *documentPosition })
+		if index < 0 {
 			return 1, fmt.Errorf("select a published --document position, or use --file for a new document")
 		}
-		requirementSource = documents[*documentPosition-1].Path
+		requirementSource = documents[index].Path
 	}
 	target := requirementSource
 	if *path != "" {
@@ -179,7 +181,7 @@ func requirementDocuments(root string) ([]requirementDocumentChoice, error) {
 			return documents, err
 		}
 		if _, err := requirement.ParseRequirementProjection(material.Path, data); err == nil {
-			documents = append(documents, requirementDocumentChoice{Position: len(documents) + 1, Path: material.Path})
+			documents = append(documents, material)
 		}
 	}
 	return documents, nil
@@ -240,16 +242,17 @@ func selectIntakeDocuments(root string, structured bool, requirementPath *string
 			return false, err
 		}
 		if document == 0 && len(documents) == 1 {
-			document = 1
+			document = documents[0].Position
 		}
 		if document == 0 {
 			_, err := printJSON(out, documents)
 			return false, err
 		}
-		if document < 1 || document > len(documents) {
+		index := slices.IndexFunc(documents, func(choice requirementDocumentChoice) bool { return choice.Position == document })
+		if index < 0 {
 			return false, fmt.Errorf("select an original displayed requirement document")
 		}
-		*requirementPath = documents[document-1].Path
+		*requirementPath = documents[index].Path
 	}
 	if solution != 0 && *solutionPath != "" || len(artifactPositions) != 0 && len(*artifacts) != 0 {
 		return false, fmt.Errorf("select confirmation material positions or exact material files")

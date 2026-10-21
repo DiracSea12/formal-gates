@@ -757,7 +757,7 @@ func (f *ProtocolFixture) Initialize(view *decision.State, provider string) erro
 		return err
 	}
 	confirmation := fakeIntakeConfirmation()
-	if err := f.Engine.InitWithMetadata(view, provider, observedInput, "", "", confirmation, "", "", nil); err != nil {
+	if err := f.Engine.InitWithMetadata(view, provider, observedInput, "", confirmation, "", "", nil); err != nil {
 		return err
 	}
 	observedInput, err = f.VCS.Observe()

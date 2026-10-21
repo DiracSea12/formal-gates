@@ -144,8 +144,7 @@ const zcodeAccessModeKey = "mode"
 // zcodeIsRegularFile mirrors Path.is_file(): follows symlinks, refuses
 // directories and anything unreadable.
 func zcodeIsRegularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+	return nativeRegularFile(path)
 }
 
 // zcodeExpandUser expands a leading "~" the way Path.expanduser does for the
@@ -247,21 +246,47 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 	}
 	config := settings.Values{Native: native}
 	executable := config.NativeString("zcodeExecutable")
-	node, executableSource, err := nativeExecutablePath(executable)
-	if err != nil {
-		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
-	}
 	script, hasScript := os.LookupEnv("FORMAL_GATES_ZCODE_SCRIPT")
 	scriptSource := "FORMAL_GATES_ZCODE_SCRIPT"
 	if configured := config.NativeString("zcodeScript"); configured != "" {
 		script, hasScript, scriptSource = configured, true, "configured"
 	}
-	if !hasScript {
+	// The install.sh CLI is the app-server itself: it launches directly with
+	// no script operand, so the launch needs no node either. Windows LookPath
+	// is case-insensitive and can land a `zcode` lookup on the ZCode desktop
+	// shell; its sibling resources tree marks the same script form the ZCode
+	// anchor below derives.
+	cli := ""
+	if !hasScript && executable == "node" {
+		if candidate, source, ok := nativeAnchorLaunch([]string{"zcode"}, "resources", "glm", "zcode.cjs"); ok {
+			script, hasScript, scriptSource = candidate, true, source
+		} else if anchor, lookErr := exec.LookPath("zcode"); lookErr == nil {
+			cli = resolveNativePath(anchor)
+		}
+	}
+	if !hasScript && cli == "" {
+		// The ZCode launcher on PATH anchors the install root; the
+		// app-server script ships inside its own resources tree.
+		if candidate, source, ok := nativeAnchorLaunch([]string{"ZCode"}, "resources", "glm", "zcode.cjs"); ok {
+			script, hasScript, scriptSource = candidate, true, source
+		}
+	}
+	if !hasScript && cli == "" {
 		script, scriptSource = zcodeDefaultScript, "platform default"
 	}
-	script = resolveNativePath(zcodeExpandUser(script))
-	if !zcodeIsRegularFile(script) {
-		return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
+	launch, executableSource := "", ""
+	if cli != "" {
+		launch, script, executableSource, scriptSource = cli, "", "PATH", "PATH"
+	} else {
+		script = resolveNativePath(zcodeExpandUser(script))
+		if !zcodeIsRegularFile(script) {
+			return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
+		}
+		var err error
+		launch, executableSource, err = nativeExecutablePath(executable)
+		if err != nil {
+			return &blockedError{message: "ZCODE_UNAVAILABLE: node or app-server script missing"}
+		}
 	}
 	home := config.NativeString("zcodeHome")
 	explicitHome := home != ""
@@ -287,12 +312,16 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 	if personal != "" {
 		personalSource = zcodePersonalConfigEnv
 	}
-	if environment := zcodeProviderEnvironment(script, data); environment != nil {
+	var providerEnvironment map[string]string
+	if script != "" {
+		providerEnvironment = zcodeProviderEnvironment(script, data)
+	}
+	if providerEnvironment != nil {
 		// The native bootstrap accepts a complete provider pair as its runtime
 		// paths. A bundled seed fills only a missing pair.
 		if catalogue == "" || personal == "" {
-			catalogue = resolveNativePath(environment[zcodeBuiltinCatalogueEnv])
-			personal = environment[zcodePersonalConfigEnv]
+			catalogue = resolveNativePath(providerEnvironment[zcodeBuiltinCatalogueEnv])
+			personal = providerEnvironment[zcodePersonalConfigEnv]
 			catalogueSource, personalSource = "zcodeScript", "zcodeDataBaseDir"
 		}
 		pinned = "true"
@@ -303,7 +332,7 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 		credentials, credentialSource = filepath.Join(data, ".zcode", "v2", zcodeCredentialsFile), "zcodeDataBaseDir"
 	}
 	recordNativePaths(native, sources, map[string]string{
-		"zcodeExecutable": resolveNativePath(node), "zcodeScript": script, "zcodeHome": home,
+		"zcodeExecutable": resolveNativePath(launch), "zcodeScript": script, "zcodeHome": home,
 		"zcodeDataBaseDir": data, "zcodeBuiltinCatalogue": catalogue,
 		"zcodePersonalConfig": personal, "zcodeCredentialStore": resolveNativePath(credentials), "zcodeCataloguePinned": pinned,
 	}, map[string]string{
@@ -315,10 +344,15 @@ func zcodeResolvePaths(native, sources map[string]string) error {
 }
 
 func zcodeConfiguredBinding(config settings.Values) (map[string]any, error) {
-	for _, name := range []string{"zcodeExecutable", "zcodeScript", "zcodeHome", "zcodeDataBaseDir", "zcodeCredentialStore"} {
+	for _, name := range []string{"zcodeExecutable", "zcodeHome", "zcodeDataBaseDir", "zcodeCredentialStore"} {
 		if config.Native[name] == "" {
 			return nil, &blockedError{message: "ZCODE_CONFIG: frozen native paths required"}
 		}
+	}
+	// The script operand is a frozen path fact even when the launch carries
+	// none: a direct-CLI resolution records it empty.
+	if _, exists := config.Native["zcodeScript"]; !exists {
+		return nil, &blockedError{message: "ZCODE_CONFIG: frozen native paths required"}
 	}
 	for _, name := range []string{"zcodeBuiltinCatalogue", "zcodePersonalConfig"} {
 		if _, exists := config.Native[name]; !exists {
@@ -329,7 +363,12 @@ func zcodeConfiguredBinding(config settings.Values) (map[string]any, error) {
 	if pinned != "true" && pinned != "false" {
 		return nil, &blockedError{message: "ZCODE_CONFIG: frozen catalogue selection required"}
 	}
-	launch := map[string]any{"executable": config.Native["zcodeExecutable"], "script": config.Native["zcodeScript"]}
+	// A direct-CLI launch has no script operand; the script forms bind the
+	// app-server script as the launch's script operand.
+	launch := map[string]any{"executable": config.Native["zcodeExecutable"]}
+	if script := config.Native["zcodeScript"]; script != "" {
+		launch["script"] = script
+	}
 	binding, err := buildCaptureBinding("zcode", launch)
 	if err != nil {
 		return nil, err
@@ -643,16 +682,12 @@ func zcodeInteractionObserved(hold *nativePendingHold, message map[string]any) b
 }
 
 // newZcodeClient spawns the app-server with ZCode's transport configuration:
-// argv [node, script, --cwd, workspace, app-server], 60-second RPC
+// argv [executable, script?, --cwd, workspace, app-server], 60-second RPC
 // acknowledgements, and the plain {id, method, params} shape. Turn completion
 // waits without a deadline. The two user-decision interactions are
 // held; the machine-answerable ones stay in respond.
 func newZcodeClient(launch map[string]any, workspace, directory string, environment map[string]string) (*zcodeClient, error) {
 	executableValue, err := mustEntry(launch, "executable")
-	if err != nil {
-		return nil, err
-	}
-	scriptValue, err := mustEntry(launch, "script")
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +702,7 @@ func newZcodeClient(launch map[string]any, workspace, directory string, environm
 		respond:         z.respond,
 		classify:        zcodeClassify,
 		notification:    z.notification,
-	}, []string{textOf(executableValue), textOf(scriptValue), "--cwd", workspace, "app-server"},
+	}, nativeArgv(launch, "--cwd", workspace, "app-server"),
 		workspace, directory, environment)
 	if err != nil {
 		return nil, err
@@ -1459,10 +1494,7 @@ func zcodeReconcile(directory string, process any, services ...ExecutionServices
 // the turn, send it, wait it out, settle the evidence.
 func zcodeExecute(request any, directory string, probe bool, services ...ExecutionServices) (map[string]any, error) {
 	directory = resolveNativePath(directory)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return nil, err
-	}
-	req, err := zcodeParseRequest(request)
+	req, err := zcodeParseRequest(request, directory)
 	if err != nil {
 		return nil, err
 	}
@@ -1519,35 +1551,27 @@ func zcodeSelectionOptions(snapshot any, target string) host.SelectionCatalogue 
 	return catalogue
 }
 
-// zcodeRequest is one execution's parsed request: the workspace, the binding
-// (captured now when the request carried none), the resume identity, the
-// wanted selection, the reasoning effort, the permission mode a new
-// non-read-only session is switched to, and the read-only flag. The prompt
-// and schema stay unparsed until sendTurn: their absence surfaces only there,
-// after the session evidence exists.
+// zcodeRequest is one execution's parsed request: the shared dispatch plus
+// ZCode's own fields — the resume identity, the wanted selection, the
+// reasoning effort, and the permission mode a new non-read-only session is
+// switched to. The prompt and schema stay unparsed until sendTurn: their
+// absence surfaces only there, after the session evidence exists.
 type zcodeRequest struct {
-	workspace  string
-	binding    map[string]any
+	*nativeDispatch
 	previous   string
 	wanted     map[string]any
 	effort     string
 	wantedMode string
-	readOnly   bool
 }
 
-// zcodeParseRequest validates and resolves the request's own fields, in the
-// order the sequence reads them.
-func zcodeParseRequest(request any) (zcodeRequest, error) {
-	workspaceValue, err := mustEntry(request, "workspace")
+// zcodeParseRequest resolves the request's shared dispatch, then its own
+// fields, in the order the sequence reads them.
+func zcodeParseRequest(request any, directory string) (zcodeRequest, error) {
+	dispatch, err := newNativeDispatch(request, directory, zcodeCaptureBinding)
 	if err != nil {
 		return zcodeRequest{}, err
 	}
-	var req zcodeRequest
-	req.workspace = resolveNativePath(textOf(workspaceValue))
-	req.binding, err = nativeExecutionBinding(request, zcodeCaptureBinding)
-	if err != nil {
-		return zcodeRequest{}, err
-	}
+	req := zcodeRequest{nativeDispatch: dispatch}
 	req.previous, _ = getOrOf(request, "identity", "").(string)
 	modelValue, _ := getOrOf(request, "model", "").(string)
 	req.wanted, err = zcodeReference(modelValue)
@@ -1563,15 +1587,6 @@ func zcodeParseRequest(request any) (zcodeRequest, error) {
 	// name is not validated here: the host's own setMode rejects modes it does
 	// not know. Resumed and read-only sessions never apply it.
 	req.wantedMode, _ = getOrOf(request, "permission_mode", "").(string)
-	readOnlyValue, err := mustEntry(request, "read_only")
-	if err != nil {
-		return zcodeRequest{}, err
-	}
-	readOnly, isBool := readOnlyValue.(bool)
-	if !isBool {
-		return zcodeRequest{}, fmt.Errorf("read_only must be a boolean")
-	}
-	req.readOnly = readOnly
 	return req, nil
 }
 
