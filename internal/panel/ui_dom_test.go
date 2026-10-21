@@ -84,18 +84,20 @@ func runDOM(t *testing.T, browser, url string, args ...string) string {
 	profile := t.TempDir()
 	// CI Linux runners restrict unprivileged user namespaces, so the headless
 	// test browser runs without the OS sandbox; it only ever loads the locally
-	// served test page.
-	cmdArgs := append([]string{"--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-extensions",
+	// served test page. Container runners mount a small /dev/shm, so
+	// --disable-dev-shm-usage keeps Chromium on temp-file shared memory instead
+	// of exhausting that mount.
+	cmdArgs := append([]string{"--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--disable-extensions",
 		"--user-data-dir=" + profile, "--virtual-time-budget=240000", "--dump-dom"}, args...)
 	cmdArgs = append(cmdArgs, url)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, browser, cmdArgs...).CombinedOutput()
 	if ctx.Err() != nil {
-		t.Fatalf("browser timed out; partial dump is not evidence:\n%.2000s", out)
+		t.Fatalf("browser timed out; partial dump is not evidence:\n%.20000s", out)
 	}
 	if err != nil {
-		t.Fatalf("browser run failed: %v\n%.2000s", err, out)
+		t.Fatalf("browser run failed: %v\n%.20000s", err, out)
 	}
 	return string(out)
 }

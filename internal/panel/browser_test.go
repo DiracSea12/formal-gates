@@ -87,9 +87,11 @@ func processAlive(pid int) bool {
 // no user activity — must hit the configured panelIdleTimeout, resolving the
 // window as timeout, killing its owned browser, and removing its profile.
 func TestManagedBrowserIdleTimeout(t *testing.T) {
-	if _, err := FindBrowser(); err != nil {
+	browser, err := FindBrowser()
+	if err != nil {
 		t.Skipf("no managed browser on this host: %v", err)
 	}
+	t.Logf("managed browser: path=%q kind=%q", browser.Path, browser.Kind)
 	home := panelHome(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".gates"), 0o700); err != nil {
@@ -118,6 +120,7 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
+	t.Logf("window URL: %s", opened.URL)
 
 	server := handle.Server
 	server.mu.Lock()
@@ -135,12 +138,16 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		server.mu.Lock()
-		seen := !session.seen.IsZero()
+		seen := session.seen
+		activity := session.activity
+		open := session.open
 		server.mu.Unlock()
-		if seen {
+		if !seen.IsZero() {
 			break
 		}
 		if time.Now().After(deadline) {
+			t.Logf("no heartbeat: seen.IsZero()=%v activity=%s open=%v", seen.IsZero(), activity, open)
+			logIdleTimeoutDiagnostics(t, browser, opened.URL, profile)
 			t.Fatal("served page never heartbeat — window is not a live UI")
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -180,4 +187,58 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatal("browser profile and process survived the idle timeout")
+}
+
+// logIdleTimeoutDiagnostics records what the test process can still observe
+// when a managed window never heartbeat: whether the served page answers at
+// all, which browser binary is installed, whether a GUI session exists, and
+// whether a process of that browser is alive. These are logs only.
+func logIdleTimeoutDiagnostics(t *testing.T, browser Browser, url, profile string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// A dedicated timeout keeps this probe from hanging CI if the service
+	// itself is wedged.
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Get(url)
+	if err != nil {
+		t.Logf("page GET: error %v", err)
+	} else {
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Logf("page GET: status=%d contentLength=%d bodyBytes=%d readErr=%v",
+			response.StatusCode, response.ContentLength, len(body), readErr)
+	}
+	version, versionErr := exec.CommandContext(ctx, browser.Path, "--version").CombinedOutput()
+	t.Logf("browser version: %.200q err=%v", version, versionErr)
+	if runtime.GOOS == "darwin" {
+		manager, managerErr := exec.CommandContext(ctx, "launchctl", "managername").CombinedOutput()
+		t.Logf("launchctl managername: %.200q err=%v", manager, managerErr)
+	}
+	_, profileErr := os.Stat(profile)
+	t.Logf("profile %s: exists=%v err=%v", profile, profileErr == nil, profileErr)
+	base := filepath.Base(browser.Path)
+	if runtime.GOOS == "windows" {
+		out, listErr := exec.CommandContext(ctx, "tasklist", "/FI", "IMAGENAME eq "+base, "/NH").CombinedOutput()
+		t.Logf("processes named %s: %.600s err=%v", base, out, listErr)
+		return
+	}
+	out, listErr := exec.CommandContext(ctx, "ps", "-Ao", "pid,command").CombinedOutput()
+	if listErr != nil {
+		t.Logf("ps -Ao pid,command: %.200s err=%v", out, listErr)
+		return
+	}
+	var matches []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, base) {
+			matches = append(matches, strings.TrimSpace(line))
+		}
+	}
+	t.Logf("processes whose command names %q: %d", base, len(matches))
+	for i, line := range matches {
+		if i == 5 {
+			break
+		}
+		t.Logf("  %s", line)
+	}
 }
