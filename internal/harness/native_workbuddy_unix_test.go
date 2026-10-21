@@ -425,8 +425,13 @@ func TestWorkBuddyPathFreezePreservesIndependentRootsWithoutInvocation(t *testin
 		t.Fatal(err)
 	}
 	var persisted settings.Effective
-	if err := json.Unmarshal(body, &persisted); err != nil || !reflect.DeepEqual(frozen, persisted) {
-		t.Fatalf("persisted values/sources differ: %v %+v", err, persisted)
+	if err := json.Unmarshal(body, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	// Revisions is not part of the persisted format.
+	frozen.Revisions, persisted.Revisions = nil, nil
+	if !reflect.DeepEqual(frozen, persisted) {
+		t.Fatalf("persisted values/sources differ: %+v", persisted)
 	}
 	t.Setenv("HOME", homeB)
 	t.Setenv("PATH", cliDirB)

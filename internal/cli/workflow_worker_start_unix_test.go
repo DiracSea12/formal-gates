@@ -120,10 +120,11 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 
 func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
-	return workflowStartPlatformFixture(t, "workbuddy", nil, selections...)
+	// Flow-selection fixtures record the published supervisor call instead of executing it.
+	return workflowStartPlatformFixture(t, "workbuddy", nil, len(selections) == 0, nil, selections...)
 }
 
-func workflowStartPlatformFixture(t *testing.T, provider string, native map[string]string, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
+func workflowStartPlatformFixture(t *testing.T, provider string, native map[string]string, startSupervisor bool, qaModes []string, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
 	root, home, bin := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -157,7 +158,7 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 		t.Fatal(err)
 	}
 	launcher := "#!/bin/sh\nexec " + "'" + strings.ReplaceAll(executable, "'", "'\\''") + "'" + " -test.run '^TestWorkflowSupervisorProcess$' -- \"$@\"\n"
-	if len(selections) > 0 {
+	if !startSupervisor {
 		launcher = "#!/bin/sh\n[ \"$#\" = 3 ] && [ \"$1\" = harness ] && [ \"$2\" = supervise ] || exit 92\nprintf '%s\\n' \"$3\" >> \"$WORKFLOW_SUPERVISOR_CALLS\"\nexit 93\n"
 	}
 	if err := os.MkdirAll(filepath.Join(target, "bin"), 0700); err != nil {
@@ -186,7 +187,7 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(selections) > 0 {
+	if len(selections) > 0 || len(qaModes) > 0 {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			t.Fatal(err)
@@ -195,7 +196,12 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 			t.Fatal(err)
 		}
 		if _, err := settings.EditConfiguration(root, home, "project", "开发", nil, func(configuration *settings.Configuration) error {
-			configuration.FlowSelection = selections[0]
+			if len(selections) > 0 {
+				configuration.FlowSelection = selections[0]
+			}
+			if len(qaModes) > 0 {
+				configuration.QAModes = append([]string(nil), qaModes...)
+			}
 			return nil
 		}); err != nil {
 			t.Fatal(err)
@@ -304,6 +310,25 @@ func (p workflowSelectionPlatform) SelectionOptions(string, string, map[string]s
 	return host.SelectionCatalogue{Models: []host.ModelOption{{Value: "target-model", Efforts: []string{"high"}}}, Source: "controlled native catalogue"}, nil
 }
 
+// nativeFixtureValues binds one platform's own native configuration fields so
+// its resolver sees a complete path-only launch without an installed host.
+func nativeFixtureValues(t *testing.T, provider string, fixture host.NativeFixture) map[string]string {
+	t.Helper()
+	adapter, err := host.LookupAdapter(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binder, ok := adapter.(host.NativeFixtureProvider)
+	if !ok {
+		t.Fatalf("native path fixture unavailable for %q", provider)
+	}
+	values, err := binder.FixtureNativePaths(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return values
+}
+
 func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
@@ -324,27 +349,18 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 				if err := os.Mkdir(home, 0700); err != nil {
 					t.Fatal(err)
 				}
-				native := map[string]string{provider + "Executable": executable}
-				if provider != "dsh" {
-					native[provider+"Home"] = home
-				}
-				if provider == "zcode" {
-					native["zcodeScript"] = filepath.Join(root, "server.cjs")
-					mustWriteCLI(t, native["zcodeScript"], "controlled native server")
-				}
-				if provider == "workbuddy" {
-					native["workbuddyProductConfig"] = filepath.Join(home, ".workbuddy", "cache", "acc-product-config-v3.json")
-					mustWriteCLI(t, native["workbuddyProductConfig"], `{}`)
-				}
+				native := nativeFixtureValues(t, provider, host.NativeFixture{Executable: executable, ScriptDir: root, Home: home})
 				controller := "workbuddy"
 				if provider == "workbuddy" {
 					controller = "codex"
-					native["codexExecutable"] = executable
+					for field, value := range nativeFixtureValues(t, controller, host.NativeFixture{Executable: executable}) {
+						native[field] = value
+					}
 				}
 				if invocation == "controller" {
 					controller = provider
 				}
-				f, root, ready, _ := workflowStartPlatformFixture(t, controller, native)
+				f, root, ready, _ := workflowStartPlatformFixture(t, controller, native, true, nil, &protocol.FlowSelection{})
 				before, err := f.Show()
 				if err != nil {
 					t.Fatal(err)
@@ -679,7 +695,8 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
-	f, root, _, _ := workflowStartFixture(t)
+	// Merge QA exists only while a QA mode is enabled, so this split scenario enables blackbox to keep its integration QA duty.
+	f, root, _, _ := workflowStartPlatformFixture(t, "workbuddy", nil, true, []string{"blackbox"})
 	workflowSplitFixture(t, f, root)
 	run, err := f.Show()
 	if err != nil || len(run.SliceChildren) != 2 {

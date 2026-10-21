@@ -104,7 +104,7 @@ func (p installedStartProject) command(input []byte, args ...string) *exec.Cmd {
 	cmd := exec.Command(p.binary, args...)
 	cmd.Dir = p.project
 	cmd.Stdin = bytes.NewReader(input)
-	cmd.Env = append(os.Environ(), "HOME="+p.home, "USERPROFILE="+p.home, "AI_AGENT=", "CLAUDE_CODE_ENTRYPOINT=", "CODEX_HOME=", "CODEX_CLI_PATH=", "CURSOR_TRACE_ID=", "CURSOR_RUNTIME=", "DSH_HOME=", "DSH_PROJECT_DIR=")
+	cmd.Env = testkit.HostFilteredEnvironment(os.Environ(), "HOME="+p.home, "USERPROFILE="+p.home)
 	return cmd
 }
 

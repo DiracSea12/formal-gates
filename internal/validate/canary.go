@@ -79,6 +79,18 @@ type InstallFaultMatrixOptions struct {
 
 type InstallFaultMatrixReport = PortableCanaryReport
 
+// installFixtureHost returns the registry's first installable host. The canary
+// fixtures drive the install transaction through one registry-owned target
+// instead of naming a platform.
+func installFixtureHost() (host.Descriptor, error) {
+	for _, descriptor := range host.All() {
+		if descriptor.Installable && descriptor.InstallName != "" {
+			return descriptor, nil
+		}
+	}
+	return host.Descriptor{}, fmt.Errorf("install fixture requires an installable host")
+}
+
 // InstallFaultMatrix is the public, deterministic fixture for the native
 // install transaction. Each named boundary injects one failure through the
 // same process-wide hook used by the real installer, then verifies that the
@@ -106,6 +118,11 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 	if fixture := strings.TrimSpace(options.Fixture); fixture != "" {
 		phases = []string{canonicalInstallFaultPhase(fixture)}
 	}
+	installHost, err := installFixtureHost()
+	if err != nil {
+		add("fault-matrix-install-host", err)
+		return report, result
+	}
 	for _, phase := range phases {
 		fixture, err := os.MkdirTemp("", "formal-gates-fault-matrix-")
 		if err != nil {
@@ -118,7 +135,7 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		registry := filepath.Join(fixture, "registry.json")
 		faultPrior, hadFault := os.LookupEnv("FORMAL_GATES_INSTALL_FAULT")
 		_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", phase)
-		_, installErr := Install(InstallOptions{Source: root, Host: "codex", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true})
+		_, installErr := Install(InstallOptions{Source: root, Host: installHost.InstallName, Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true})
 		if hadFault {
 			_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", faultPrior)
 		} else {
@@ -133,7 +150,7 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 			checkErr = fmt.Errorf("fault %s did not reach its injection boundary: %w", phase, checkErr)
 		} else {
 			checkErr = nil
-			target := filepath.Join(project, ".codex", "skills", "formal-gates")
+			target := filepath.Join(project, filepath.FromSlash(installHost.Paths.ProjectBase), "formal-gates")
 			if exists(target) || exists(release) || exists(launcher) {
 				checkErr = fmt.Errorf("fault %s left committed target/release/launcher state", phase)
 			} else if matches, globErr := filepath.Glob(registry + ".transaction.json*"); globErr != nil {
@@ -305,25 +322,24 @@ func runQuickE2ECanaryAt(packageRoot string, catalog prompts.PromptCatalog, root
 	if err != nil {
 		return err
 	}
-	// Synthetic workers bind the installed CLI as a path-only fixture; it
-	// rejects native host arguments instead of starting a model session.
+	// Synthetic workers bind the installed CLI as a path-only fixture; the
+	// platform adapter owns which of its own configuration fields receive it.
 	binary := filepath.Join(packageRoot, "bin", nativeBinaryName())
-	script := filepath.Join(root, ".gates", "canary.cjs")
-	for field, value := range map[string]string{
-		"claudeExecutable": binary, "codexExecutable": binary, "cursorExecutable": binary,
-		"dshExecutable": binary, "workbuddyExecutable": binary, "zcodeExecutable": binary,
-		"zcodeScript": script,
-	} {
+	adapter, err := host.LookupAdapter(admission.Provider)
+	if err != nil {
+		return err
+	}
+	binder, ok := adapter.(host.NativeFixtureProvider)
+	if !ok {
+		return fmt.Errorf("native fixture binding unavailable for %s", admission.Provider)
+	}
+	fixture, err := binder.FixtureNativePaths(host.NativeFixture{Executable: binary, ScriptDir: filepath.Join(root, ".gates")})
+	if err != nil {
+		return err
+	}
+	for field, value := range fixture {
 		configuration.Values.Native[field] = value
 		configuration.Sources[field] = "portable canary"
-	}
-	if admission.Provider == host.ZCode {
-		if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
-			return err
-		}
-		if err := os.WriteFile(script, []byte(`throw new Error("portable canary does not start a model host");`), 0600); err != nil {
-			return err
-		}
 	}
 	revision := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
 	receipt := protocol.IntakeConfirmationReceipt{Source: facade.DefaultIntakeSource, Authority: facade.DefaultIntakeAuthority, Transport: facade.DefaultIntakeTransport, RequirementSource: "requirement.md", RequirementRevision: revision, Artifacts: []protocol.IntakeArtifact{{Path: "requirement.md", Revision: revision}}, SolutionRevision: revision, SolutionDigest: "sha256:" + revision}
@@ -747,6 +763,11 @@ func initializeCanaryGit(root string, runtimeFiles vcs.RuntimeFiles) error {
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) []CanaryInstallIdentity {
 	var identities []CanaryInstallIdentity
+	installHost, err := installFixtureHost()
+	if err != nil {
+		addCheck("install-fixture-host", false, err.Error())
+		return nil
+	}
 	hosts := host.InstallableNames()
 	canaries := make([]struct {
 		host    string
@@ -874,12 +895,12 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		candidateBase := filepath.Base(filepath.Clean(candidateExecutable))
 		if executableErr == nil && candidateBase == nativeBinaryName() && canonicalRegistryPath(candidateExecutable) != canonicalRegistryPath(launcher) {
 			candidateProject := filepath.Join(project, "candidate-must-not-install")
-			candidateInstall := exec.Command(candidateExecutable, "install", "--source", releaseRoot, "--host", "claude", "--scope", "project", "--project", candidateProject, "--binary-target", candidateExecutable, "--force")
+			candidateInstall := exec.Command(candidateExecutable, "install", "--source", releaseRoot, "--host", installHost.InstallName, "--scope", "project", "--project", candidateProject, "--binary-target", candidateExecutable, "--force")
 			candidateInstall.Env = stableEnv
 			if output, candidateErr := candidateInstall.CombinedOutput(); candidateErr == nil {
 				addCheck(tc.name+"-candidate-install-fenced", false, "candidate binary unexpectedly installed runtime")
 				continue
-			} else if exists(filepath.Join(candidateProject, ".claude", "skills", "formal-gates")) {
+			} else if exists(filepath.Join(candidateProject, filepath.FromSlash(installHost.Paths.ProjectBase), "formal-gates")) {
 				addCheck(tc.name+"-candidate-install-fenced", false, fmt.Sprintf("candidate rejection left a target: %s", strings.TrimSpace(string(output))))
 				continue
 			}
@@ -921,12 +942,12 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name+"-candidate-workflow-fenced", true, "candidate binary could not drive the registered target")
 		}
 		faultProject := filepath.Join(project, "fault-recovery")
-		faultCommand := exec.Command(launcher, "install", "--source", releaseRoot, "--host", "claude", "--scope", "project", "--project", faultProject, "--binary-target", launcher, "--force")
+		faultCommand := exec.Command(launcher, "install", "--source", releaseRoot, "--host", installHost.InstallName, "--scope", "project", "--project", faultProject, "--binary-target", launcher, "--force")
 		faultCommand.Env = append(stableEnv, "FORMAL_GATES_INSTALL_FAULT=post-switch-smoke")
 		if output, faultErr := faultCommand.CombinedOutput(); faultErr == nil {
 			addCheck(tc.name+"-installed-binary-fault-recovery", false, "post-switch smoke fault unexpectedly succeeded")
 			continue
-		} else if exists(filepath.Join(faultProject, ".claude", "skills", "formal-gates")) {
+		} else if exists(filepath.Join(faultProject, filepath.FromSlash(installHost.Paths.ProjectBase), "formal-gates")) {
 			addCheck(tc.name+"-installed-binary-fault-recovery", false, fmt.Sprintf("fault left a candidate target: %s", strings.TrimSpace(string(output))))
 			continue
 		}

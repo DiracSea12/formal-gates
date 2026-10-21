@@ -36,6 +36,11 @@ import (
 
 func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facade.WorkerMaterial, *codexScenario, string) {
 	t.Helper()
+	return engineNativeFixtureWith(t, len(installed) > 0 && installed[0], nil)
+}
+
+func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*facade.Facade, facade.WorkerMaterial, *codexScenario, string) {
+	t.Helper()
 	s := newCodexScenario(t)
 	s.runID = "native-execution"
 	project := s.workspace
@@ -101,7 +106,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 		t.Fatal(err)
 	}
 	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
-	if len(installed) > 0 && installed[0] {
+	if installed {
 		candidate := t.TempDir()
 		inventory, err := validate.PackageReceipt(source)
 		if err != nil {
@@ -156,6 +161,9 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	if _, err := settings.EditConfiguration(project, s.home, "project", "命令", nil, func(configuration *settings.Configuration) error {
 		gates := []string{"implementation-quality-gate"}
 		configuration.Gates = &gates
+		if len(qaModes) > 0 {
+			configuration.QAModes = slices.Clone(qaModes)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -165,7 +173,7 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 	}
 	c := engineCanary{t: t, doc: []byte(document)}
 	var f *facade.Facade
-	if len(installed) > 0 && installed[0] {
+	if installed {
 		started, startErr := confirmInstalledFixtureStart(t, s.command(binary, "workflow", "serve"), project, document)
 		if startErr != nil {
 			t.Fatalf("original installed start through the simulated MCP host: %v", startErr)
@@ -1695,7 +1703,8 @@ func TestNativeStartEvidenceUsesActualAcknowledgement(t *testing.T) {
 
 func TestWorkflowConsumesReleasedChildAndShowsOriginalPlan(t *testing.T) {
 	t.Parallel()
-	f, _, s, binary := engineNativeFixture(t, true)
+	// Merge QA exists only while a QA mode is enabled, so this split scenario enables blackbox to keep its integration QA duty.
+	f, _, s, binary := engineNativeFixtureWith(t, true, []string{"blackbox"})
 	plan := stageNativeReviews(t, f, s, "core", "tooling", "master-merge")
 	run, err := f.Show()
 	if err != nil || !reflect.DeepEqual(run.Review.ReadinessProposal, plan) {

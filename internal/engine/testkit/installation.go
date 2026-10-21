@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/host"
 )
 
 // ShortRoot keeps native worktree paths independent of test names.
@@ -42,7 +43,7 @@ func Installation(t testing.TB, root, recordID, packageDigest, provider string) 
 	}
 	canonical := map[string]string{}
 	for key, field := range map[string]string{"target": "target", "launcher": "launcherPath", "projectRoot": "projectRoot", "stateRoot": "stateRoot", "resourceRoot": "resourceRoot", "runtimeSibling": "runtimeSibling"} {
-		canonical[key] = record[field].(string)
+		canonical[key] = canonicalInstallPath(record[field].(string))
 	}
 	record["canonicalPaths"] = canonical
 	for path, value := range map[string]any{
@@ -65,9 +66,34 @@ func Installation(t testing.TB, root, recordID, packageDigest, provider string) 
 	return
 }
 
+// canonicalInstallPath resolves aliases in the nearest existing ancestor: the
+// fixture's target paths do not exist yet, while its registry record must carry
+// the canonical roots an installer writes for the same layout.
+func canonicalInstallPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	abs = filepath.Clean(abs)
+	for current := abs; ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			rel, err := filepath.Rel(current, abs)
+			if err != nil || rel == "." {
+				return filepath.Clean(resolved)
+			}
+			return filepath.Join(resolved, rel)
+		}
+		if filepath.Dir(current) == current {
+			return abs
+		}
+	}
+}
+
 // ConfigureNativePaths isolates path-freezing scenarios from installed model
-// hosts. Native host arguments fail against the Go executable; transport tests
-// provide their own protocol peers instead.
+// hosts: each platform binds the Go executable into its own configuration
+// fields, so a path-only freeze resolves without an installed host. Native host
+// arguments fail against the Go executable; transport tests provide their own
+// protocol peers instead.
 func ConfigureNativePaths(t testing.TB, root string, providers ...string) {
 	t.Helper()
 	executable, err := exec.LookPath("go")
@@ -85,20 +111,20 @@ func ConfigureNativePaths(t testing.TB, root string, providers ...string) {
 		t.Fatal(err)
 	}
 	for _, provider := range providers {
-		switch provider {
-		case "claude", "claude-code":
-			values["claudeExecutable"], values["claudeHome"] = executable, t.TempDir()
-		case "codex":
-			values["codexExecutable"], values["codexHome"] = executable, t.TempDir()
-		case "zcode":
-			home := t.TempDir()
-			script := filepath.Join(home, "unavailable.cjs")
-			if err := os.WriteFile(script, []byte(`throw new Error("path-only fixture cannot start a model host");`), 0600); err != nil {
-				t.Fatal(err)
-			}
-			values["zcodeExecutable"], values["zcodeScript"], values["zcodeHome"] = executable, script, home
-		default:
-			t.Fatalf("unsupported path fixture provider %q", provider)
+		adapter, err := host.LookupAdapter(provider)
+		if err != nil {
+			t.Fatalf("native path fixture %q: %v", provider, err)
+		}
+		fixture, ok := adapter.(host.NativeFixtureProvider)
+		if !ok {
+			t.Fatalf("native path fixture %q is not a registered platform", provider)
+		}
+		native, err := fixture.FixtureNativePaths(host.NativeFixture{Executable: executable, ScriptDir: t.TempDir(), Home: t.TempDir()})
+		if err != nil {
+			t.Fatalf("native path fixture %q: %v", provider, err)
+		}
+		for field, value := range native {
+			values[field] = value
 		}
 	}
 	data, err = json.Marshal(values)

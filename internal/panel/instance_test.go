@@ -49,9 +49,25 @@ func instanceClient(t *testing.T, instance Instance, method, path, body string) 
 }
 
 func TestPanelServiceSingletonOwnership(t *testing.T) {
+	// The window assertions below need a managed browser and a desktop
+	// session.
+	if _, err := FindBrowser(); err != nil {
+		t.Skipf("panel window unavailable: %v", err)
+	}
 	home := panelHome(t)
 	root := t.TempDir()
 	ctx := context.Background()
+	// The sweep revalidates every open intake window against its candidate, so
+	// both windows need a live candidate file behind the path.
+	firstIntake := intakeFixture(t, root)
+	otherIntake := filepath.Join(root, "other-intake.json")
+	body, err := os.ReadFile(firstIntake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherIntake, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	owner, err := PrepareService(ctx, Backend{Root: root, Home: home})
 	if err != nil {
@@ -77,18 +93,18 @@ func TestPanelServiceSingletonOwnership(t *testing.T) {
 	}
 
 	// Same intake reuses its window; a different intake opens a second one.
-	first, err := delegate.OpenWindow(ctx, "intake-a.json")
+	first, err := delegate.OpenWindow(ctx, firstIntake)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := delegate.OpenWindow(ctx, "intake-a.json")
+	again, err := delegate.OpenWindow(ctx, firstIntake)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !again.Reused || again.Window != first.Window {
 		t.Fatalf("same intake did not reuse its window: %+v then %+v", first, again)
 	}
-	second, err := delegate.OpenWindow(ctx, "intake-b.json")
+	second, err := delegate.OpenWindow(ctx, otherIntake)
 	if err != nil {
 		t.Fatal(err)
 	}

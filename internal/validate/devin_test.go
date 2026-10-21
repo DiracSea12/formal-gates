@@ -110,7 +110,7 @@ func TestDevinInstallationTransactions(t *testing.T) {
 				t.Fatal(err)
 			}
 			server := control["mcpServers"].(map[string]any)["formal-gates"]
-			want := map[string]any{"command": filepath.ToSlash(options.BinaryTarget), "args": []any{"workflow", "serve", "--package-root", filepath.ToSlash(target)}}
+			want := map[string]any{"command": filepath.ToSlash(stableLauncherPath(options.BinaryTarget)), "args": []any{"workflow", "serve", "--package-root", filepath.ToSlash(target)}}
 			if !reflect.DeepEqual(server, want) {
 				t.Fatalf("not native stdio configuration: %#v", server)
 			}

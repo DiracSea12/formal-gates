@@ -379,6 +379,8 @@ func TestDriveObservesClaimedWorkerDeath(t *testing.T) {
 							t.Fatal(err)
 						}
 						write("process.json", map[string]any{"pid": process.Process.Pid, "pgid": process.Process.Pid, "started_at": float64(started.UnixNano()) / 1e9, "request_digest": digest})
+						// The fixture has no separate native wrapper; the claimed process group is its child record.
+						write("native-process.json", map[string]any{"pid": process.Process.Pid, "pgid": process.Process.Pid})
 						release()
 						if !harness.NativeJobAlive(directory) {
 							t.Fatal("fixture owner does not match its live process")

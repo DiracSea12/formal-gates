@@ -57,12 +57,6 @@ var requiredDirs = []string{
 	"definitions",
 }
 
-var explanationOnlyHosts = []string{
-	"Gemini",
-	"OpenCode",
-	"Windsurf",
-}
-
 var knownManifestParts = []string{
 	"SKILL.md",
 	"README.md",
@@ -589,18 +583,19 @@ func manifestHostTargetNames() map[string]string {
 	return names
 }
 
-// requiredManifestHosts derives installable host entries from the shared
-// registry and appends the explanation-only support entries that have no
-// installer descriptor. Adding an installable host therefore updates one
-// registry instead of a second package-validation list.
+// requiredManifestHosts derives every manifest host entry from the shared
+// platform layer: installable platforms contribute their manifest name, then
+// platforms that only share readable guidance contribute theirs. Adding a
+// platform therefore updates one registry instead of a second
+// package-validation list.
 func requiredManifestHosts() []string {
-	names := make([]string, 0, len(host.All())+len(explanationOnlyHosts))
+	var names []string
 	for _, descriptor := range host.All() {
 		if descriptor.Installable && descriptor.ManifestName != "" {
 			names = append(names, descriptor.ManifestName)
 		}
 	}
-	return append(names, explanationOnlyHosts...)
+	return append(names, host.ManifestOnlyNames()...)
 }
 
 // unregisteredManifestInstallHosts returns the manifest host names the

@@ -591,7 +591,10 @@ func TestDevinExecuteResumeUnavailable(t *testing.T) {
 // guessed session state.
 func TestDevinExecuteStartupTimeout(t *testing.T) {
 	original := devinStartupTimeout
-	devinStartupTimeout = 200 * time.Millisecond
+	// The budget must outlast the peer's scripted initialize round-trip: a
+	// shorter one is lost to CI scheduling and times out on initialize
+	// instead of the silent session/new request.
+	devinStartupTimeout = 2 * time.Second
 	t.Cleanup(func() { devinStartupTimeout = original })
 	stepsFor := func(workspace, directory string) []peerStep {
 		return []peerStep{

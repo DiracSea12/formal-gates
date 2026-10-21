@@ -82,7 +82,10 @@ func domDriverMiddleware(t *testing.T, ready chan<- struct{}) func(http.Handler)
 func runDOM(t *testing.T, browser, url string, args ...string) string {
 	t.Helper()
 	profile := t.TempDir()
-	cmdArgs := append([]string{"--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+	// CI Linux runners restrict unprivileged user namespaces, so the headless
+	// test browser runs without the OS sandbox; it only ever loads the locally
+	// served test page.
+	cmdArgs := append([]string{"--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-extensions",
 		"--user-data-dir=" + profile, "--virtual-time-budget=240000", "--dump-dom"}, args...)
 	cmdArgs = append(cmdArgs, url)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -345,7 +348,8 @@ func TestPanelDOMDesktopScreenshot(t *testing.T) {
 	profile := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, browser, "--headless=new", "--disable-gpu", "--user-data-dir="+profile,
+	// Same headless-browser constraint as runDOM.
+	cmd := exec.CommandContext(ctx, browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--user-data-dir="+profile,
 		"--window-size=1440,900", "--virtual-time-budget=15000", "--screenshot="+shot, window.URL)
 	if body, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("screenshot: %v\n%.1000s", err, body)

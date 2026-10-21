@@ -15,6 +15,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/harness"
+	"formal-gates/internal/host"
 	"formal-gates/internal/prompts"
 	"formal-gates/internal/settings"
 	"formal-gates/internal/validate"
@@ -749,6 +750,10 @@ func installConfirmationHost(t *testing.T, root, hostName string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	original := os.Args[0]
 	os.Args[0] = filepath.Join(home, ".local", "bin", installTestBinaryName())
 	t.Cleanup(func() { os.Args[0] = original })
@@ -760,6 +765,43 @@ func installConfirmationHost(t *testing.T, root, hostName string) string {
 	target := report.Targets[0].TargetPath
 	option.Bootstrap = true
 	if _, err := validate.Install(option); err != nil {
+		t.Fatal(err)
+	}
+	// Path freezing resolves the installed host's native executable from its own
+	// configuration fields; the test binary is that executable so the fixture
+	// does not depend on an installed host CLI.
+	adapter, err := host.LookupAdapter(hostName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, ok := adapter.(host.NativeFixtureProvider)
+	if !ok {
+		t.Fatalf("native path fixture unavailable for %q", hostName)
+	}
+	native, err := fixture.FixtureNativePaths(host.NativeFixture{Executable: executable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".gates", "config.json")
+	values := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &values); err != nil {
+			t.Fatal(err)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for field, value := range native {
+		values[field] = value
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return target

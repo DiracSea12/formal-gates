@@ -95,7 +95,7 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".gates"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".gates", "config.json"), []byte(`{"panelIdleTimeout":3}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".gates", "config.json"), []byte(`{"panelIdleTimeout":15}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	handle, err := PrepareService(context.Background(), Backend{Root: root, Home: home})

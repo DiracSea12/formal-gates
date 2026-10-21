@@ -37,10 +37,8 @@ func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	command := exec.Command(candidate, "install", "--source", t.TempDir(), "--host", "claude", "--scope", "project", "--project", project, "--binary-target", candidate, "--skip-hooks", "--force")
-	command.Env = environmentWithOverrides(os.Environ(), map[string]string{
+	command.Env = environmentWithOverrides(hostFilteredEnv(nil), map[string]string{
 		"HOME": home, "USERPROFILE": home, "GOCACHE": t.TempDir(),
-		"AI_AGENT": "", "CLAUDE_CODE_ENTRYPOINT": "", "CODEX_HOME": "", "CODEX_CLI_PATH": "",
-		"CURSOR_TRACE_ID": "", "CURSOR_RUNTIME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
 	})
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL") || !strings.Contains(string(output), "is not registered") {

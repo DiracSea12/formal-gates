@@ -124,8 +124,14 @@ func (b Browser) LaunchBrowser(url, profileDir string) (*exec.Cmd, error) {
 	}
 	switch b.Kind {
 	case "app":
+		// The served page's heartbeat timer keeps the window alive, so its
+		// timers and renderer must keep running while the window is occluded
+		// or behind another window.
 		return exec.Command(b.Path, "--app="+url, "--user-data-dir="+profileDir,
-			"--no-first-run", "--no-default-browser-check"), nil
+			"--no-first-run", "--no-default-browser-check",
+			"--disable-background-timer-throttling",
+			"--disable-backgrounding-occluded-windows",
+			"--disable-renderer-backgrounding"), nil
 	case "firefox":
 		return exec.Command(b.Path, "--no-remote", "--profile", profileDir, "--new-window", url), nil
 	default:

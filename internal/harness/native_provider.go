@@ -10,6 +10,7 @@ import (
 // nativeImplementation is the execution boundary for one native provider.
 type nativeImplementation struct {
 	resolvePaths      func(map[string]string, map[string]string) error
+	fixturePaths      func(host.NativeFixture) (map[string]string, error)
 	cleanup           func(string) error
 	captureConfigured func(settings.Values) (map[string]any, error)
 	capture           func() (map[string]any, error)
@@ -27,13 +28,13 @@ func init() {
 		provider string
 		nativeImplementation
 	}{
-		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, captureConfigured: dshConfiguredBinding, verifySource: dshVerifySource, verifyStart: acpVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
-		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, captureConfigured: zcodeConfiguredBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
-		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, captureConfigured: claudeConfiguredBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
-		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, captureConfigured: codexConfiguredBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
-		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, cleanup: workbuddyInvocationCleanup, captureConfigured: workbuddyConfiguredBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
-		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, captureConfigured: cursorConfiguredBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
-		{"devin", nativeImplementation{resolvePaths: devinResolvePaths, captureConfigured: devinConfiguredBinding, verifySource: devinVerifySource, verifyStart: acpVerifyStart, reconcile: devinReconcile, execute: devinExecute}},
+		{"dsh", nativeImplementation{resolvePaths: dshResolvePaths, fixturePaths: dshFixturePaths, captureConfigured: dshConfiguredBinding, verifySource: dshVerifySource, verifyStart: acpVerifyStart, reconcile: dshReconcile, execute: dshExecute}},
+		{"zcode", nativeImplementation{resolvePaths: zcodeResolvePaths, fixturePaths: zcodeFixturePaths, captureConfigured: zcodeConfiguredBinding, verifySource: zcodeVerifySource, verifyStart: zcodeVerifyStart, reconcile: zcodeReconcile, execute: zcodeExecute}},
+		{"claude", nativeImplementation{resolvePaths: claudeResolvePaths, fixturePaths: claudeFixturePaths, captureConfigured: claudeConfiguredBinding, verifySource: claudeVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: claudeReconcile, execute: claudeExecute}},
+		{"codex", nativeImplementation{resolvePaths: codexResolvePaths, fixturePaths: codexFixturePaths, captureConfigured: codexConfiguredBinding, verifySource: codexVerifySource, verifyStart: codexCheckConfiguration, reconcile: codexReconcile, execute: codexExecute}},
+		{"workbuddy", nativeImplementation{resolvePaths: workbuddyResolvePaths, fixturePaths: workbuddyFixturePaths, cleanup: workbuddyInvocationCleanup, captureConfigured: workbuddyConfiguredBinding, verifySource: workbuddyVerifySource, verifyStart: nativeInitAcknowledgement, reconcile: workbuddyReconcile, execute: workbuddyExecute}},
+		{"cursor", nativeImplementation{resolvePaths: cursorResolvePaths, fixturePaths: cursorFixturePaths, captureConfigured: cursorConfiguredBinding, verifySource: cursorVerifySource, verifyStart: nativeInitAcknowledgement, inheritInvocation: cursorInheritInvocation, reconcile: cursorReconcile, execute: cursorExecute}},
+		{"devin", nativeImplementation{resolvePaths: devinResolvePaths, fixturePaths: devinFixturePaths, captureConfigured: devinConfiguredBinding, verifySource: devinVerifySource, verifyStart: acpVerifyStart, reconcile: devinReconcile, execute: devinExecute}},
 	}
 
 	for _, entry := range platforms {
@@ -75,6 +76,13 @@ func (p *nativePlatform) ResolveNativePaths(native, sources map[string]string) e
 		return fmt.Errorf("native path resolver unavailable for %s", p.ID)
 	}
 	return p.implementation.resolvePaths(native, sources)
+}
+
+func (p *nativePlatform) FixtureNativePaths(fixture host.NativeFixture) (map[string]string, error) {
+	if p.implementation.fixturePaths == nil {
+		return nil, fmt.Errorf("native fixture binding unavailable for %s", p.ID)
+	}
+	return p.implementation.fixturePaths(fixture)
 }
 
 type nativeCapability interface {

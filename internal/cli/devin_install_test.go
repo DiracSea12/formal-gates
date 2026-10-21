@@ -10,16 +10,21 @@ import (
 	"testing"
 
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/host"
 )
 
 func TestDevinInstallHelpIncludesExistingHosts(t *testing.T) {
+	hosts := host.InstallableNames()
+	if len(hosts) == 0 {
+		t.Fatal("installable host list is empty")
+	}
 	for _, command := range []string{"install", "uninstall"} {
 		var stdout, stderr bytes.Buffer
 		if code := Run("formal-gates", []string{command, "--help"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 			t.Fatalf("%s help failed: %d %s", command, code, stderr.String())
 		}
 		text := stdout.String() + stderr.String()
-		for _, name := range []string{"claude", "codex", "cursor", "dsh", "zcode", "workbuddy", "devin"} {
+		for _, name := range hosts {
 			if !strings.Contains(text, name) {
 				t.Fatalf("%s help lost host %s: %s", command, name, text)
 			}
@@ -44,6 +49,13 @@ func TestRunInstallDevinNativeProjectAndGlobal(t *testing.T) {
 				base, rules = filepath.Join(project, ".devin"), filepath.Join(project, "AGENTS.md")
 			}
 			launcher := filepath.Join(home, ".local", "bin", installTestBinaryName())
+			// The installer records the stable launcher under its alias-resolved
+			// parent while the installed package keeps the project's spelling.
+			canonicalHome, err := filepath.EvalSymlinks(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installedLauncher := filepath.Join(canonicalHome, ".local", "bin", installTestBinaryName())
 			target := filepath.Join(base, "skills", "formal-gates")
 			mcp := filepath.Join(base, "mcp_config.json")
 			mustWriteCLI(t, mcp, `{"custom":true,"mcpServers":{"other":{"command":"other"}}}`+"\n")
@@ -66,7 +78,7 @@ func TestRunInstallDevinNativeProjectAndGlobal(t *testing.T) {
 				if err != nil || json.Unmarshal(body, &config) != nil {
 					t.Fatalf("invalid native MCP: %v %s", err, body)
 				}
-				want := map[string]any{"custom": true, "mcpServers": map[string]any{"other": map[string]any{"command": "other"}, "formal-gates": map[string]any{"command": filepath.ToSlash(launcher), "args": []any{"workflow", "serve", "--package-root", filepath.ToSlash(target)}}}}
+				want := map[string]any{"custom": true, "mcpServers": map[string]any{"other": map[string]any{"command": "other"}, "formal-gates": map[string]any{"command": filepath.ToSlash(installedLauncher), "args": []any{"workflow", "serve", "--package-root", filepath.ToSlash(target)}}}}
 				if !reflect.DeepEqual(config, want) {
 					t.Fatalf("native MCP command/shape or unknown fields lost: %s", body)
 				}

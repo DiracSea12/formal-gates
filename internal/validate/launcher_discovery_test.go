@@ -131,8 +131,6 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 		"HOME": home, "USERPROFILE": home,
 		"LAUNCHER_DISCOVERY_ROOT":    root,
 		"LAUNCHER_DISCOVERY_PACKAGE": packageRoot,
-		"AI_AGENT":                   "", "CLAUDE_CODE_ENTRYPOINT": "", "CODEX_HOME": "", "CODEX_CLI_PATH": "",
-		"CURSOR_TRACE_ID": "", "CURSOR_RUNTIME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
 	}
 	for _, invocation := range []struct {
 		mode       string
@@ -152,7 +150,7 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 			}
 			command := exec.Command(invocation.executable, "workflow", "serve")
 			command.Dir = root
-			command.Env = launcherChildEnvironment(environment)
+			command.Env = testkit.HostFilteredEnvironment(launcherChildEnvironment(environment))
 			displayedID := ""
 			output, childErr := launcherConfirmStart(t, command, root, intake, func(original map[string]any) {
 				materials, ok := original["materials"].(map[string]any)

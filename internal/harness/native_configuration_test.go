@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 )
 
@@ -35,14 +36,17 @@ func TestConfiguredPlatformPathsStayScopedToTheirOwnBinding(t *testing.T) {
 			if err := os.Mkdir(home, 0700); err != nil {
 				t.Fatal(err)
 			}
-			options := map[string]string{provider + "Executable": executable}
-			if provider != "dsh" {
-				options[provider+"Home"] = home
+			adapter, err := host.LookupAdapter(provider)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if provider == "zcode" {
-				script := filepath.Join(root, "server.cjs")
-				os.WriteFile(script, []byte("native source"), 0600)
-				options["zcodeScript"] = script
+			fixture, ok := adapter.(host.NativeFixtureProvider)
+			if !ok {
+				t.Fatalf("native path fixture unavailable for %q", provider)
+			}
+			options, err := fixture.FixtureNativePaths(host.NativeFixture{Executable: executable, ScriptDir: root, Home: home})
+			if err != nil {
+				t.Fatal(err)
 			}
 			originalHome := os.Getenv("HOME")
 			frozen, err := settings.Freeze(provider, settings.Effective{Values: settings.Values{Native: options}})

@@ -187,6 +187,15 @@ var descriptors = []*Descriptor{
 	},
 }
 
+// manifestOnlyHosts lists the platforms whose packages share the readable
+// guidance only; they have no installer or execution descriptor, but the
+// payload manifest names them as explanation-level support entries.
+var manifestOnlyHosts = []string{"Gemini", "OpenCode", "Windsurf"}
+
+// ManifestOnlyNames returns the manifest names of platforms that share the
+// readable guidance without an installer.
+func ManifestOnlyNames() []string { return append([]string(nil), manifestOnlyHosts...) }
+
 type Adapter interface{ HostDescriptor() *Descriptor }
 
 // NativePathResolver is the shared contract for each platform's own native
@@ -194,6 +203,22 @@ type Adapter interface{ HostDescriptor() *Descriptor }
 // paths and records where each value came from.
 type NativePathResolver interface {
 	ResolveNativePaths(native, sources map[string]string) error
+}
+
+// NativeFixture is the path-only value set canary and test fixtures supply so a
+// platform's native configuration resolves without an installed host.
+type NativeFixture struct {
+	Executable string
+	ScriptDir  string
+	Home       string
+}
+
+// NativeFixtureProvider is implemented by platform adapters that resolve native
+// paths. The platform owns which of its own configuration fields the fixture
+// binds (and any file its resolver needs); common layers only provide the
+// values above and never name a platform or one of its fields.
+type NativeFixtureProvider interface {
+	FixtureNativePaths(NativeFixture) (map[string]string, error)
 }
 
 func (d *Descriptor) HostDescriptor() *Descriptor { return d }

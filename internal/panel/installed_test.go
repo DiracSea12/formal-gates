@@ -2,7 +2,6 @@ package panel
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"formal-gates/internal/host"
@@ -20,16 +19,35 @@ func executionPlatformNames() []string {
 	return platforms
 }
 
+// nativeFixtureValues binds one platform's own native configuration fields so
+// its resolver sees a complete path-only configuration.
+func nativeFixtureValues(t *testing.T, provider string, fixture host.NativeFixture) map[string]string {
+	t.Helper()
+	adapter, err := host.LookupAdapter(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binder, ok := adapter.(host.NativeFixtureProvider)
+	if !ok {
+		t.Fatalf("native path fixture unavailable for %q", provider)
+	}
+	values, err := binder.FixtureNativePaths(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return values
+}
+
 func TestInstalledExecutablesFollowPATHVerdicts(t *testing.T) {
 	platforms := executionPlatformNames()
 	if len(platforms) == 0 {
 		t.Fatal("no execution platforms registered")
 	}
-	native := map[string]string{
-		// A configured absolute executable path is its own installed proof;
-		// a configured name missing from PATH is not.
-		"devinExecutable": os.Args[0],
-		"codexExecutable": "formal-gates-definitely-missing-executable-name",
+	// A configured absolute executable path is its own installed proof; a
+	// configured name missing from PATH is not.
+	native := nativeFixtureValues(t, "devin", host.NativeFixture{Executable: os.Args[0]})
+	for field, value := range nativeFixtureValues(t, "codex", host.NativeFixture{Executable: "formal-gates-definitely-missing-executable-name"}) {
+		native[field] = value
 	}
 	installed := installedExecutables(native, platforms)
 	if !installed["devin"] {
@@ -50,19 +68,19 @@ func TestInstalledExecutablesFollowPATHVerdicts(t *testing.T) {
 // dispatch resolution rather than a bare PATH lookup.
 func TestZCodeInstallationFollowsItsDispatchResolution(t *testing.T) {
 	platforms := executionPlatformNames()
-	native := map[string]string{
-		// Node resolves through PATH semantics too; an absolute stand-in keeps
-		// the test independent of the machine's own node install.
-		"zcodeExecutable": os.Args[0],
-		"zcodeScript":     filepath.Join(t.TempDir(), "app-server.cjs"),
-	}
-	if err := os.WriteFile(native["zcodeScript"], []byte("// stand-in"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// The platform materializes the script its dispatch resolution requires,
+	// and an absolute stand-in executable keeps the test independent of the
+	// machine's own node install.
+	scriptDir := t.TempDir()
+	native := nativeFixtureValues(t, "zcode", host.NativeFixture{Executable: os.Args[0], ScriptDir: scriptDir})
 	if installed := installedExecutables(native, platforms); !installed["zcode"] {
 		t.Fatalf("zcode dispatch resolution was ignored: %+v", installed)
 	}
-	native["zcodeScript"] = filepath.Join(t.TempDir(), "missing-app-server.cjs")
+	// The same bound values without the platform's dispatch script: its own
+	// resolver reports the platform unavailable.
+	if err := os.RemoveAll(scriptDir); err != nil {
+		t.Fatal(err)
+	}
 	if installed := installedExecutables(native, platforms); installed["zcode"] {
 		t.Fatal("zcode reported installed while its dispatch script is absent")
 	}

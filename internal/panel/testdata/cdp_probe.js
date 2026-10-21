@@ -10,8 +10,10 @@ const fs = require("fs"), path = require("path"), os = require("os");
 const [bin, url, w = "390", h = "844", shotPath = ""] = process.argv.slice(2);
 const width = parseInt(w), height = parseInt(h);
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "cdp-"));
+// CI Linux runners restrict unprivileged user namespaces, so the headless
+// browser runs without the OS sandbox; it only loads the local test page.
 const proc = spawn(bin, [
-	"--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+	"--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-extensions",
 	"--window-size=" + width + "," + height,
 	"--remote-debugging-port=0", "--user-data-dir=" + profile, "about:blank",
 ], { stdio: "ignore" });

@@ -198,7 +198,19 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 		t.Fatalf("panel choice: %+v", result)
 	}
 	open, _, err := service.WindowStatus(ctx, window.ID)
-	if err != nil || open {
+	if err != nil {
+		// The service stops once its last window closes, so this status read
+		// can lose to that shutdown; only a stopped service with no shutdown
+		// error proves the window closed, any other status failure still fails.
+		select {
+		case <-serviceStopped:
+			if serviceErr != nil {
+				t.Fatalf("last-window service shutdown: %v", serviceErr)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("conversation left its panel open: %v %v", open, err)
+		}
+	} else if open {
 		t.Fatalf("conversation left its panel open: %v %v", open, err)
 	}
 	waitSelectionOutput(t, &out, `selected`)

@@ -65,10 +65,9 @@ jobs:
         run: |
           $tools = Join-Path $env:RUNNER_TEMP "formal-gates-vcs"
           New-Item -ItemType Directory -Force -Path $tools | Out-Null
-          $svnArchive = Join-Path $env:RUNNER_TEMP "sliksvn.zip"
-          Invoke-WebRequest https://sliksvn.com/download/slik-subversion-1-14-5-x64/ -OutFile $svnArchive
-          Expand-Archive -Path $svnArchive -DestinationPath $tools
-          $svnInstaller = Join-Path $tools "Slik-Subversion-1.14.5-x64.msi"
+          # The vendor publishes the versioned MSI under /pub/.
+          $svnInstaller = Join-Path $env:RUNNER_TEMP "Slik-Subversion-1.14.5-x64.msi"
+          Invoke-WebRequest https://sliksvn.com/pub/Slik-Subversion-1.14.5-x64.msi -OutFile $svnInstaller
           $installation = Start-Process msiexec.exe -ArgumentList "/i `"$svnInstaller`" /qn /norestart ADDLOCAL=ALL" -Wait -PassThru
           if ($installation.ExitCode -notin @(0, 3010)) { throw "Subversion installer exited with $($installation.ExitCode)" }
           Invoke-WebRequest https://cdist2.perforce.com/perforce/r25.2/bin.${{ matrix.perforce }}/p4.exe -OutFile (Join-Path $tools "p4.exe")

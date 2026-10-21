@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/validate"
 )
 
@@ -93,9 +94,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 					t.Helper()
 					cmd := exec.Command(binary, args...)
 					cmd.Dir = project
-					cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home,
-						"AI_AGENT=", "CLAUDE_CODE_ENTRYPOINT=", "CODEX_HOME=", "CODEX_CLI_PATH=",
-						"CURSOR_TRACE_ID=", "CURSOR_RUNTIME=", "DSH_HOME=", "DSH_PROJECT_DIR=")
+					cmd.Env = testkit.HostFilteredEnvironment(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 					output, err := cmd.CombinedOutput()
 					if err != nil {
 						t.Fatalf("installed command %v: %v\n%s", args, err, output)
