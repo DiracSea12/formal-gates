@@ -22,9 +22,13 @@ import (
 )
 
 // panelBrowser locates an installed Chromium-family browser for headless DOM
-// driving; nothing is downloaded.
+// driving; nothing is downloaded. The installed-path order prefers Edge, then
+// Chrome, because Chrome refuses an ephemeral DevTools browser under the
+// redirected USERPROFILE that the DOM fixtures set. The PATH lookup prefers
+// chrome, then msedge, then chromium.
 func panelBrowser(t *testing.T) string {
 	t.Helper()
+	visualPanelAvailable(t)
 	candidates := []string{
 		`C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe`,
 		`C:/Program Files/Google/Chrome/Application/chrome.exe`,
@@ -42,6 +46,24 @@ func panelBrowser(t *testing.T) string {
 	}
 	t.Skip("no installed chromium browser")
 	return ""
+}
+
+// visualPanelAvailable skips a test that needs a real browser window on hosts
+// without an interactive desktop: headless Linux has no DISPLAY/WAYLAND
+// session, and the hosted CI runners never present the managed browser page.
+// Developers' desktops run these tests by default; FORMAL_GATES_VISUAL_PANEL=1
+// forces them where they are otherwise skipped.
+func visualPanelAvailable(t *testing.T) {
+	t.Helper()
+	if os.Getenv("FORMAL_GATES_VISUAL_PANEL") == "1" {
+		return
+	}
+	if !desktopAvailable() {
+		t.Skip("no desktop session for a visual panel (DISPLAY and WAYLAND_DISPLAY are unset)")
+	}
+	if os.Getenv("CI") != "" {
+		t.Skip("hosted CI runner has no interactive desktop for a visual panel; set FORMAL_GATES_VISUAL_PANEL=1 to force")
+	}
 }
 
 // domDriverMiddleware appends the testdata driver to the served app.js and
@@ -168,6 +190,39 @@ func startDomServer(t *testing.T, b Backend, ready chan struct{}, wraps ...func(
 	return server, cancel
 }
 
+// keepDomWindowAlive posts the page's own heartbeat for one window until the
+// test ends, so a browser that is still cold-starting on a loaded runner cannot
+// outlast heartbeatGrace before the page's first heartbeat. It adds no UI
+// evidence: the runtime idle timeout still keys off real activity
+// (activity=false), and every assertion still comes from the driver's
+// RESULT/END block and the server state the page wrote.
+func keepDomWindowAlive(t *testing.T, server *Server, windowID string) {
+	t.Helper()
+	host := server.Addr()
+	body := fmt.Sprintf(`{"window":%q,"activity":false}`, windowID)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+host+"/api/window/heartbeat", strings.NewReader(body))
+			if err == nil {
+				request.Header.Set("Origin", "http://"+host)
+				request.Header.Set("X-Formal-Gates-Token", server.token)
+				if response, err := http.DefaultClient.Do(request); err == nil {
+					response.Body.Close()
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func TestPanelDOMLibraryFlows(t *testing.T) {
 	browser := panelBrowser(t)
 	home := panelHome(t)
@@ -184,6 +239,7 @@ func TestPanelDOMLibraryFlows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL)
 	t.Logf("window result after run: %+v", window.Result())
 	domResults(t, dump)
@@ -217,6 +273,7 @@ func TestPanelDOMSupersededIntake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	// Flip the candidate stale once the intake page is live; the sweep must
 	// supersede the waiter and the page's own window poll must surface it.
 	go func() {
@@ -289,6 +346,7 @@ func TestPanelDOMIntakeIgnoresExistingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	// Once the page has saved and re-dirtied its draft, supersede the
 	// candidate so the window must drop back to the real run context.
 	go func() {
@@ -343,6 +401,7 @@ func TestPanelDOMMobileBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := cdpDOM(t, browser, window.URL+"&probe=bounds&wantW=390&wantH=844", 390, 844)
 	domResults(t, dump)
 }
@@ -356,6 +415,7 @@ func TestPanelDOMDesktopScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	out := os.Getenv("PANEL_SHOT_DIR")
 	if out == "" {
 		out = t.TempDir()
@@ -390,6 +450,7 @@ func TestPanelDOMQAToggles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=qa")
 	domResults(t, dump)
 }
@@ -407,6 +468,7 @@ func TestPanelDOMTwoRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=runs")
 	domResults(t, dump)
 }
@@ -430,6 +492,7 @@ func TestPanelDOMRevisionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	go func() {
 		select {
 		case <-ready:
@@ -467,6 +530,7 @@ func TestPanelDOMSaveCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=savecancel")
 	domResults(t, dump)
 }
@@ -604,6 +668,7 @@ func TestPanelDOMDynamicSelect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	var dump string
 	if os.Getenv("PANEL_DOM_REALTIME") != "" {
 		dump = cdpDOM(t, browser, window.URL+"&probe=execsel", 1440, 900)
@@ -703,6 +768,7 @@ func TestPanelDOMZoomFloorKeepsClickedNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=zoomfit")
 	domResults(t, dump)
 }
@@ -724,6 +790,7 @@ func TestPanelDOMBoundRunsBadge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=boundruns")
 	domResults(t, dump)
 }
@@ -755,6 +822,7 @@ func TestPanelDOMBadConfigRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	go func() {
 		select {
 		case <-ready:
@@ -1088,6 +1156,7 @@ func TestPanelDOMFlowCanvasRendering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=flowcanvas", "--window-size=1440,900")
 	domResults(t, dump)
 }

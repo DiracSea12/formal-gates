@@ -274,37 +274,52 @@ func p4Fixture(t *testing.T) (*Provider, *nativeTestRunner) {
 			t.Skipf("%s unavailable", tool)
 		}
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().String()
-	listener.Close()
 	root := canonicalPath(nativeFixtureDirectory(t))
-	serverRoot := filepath.Join(root, "server")
-	if err = os.MkdirAll(serverRoot, 0755); err != nil {
-		t.Fatal(err)
+	runner := &nativeTestRunner{user: "fixture", client: "main", log: nativeFixtureLog(t)}
+	// A parallel CI package can take the probed port between close and the
+	// bind, and a loaded runner can outlast the readiness budget; each attempt
+	// re-picks a port and gets its own fresh server root, so a lost bind leaves
+	// nothing half-initialized for the next one.
+	var server *exec.Cmd
+	var err error
+	var probeErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		listener, listenErr := net.Listen("tcp", "127.0.0.1:0")
+		if listenErr != nil {
+			t.Fatal(listenErr)
+		}
+		runner.port = listener.Addr().String()
+		listener.Close()
+		serverRoot := filepath.Join(root, fmt.Sprintf("server-%d", attempt))
+		if err = os.MkdirAll(serverRoot, 0755); err != nil {
+			t.Fatal(err)
+		}
+		server = exec.Command("p4d", "-r", serverRoot, "-p", runner.port)
+		server.Stdout, server.Stderr = runner.log, runner.log
+		if err = server.Start(); err != nil {
+			probeErr = err
+		} else {
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+				if _, probeErr = runner.Run(root, "p4", "info"); probeErr == nil {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if probeErr == nil {
+				break
+			}
+		}
+		if server.Process != nil {
+			_ = server.Process.Kill()
+			_ = server.Wait()
+		}
+		t.Logf("p4d attempt %d on %s failed: %v", attempt, runner.port, probeErr)
 	}
-	log := nativeFixtureLog(t)
-	server := exec.Command("p4d", "-r", serverRoot, "-p", port)
-	server.Stdout, server.Stderr = log, log
-	if err = server.Start(); err != nil {
-		t.Fatal(err)
+	if probeErr != nil {
+		body, readErr := os.ReadFile(runner.log.Name())
+		t.Fatalf("private p4d did not start after 5 attempts: address=%s log=%q readError=%v probe=%v\n%s", runner.port, runner.log.Name(), readErr, probeErr, body)
 	}
 	t.Cleanup(func() { _ = server.Process.Kill(); _ = server.Wait() })
-	runner := &nativeTestRunner{port: port, user: "fixture", client: "main", log: log}
-	ready := false
-	for i := 0; i < 50; i++ {
-		if _, err = runner.Run(root, "p4", "info"); err == nil {
-			ready = true
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !ready {
-		body, readErr := os.ReadFile(log.Name())
-		t.Fatalf("private p4d did not start: address=%s pid=%d probe=%v log=%q readError=%v\n%s", port, server.Process.Pid, err, log.Name(), readErr, body)
-	}
 	wc := filepath.Join(root, "main")
 	if err = os.MkdirAll(wc, 0755); err != nil {
 		t.Fatal(err)

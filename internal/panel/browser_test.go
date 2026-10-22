@@ -23,6 +23,7 @@ import (
 // windows on separate profiles, kills the first, and proves the second is
 // untouched — the per-window profile and per-window owned process contract.
 func TestManagedBrowserWindowsAreIndependent(t *testing.T) {
+	visualPanelAvailable(t)
 	browser, err := FindBrowser()
 	if err != nil {
 		t.Skipf("no managed browser on this host: %v", err)
@@ -89,6 +90,7 @@ func processAlive(pid int) bool {
 // idle budget leaves room for a cold browser start and first page load on a
 // loaded CI runner, which must not race the timeout.
 func TestManagedBrowserIdleTimeout(t *testing.T) {
+	visualPanelAvailable(t)
 	browser, err := FindBrowser()
 	if err != nil {
 		t.Skipf("no managed browser on this host: %v", err)
@@ -135,6 +137,40 @@ func TestManagedBrowserIdleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Park the window state in the log at ~3 s and ~10 s, before the 30 s
+	// first-heartbeat grace can close it: the lines distinguish a browser that
+	// never loads from one that dies immediately. Logs only; the budget and the
+	// assertions below are unchanged.
+	diagnosticsCtx, stopDiagnostics := context.WithCancel(context.Background())
+	diagnosticsDone := make(chan struct{})
+	t.Cleanup(func() {
+		stopDiagnostics()
+		<-diagnosticsDone
+	})
+	go func() {
+		defer close(diagnosticsDone)
+		start := time.Now()
+		for _, at := range []time.Duration{3 * time.Second, 10 * time.Second} {
+			select {
+			case <-diagnosticsCtx.Done():
+				return
+			case <-time.After(time.Until(start.Add(at))):
+			}
+			server.mu.Lock()
+			seen := session.seen
+			open := session.open
+			server.mu.Unlock()
+			probeCtx, cancel := context.WithTimeout(diagnosticsCtx, 10*time.Second)
+			count, lines, listErr := browserProcesses(probeCtx, browser.Path)
+			cancel()
+			t.Logf("idle timeout diagnostic at %s: open=%v seen.IsZero=%v browser=%s liveProcesses=%d listErr=%v",
+				at, open, seen.IsZero(), filepath.Base(browser.Path), count, listErr)
+			for _, line := range lines {
+				t.Logf("  %.300s", line)
+			}
+		}
+	}()
 
 	// The served page must actually heartbeat — proof the browser loaded it.
 	deadline := time.Now().Add(60 * time.Second)
@@ -220,27 +256,44 @@ func logIdleTimeoutDiagnostics(t *testing.T, browser Browser, url, profile strin
 	_, profileErr := os.Stat(profile)
 	t.Logf("profile %s: exists=%v err=%v", profile, profileErr == nil, profileErr)
 	base := filepath.Base(browser.Path)
+	count, lines, listErr := browserProcesses(ctx, browser.Path)
+	t.Logf("live processes named %q: %d err=%v", base, count, listErr)
+	for _, line := range lines {
+		t.Logf("  %.600s", line)
+	}
+}
+
+// browserProcesses counts the live processes whose image name is the browser
+// binary and returns a bounded sample of their command lines: tasklist on
+// Windows, ps elsewhere.
+func browserProcesses(ctx context.Context, browserPath string) (int, []string, error) {
+	base := filepath.Base(browserPath)
+	var lines []string
 	if runtime.GOOS == "windows" {
-		out, listErr := exec.CommandContext(ctx, "tasklist", "/FI", "IMAGENAME eq "+base, "/NH").CombinedOutput()
-		t.Logf("processes named %s: %.600s err=%v", base, out, listErr)
-		return
-	}
-	out, listErr := exec.CommandContext(ctx, "ps", "-Ao", "pid,command").CombinedOutput()
-	if listErr != nil {
-		t.Logf("ps -Ao pid,command: %.200s err=%v", out, listErr)
-		return
-	}
-	var matches []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, base) {
-			matches = append(matches, strings.TrimSpace(line))
+		out, err := exec.CommandContext(ctx, "tasklist", "/FI", "IMAGENAME eq "+base, "/NH").CombinedOutput()
+		if err != nil {
+			return 0, nil, fmt.Errorf("tasklist: %.600s: %w", out, err)
+		}
+		// tasklist prints an INFO line instead of rows when nothing matches.
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, base) {
+				lines = append(lines, strings.TrimSpace(line))
+			}
+		}
+	} else {
+		out, err := exec.CommandContext(ctx, "ps", "-Ao", "pid,command").CombinedOutput()
+		if err != nil {
+			return 0, nil, fmt.Errorf("ps -Ao pid,command: %.200s: %w", out, err)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, base) {
+				lines = append(lines, strings.TrimSpace(line))
+			}
 		}
 	}
-	t.Logf("processes whose command names %q: %d", base, len(matches))
-	for i, line := range matches {
-		if i == 5 {
-			break
-		}
-		t.Logf("  %s", line)
+	count := len(lines)
+	if len(lines) > 6 {
+		lines = lines[:6]
 	}
+	return count, lines, nil
 }
