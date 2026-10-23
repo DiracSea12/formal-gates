@@ -1,6 +1,7 @@
 package acceptance_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/prompts"
 )
 
 func nativeWorktreeAddCount(trace string, resource protocol.NativeResource) int {
@@ -207,9 +209,61 @@ func TestInstalledSpikeArtifactsRemainOutsideDelivery(t *testing.T) {
 			}
 			d.develop(commandAction, commandInput)
 			d.drive()
+			catalog, err := prompts.LoadPromptCatalog(d.p.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gateNames []string
+			for _, id := range catalog.RouteCandidates() {
+				if _, found := catalog.Gate(id); found {
+					gateNames = append(gateNames, id)
+				}
+			}
+			expected := d.run.Configuration.SelectedGates(gateNames)
+			var issued, gateActions []string
+			var commandSource string
+			for id, input := range d.run.ValidationInputs {
+				if input.Development != nil && input.Development.Batch.ID == extension.ID {
+					t.Fatal("dependent development was issued before its predecessor gates passed")
+				}
+				if input.Handler != "engine.gate.v3" {
+					continue
+				}
+				if input.Binding.BatchID != command.ID || input.Gate == nil || len(input.Gate.Batches) != 1 || !reflect.DeepEqual(input.Gate.Batches[0], commandInput.Development.Batch) {
+					t.Fatal("development gate lost its exact predecessor batch")
+				}
+				if input.Binding.Candidate == "" || commandSource != "" && commandSource != input.Binding.Candidate {
+					t.Fatal("predecessor gates do not share the exact immutable source")
+				}
+				commandSource = input.Binding.Candidate
+				issued = append(issued, input.Gate.Gate)
+				gateActions = append(gateActions, id)
+			}
+			slices.Sort(expected)
+			slices.Sort(issued)
+			if len(expected) == 0 || !slices.Equal(issued, expected) {
+				t.Fatalf("development gates differ from saved configuration: issued=%v expected=%v", issued, expected)
+			}
+			slices.Sort(gateActions)
+			for _, id := range gateActions {
+				d.business(id, d.gateResult(id, d.run.ValidationInputs[id]))
+			}
+			d.drive()
+			_, commandState := d.p.bindings(t, d.runID, "codex")
 			extensionAction, extensionInput := find(extension.ID)
-			if extensionInput.Workspace.ID != commandInput.Workspace.ID || extensionInput.Workspace.Path != commandInput.Workspace.Path || extensionInput.Development.Dependencies[command.ID].Validation.Development.Completion.Handoff == "" {
-				t.Fatal("ordinary members lost their shared edits or dependency handoff")
+			if extensionInput.Workspace.Source != commandSource || extensionInput.Workspace.Identity != commandSource || extensionInput.Workspace.ID == commandInput.Workspace.ID || extensionInput.Workspace.Path == commandInput.Workspace.Path {
+				t.Fatal("dependent development did not receive the exact validated predecessor source in its own resource")
+			}
+			if !reflect.DeepEqual(extensionInput.Development.Dependencies[command.ID], commandState.Results[commandAction]) || extensionInput.Development.Dependencies[command.ID].Validation.Development.Completion.Handoff == "" {
+				t.Fatal("ordinary members lost the complete original dependency or handoff")
+			}
+			source := exec.Command("git", "-C", commandInput.Workspace.Path, "show", commandSource+":app.go")
+			original, err := source.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(readInstalledFile(t, filepath.Join(extensionInput.Workspace.Path, "app.go")), original) {
+				t.Fatal("dependent development lost validated predecessor content")
 			}
 			d.write(extensionInput.Workspace.Path, "extension.go", "package main\nfunc extended(s string) bool { return len(s)>0 }\n", 0644)
 			d.implementation = "package main\nimport \"os\"\nfunc main(){if len(os.Args)!=2 || !valid(os.Args[1]){os.Exit(2)}}\nfunc valid(s string)bool{return s!=\"\" && extended(s)}\n"

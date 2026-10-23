@@ -715,6 +715,11 @@ func (d *candidateDriver) untilValidation() {
 				d.design(id, input)
 			case "engine.qa.review.rationale.v2":
 				d.caseReview(id, input)
+			case "engine.gate.v3":
+				if input.Binding.BatchID == "" {
+					d.t.Fatal("candidate preparation issued a gate without a development batch")
+				}
+				d.business(id, d.gateResult(id, input))
 			default:
 				d.t.Fatalf("unexpected worker %s", input.Handler)
 			}
@@ -789,37 +794,49 @@ func (d *candidateDriver) executeWorkers() {
 			result.Execution = &report
 			result.Tool, result.Environment = protocol.ExecutionIdentities(input.ExecutionFacts)
 		} else if input.Handler == "engine.gate.v3" {
-			cmd := exec.Command("go", "test", "-timeout=0", "./...")
-			cmd.Dir = input.Workspace.Path
-			if out, err := cmd.CombinedOutput(); err != nil {
-				d.t.Fatalf("Qn gate Go checks: %v %s", err, out)
-			}
-			binary := executablePath(filepath.Join(d.t.TempDir(), "app"))
-			build := exec.Command("go", "build", "-o", binary, ".")
-			build.Dir = input.Workspace.Path
-			if output, err := build.CombinedOutput(); err != nil {
-				d.t.Fatalf("Qn gate command build: %v %s", err, output)
-			}
-			if output, err := exec.Command(binary, "ok").CombinedOutput(); err != nil {
-				d.t.Fatalf("Qn gate valid input: %v %s", err, output)
-			}
-			if output, err := exec.Command(binary, "").CombinedOutput(); err == nil {
-				d.t.Fatalf("Qn gate empty input was accepted: %s", output)
-			} else if failed, ok := err.(*exec.ExitError); !ok || failed.ExitCode() != 2 {
-				d.t.Fatalf("Qn gate empty input: %v %s", err, output)
-			}
-			var material worker.Material
-			if err := json.Unmarshal(readInstalledFile(d.t, d.run.WorkerMaterials[id].Path), &material); err != nil {
-				d.t.Fatal(err)
-			}
-			for _, point := range material.Input.RequirementPoints {
-				result.RequirementResults = append(result.RequirementResults, protocol.RequirementDecision{PointID: point.ID, Status: "PASS", Evidence: "The assembled candidate passes its Go tests, accepts ok with exit 0 and rejects empty input with exit 2 under the admitted native Git workflow."})
-			}
+			result = d.gateResult(id, input)
 		} else {
 			d.t.Fatalf("unexpected final worker %s", input.Handler)
 		}
 		d.business(id, result)
 	}
+}
+func (d *candidateDriver) gateResult(id string, input protocol.ValidationInput) protocol.ValidationResult {
+	d.t.Helper()
+	if input.Gate == nil || input.Workspace == nil || input.Gate.Candidate.Identity != input.Binding.Candidate || input.Workspace.Source != input.Binding.Candidate {
+		d.t.Fatal("gate lost its exact immutable source or workspace")
+	}
+	result := protocol.ValidationResult{Binding: input.Binding, Status: "PASS"}
+	cmd := exec.Command("go", "test", "-timeout=0", "./...")
+	cmd.Dir = input.Workspace.Path
+	if out, err := cmd.CombinedOutput(); err != nil {
+		d.t.Fatalf("Qn gate Go checks: %v %s", err, out)
+	}
+	binary := executablePath(filepath.Join(d.t.TempDir(), "app"))
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Dir = input.Workspace.Path
+	if output, err := build.CombinedOutput(); err != nil {
+		d.t.Fatalf("Qn gate command build: %v %s", err, output)
+	}
+	if output, err := exec.Command(binary, "ok").CombinedOutput(); err != nil {
+		d.t.Fatalf("Qn gate valid input: %v %s", err, output)
+	}
+	if output, err := exec.Command(binary, "").CombinedOutput(); err == nil {
+		d.t.Fatalf("Qn gate empty input was accepted: %s", output)
+	} else if failed, ok := err.(*exec.ExitError); !ok || failed.ExitCode() != 2 {
+		d.t.Fatalf("Qn gate empty input: %v %s", err, output)
+	}
+	var material worker.Material
+	if err := json.Unmarshal(readInstalledFile(d.t, d.run.WorkerMaterials[id].Path), &material); err != nil {
+		d.t.Fatal(err)
+	}
+	if material.Input.Validation == nil || !reflect.DeepEqual(*material.Input.Validation, input) || len(material.Input.RequirementPoints) == 0 {
+		d.t.Fatal("gate material differs from its issued input or lacks requirement points")
+	}
+	for _, point := range material.Input.RequirementPoints {
+		result.RequirementResults = append(result.RequirementResults, protocol.RequirementDecision{PointID: point.ID, Status: "PASS", Evidence: "The assembled candidate passes its Go tests, accepts ok with exit 0 and rejects empty input with exit 2 under the admitted native Git workflow."})
+	}
+	return result
 }
 func (d *candidateDriver) assertClean() {
 	d.t.Helper()
