@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
@@ -64,6 +65,9 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 	}
 	if err := readJSONFileInto(filepath.Join(directory, "native-request.json"), &native); err != nil {
 		t.Fatal(err)
+	}
+	if expected := os.Getenv("WORKFLOW_EXPECTED_WORKER_PROVIDER"); expected != "" && native["provider"] != expected {
+		t.Fatal("supervisor received a different execution platform", native["provider"], expected)
 	}
 	release, err := facade.AdmitExecution(directory, request)
 	if err != nil || release == nil {
@@ -121,10 +125,10 @@ func TestWorkflowSupervisorProcess(t *testing.T) {
 func workflowStartFixture(t *testing.T, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
 	// Flow-selection fixtures record the published supervisor call instead of executing it.
-	return workflowStartPlatformFixture(t, "workbuddy", nil, len(selections) == 0, nil, selections...)
+	return workflowStartPlatformFixture(t, "codex", "workbuddy", nil, len(selections) == 0, nil, selections...)
 }
 
-func workflowStartPlatformFixture(t *testing.T, provider string, native map[string]string, startSupervisor bool, qaModes []string, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
+func workflowStartPlatformFixture(t *testing.T, provider, workerProvider string, native map[string]string, startSupervisor bool, qaModes []string, selections ...*protocol.FlowSelection) (*facade.Facade, string, facade.WorkerMaterial, string) {
 	t.Helper()
 	root, home, bin := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -132,6 +136,7 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 	t.Setenv("ACC_PRODUCT_CONFIG_PATH", "")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WORKFLOW_SUPERVISOR_PROCESS", "1")
+	t.Setenv("WORKFLOW_EXPECTED_WORKER_PROVIDER", workerProvider)
 	t.Setenv("WORKFLOW_SUPERVISOR_CALLS", filepath.Join(root, "supervisor-calls"))
 	mustWriteCLI(t, filepath.Join(home, ".workbuddy", "cache", "acc-product-config-v3.json"), `{}`)
 	if err := os.WriteFile(filepath.Join(bin, "codebuddy"), []byte("#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = --help ] || exit 91\nprintf '%s\\n' '--resume --session-id stream-json --mcp-config --tools --permission-mode dontAsk'\n"), 0700); err != nil {
@@ -175,6 +180,12 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 		}
 		mustWriteCLI(t, filepath.Join(root, ".gates", "config.json"), string(body))
 	}
+	if workerProvider != "" {
+		if workerProvider == provider {
+			t.Fatal("independent supervisor fixture requires distinct controller and worker platforms")
+		}
+		testkit.ConfigureNativePaths(t, root, provider)
+	}
 	mustWriteCLI(t, filepath.Join(root, "README.md"), "independent command components\n")
 	mustWriteCLI(t, filepath.Join(root, ".gitignore"), ".gates/\n.formal-gates-resources/\n")
 	runner := vcs.ExecRunner{}
@@ -187,7 +198,7 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(selections) > 0 || len(qaModes) > 0 {
+	if workerProvider != "" || len(selections) > 0 || len(qaModes) > 0 {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			t.Fatal(err)
@@ -196,6 +207,12 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 			t.Fatal(err)
 		}
 		if _, err := settings.EditConfiguration(root, home, "project", "开发", nil, func(configuration *settings.Configuration) error {
+			if workerProvider != "" {
+				configuration.Execution = map[string]settings.ExecutionChoice{}
+				for _, node := range definition.ExecutionNodes() {
+					configuration.Execution[node.ID] = settings.ExecutionChoice{Provider: workerProvider}
+				}
+			}
 			if len(selections) > 0 {
 				configuration.FlowSelection = selections[0]
 			}
@@ -221,6 +238,12 @@ func workflowStartPlatformFixture(t *testing.T, provider string, native map[stri
 	var ref facade.WorkerMaterial
 	for _, material := range run.WorkerMaterials {
 		ref = material
+	}
+	if workerProvider != "" {
+		var material worker.Material
+		if err := readJSONFileInto(ref.Path, &material); err != nil || material.Input.Provider != workerProvider {
+			t.Fatal("issued material lost the configured execution platform", material.Input.Provider, err)
+		}
 	}
 	directory := facade.WorkerExecutionDirectory(ref, "")
 	cleanupWorkflowSupervisor(t, directory)
@@ -360,7 +383,7 @@ func TestWorkflowSelectedPlatformFreezesNewBindingAndRetainsClaimedBinding(t *te
 				if invocation == "controller" {
 					controller = provider
 				}
-				f, root, ready, _ := workflowStartPlatformFixture(t, controller, native, true, nil, &protocol.FlowSelection{})
+				f, root, ready, _ := workflowStartPlatformFixture(t, controller, "", native, true, nil, &protocol.FlowSelection{})
 				before, err := f.Show()
 				if err != nil {
 					t.Fatal(err)
@@ -696,7 +719,7 @@ func TestWorkflowPendingAskStartsSignedChildrenAfterReopen(t *testing.T) {
 		return
 	}
 	// Merge QA exists only while a QA mode is enabled, so this split scenario enables blackbox to keep its integration QA duty.
-	f, root, _, _ := workflowStartPlatformFixture(t, "workbuddy", nil, true, []string{"blackbox"})
+	f, root, _, _ := workflowStartPlatformFixture(t, "codex", "workbuddy", nil, true, []string{"blackbox"})
 	workflowSplitFixture(t, f, root)
 	run, err := f.Show()
 	if err != nil || len(run.SliceChildren) != 2 {
