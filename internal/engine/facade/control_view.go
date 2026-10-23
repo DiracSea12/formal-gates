@@ -76,6 +76,11 @@ func (f *Facade) controlRuns() ([]controlRun, error) {
 // ControlRuns reads the caller and established current children in the same
 // order used to select an Ask. It does not create or synchronize child state.
 func (f *Facade) ControlRuns() ([]Run, error) {
+	if run, retired, err := f.RetiredTerminal(); err != nil {
+		return nil, err
+	} else if retired {
+		return []Run{run}, nil
+	}
 	unlock, err := f.acquireControlReadWindow()
 	if err != nil {
 		return nil, err

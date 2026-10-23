@@ -970,6 +970,34 @@ func Open(root, runID string, inventories ...vcs.RuntimeFiles) (*Facade, error) 
 	return f, nil
 }
 
+// RetiredTerminal reads a fully retired run under the native publication window.
+// Incomplete cleanup retains its original admitted writer.
+func (f *Facade) RetiredTerminal() (Run, bool, error) {
+	if f == nil || f.engine == nil {
+		return Run{}, false, fmt.Errorf("engine terminal read: nil façade")
+	}
+	if _, err := f.engine.Load(); !isMissingEngineState(err) {
+		return Run{}, false, nil
+	}
+	unlock, err := coordination.AcquireExistingPathWaiting(f.promotionLockPath(), promotionLockDescription)
+	if err != nil {
+		return Run{}, false, err
+	}
+	// Only a fully retired run is a pure read. Recheck its current authority
+	// under the window; unfinished cleanup must enter the admitted writer.
+	defer unlock()
+	if _, err := f.engine.Load(); !isMissingEngineState(err) {
+		return Run{}, false, nil
+	}
+	summary, err := f.readSummary()
+	_, intentErr := os.Stat(terminalIntentPath(f.stateDir))
+	_, activeErr := os.Stat(filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active"))
+	if err == nil && f.terminalEvidenceComplete(summary) && errors.Is(intentErr, fs.ErrNotExist) && errors.Is(activeErr, fs.ErrNotExist) {
+		return runFromSummary(summary), true, nil
+	}
+	return Run{}, false, nil
+}
+
 // Drive performs Observe → Decide → SelectIssued.  A run whose enabled nodes
 // leave no issued work settles deterministic steps and retains an immutable
 // Complete summary.
@@ -977,29 +1005,10 @@ func (f *Facade) Drive() (Run, error) {
 	if f == nil || f.engine == nil {
 		return Run{}, fmt.Errorf("engine drive: nil façade")
 	}
-	if _, err := f.engine.Load(); isMissingEngineState(err) {
-		unlock, err := coordination.AcquireExistingPathWaiting(f.promotionLockPath(), promotionLockDescription)
-		if err != nil {
-			return Run{}, err
-		}
-		// Only a fully retired run is a pure read. Recheck its current authority
-		// under the window; unfinished cleanup must enter the admitted writer.
-		run, replayed := func() (Run, bool) {
-			defer unlock()
-			if _, err := f.engine.Load(); !isMissingEngineState(err) {
-				return Run{}, false
-			}
-			summary, err := f.readSummary()
-			_, intentErr := os.Stat(terminalIntentPath(f.stateDir))
-			_, activeErr := os.Stat(filepath.Join(f.root, ".gates", "tmp", f.runID, "lifecycle", "active"))
-			if err == nil && f.terminalEvidenceComplete(summary) && errors.Is(intentErr, fs.ErrNotExist) && errors.Is(activeErr, fs.ErrNotExist) {
-				return runFromSummary(summary), true
-			}
-			return Run{}, false
-		}()
-		if replayed {
-			return run, nil
-		}
+	if run, retired, err := f.RetiredTerminal(); err != nil {
+		return Run{}, err
+	} else if retired {
+		return run, nil
 	}
 	unlock, err := f.acquireWriteWindow()
 	if err != nil {

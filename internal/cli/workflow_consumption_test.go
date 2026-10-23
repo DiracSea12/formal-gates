@@ -115,6 +115,54 @@ func TestWorkflowConsumerReturnsTerminalBeforeChildLookup(t *testing.T) {
 	}
 }
 
+func TestWorkflowConsumerRefreshRetainsRetiredChildren(t *testing.T) {
+	f, root, statePath := startEngineRunForWriterTest(t)
+	request, err := protocol.NewRequestEvent("abort-observed-children", protocol.ControlAbort, protocol.AskOption{ID: "abort", Label: "Abort"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = f.Submit(request); err != nil {
+		t.Fatal(err)
+	}
+	token, err := f.Freshness(string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := protocol.NewDecideEvent("abort-observed-children-decision", protocol.RequestID(request.ID), token, "abort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = f.Submit(event); err != nil {
+		t.Fatal(err)
+	}
+	retainRetiredChildReference(t, root, "writer-exclusive")
+	run, err := f.Drive()
+	if err != nil || run.Status != "ABORTED" {
+		t.Fatal("original abort did not publish terminal cleanup", run.Status, err)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatal("terminal abort retained active state", err)
+	}
+	observed := workflowConsumption{Run: facade.Run{RunID: "retired-child", Status: "SLICE_READY", Revision: 7}, Boundary: "SLICE_READY"}
+	for _, status := range []string{run.Status, "COMPLETE", "SLICE_READY", "RUNNING"} {
+		t.Run(status, func(t *testing.T) {
+			result := workflowConsumption{Run: run, Children: map[string]workflowConsumption{"retired-child": observed}}
+			result.Run.Status = status
+			err := refreshWorkflowChildren(root, &result)
+			if status == "COMPLETE" || status == "ABORTED" {
+				if err != nil {
+					t.Fatal("terminal refresh reopened a retired child", err)
+				}
+			} else if err == nil {
+				t.Fatal("active or slice checkpoint refresh hid the missing child")
+			}
+			if !reflect.DeepEqual(result.Children["retired-child"], observed) {
+				t.Fatal("refresh changed the historical child projection")
+			}
+		})
+	}
+}
+
 func TestWorkflowConsumerPreservesNonterminalChildError(t *testing.T) {
 	t.Parallel()
 	f, root, statePath := startEngineRunForWriterTest(t)

@@ -119,6 +119,89 @@ func TestWorkflowReentryRetainsUnavailableRunAndSelectsCurrentRun(t *testing.T) 
 	}
 }
 
+func TestWorkflowRetiredRunReplaysAfterInstallationUpdate(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	f := startAdmittedEngineRun(t, root)
+	requestPath := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "request.json")
+	var request facade.StartRequest
+	if err := readJSONFileInto(requestPath, &request); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := f.PrepareControl(facade.ControlInput{Request: protocol.ControlAbort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err = f.PrepareControl(facade.ControlInput{Ask: 1, Choice: "abort", Reason: "Stop this local fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := submitCLIControlWithHost(t, f, candidate); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Drive()
+	if err != nil || run.Status != "ABORTED" {
+		t.Fatal(run.Status, err)
+	}
+	// The same public consumer owns its existing local lock before the update.
+	var initial, initialError bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "drive", "--root", root, "--run", "1", "--machine"}, IO{Stdout: &initial, Stderr: &initialError}); code != 0 {
+		t.Fatal(initialError.String())
+	}
+	before := snapshotEngineRunTree(t, root, "writer-exclusive")
+	var installation validate.InstallReport
+	if err := readJSONFileInto(request.AdmissionRegistryPath+".install.json", &installation); err != nil {
+		t.Fatal(err)
+	}
+	source := installation.Targets[0].SourceRoot
+	mustWriteCLI(t, filepath.Join(source, "README.md"), "Updated installed documentation.\n")
+	for _, bootstrap := range []bool{false, true} {
+		args := []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}
+		if bootstrap {
+			args = append(args, "--bootstrap")
+		}
+		var out, stderr bytes.Buffer
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+			t.Fatal(stderr.String())
+		}
+	}
+	for _, entry := range []string{"show", "status", "next", "drive"} {
+		var out, stderr bytes.Buffer
+		args := []string{"workflow", entry, "--root", root, "--run", "1"}
+		if entry == "drive" {
+			args = append(args, "--machine")
+		}
+		if code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &stderr}); code != 0 {
+			t.Fatal("retired run failed after normal update", entry, stderr.String())
+		}
+		if !strings.Contains(out.String(), "COMPLETE") && !strings.Contains(out.String(), "ABORTED") {
+			t.Fatal("lost terminal projection", entry, out.String())
+		}
+		if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+			t.Fatal("replay changed terminal authority", entry)
+		}
+	}
+	var controlOut, controlError bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "submit", "--root", root, "--run", "1", "--single-step"}, IO{Stdin: strings.NewReader(`{"request":"ABORT"}`), Stdout: &controlOut, Stderr: &controlError}); code == 0 || !strings.Contains(controlError.String(), "STALE_FENCING_TOKEN") {
+		t.Fatal("retired read granted a new control writer", controlOut.String(), controlError.String())
+	}
+	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
+		t.Fatal("rejected control changed original terminal authority")
+	}
+	// An unfinished cleanup intent must retain the original installation fence.
+	intent := filepath.Join(root, facade.EngineNamespace, "writer-exclusive", "terminal-summary.intent.json")
+	mustWriteCLI(t, intent, before["terminal-summary.json"])
+	var out, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "drive", "--root", root, "--run", "1", "--machine"}, IO{Stdout: &out, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "UNREGISTERED_INSTALL") {
+		t.Fatal("unfinished cleanup bypassed admission", out.String(), stderr.String())
+	}
+}
+
 func TestWorkflowMultipleRunsRequireProgramPositionBeforeAnyWrite(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return

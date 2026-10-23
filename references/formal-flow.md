@@ -23,13 +23,14 @@ workflow 的当前入口以 `workflow --help` 和各子命令帮助为准：
 | `message` | 向原 worker 提交新语义文字或原输入文件字节。 |
 | `handoff` | 为原开发职责准备受限转交 Ask。 |
 | `replan` | 为原需求内计划调整准备确认候选。 |
-| `serve` | 为当前主宿主提供 stdio MCP 真人确认；原生响应直接进入同一引擎接纳路径。 |
+| `serve` | 为当前主宿主提供 stdio MCP 原生确认；宿主权限策略下的响应直接进入同一引擎接纳路径。 |
 
 安装、卸载、hook、lifecycle、canary 和脱离 run 的 gate 检查属于维护/诊断面，
 不能推进业务或改写 workflow 状态。正常 loader 要求版本、definition/package 摘要和
 installed-target 身份精确匹配；不匹配返回 `UNSUPPORTED_RUN_VERSION`。原始文件保留
 供 diagnose；不支持的 run 版本须使用新 run ID，不提供绕过准入的兼容入口或第二 writer。
 不支持旧格式 run 或跨安装重装、升级接管；当前版本同安装身份内的正常恢复与精确事件重放不变。
+完整退休终态的只读查看与回放仍使用原不可变结果，不接管执行；活动状态与未完成清理仍要求原安装身份。
 配置绑定与完整历史见[用户与项目设置](user-configuration.md#绑定与运行中生效)。
 
 ## 启动前受理

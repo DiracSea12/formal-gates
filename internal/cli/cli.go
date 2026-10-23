@@ -1307,11 +1307,14 @@ func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	if request.PackageDigest != admission.PackageDigest || request.InstalledTargetIdentity != admission.RecordID ||
-		request.AdmissionGeneration != admission.Generation || request.AdmissionLease != admission.Lease || request.AdmissionToken != admission.Token {
-		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current admitted launcher")
+	stale := request.PackageDigest != admission.PackageDigest || request.InstalledTargetIdentity != admission.RecordID ||
+		request.AdmissionGeneration != admission.Generation || request.AdmissionLease != admission.Lease || request.AdmissionToken != admission.Token
+	var f *facade.Facade
+	if stale {
+		f, err = facade.Open(root, runID)
+	} else {
+		f, err = facade.Open(root, runID, admission.RuntimeFiles)
 	}
-	f, err := facade.Open(root, runID, admission.RuntimeFiles)
 	if err != nil {
 		return nil, true, err
 	}
@@ -1324,6 +1327,13 @@ func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
 	}
 	if bound.RecordID != admission.RecordID || bound.PackageDigest != admission.PackageDigest {
 		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current project binding")
+	}
+	if stale {
+		if _, retired, readErr := f.RetiredTerminal(); readErr != nil {
+			return nil, true, readErr
+		} else if !retired {
+			return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current admitted launcher")
+		}
 	}
 	return f, true, nil
 }

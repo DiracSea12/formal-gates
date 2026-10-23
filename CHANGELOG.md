@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 改动：持久化状态的替换与读取、诊断读取复用现有 atomicfile 能力；正常读取和恢复保持同一权威状态及原校验路径，不新增第二份状态或恢复账本。
 - 验证与限制：加入并执行 Windows 原生发布窗口相关回归，核对并发读取及发布后的实际内容；本次提交拆分另核编译与最终树一致性，不把 Windows 检查写作 Unix 实测。
 
+### 完整终态结果读取（2026-10-22）
+
+- 改动：COMPLETE/ABORTED 不再刷新已清理的活动子状态，保留历史投影；完全退休结果读取提取原引擎唯一判据，供 Drive、CLI 和控制视图共用。安装更新后可只读原完整终态，活动运行、未完成清理及真正写入仍受原安装身份限制。
+- 验证与限制：隔离安装更新后的 show/status/next/drive 重复读取、原文件树字节不变，以及活动运行/未完清理/新写入拒绝负控通过。最新版稳定入口实际重读原项目返回 COMPLETE、修订 198、exit 0、无 stderr；原主运行和两个子运行活动状态未重建。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

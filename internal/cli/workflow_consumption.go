@@ -111,21 +111,8 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 		if latest, showErr := f.Show(); showErr == nil {
 			result.Run = latest
 		}
-		for id, child := range result.Children {
-			owner, showErr := facade.Open(root, id)
-			if showErr == nil {
-				child.Run, showErr = owner.Show()
-			}
-			if showErr != nil {
-				if err == nil {
-					err = showErr
-				}
-				continue
-			}
-			if len(child.Run.PendingAsks) != 0 {
-				child.Boundary = string(decision.KindAsk)
-			}
-			result.Children[id] = child
+		if refreshErr := refreshWorkflowChildren(root, &result); err == nil {
+			err = refreshErr
 		}
 		result.Progress.Issued = len(result.Run.PendingActions)
 		result.Progress.Running = len(active)
@@ -364,6 +351,32 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 			recordCompletion(finished)
 		}
 	}
+}
+
+// refreshWorkflowChildren refreshes active child projections while retaining
+// the observed children of a master whose terminal publication retired them.
+func refreshWorkflowChildren(root string, result *workflowConsumption) error {
+	if result.Run.Status == "COMPLETE" || result.Run.Status == "ABORTED" {
+		return nil
+	}
+	var err error
+	for id, child := range result.Children {
+		owner, showErr := facade.Open(root, id)
+		if showErr == nil {
+			child.Run, showErr = owner.Show()
+		}
+		if showErr != nil {
+			if err == nil {
+				err = showErr
+			}
+			continue
+		}
+		if len(child.Run.PendingAsks) != 0 {
+			child.Boundary = string(decision.KindAsk)
+		}
+		result.Children[id] = child
+	}
+	return err
 }
 
 func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) error {
