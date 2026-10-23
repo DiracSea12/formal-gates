@@ -278,15 +278,11 @@ func (p *Provider) Track(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	changed, err := p.runner.RunRaw(p.root, "git", nil, append([]string{"diff", "--name-only", "--no-renames", "-z", "--"}, paths...)...)
+	changed, err := p.runner.RunRaw(p.root, "git", nil, append([]string{"ls-files", "--modified", "--others", "-z", "--"}, paths...)...)
 	if err != nil {
 		return err
 	}
-	untracked, err := p.runner.RunRaw(p.root, "git", nil, append([]string{"ls-files", "--others", "-z", "--"}, paths...)...)
-	if err != nil {
-		return err
-	}
-	remaining := append(nulPaths(string(changed)), nulPaths(string(untracked))...)
+	remaining := nulPaths(string(changed))
 	slices.Sort(remaining)
 	remaining = slices.Compact(remaining)
 	if len(remaining) == 0 {

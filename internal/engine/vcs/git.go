@@ -122,6 +122,15 @@ func (p *Provider) VerifyReady() error {
 	if err != nil {
 		return err
 	}
+	if p.name == "git" && strings.TrimSpace(pending) != "" {
+		paths, err := p.ChangedPaths()
+		if err != nil {
+			return err
+		}
+		if len(paths) == 0 {
+			return nil
+		}
+	}
 	if strings.TrimSpace(pending) != "" {
 		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot (including any untracked files that must be added)", p.name)
 	}

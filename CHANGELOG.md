@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 改动：通过 WorkBuddy 原生桌面存储及进程内桥接初始化原 CLI 所需认证，复用现有登录态，不另建登录存储或明文凭据副本；模型目录从原生元数据发现，安装包包含对应 helper。受管工具列表沿用公共归属。
 - 验证与限制：固定启动器真实元数据查询获得 22 个模型，使用现有桌面登录态的 Hy3 实际调用成功；安装资产哈希和 WorkBuddy 相关回归通过。异常 socket 断开只有源码核查，未宣称已有独立断开负控实跑；其他平台的认证实测范围分别记录，未要求重新登录。
 
+### Git 候选与工作区逻辑一致性（2026-10-22）
+
+- 改动：跟踪及就绪判断使用 Git 原生修改文件与逻辑差异，正确处理 Windows CRLF、索引 stat 刷新与原生过滤；不将仅物理换行或 stat 差异当作新业务候选，不制造空提交。
+- 验证与限制：真实 Windows Git 红绿回归、重复只读与 HEAD/index/逻辑内容不变检查通过；原真实项目 UNKNOWN 执行通过原观察接纳路径继续，候选快照保持，没有手工重写状态或索引。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

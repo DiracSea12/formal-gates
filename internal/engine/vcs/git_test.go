@@ -171,7 +171,14 @@ func TestStatusExcludesOnlyRuntimeUntrackedEntries(t *testing.T) {
 		"?? .gates/slices/a.json",
 		"?? .gates/results/a.json",
 		"?? deliverable.go",
-	}, "\n")}, nil)
+	}, "\n"),
+		"git diff --name-only --no-renames -z HEAD --":          "tracked.go\x00",
+		"git diff --cached --name-only --no-renames -z HEAD --": "",
+		"git ls-files --others --exclude-standard -z": strings.Join([]string{
+			".gates/engine/run-1/state.json", ".gates/tmp/run-1/state.json", ".gates/run-locks/run-1.lock",
+			".gates/qa-isolation/case/x.md", ".gates/slices/a.json", ".gates/results/a.json", "deliverable.go", "",
+		}, "\x00"),
+	}, nil)
 	got, err := p.Status()
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +192,12 @@ func TestStatusExcludesOnlyRuntimeUntrackedEntries(t *testing.T) {
 	}
 	// 运行期路径被跟踪后出现修改（非 "?? " 行）仍照常拦截——只豁免未跟踪
 	// 的运行期产物。
-	p2, _ := newStub(map[string]string{"git status": " M .gates/engine/run-1/state.json"}, nil)
+	p2, _ := newStub(map[string]string{
+		"git status": " M .gates/engine/run-1/state.json",
+		"git diff --name-only --no-renames -z HEAD --":          ".gates/engine/run-1/state.json\x00",
+		"git diff --cached --name-only --no-renames -z HEAD --": "",
+		"git ls-files --others --exclude-standard -z":           "",
+	}, nil)
 	if err := p2.VerifyReady(); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") {
 		t.Fatalf("tracked runtime modification escaped readiness: %v", err)
 	}
