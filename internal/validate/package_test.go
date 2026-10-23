@@ -38,7 +38,7 @@ func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 
 func TestPackageRequiresNativeHostScripts(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		t.Run(name, func(t *testing.T) {
 			root := copyPackageFixture(t)
 			if result := Package(root); !result.OK() {
@@ -58,7 +58,7 @@ func TestPackageRequiresNativeHostScripts(t *testing.T) {
 
 func TestPackageManifestRequiresNativeHostScripts(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		t.Run(name, func(t *testing.T) {
 			root := copyPackageFixture(t)
 			rel := "internal/harness/" + name

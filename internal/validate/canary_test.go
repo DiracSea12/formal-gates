@@ -90,7 +90,7 @@ func TestInstalledScriptRuntimeAllowsDeclaredHostAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, relative := range []string{"internal/harness/native_dsh.mjs", "internal/harness/zcode_credential.mjs"} {
+	for _, relative := range []string{"internal/harness/native_dsh.mjs", "internal/harness/zcode_credential.mjs", "internal/harness/native_workbuddy.mjs"} {
 		declared := false
 		for _, entry := range entries {
 			if entry.Path == relative {

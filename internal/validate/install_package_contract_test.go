@@ -101,7 +101,7 @@ func TestInstallUsesCandidatePackageContract(t *testing.T) {
 		} else {
 			filtered := []any{}
 			for _, part := range parts {
-				if strings.HasSuffix(part.(string), "native_dsh.mjs") || strings.HasSuffix(part.(string), "zcode_credential.mjs") {
+				if strings.HasSuffix(part.(string), "native_dsh.mjs") || strings.HasSuffix(part.(string), "zcode_credential.mjs") || strings.HasSuffix(part.(string), "native_workbuddy.mjs") {
 					if err := os.Remove(filepath.Join(root, filepath.FromSlash(part.(string)))); err != nil {
 						t.Fatal(err)
 					}

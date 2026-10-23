@@ -66,7 +66,7 @@ func TestInstalledNativeHostScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	assets := make(map[string][]byte)
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		rel := "internal/harness/" + name
 		assets[rel], err = os.ReadFile(filepath.Join(source, filepath.FromSlash(rel)))
 		if err != nil {

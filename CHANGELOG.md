@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 改动：启动采用对话明确决定，删除启动强制弹窗；流程内操作确认遵循宿主原生权限。免交互宿主不额外索取真人输入，询问宿主保留原生确认；拒绝/取消不执行，修改后可以重提。公共操作确认不再附加必填数据字段，DSH 删除原生工具放行后的第二次提问。限制确认展示篇幅；同平台 Codex 采用真实原生子代理，继续和恢复复用原身份与接纳路径。
 - 验证与限制：公共确认的接受/拒绝/取消/过期及普通数据表单回归通过；真实 DSH 原生权限对照通过。实际 Codex 子代理的父子来源、never/full 策略和控制候选接纳已核验。七平台已审计，但没有全部进行真实模型完整运行，未支持的原生子代理能力仍明确报错。
 
+### WorkBuddy 桌面认证与模型目录（2026-10-22）
+
+- 改动：通过 WorkBuddy 原生桌面存储及进程内桥接初始化原 CLI 所需认证，复用现有登录态，不另建登录存储或明文凭据副本；模型目录从原生元数据发现，安装包包含对应 helper。受管工具列表沿用公共归属。
+- 验证与限制：固定启动器真实元数据查询获得 22 个模型，使用现有桌面登录态的 Hy3 实际调用成功；安装资产哈希和 WorkBuddy 相关回归通过。异常 socket 断开只有源码核查，未宣称已有独立断开负控实跑；其他平台的认证实测范围分别记录，未要求重新登录。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

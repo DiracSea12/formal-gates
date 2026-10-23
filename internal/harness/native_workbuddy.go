@@ -20,7 +20,11 @@ var workbuddyStream = streamAdapter{provider: "workbuddy", prefix: "WORKBUDDY", 
 
 func workbuddySelectionOptions(launch map[string]any, workspace, directory string, environment map[string]string, target string) (host.SelectionCatalogue, error) {
 	catalogue := host.SelectionCatalogue{Source: "WorkBuddy initialize and get_available_models"}
-	client, err := nativeSelectionControl(launch, workspace, directory, environment)
+	runtimeLaunch, err := workbuddyRuntimeLaunch(launch)
+	if err != nil {
+		return catalogue, err
+	}
+	client, err := nativeSelectionControl(runtimeLaunch, workspace, directory, environment)
 	if err != nil {
 		return catalogue, err
 	}
@@ -110,17 +114,17 @@ func workbuddyResolvePaths(native, sources map[string]string) error {
 		path, executableSource, err = nativeExecutablePath("cbc")
 	}
 	if err != nil && executable == "codebuddy" {
-		// The WorkBuddy desktop launcher on PATH anchors the install root; the
-		// bundled CLI is a node script inside its own resources tree.
+		// The desktop runtime exposes the native credential bootstrap used by
+		// its bundled CLI.
 		if candidate, _, ok := nativeAnchorLaunch([]string{"WorkBuddy"}, "resources", "app.asar.unpacked", "cli", "bin", "codebuddy"); ok {
-			if node, nodeSource, nodeErr := nativeExecutablePath("node"); nodeErr == nil {
-				path, script, executableSource, err = node, candidate, nodeSource, nil
-			}
+			path, executableSource, err = nativeExecutablePath("WorkBuddy")
+			script = candidate
 		}
 	}
 	if err != nil && executable == "codebuddy" && runtime.GOOS == "darwin" {
-		path = "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
-		_, err = os.Stat(path)
+		path = "/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy"
+		script = "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
+		_, err = os.Stat(script)
 		executableSource = "platform default"
 	}
 	if err != nil {
@@ -188,11 +192,20 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 	if runtime.GOOS == "windows" {
 		environment["USERPROFILE"] = home
 	}
-	// A PATH-anchored desktop install binds its bundled node script as the
-	// launch's script operand; a directly installed CLI leaves it absent.
 	launch := map[string]any{"executable": path}
 	if script := config.Native["workbuddyScript"]; script != "" {
+		resources := filepath.Join(filepath.Dir(path), "resources")
+		if runtime.GOOS == "darwin" {
+			resources = filepath.Join(filepath.Dir(path), "..", "Resources")
+		}
+		archive := resolveNativePath(filepath.Join(resources, "app.asar"))
 		launch["script"] = script
+		launch["bundle"] = filepath.Join(filepath.Dir(filepath.Dir(script)), "dist", "codebuddy-lite-wb.mjs")
+		launch["archive"] = archive
+		environment["CODEBUDDY_FORCE_LITE_WB_BUNDLE"] = "1"
+		environment["ELECTRON_RUN_AS_NODE"] = "1"
+		environment["FORMAL_GATES_WORKBUDDY_CLI"] = script
+		environment["FORMAL_GATES_WORKBUDDY_ARCHIVE"] = archive
 	}
 	binding, err := buildCaptureBinding("workbuddy", launch)
 	if err != nil {
@@ -208,6 +221,22 @@ func workbuddyConfiguredBinding(config settings.Values) (map[string]any, error) 
 	}
 	return binding, nil
 }
+
+// Package-owned scripts are resolved by the admitted runtime executing the
+// request; captured launch facts retain the host's original CLI and archive.
+func workbuddyRuntimeLaunch(launch map[string]any) (map[string]any, error) {
+	if archive, _ := launch["archive"].(string); archive == "" {
+		return launch, nil
+	}
+	root, err := nativePackageRoot()
+	if err != nil {
+		return nil, err
+	}
+	runtimeLaunch := maps.Clone(launch)
+	runtimeLaunch["script"] = filepath.Join(root, "internal", "harness", "native_workbuddy.mjs")
+	return runtimeLaunch, nil
+}
+
 func workbuddyProbe(launch map[string]any, workspace string, environment map[string]string) (map[string]any, error) {
 	argv := nativeArgv(launch, "--help")
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -248,6 +277,10 @@ func workbuddyReconcile(directory string, process any, services ...ExecutionServ
 	return streamReconcile(workbuddyStream, directory, process)
 }
 func workbuddyArguments(request any, directory string, launch map[string]any, workspace string, environment map[string]string, prompt string) ([]string, string, error) {
+	runtimeLaunch, err := workbuddyRuntimeLaunch(launch)
+	if err != nil {
+		return nil, "", err
+	}
 	effort, _ := getOf(request, "reasoning_effort").(string)
 	identity, _ := getOf(request, "identity").(string)
 	resume := identity != ""
@@ -297,7 +330,7 @@ func workbuddyArguments(request any, directory string, launch map[string]any, wo
 	if getOf(request, "read_only") == true {
 		permission = "dontAsk"
 	}
-	argv := nativeArgv(launch, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics")
+	argv := nativeArgv(runtimeLaunch, "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", permission, "--allowedTools", nativeAllowedMCPTools)
 	if model, _ := getOf(request, "model").(string); model != "" {
 		argv = append(argv, "--model", model)
 	}

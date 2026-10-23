@@ -42,6 +42,7 @@ var requiredFiles = []string{
 	"references/vcs-snapshots.md",
 	"internal/harness/native_dsh.mjs",
 	"internal/harness/zcode_credential.mjs",
+	"internal/harness/native_workbuddy.mjs",
 }
 
 var requiredDirs = []string{
@@ -74,6 +75,7 @@ var knownManifestParts = []string{
 	"definitions/",
 	"internal/harness/native_dsh.mjs",
 	"internal/harness/zcode_credential.mjs",
+	"internal/harness/native_workbuddy.mjs",
 }
 
 type manifest struct {

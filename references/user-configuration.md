@@ -202,11 +202,14 @@ formal-gates settings remove panelSelection --root <repo> --scope project
 | Cursor | `cursorExecutable`: cursor-agent；`cursorHome`: 当前用户 HOME。 |
 | DSH | `dshExecutable`: dsh。 |
 | ZCode | `zcodeExecutable`: node；`zcodeScript`: 原环境指定或标准 app-server；`zcodeHome`: 原宿主数据 HOME。 |
-| WorkBuddy | `workbuddyExecutable`: codebuddy（PATH 不存在时核 PATH 上的 WorkBuddy 桌面安装锚点，取其 resources 内包内 CLI 经 node 运行，再核标准 macOS app bundle）；`workbuddyHome`: 原用户 HOME；`workbuddyProductConfig`: 原桌面 product config。 |
+| WorkBuddy | `workbuddyExecutable`: codebuddy（PATH 不存在时核 PATH 上的 WorkBuddy 桌面安装锚点，再核标准 macOS app bundle；包内 CLI 由桌面自身运行时承接）；`workbuddyHome`: 原用户 HOME；`workbuddyProductConfig`: 原桌面 product config。 |
 
 原生 home 留空继承当前宿主环境；显式字段须非空。路径配置只传入对应子进程，不改
 进程全局环境，不复制认证文件。WorkBuddy 默认配置根是原 `.workbuddy`；product config
 通常位于其 `cache/acc-product-config-v3.json`，安装位置仍为 `.codebuddy/skills`。
+桌面包通过自身原生存储 API 和内存凭据初始化通道读取已有登录态，不要求重新登录，
+不复制明文凭据，也不新建登录存储。加密策略来自原安装包；独立 codebuddy/cbc CLI
+继续使用其原生认证。桌面安装包缺少所需原生能力时会明确报告初始化不可用。
 WorkBuddy CLI 的 effort 合同为 minimal/low/medium/high/xhigh/max，模型实际支持另由
 宿主决定；`deepseek-v4.1-flash` 的官方默认 effort 为 high。
 

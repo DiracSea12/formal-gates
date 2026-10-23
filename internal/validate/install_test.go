@@ -40,7 +40,7 @@ func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 				path := filepath.Join(source, "internal", "harness", name)
 				if err := os.WriteFile(path, []byte("candidate script "+name+"\n"), 0o600); err != nil {
 					t.Fatal(err)
@@ -62,7 +62,7 @@ func TestInstallRestoresNativeHostScriptsAfterInterruptedReplacement(t *testing.
 			if _, err := Install(options); err != nil {
 				t.Fatalf("replacement after rollback failed: %v", err)
 			}
-			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+			for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 				rel := filepath.Join("internal", "harness", name)
 				want, err := os.ReadFile(filepath.Join(source, rel))
 				if err != nil {

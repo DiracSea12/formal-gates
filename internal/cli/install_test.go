@@ -977,7 +977,7 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
 	// install 会拒绝 manifest 未登记为
 	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
-	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[`+
+	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","go.mod",".github/workflows/portable-validation.yml","bin/","cmd/","internal/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs","internal/harness/native_workbuddy.mjs"],"hosts":[`+
 		`{"name":"Claude Code","support":"host-target"},`+
 		`{"name":"Codex","support":"host-target"},`+
 		`{"name":"Cursor","support":"host-target"},`+
@@ -1012,7 +1012,7 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		rel := filepath.Join("prompts", "roles", file.Name())
 		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))
 	}
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		rel := filepath.Join("internal", "harness", name)
 		mustWriteCLI(t, filepath.Join(source, rel), readFile(t, filepath.Join(repoRoot, rel)))
 	}
@@ -1220,6 +1220,7 @@ func assertInstalledScriptInventory(t *testing.T, source, root string) {
 	nativeScripts := map[string]bool{
 		filepath.FromSlash("internal/harness/native_dsh.mjs"):       true,
 		filepath.FromSlash("internal/harness/zcode_credential.mjs"): true,
+		filepath.FromSlash("internal/harness/native_workbuddy.mjs"): true,
 	}
 	for rel := range nativeScripts {
 		if readFile(t, filepath.Join(root, rel)) != readFile(t, filepath.Join(source, rel)) {

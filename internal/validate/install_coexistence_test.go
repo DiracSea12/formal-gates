@@ -12,7 +12,7 @@ import (
 	"formal-gates/internal/settings"
 )
 
-const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
+const coexistenceManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs","internal/harness/native_workbuddy.mjs"],"hosts":[{"name":"Claude Code","support":"host-target"}]}` + "\n"
 
 func coexistenceWriteFile(t *testing.T, path, data string, mode os.FileMode) {
 	t.Helper()
@@ -35,7 +35,7 @@ func coexistenceSource(t *testing.T) string {
 	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		coexistenceWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		copyValidateTestFile(t, repoRootValidateTest(t), root, "internal/harness/"+name)
 	}
 	return root

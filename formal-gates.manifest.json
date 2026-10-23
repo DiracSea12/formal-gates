@@ -129,7 +129,8 @@
     "gates/",
     "definitions/",
     "internal/harness/native_dsh.mjs",
-    "internal/harness/zcode_credential.mjs"
+    "internal/harness/zcode_credential.mjs",
+    "internal/harness/native_workbuddy.mjs"
   ],
   "install_commands": [
     "./install.command --host claude --scope global --force",

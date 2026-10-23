@@ -66,7 +66,7 @@ func admissionGitProject(t *testing.T) string {
 
 // admissionManifest registers every installable host target so install only
 // rejects a host when a scenario explicitly mutates the registration.
-const admissionManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs"],"hosts":[
+const admissionManifest = `{"name":"formal-gates","package_parts":["SKILL.md","README.md","README_EN.md","formal-gates.manifest.json","bin/","agents/","prompts/","gates/","references/","internal/harness/native_dsh.mjs","internal/harness/zcode_credential.mjs","internal/harness/native_workbuddy.mjs"],"hosts":[
   {"name": "Claude Code", "support": "host-target"},
   {"name": "Codex", "support": "host-target"},
   {"name": "Cursor", "support": "host-target"},
@@ -100,7 +100,7 @@ func admissionSource(t *testing.T) string {
 	admissionWrite(t, filepath.Join(root, "gates", "admission-gate.md"), "# sample gate\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "agents", "agent.md"), "agent\n", 0o600)
 	admissionWrite(t, filepath.Join(root, "references", "reference.md"), "reference\n", 0o600)
-	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs"} {
+	for _, name := range []string{"native_dsh.mjs", "zcode_credential.mjs", "native_workbuddy.mjs"} {
 		copyValidateTestFile(t, repoRootValidateTest(t), root, "internal/harness/"+name)
 	}
 	return root
