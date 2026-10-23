@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/compiler"
@@ -2118,7 +2119,7 @@ func Diagnose(path string, packageDigest, targetIdentity string) (DiagnosticRepo
 		}
 	}
 	report := DiagnosticReport{Path: filepath.Clean(path), Integrity: "unknown", Supported: Envelope{Writer: persistence.Writer, StateSchemaVersion: encoder.StateSchemaVersion, WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, PackageDigest: packageDigest, InstalledTargetIdentity: targetIdentity}}
-	data, err := os.ReadFile(path)
+	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return report, err
 	}

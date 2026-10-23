@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 改动：跟踪及就绪判断使用 Git 原生修改文件与逻辑差异，正确处理 Windows CRLF、索引 stat 刷新与原生过滤；不将仅物理换行或 stat 差异当作新业务候选，不制造空提交。
 - 验证与限制：真实 Windows Git 红绿回归、重复只读与 HEAD/index/逻辑内容不变检查通过；原真实项目 UNKNOWN 执行通过原观察接纳路径继续，候选快照保持，没有手工重写状态或索引。
 
+### Windows 状态发布窗口（2026-10-22）
+
+- 改动：持久化状态的替换与读取、诊断读取复用现有 atomicfile 能力；正常读取和恢复保持同一权威状态及原校验路径，不新增第二份状态或恢复账本。
+- 验证与限制：加入并执行 Windows 原生发布窗口相关回归，核对并发读取及发布后的实际内容；本次提交拆分另核编译与最终树一致性，不把 Windows 检查写作 Unix 实测。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

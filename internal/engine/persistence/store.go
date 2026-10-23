@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/atomicfile"
 )
 
 // 状态目录内的协议文件名。temp 文件名形如 ".state.json.<random>.tmp"，
@@ -253,7 +255,7 @@ func (s *Store) Load() (*Snapshot, error) {
 // readDocument 读取最终状态文件并完成信封与完整性摘要校验；文件不
 // 存在返回 (nil, nil)（全新目录，revision 视为 0）。
 func (s *Store) readDocument() (*document, error) {
-	data, err := os.ReadFile(s.statePath())
+	data, err := atomicfile.ReadFile(s.statePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -564,7 +566,7 @@ func (s *Store) writeIntent(intent intentRecord) error {
 // executeCommit 是 execute 段单点：暂存文件原子替换最终状态文件，
 // 随后按平台策略同步目录，使 rename 持久。
 func (s *Store) executeCommit(tempName string) error {
-	if err := os.Rename(filepath.Join(s.dir, tempName), s.statePath()); err != nil {
+	if err := atomicfile.Replace(filepath.Join(s.dir, tempName), s.statePath()); err != nil {
 		return err
 	}
 	return syncDirectory(s.dir)
