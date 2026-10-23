@@ -16,6 +16,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/settings"
 )
 
 // These peers simulate a host protocol response; they do not prove a human UI.
@@ -44,6 +45,9 @@ func exchangeConfirmationFixture(t *testing.T, input io.Reader, output io.Writer
 			return nil, err
 		}
 		if frame["method"] == "elicitation/create" {
+			if name == "confirm_start" {
+				return nil, fmt.Errorf("conversation-authorized startup unexpectedly requested a native form")
+			}
 			params := objectOrEmpty(frame["params"])
 			schema := objectOrEmpty(params["requestedSchema"])
 			if params["mode"] != "form" || len(schema["properties"].(map[string]any)) != 0 || schema["required"] != nil {
@@ -150,28 +154,77 @@ func confirmInstalledFixtureStart(t *testing.T, command *exec.Cmd, root, documen
 	if err != nil {
 		return facade.Run{}, err
 	}
-	displayedID := ""
-	body, err := installedConfirmationFixture(t, command, "confirm_start", map[string]any{"root": root, "intake": position}, func(original map[string]any) {
-		materials := objectOrEmpty(original["materials"])
-		if original["root"] != root || original["baseSnapshot"] == nil || materials["content"] != document || materials["revision"] != preview.Revision {
-			t.Fatal("start form omitted the exact complete source and operation", original)
+	if preview.Content != document || preview.Revision != preview.IntakeCandidate.RequirementRevision {
+		t.Fatal("prepared intake differs from the complete fixture document")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return facade.Run{}, err
+	}
+	for _, entry := range command.Environ() {
+		if value, ok := strings.CutPrefix(entry, "HOME="); ok {
+			home = value
 		}
-		displayedID = textOf(original["runId"])
-	})
+	}
+	_, configurations, err := settings.LoadConfigurations(root, home)
+	if err != nil {
+		return facade.Run{}, err
+	}
+	configuration, err := settings.SelectConfiguration(configurations, "")
+	if err != nil {
+		return facade.Run{}, err
+	}
+	baseCommand := exec.Command("git", "-C", root, "rev-parse", "HEAD")
+	baseCommand.Env = command.Env
+	base, err := baseCommand.Output()
+	if err != nil {
+		return facade.Run{}, err
+	}
+	body, err := installedConfirmationFixture(t, command, "confirm_start", map[string]any{"root": root, "intake": position}, nil)
 	if err != nil {
 		return facade.Run{}, err
 	}
 	var response struct {
 		RunID string `json:"runId"`
 	}
-	if err := json.Unmarshal(body, &response); err != nil || response.RunID == "" || response.RunID != displayedID {
-		return facade.Run{}, fmt.Errorf("start response changed its displayed run identity: %s", body)
+	if err := json.Unmarshal(body, &response); err != nil || response.RunID == "" {
+		return facade.Run{}, fmt.Errorf("start response omitted its run identity: %s", body)
 	}
 	f, err := facade.Open(root, response.RunID)
 	if err != nil {
 		return facade.Run{}, err
 	}
-	return f.Show()
+	run, err := f.Show()
+	if err != nil {
+		return run, err
+	}
+	var request facade.StartRequest
+	requestBody, err := os.ReadFile(filepath.Join(root, facade.EngineNamespace, response.RunID, "request.json"))
+	if err != nil || json.Unmarshal(requestBody, &request) != nil {
+		t.Fatal("started run omitted its original request", err)
+	}
+	expectedReceipt := preview.IntakeCandidate
+	expectedReceipt.Confirmation = "conversation"
+	if request.RunID != response.RunID || run.RunID != response.RunID || request.AdmissionRoot != root || request.BaseSnapshot != strings.TrimSpace(string(base)) || run.BaseSnapshot != request.BaseSnapshot || !reflect.DeepEqual(request.IntakeConfirmationReceipt, expectedReceipt) || !reflect.DeepEqual(run.IntakeConfirmationReceipt, &expectedReceipt) {
+		t.Fatal("started run changed the original root, identity, baseline, intake, configuration or confirmation source", request, run)
+	}
+	if run.Configuration.Name != configuration.Name || !reflect.DeepEqual(run.Configuration.Configuration, configuration.Configuration) || !reflect.DeepEqual(request.FlowSelection, configuration.Configuration.FlowSelection) || !reflect.DeepEqual(request.FlowSelection, run.FlowSelection) {
+		t.Fatal("started run changed the selected saved configuration", configuration, run.Configuration)
+	}
+	paths, err := facade.OriginalPayloadPaths(filepath.Join(root, facade.EngineNamespace, response.RunID, "payloads", "intake"))
+	if err != nil || len(paths) != 1 {
+		t.Fatal("started run omitted its complete original intake", paths, err)
+	}
+	var retained facade.IntakePreview
+	intakeBody, err := os.ReadFile(paths[0])
+	if err != nil || json.Unmarshal(intakeBody, &retained) != nil {
+		t.Fatal("cannot read the retained original intake", err)
+	}
+	preview.IntakeCandidate = expectedReceipt
+	if !reflect.DeepEqual(retained, preview) {
+		t.Fatal("started run changed its complete original material or revision", retained)
+	}
+	return run, nil
 }
 
 func confirmFacadeFixtureControl(t *testing.T, f *facade.Facade, candidate facade.ControlCandidate) (protocol.Acceptance, facade.Run, error) {
