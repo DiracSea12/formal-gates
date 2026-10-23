@@ -46,8 +46,8 @@ func exchangeConfirmationFixture(t *testing.T, input io.Reader, output io.Writer
 		if frame["method"] == "elicitation/create" {
 			params := objectOrEmpty(frame["params"])
 			schema := objectOrEmpty(params["requestedSchema"])
-			if params["mode"] != "form" || !valuesEqual(schema["required"], []any{"confirmOperation"}) || getOf(getOf(schema, "properties"), "confirmOperation") == nil {
-				return nil, fmt.Errorf("service omitted its explicit original form: %v", frame)
+			if params["mode"] != "form" || len(schema["properties"].(map[string]any)) != 0 || schema["required"] != nil {
+				return nil, fmt.Errorf("service omitted its original confirmation-only schema: %v", frame)
 			}
 			var original map[string]any
 			message := strings.TrimPrefix(textOf(params["message"]), "Confirm this exact operation:\n")
@@ -57,7 +57,7 @@ func exchangeConfirmationFixture(t *testing.T, input io.Reader, output io.Writer
 			if check != nil {
 				check(original)
 			}
-			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{}}}); err != nil {
 				return nil, err
 			}
 			continue

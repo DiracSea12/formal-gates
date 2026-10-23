@@ -8,7 +8,7 @@ type Observation struct {
 	Facts decision.Observation
 	Read  func() (decision.Observation, error)
 	// Confirmation is the channel that confirmed this write; empty means the
-	// interactive form (or no confirmation happened for this event).
+	// host-policy form response (or no confirmation happened for this event).
 	Confirmation string
 }
 

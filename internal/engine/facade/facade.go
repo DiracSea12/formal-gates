@@ -407,7 +407,6 @@ type startIntent struct {
 }
 
 type StartOptions struct {
-	Confirm       func(any) error
 	Configuration string
 	Settings      *settings.Effective
 	Root          string
@@ -690,10 +689,7 @@ func startRun(options StartOptions, sliceStart *protocol.SliceRunStart, nativeRo
 			return nil, Run{}, err
 		}
 	}
-	if options.Confirm != nil {
-		if err := options.Confirm(map[string]any{"root": root, "runId": req.RunID, "vcs": req.VCS, "baseSnapshot": req.BaseSnapshot, "flowSelection": req.FlowSelection, "configuration": frozen.Configuration, "materials": initialMaterials}); err != nil {
-			return nil, Run{}, err
-		}
+	if options.ArtifactRoot != "" {
 		if err := validateArtifactBindings(options.ArtifactRoot, req.IntakeConfirmationReceipt); err != nil {
 			return nil, Run{}, err
 		}
@@ -2206,8 +2202,8 @@ func validateConfirmation(receipt IntakeConfirmationReceipt) error {
 	if receipt.Source != DefaultIntakeSource || receipt.Authority != DefaultIntakeAuthority || receipt.Transport != DefaultIntakeTransport {
 		return fmt.Errorf("%s: source, authority or transport is not the fixed stable launcher binding", InvalidIntakeConfirmation)
 	}
-	if receipt.Confirmation != "" && receipt.Confirmation != string(host.ConfirmationHostPermission) {
-		return fmt.Errorf("%s: confirmation channel %q is not a native host channel", InvalidIntakeConfirmation, receipt.Confirmation)
+	if receipt.Confirmation != "" && receipt.Confirmation != string(host.ConfirmationHostPermission) && receipt.Confirmation != string(host.ConfirmationConversation) {
+		return fmt.Errorf("%s: confirmation source %q is unsupported", InvalidIntakeConfirmation, receipt.Confirmation)
 	}
 	if strings.TrimSpace(receipt.RequirementSource) == "" || strings.TrimSpace(receipt.RequirementRevision) == "" || strings.TrimSpace(receipt.SolutionRevision) == "" || strings.TrimSpace(receipt.SolutionDigest) == "" {
 		return fmt.Errorf("%s: requirement and solution bindings are required", InvalidIntakeConfirmation)

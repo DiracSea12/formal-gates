@@ -222,9 +222,13 @@ func codexConfiguredBinding(config settings.Values) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Native config/auth resolution stays with app-server. Only its path is
-	// pinned; credentials are never copied into an evidence record.
-	binding["environment"] = map[string]any{"HOME": home, "CODEX_HOME": nativeHome}
+	// Native config/auth resolution stays with app-server. Its paths and the
+	// public host permission profile are pinned without copying credentials.
+	environment := map[string]any{"HOME": home, "CODEX_HOME": nativeHome}
+	if profile := os.Getenv("CODEX_PERMISSION_PROFILE"); profile != "" {
+		environment["CODEX_PERMISSION_PROFILE"] = profile
+	}
+	binding["environment"] = environment
 	return binding, nil
 }
 
@@ -413,8 +417,9 @@ func codexInteractionObserved(hold *nativePendingHold, message map[string]any) b
 }
 
 // ThreadStartResponse and ThreadResumeResponse expose effective configuration.
-// App-server owns inherited permissions; only a read-only role adds a sandbox
-// constraint. Both execution and recovery check this same native response.
+// Non-readonly roles use the captured host permission profile when supplied;
+// read-only roles constrain the sandbox. Execution and recovery check the same
+// native response against the original issued request.
 func codexCheckConfiguration(request, configuration any, thread string) error {
 	workspace, _ := getOf(request, "workspace").(string)
 	sandboxType, _ := getOf(getOf(configuration, "sandbox"), "type").(string)
@@ -422,6 +427,10 @@ func codexCheckConfiguration(request, configuration any, thread string) error {
 	nativeThread := getOf(configuration, "thread")
 	if !valuesEqual(getOf(nativeThread, "id"), thread) || !valuesEqual(getOf(nativeThread, "ephemeral"), false) || !valuesEqual(resolveNativePath(textOf(getOf(configuration, "cwd"))), resolveNativePath(workspace)) || sandboxType == "" || getOf(configuration, "approvalPolicy") == nil || reviewer == "" || (getOf(request, "read_only") == true && sandboxType != "readOnly") {
 		return &blockedError{message: "CODEX_CONFIG: native workspace/persistence/permissions differ"}
+	}
+	profile := nativeBindingEnvironment(getOf(request, "binding"))["CODEX_PERMISSION_PROFILE"]
+	if getOf(request, "read_only") != true && profile != "" && !valuesEqual(getOf(getOf(configuration, "activePermissionProfile"), "id"), profile) {
+		return &blockedError{message: "CODEX_CONFIG: native permission profile differs or is missing"}
 	}
 	selected, _ := getOf(configuration, "model").(string)
 	requested, _ := getOf(request, "model").(string)
@@ -520,6 +529,8 @@ func codexExecute(request any, directory string, probe bool, services ...Executi
 	params := map[string]any{"cwd": workspace, "config": map[string]any{"bypass_hook_trust": true, "features.shell_tool": false, "features.unified_exec": false, "tools.view_image": false, "web_search": "disabled"}}
 	if readOnly {
 		params["sandbox"] = "read-only"
+	} else if profile := environment["CODEX_PERMISSION_PROFILE"]; profile != "" {
+		params["permissions"] = profile
 	}
 	model, _ := getOf(request, "model").(string)
 	if model != "" {

@@ -489,7 +489,7 @@ func TestDeliveredCandidateRequalifiesAfterExplicitCarry(t *testing.T) {
 
 func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 	t.Parallel()
-	for _, status := range []string{"spawned", "awaiting-result", "unknown", "attached", "claimed", "failed"} {
+	for _, status := range []string{"spawned", "awaiting-result", "unknown", "attached", "unstarted-claim", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			root := t.TempDir()
 			base := snapshotRepoCommits(t, root)[0]
@@ -536,7 +536,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 					}
 				}
 			}
-			if status == "claimed" {
+			if status == "unstarted-claim" {
 				refs, err := d.f.workerMaterials(before.State, true)
 				if err != nil {
 					t.Fatal(err)
@@ -620,7 +620,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 			if _, worker := after.State.WorkerInput(action, d.f.definition); worker {
 				t.Fatal("obsolete execution still admitted")
 			}
-			if _, replacement := after.State.PendingActions[obsolete.ReplacedBy]; replacement && status != "failed" && status != "attached" {
+			if _, replacement := after.State.PendingActions[obsolete.ReplacedBy]; replacement && status != "failed" && status != "attached" && status != "unstarted-claim" {
 				t.Fatal("replacement issued before stop", obsolete)
 			}
 			assertStopped := func(withLate bool) {
@@ -646,7 +646,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 					t.Fatal("late original raw evidence lost")
 				}
 			}
-			if status == "failed" || status == "attached" {
+			if status == "failed" || status == "attached" || status == "unstarted-claim" {
 				assertStopped(false)
 				return
 			}
@@ -657,7 +657,7 @@ func TestRequirementRedoStopsOriginalExecutionBeforeReplacement(t *testing.T) {
 			if acceptance := d.submit(late); acceptance.Status != "OBSOLETE_RESULT" {
 				t.Fatal("late result advanced original duty", acceptance)
 			}
-			if status == "unknown" || status == "claimed" {
+			if status == "unknown" {
 				unknown, err := d.f.engine.Load()
 				if err != nil {
 					t.Fatal(err)

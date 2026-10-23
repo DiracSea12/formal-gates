@@ -650,6 +650,10 @@ func writeSubmittedAnswer(directory string) error {
 	return os.WriteFile(path, body, 0600)
 }
 
+// ErrSemanticSubmissionMissing identifies a completed model's omitted result;
+// unavailable or inconsistent evidence retains its original error.
+var ErrSemanticSubmissionMissing = &blockedError{message: "NATIVE_RESULT: current invocation has no submitted semantic tool evidence"}
+
 func submittedSemantics(directory string) ([]byte, error) {
 	if err := verifyNativeToolEvidence(directory); err != nil {
 		return nil, err
@@ -673,7 +677,7 @@ func submittedSemantics(directory string) ([]byte, error) {
 			return fact.Content, nil
 		}
 	}
-	return nil, &blockedError{message: "NATIVE_RESULT: current invocation has no submitted semantic tool evidence"}
+	return nil, ErrSemanticSubmissionMissing
 }
 
 // normalizeNewlines splits native diagnostic streams with LF, CRLF or CR endings.

@@ -46,7 +46,7 @@ func waitSelectionOutput(t *testing.T, out *lockedTestBuffer, token string) {
 	}
 }
 
-func TestConversationSelectsPendingPanelBeforeNativeStartupConfirmation(t *testing.T) {
+func TestConversationSelectsPendingPanelAndStartsConfirmedIntake(t *testing.T) {
 	if testkit.RunNativePackageTest(t) {
 		return
 	}
@@ -166,7 +166,7 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 	}
 	if conversation {
 		send(3, "confirm_start", map[string]any{"intake": position, "configuration": selection})
-		waitSelectionOutput(t, &out, `"method":"elicitation/create"`)
+		waitSelectionOutput(t, &out, `"id":3`)
 	} else {
 		body := fmt.Sprintf(`{"window":%q,"configuration":%q}`, window.ID, expectedConfiguration)
 		request, err := http.NewRequestWithContext(ctx, "POST", "http://"+service.Instance.Addr+"/api/window/select", strings.NewReader(body))
@@ -185,13 +185,17 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 			t.Fatalf("panel click: %d", response.StatusCode)
 		}
 		waitSelectionOutput(t, &out, `selected`)
+		selectedStates, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
+		if err != nil || !reflect.DeepEqual(before, selectedStates) {
+			t.Fatal("configuration selection alone started a run", selectedStates, err)
+		}
 		send(3, "confirm_start", map[string]any{"intake": position, "configuration": selection})
-		waitSelectionOutput(t, &out, `"method":"elicitation/create"`)
+		waitSelectionOutput(t, &out, `"id":3`)
 	}
 	select {
 	case <-window.Done:
 	default:
-		t.Fatal("conversation did not resolve pending panel before native confirmation")
+		t.Fatal("startup did not resolve the pending configuration panel")
 	}
 	result := window.Result()
 	if result.Status != "selected" || result.Configuration != expectedConfiguration {
@@ -214,9 +218,6 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 		t.Fatalf("conversation left its panel open: %v %v", open, err)
 	}
 	waitSelectionOutput(t, &out, `selected`)
-	if err := encoder.Encode(map[string]any{"id": "formal-gates-confirmation-1", "result": map[string]any{"action": "cancel"}}); err != nil {
-		t.Fatal(err)
-	}
 	waitSelectionOutput(t, &out, `"id":3`)
 	feed.Close()
 	select {
@@ -228,8 +229,8 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 		t.Fatal("serve did not finish")
 	}
 	after, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
-	if err != nil || !reflect.DeepEqual(before, after) {
-		t.Fatalf("cancelled native startup created run: before=%v after=%v err=%v", before, after, err)
+	if err != nil || len(after) != len(before)+1 {
+		t.Fatalf("confirmed startup did not create exactly one run: before=%v after=%v err=%v", before, after, err)
 	}
 	select {
 	case <-serviceStopped:
@@ -239,7 +240,35 @@ func exercisePendingPanelSelection(t *testing.T, conversation bool, form string)
 	case <-time.After(10 * time.Second):
 		t.Fatal("last-window service did not stop after delivering selected")
 	}
-	if strings.Contains(out.String(), `"status":"ACTIVE"`) {
-		t.Fatalf("configuration choice approved startup: %s", out.String())
+	decoder := json.NewDecoder(strings.NewReader(out.String()))
+	var started facade.Run
+	for decoder.More() {
+		var frame struct {
+			ID     int `json:"id"`
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		if err := decoder.Decode(&frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.ID == 3 {
+			if frame.Result.IsError || len(frame.Result.Content) != 1 {
+				t.Fatal("confirmed startup returned an error", frame)
+			}
+			if err := json.Unmarshal([]byte(frame.Result.Content[0].Text), &started); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var request facade.StartRequest
+	if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, started.RunID, "request.json"), &request); err != nil {
+		t.Fatal(err)
+	}
+	if started.Status != "ACTIVE" || request.IntakeConfirmationReceipt.Confirmation != "conversation" || request.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest || strings.Contains(out.String(), `"method":"elicitation/create"`) {
+		t.Fatal("confirmed startup did not preserve its source without a form", started.RunID, started.Status)
 	}
 }

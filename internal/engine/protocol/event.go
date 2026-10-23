@@ -1045,7 +1045,7 @@ type Acceptance struct {
 	FailureClass   string   `json:"failureClass,omitempty"`
 	RecoveryAction string   `json:"recoveryAction,omitempty"`
 	// Confirmation records which channel confirmed the decision: empty for the
-	// interactive form, "host-permission" when the host's permission gate
+	// host-policy form response, "host-permission" when the host's permission gate
 	// admitted the confirmation call.
 	Confirmation string `json:"confirmation,omitempty"`
 }

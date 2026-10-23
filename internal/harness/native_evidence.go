@@ -11,6 +11,10 @@ import (
 // NativeResultEvidence uses the native adapter's original source verifier.
 // Parsed output and original output identity remain distinct evidence.
 func NativeResultEvidence(provider, directory string, source map[string]any) ([]byte, string, string, error) {
+	if source["source"] == "host" {
+		evidence, err := HostWorkerResultEvidence(provider, directory, source)
+		return evidence.Answer, evidence.Digest, evidence.Identity, err
+	}
 	impl, err := nativeImplementationFor(provider)
 	if err != nil {
 		return nil, "", "", err

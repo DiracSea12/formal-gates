@@ -1389,6 +1389,7 @@ func TestCodexNativeSupervisorAndInterrupt(t *testing.T) {
 
 func TestCodexNativeCaptureAndEvidence(t *testing.T) {
 	s := newCodexScenario(t)
+	t.Setenv("CODEX_PERMISSION_PROFILE", "")
 	t.Setenv("PATH", filepath.Dir(textOf(getOf(getOf(getOf(s.request, "binding"), "launch"), "executable"))))
 	t.Setenv("HOME", s.home)
 	t.Setenv("CODEX_HOME", s.config)

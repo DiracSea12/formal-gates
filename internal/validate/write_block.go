@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,11 +10,14 @@ import (
 	"slices"
 	"strings"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
 	engineRuntime "formal-gates/internal/engine/runtime"
+	"formal-gates/internal/engine/worker"
 	"formal-gates/internal/host"
 )
 
@@ -417,7 +421,7 @@ func hookBoundAgentType(repoRoot, identity string) string {
 // readHookEngineState reads the current engine envelope for auxiliary scope.
 // Core loaders and Submit retain full integrity and business admission authority.
 func readHookEngineState(statePath string) (*protocol.State, error) {
-	data, err := os.ReadFile(statePath)
+	data, err := atomicfile.ReadFile(statePath)
 	if err != nil {
 		return nil, err
 	}
@@ -501,6 +505,12 @@ func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool
 	if toolName == "" {
 		return HookDecision{}, false
 	}
+	if boundHostWorker(decoded, providers...) {
+		if managedHostWorkerTool(decoded) {
+			return allowHook("issued host worker uses its managed tools"), true
+		}
+		return denyWrite("issued host workers must use formal-gates worker tools; native tools bypass the issued workspace and edit checks"), true
+	}
 	command := hookCommand(decoded)
 	if !isWriteTool(toolName, command) {
 		return HookDecision{}, false
@@ -569,6 +579,129 @@ func decideWriteBlockValue(decoded any, providers ...string) (HookDecision, bool
 
 	// 其余代理不阻断。
 	return allowHook(input.agentType + " is not a reviewer-class agent; write allowed"), true
+}
+
+// The registry reference only locates original evidence across host and task
+// working directories. The native turn, issued material and engine receipt
+// establish whether this caller is a managed worker.
+func boundHostWorker(value any, providers ...string) bool {
+	if len(providers) == 0 {
+		return false
+	}
+	descriptor, err := host.Lookup(providers[0])
+	if err != nil || descriptor.ID != host.Codex {
+		return false
+	}
+	transcript, _ := hookOwnerIdentity(value)
+	turnID := hookPayloadField(value, "turn_id", "turnId")
+	if transcript == "" || turnID == "" {
+		return false
+	}
+	thread, err := host.ReadCodexThread(transcript)
+	if err != nil || !thread.SourceSubagent {
+		return false
+	}
+	registry, err := LoadRegistry(installRegistryPath(InstallOptions{}))
+	if err != nil {
+		return false
+	}
+	for _, record := range registry.Records {
+		provider, err := host.Lookup(record.Host)
+		if err != nil || provider.ID != descriptor.ID || record.Status != "active" || record.StateRoot == "" {
+			continue
+		}
+		var pointer struct {
+			Job string `json:"job"`
+		}
+		body, err := os.ReadFile(filepath.Join(record.StateRoot, "host-workers", thread.ID+".json"))
+		if err != nil || json.Unmarshal(body, &pointer) != nil || !filepath.IsAbs(pointer.Job) {
+			continue
+		}
+		if hostWorkerEvidenceMatches(pointer.Job, thread, turnID) {
+			return true
+		}
+	}
+	return false
+}
+
+func hostWorkerEvidenceMatches(job string, thread host.CodexThread, turnID string) bool {
+	var request struct {
+		Provider   string                `json:"provider"`
+		Host       host.CodexInvocation  `json:"host"`
+		Controller *host.CodexInvocation `json:"controller"`
+		Engine     struct {
+			Root           string                `json:"root"`
+			RunID          string                `json:"runId"`
+			WorkerMaterial facade.WorkerMaterial `json:"workerMaterial"`
+			ResumeActionID string                `json:"resumeActionId"`
+		} `json:"engine"`
+	}
+	body, err := os.ReadFile(filepath.Join(job, "native-request.json"))
+	if err != nil || json.Unmarshal(body, &request) != nil || request.Provider != "codex" {
+		return false
+	}
+	ref := request.Host
+	if ref.Session != thread.ID || ref.Parent != thread.ParentThreadID || ref.Turn != turnID || canonicalRegistryPath(ref.Transcript) != canonicalRegistryPath(thread.Path) {
+		return false
+	}
+	_, turn, err := ref.Observe()
+	if err != nil || turn.State != "running" {
+		return false
+	}
+	materialRef := request.Engine.WorkerMaterial
+	if canonicalRegistryPath(facade.WorkerExecutionDirectory(materialRef, request.Engine.ResumeActionID)) != canonicalRegistryPath(job) {
+		return false
+	}
+	statePath := filepath.Join(request.Engine.Root, ".gates", "engine", request.Engine.RunID, "state.json")
+	if canonicalRegistryPath(filepath.Dir(filepath.Dir(materialRef.Path))) != canonicalRegistryPath(filepath.Dir(statePath)) {
+		return false
+	}
+	state, err := readHookEngineState(statePath)
+	if err != nil || state.Phase == engineRuntime.PhaseTerminal || state.RunID != request.Engine.RunID {
+		return false
+	}
+	parent := state.OwnerSession
+	if request.Controller != nil {
+		if _, _, err := request.Controller.Observe(); err != nil {
+			return false
+		}
+		parent = request.Controller.Session
+	}
+	if parent == "" || parent != ref.Parent {
+		return false
+	}
+	receipt, issued := state.SpawnReceipts[materialRef.ActionID]
+	pending, active := state.PendingActions[materialRef.ActionID]
+	if !issued || !active || pending.AttemptID != materialRef.AttemptID || receipt.ActionID != materialRef.ActionID || receipt.Task != pending.Task || receipt.Correlation != ref.Session || receipt.Provider != request.Provider || receipt.Status != protocol.SpawnStatusSpawned && receipt.Status != protocol.SpawnStatusAttached {
+		return false
+	}
+	body, err = os.ReadFile(materialRef.Path)
+	if err != nil || fmt.Sprintf("sha256:%x", sha256.Sum256(body)) != materialRef.Digest {
+		return false
+	}
+	var material worker.Material
+	return json.Unmarshal(body, &material) == nil && material.Input.RunID == state.RunID && material.Input.Pending == pending
+}
+
+func managedHostWorkerTool(value any) bool {
+	name := hookToolName(value)
+	if name == "functions.exec" || name == "functions.wait" {
+		return true
+	}
+	for _, prefix := range []string{"mcp__formal_gates__", "mcp__formal-gates__"} {
+		if tool, found := strings.CutPrefix(name, prefix); found {
+			return tool == "worker" || tool == "workspace" || tool == "submit_semantics" || tool == "confirm_control" || tool == "confirm_native"
+		}
+	}
+	command := strings.TrimSpace(hookCommand(value))
+	if strings.HasPrefix(command, "&") && !strings.HasPrefix(command, "&&") {
+		command = strings.TrimSpace(command[1:])
+	}
+	if len(commandSegments(command)) != 1 || len(redirectWriteTargets(command)) != 0 {
+		return false
+	}
+	tokens := executableCommandTokens(command)
+	return len(tokens) >= 3 && isFormalGatesExecutableToken(tokens[0]) && tokens[1] == "workflow" && tokens[2] == "worker"
 }
 
 // writeTargetsOutsideActiveRoot reports whether every confidently resolved write

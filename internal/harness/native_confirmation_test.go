@@ -16,19 +16,20 @@ func TestNativeConfirmationAcceptsOnlyCurrentHostResponse(t *testing.T) {
 		name, capabilities, response, problem string
 		accepted                              bool
 	}{
-		{"accept", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`, "", true},
-		{"legacy form capability", `{"elicitation":{}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`, "", true},
+		{"accept", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "", true},
+		{"legacy form capability", `{"elicitation":{}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "", true},
 		{"decline", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"decline"}}`, "not executed", false},
 		{"cancel", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"cancel"}}`, "not executed", false},
 		{"missing capability", `{}`, "", "NATIVE_CONFIRMATION_UNAVAILABLE", false},
 		{"url only", `{"elicitation":{"url":{}}}`, "", "NATIVE_CONFIRMATION_UNAVAILABLE", false},
-		{"another identity", `{"elicitation":{"form":{}}}`, `{"id":"another-request","result":{"action":"accept","content":{"confirmOperation":true}}}`, "another request", false},
-		{"request cannot answer", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","method":"tools/call","result":{"action":"accept","content":{"confirmOperation":true}}}`, "not received", false},
+		{"another identity", `{"elicitation":{"form":{}}}`, `{"id":"another-request","result":{"action":"accept","content":{}}}`, "another request", false},
+		{"request cannot answer", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","method":"tools/call","result":{"action":"accept","content":{}}}`, "not received", false},
 		{"disconnect", `{"elicitation":{"form":{}}}`, "", "not received", false},
-		{"empty acceptance", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "explicitly confirm", false},
-		{"cancelled original call", `{"elicitation":{"form":{}}}`, `{"method":"notifications/cancelled","params":{"requestId":2}}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`, "not executed", false},
-		{"another cancellation", `{"elicitation":{"form":{}}}`, `{"method":"notifications/cancelled","params":{"requestId":99}}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`, "", true},
-		{"host ping", `{"elicitation":{"form":{}}}`, `{"id":"host-ping","method":"ping"}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`, "", true},
+		{"host policy acceptance", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "", true},
+		{"missing action", `{"elicitation":{"form":{}}}`, `{"id":"formal-gates-confirmation-1","result":{"content":{}}}`, "supported host action", false},
+		{"cancelled original call", `{"elicitation":{"form":{}}}`, `{"method":"notifications/cancelled","params":{"requestId":2}}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "not executed", false},
+		{"another cancellation", `{"elicitation":{"form":{}}}`, `{"method":"notifications/cancelled","params":{"requestId":99}}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "", true},
+		{"host ping", `{"elicitation":{"form":{}}}`, `{"id":"host-ping","method":"ping"}` + "\n" + `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`, "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":` + test.capabilities + `}}` + "\n" +
@@ -69,6 +70,11 @@ func TestNativeConfirmationAcceptsOnlyCurrentHostResponse(t *testing.T) {
 				if len(requests) != 1 || requests[0]["id"] != "formal-gates-confirmation-1" || getOf(getOf(requests[0], "params"), "mode") != "form" {
 					t.Fatal("confirmation did not use its original MCP request", requests)
 				}
+				schema := getOf(getOf(requests[0], "params"), "requestedSchema").(map[string]any)
+				properties, ok := schema["properties"].(map[string]any)
+				if !ok || len(properties) != 0 || schema["required"] != nil || schema["type"] != "object" || schema["additionalProperties"] != false {
+					t.Fatal("operation confirmation asked the host to collect an extra answer", schema)
+				}
 				message := textOf(getOf(getOf(requests[0], "params"), "message"))
 				if !strings.Contains(message, "original operation") || !strings.Contains(message, "original revision") {
 					t.Fatal("host did not receive the exact operation", message)
@@ -83,7 +89,7 @@ func TestNativeConfirmationKeepsOriginalCallWhileAnotherCallIsBusy(t *testing.T)
 		`{"id":2,"method":"tools/call","params":{"name":"original","arguments":{"operation":"first"}}}` + "\n" +
 		`{"id":3,"method":"tools/call","params":{"name":"second","arguments":{"operation":"second"}}}` + "\n" +
 		`{"id":4,"method":"ping"}` + "\n" +
-		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}` + "\n"
 	var output, errors bytes.Buffer
 	calls := 0
 	code := ServeTools(strings.NewReader(wire), &output, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
@@ -120,8 +126,8 @@ func TestNativeConfirmationKeepsOriginalCallWhileAnotherCallIsBusy(t *testing.T)
 func TestNativeConfirmationIgnoresStaleFormReplies(t *testing.T) {
 	wire := `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}` + "\n" +
 		`{"id":2,"method":"tools/call","params":{"name":"confirm","arguments":{}}}` + "\n" +
-		`{"id":"formal-gates-confirmation-9","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n" +
-		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+		`{"id":"formal-gates-confirmation-9","result":{"action":"accept","content":{}}}` + "\n" +
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}` + "\n"
 	var out, errors bytes.Buffer
 	executed := false
 	code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
@@ -209,7 +215,7 @@ func TestServeToolsWithContextEOFCancelsActiveCall(t *testing.T) {
 func TestNativeConfirmationAcceptsBufferedReplyAtEOF(t *testing.T) {
 	wire := `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}` + "\n" +
 		`{"id":2,"method":"tools/call","params":{"name":"confirm","arguments":{}}}` + "\n" +
-		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}` + "\n"
 	var out, errors bytes.Buffer
 	executed := 0
 	code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
@@ -230,7 +236,7 @@ func TestNativeConfirmationRejectsReplyAfterCancel(t *testing.T) {
 	wire := `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}` + "\n" +
 		`{"id":2,"method":"tools/call","params":{"name":"confirm","arguments":{}}}` + "\n" +
 		`{"method":"notifications/cancelled","params":{"requestId":2}}` + "\n" +
-		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}` + "\n"
 	var out, errors bytes.Buffer
 	executed := false
 	code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
@@ -341,11 +347,11 @@ func TestNativeConfirmationScopingAcrossCalls(t *testing.T) {
 	}()
 	fmt.Fprint(feed, `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}`+"\n")
 	fmt.Fprint(feed, `{"id":2,"method":"tools/call","params":{"name":"noop","arguments":{}}}`+"\n")
-	fmt.Fprint(feed, `{"id":"stray-foreign","result":{"action":"accept","content":{"confirmOperation":true}}}`+"\n")
-	fmt.Fprint(feed, `{"id":"formal-gates-confirmation-9","result":{"action":"accept","content":{"confirmOperation":true}}}`+"\n")
+	fmt.Fprint(feed, `{"id":"stray-foreign","result":{"action":"accept","content":{}}}`+"\n")
+	fmt.Fprint(feed, `{"id":"formal-gates-confirmation-9","result":{"action":"accept","content":{}}}`+"\n")
 	fmt.Fprint(feed, `{"id":3,"method":"tools/call","params":{"name":"confirm","arguments":{}}}`+"\n")
 	<-confirming
-	fmt.Fprint(feed, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`+"\n")
+	fmt.Fprint(feed, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`+"\n")
 	var final map[string]any
 	deadline := time.After(10 * time.Second)
 	for final == nil {
@@ -438,7 +444,7 @@ func TestServeToolsIgnoresStalePingReply(t *testing.T) {
 	wire := `{"id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{}}}}}` + "\n" +
 		`{"id":2,"method":"tools/call","params":{"name":"confirm","arguments":{}}}` + "\n" +
 		`{"id":"formal-gates-ping-9","result":{}}` + "\n" +
-		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}` + "\n"
+		`{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}` + "\n"
 	var out, errors bytes.Buffer
 	executed := false
 	code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {

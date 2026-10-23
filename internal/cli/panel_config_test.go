@@ -193,6 +193,7 @@ func TestWorkflowServeListsConfigureTool(t *testing.T) {
 		Description string `json:"description"`
 		InputSchema struct {
 			Properties           map[string]json.RawMessage `json:"properties"`
+			Required             json.RawMessage            `json:"required"`
 			AdditionalProperties bool                       `json:"additionalProperties"`
 		} `json:"inputSchema"`
 	}
@@ -215,6 +216,15 @@ func TestWorkflowServeListsConfigureTool(t *testing.T) {
 	names := map[string]toolDecl{}
 	for _, toolFrame := range declared {
 		names[toolFrame.Name] = toolFrame
+		var required []string
+		if len(toolFrame.InputSchema.Required) == 0 || string(toolFrame.InputSchema.Required) == "null" || json.Unmarshal(toolFrame.InputSchema.Required, &required) != nil {
+			t.Errorf("%s required must encode a JSON array: %s", toolFrame.Name, toolFrame.InputSchema.Required)
+		}
+		for _, field := range required {
+			if _, ok := toolFrame.InputSchema.Properties[field]; !ok {
+				t.Errorf("%s requires undeclared field %s", toolFrame.Name, field)
+			}
+		}
 	}
 	for _, want := range []string{"confirm_start", "confirm_control", "confirm_native", "configure"} {
 		if _, ok := names[want]; !ok {

@@ -65,13 +65,14 @@ func TestDSHPluginConfigureClientLifecycle(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	t.Logf("plugin client test output:\n%s", out)
 	if err != nil {
+		log, _ := os.ReadFile(logFile)
+		t.Logf("control protocol:\n%s", log)
 		t.Fatalf("plugin client test failed: %v", err)
 	}
 }
 
-// fakeMCPService is the helper-process half of the test: a line-delimited
-// JSON-RPC peer that records every request identity it receives and rejects
-// anything but the configure tool with its expected arguments.
+// fakeMCPService checks bidirectional JSON-RPC identities, liveness during
+// configuration and held control calls, and request-scoped cancellation.
 func fakeMCPService() {
 	log := func(line string) {
 		path := os.Getenv("FAKE_MCP_LOG")
@@ -90,6 +91,11 @@ func fakeMCPService() {
 	fail := func(id json.RawMessage, message string) {
 		send(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32602, "message": message}})
 	}
+	pingReplies := map[string]func(){}
+	ping := func(id string, next func()) {
+		pingReplies[id] = next
+		send(map[string]any{"jsonrpc": "2.0", "id": id, "method": "ping"})
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	pending := map[float64]bool{}
@@ -98,50 +104,97 @@ func fakeMCPService() {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
 			continue
 		}
 		switch frame.Method {
+		case "":
+			var id string
+			_ = json.Unmarshal(frame.ID, &id)
+			if next, ok := pingReplies[id]; ok {
+				delete(pingReplies, id)
+				if string(frame.Result) != "{}" || len(frame.Error) != 0 {
+					log(fmt.Sprintf("PING_REJECTED %s %s", id, scanner.Bytes()))
+					continue
+				}
+				log("PING_OK " + id)
+				next()
+			} else if id == "unknown-method" {
+				var response struct {
+					Code int `json:"code"`
+				}
+				_ = json.Unmarshal(frame.Error, &response)
+				log(fmt.Sprintf("UNKNOWN_REPLY %d", response.Code))
+			}
 		case "initialize":
 			log(fmt.Sprintf("INIT %s", frame.ID))
-			send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{
-				"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "serverInfo": map[string]any{"name": "fake", "version": "1"},
-			}})
+			ping("ping-initialize", func() {
+				send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{
+					"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "serverInfo": map[string]any{"name": "fake", "version": "1"},
+				}})
+			})
 		case "tools/list":
 			log(fmt.Sprintf("LIST %s", frame.ID))
-			send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{"tools": []any{
-				map[string]any{"name": "configure", "description": "fake configure", "inputSchema": map[string]any{"type": "object"}},
-				map[string]any{"name": "confirm_start", "description": "fake confirm", "inputSchema": map[string]any{"type": "object"}},
-			}}})
+			ping("ping-discovery", func() {
+				send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{"tools": []any{
+					map[string]any{"name": "configure", "description": "fake configure", "inputSchema": map[string]any{"type": "object"}},
+					map[string]any{"name": "confirm_control", "description": "fake confirm", "inputSchema": map[string]any{"type": "object"}},
+				}}})
+			})
 		case "tools/call":
 			var id float64
 			_ = json.Unmarshal(frame.ID, &id)
 			var params struct {
 				Name      string `json:"name"`
 				Arguments struct {
-					Force bool   `json:"force"`
-					Hold  bool   `json:"hold"`
-					Root  string `json:"root"`
+					Force     bool   `json:"force"`
+					Hold      bool   `json:"hold"`
+					Root      string `json:"root"`
+					Candidate int    `json:"candidate"`
 				} `json:"arguments"`
+				Metadata struct {
+					Owner struct {
+						Session    string `json:"session"`
+						Transcript string `json:"transcript"`
+						Provider   string `json:"provider"`
+					} `json:"formal-gates/owner"`
+				} `json:"_meta"`
 			}
 			_ = json.Unmarshal(frame.Params, &params)
 			log(fmt.Sprintf("CALL %v name=%s root=%s", id, params.Name, params.Arguments.Root))
+			if params.Name == "confirm_control" {
+				if params.Arguments.Root != "/project" || params.Arguments.Candidate != 3 || params.Metadata.Owner.Session != "session-1" || params.Metadata.Owner.Transcript != "" || params.Metadata.Owner.Provider != "" {
+					fail(frame.ID, "original control identity changed")
+					continue
+				}
+				pending[id] = true
+				log(fmt.Sprintf("HELD_CONTROL %v candidate=%d session=%s", id, params.Arguments.Candidate, params.Metadata.Owner.Session))
+				ping("ping-held-control", func() {
+					send(map[string]any{"jsonrpc": "2.0", "id": "unknown-method", "method": "unsupported/method"})
+				})
+				continue
+			}
 			if params.Name != "configure" || !params.Arguments.Force {
 				fail(frame.ID, "unexpected tool or arguments")
 				continue
 			}
 			if params.Arguments.Hold {
 				pending[id] = true
+				ping("ping-held-configure", func() {})
 				continue
 			}
-			text, _ := json.Marshal(map[string]any{
-				"status": "selected", "name": params.Name,
-				"root": params.Arguments.Root, "requestId": id,
+			ping(fmt.Sprintf("ping-configure-%v", id), func() {
+				text, _ := json.Marshal(map[string]any{
+					"status": "selected", "name": params.Name,
+					"root": params.Arguments.Root, "requestId": id,
+				})
+				send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{
+					"content": []any{map[string]any{"type": "text", "text": string(text)}}, "isError": false,
+				}})
 			})
-			send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(frame.ID), "result": map[string]any{
-				"content": []any{map[string]any{"type": "text", "text": string(text)}}, "isError": false,
-			}})
 		case "notifications/cancelled":
 			var params struct {
 				RequestID float64 `json:"requestId"`
@@ -150,8 +203,9 @@ func fakeMCPService() {
 			if pending[params.RequestID] {
 				delete(pending, params.RequestID)
 				log(fmt.Sprintf("CANCELLED %v", params.RequestID))
+				log(fmt.Sprintf("LATE_REPLY %v", params.RequestID))
 				send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(fmt.Sprint(params.RequestID)), "result": map[string]any{
-					"content": []any{map[string]any{"type": "text", "text": `{"status":"cancelled"}`}}, "isError": false,
+					"content": []any{map[string]any{"type": "text", "text": `{"status":"selected","late":true}`}}, "isError": false,
 				}})
 			}
 		}

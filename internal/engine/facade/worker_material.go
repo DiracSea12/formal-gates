@@ -103,7 +103,25 @@ func claimedWorkerInvocations(root, runID, actionID, attemptID string) ([]native
 		}
 		directory := filepath.Join(actionDir, entry.Name())
 		if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
-			continue
+			var source struct {
+				Host *host.CodexInvocation `json:"host"`
+			}
+			body, readErr := os.ReadFile(filepath.Join(directory, "native-request.json"))
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			if readErr != nil {
+				return nil, readErr
+			}
+			if err := json.Unmarshal(body, &source); err != nil {
+				return nil, err
+			}
+			if source.Host == nil {
+				continue
+			}
+			if _, _, err := source.Host.Observe(); err != nil {
+				return nil, err
+			}
 		} else if err != nil {
 			return nil, err
 		}
@@ -130,6 +148,17 @@ func workerExecutionBridge(root, runID string) func(protocol.PendingAction, prot
 		for _, invocation := range invocations {
 			provider := invocation.request["provider"].(string)
 			fact := &protocol.SpawnReceiptPayload{ActionID: pending.ActionID, Provider: invocation.material.Input.Provider, Correlation: invocation.directory, Status: protocol.SpawnStatusUnknown}
+			if invocation.request["host"] != nil {
+				ref, err := hostInvocation(invocation.request)
+				if err != nil {
+					return nil, err
+				}
+				if _, _, err := ref.Observe(); err != nil {
+					return nil, err
+				}
+				fact.Correlation, fact.Status = ref.Session, protocol.SpawnStatusSpawned
+				return fact, nil
+			}
 			if _, err := os.Stat(filepath.Join(invocation.directory, "identity.json")); err == nil && NativeStartVerifier != nil {
 				identity, err := NativeStartVerifier(provider, invocation.directory)
 				if err != nil {
@@ -147,14 +176,25 @@ func workerExecutionBridge(root, runID string) func(protocol.PendingAction, prot
 
 func workerExecutionStoppedBridge(root, runID string) func(protocol.PendingAction, protocol.Attempt) (bool, error) {
 	return func(pending protocol.PendingAction, attempt protocol.Attempt) (bool, error) {
-		if NativeJobStopped == nil {
-			return false, nil
-		}
 		invocations, err := claimedWorkerInvocations(root, runID, pending.ActionID, attempt.ID)
 		if err != nil {
 			return false, err
 		}
 		for _, invocation := range invocations {
+			if invocation.request["host"] != nil {
+				ref, err := hostInvocation(invocation.request)
+				if err != nil {
+					return false, err
+				}
+				_, turn, err := ref.Observe()
+				if err != nil {
+					return false, err
+				}
+				if turn.State == "running" {
+					return false, nil
+				}
+				continue
+			}
 			// Claim writes owner then process while holding the native window;
 			// execution starts only after both. Missing process here is unstarted.
 			if _, err := os.Stat(filepath.Join(invocation.directory, "process.json")); os.IsNotExist(err) {
@@ -162,7 +202,7 @@ func workerExecutionStoppedBridge(root, runID string) func(protocol.PendingActio
 			} else if err != nil {
 				return false, err
 			}
-			if !NativeJobStopped(invocation.directory) {
+			if NativeJobStopped == nil || !NativeJobStopped(invocation.directory) {
 				return false, nil
 			}
 		}
@@ -268,7 +308,8 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	}
 	var value worker.Material
 	var originalRequest map[string]any
-	if _, ownerErr := os.Stat(filepath.Join(directory, "owner")); ownerErr == nil {
+	_, ownerErr := os.Stat(filepath.Join(directory, "owner"))
+	if ownerErr == nil || request["host"] != nil {
 		original, err := readNativeWorkerInvocation(f.root, f.runID, directory)
 		if err != nil {
 			return release, err
@@ -315,7 +356,7 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	known["model"] = value.Input.Execution.Model
 	known["reasoning_effort"] = value.Input.Execution.ReasoningEffort
 	if originalRequest != nil {
-		for _, key := range []string{"binding", "permission_mode", "native_store", "model", "reasoning_effort", "runtime_files"} {
+		for _, key := range []string{"binding", "permission_mode", "native_store", "model", "reasoning_effort", "runtime_files", "controller", "host"} {
 			known[key] = originalRequest[key]
 		}
 	}
@@ -331,9 +372,14 @@ func AdmitExecution(directory string, request map[string]any) (release func(), e
 	}
 	for key := range request {
 		switch key {
-		case "engine", "provider", "prompt", "schema", "read_only", "workspace", "identity", "binding", "model", "reasoning_effort", "permission_mode", "native_store", "probe", "runtime_files":
+		case "engine", "provider", "prompt", "schema", "read_only", "workspace", "identity", "binding", "model", "reasoning_effort", "permission_mode", "native_store", "probe", "runtime_files", "host", "controller":
 		default:
 			return release, fmt.Errorf("worker execution has unissued field %s", key)
+		}
+	}
+	if request["host"] != nil {
+		if _, _, err := f.verifyHostWorker(request, value); err != nil {
+			return release, err
 		}
 	}
 	if requested, _ := request["identity"].(string); identity != "" && requested != "" && requested != identity {
@@ -428,7 +474,7 @@ func (f *Facade) WorkerExecutionRequest(material WorkerMaterial, resumeActionID 
 	directory := WorkerExecutionDirectory(material, resumeActionID)
 	request := map[string]any{"engine": map[string]any{"root": f.root, "runId": f.runID, "workerMaterial": material, "resumeActionId": resumeActionID}}
 	if resumeRequest != nil {
-		for _, key := range []string{"binding", "permission_mode", "native_store"} {
+		for _, key := range []string{"binding", "permission_mode", "native_store", "controller"} {
 			if value, ok := resumeRequest[key]; ok {
 				request[key] = value
 			}
@@ -481,6 +527,15 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 	provider := value.Input.Provider
 	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil {
 		provider = descriptor.InstallName
+	}
+	if invocation.request["host"] != nil {
+		ref, _, err := f.verifyHostWorker(invocation.request, value)
+		if err != nil {
+			return err
+		}
+		if err := f.publishHostWorkerReference(ref.Session, directory, invocation.binding.ResumeActionID); err != nil {
+			return err
+		}
 	}
 	identity, err := verifyStart(provider, directory)
 	if err != nil {
@@ -543,6 +598,23 @@ func (f *Facade) observeWorkerExecution(material WorkerMaterial, directory strin
 				return err
 			}
 		}
+	}
+	if invocation.request["host"] != nil {
+		_, turn, err := f.verifyHostWorker(invocation.request, value)
+		if err != nil {
+			return err
+		}
+		if turn.State == "running" {
+			return nil
+		}
+		stop, err := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("native-stopped:"+material.Digest+":"+resumeID), value.Input.Provider, correlation, identity, protocol.LifecycleStop)
+		if err != nil {
+			return err
+		}
+		if _, err := f.engine.Submit(stop, protocol.Observation{}); err != nil {
+			return err
+		}
+		return f.ObserveWorkerTerminal(material, identity)
 	}
 	var exit struct {
 		ExitCode      *int   `json:"exit_code"`
@@ -656,6 +728,24 @@ func (f *Facade) AgentExecution(intent protocol.HostActionIntent) (provider stri
 func WorkerExecutionDirectory(material WorkerMaterial, resumeActionID string) string {
 	call := sha256.Sum256([]byte(material.Digest + "\n" + resumeActionID))
 	return filepath.Join(workerActionDirectory(filepath.Dir(filepath.Dir(material.Path)), material.ActionID), hex.EncodeToString(call[:]))
+}
+
+// HasNativeWorkerExecution follows the original action and attempt across its
+// initial invocation and signed resumes. A claimed source keeps its executor.
+func (f *Facade) HasNativeWorkerExecution(material WorkerMaterial) (bool, error) {
+	if _, err := readWorkerMaterial(material); err != nil {
+		return false, err
+	}
+	invocations, err := claimedWorkerInvocations(f.root, f.runID, material.ActionID, material.AttemptID)
+	if err != nil {
+		return false, err
+	}
+	for _, invocation := range invocations {
+		if invocation.request["host"] == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func workerActionDirectory(stateDir, actionID string) string {
@@ -987,6 +1077,15 @@ func (f *Facade) SubmitWorkerResult(eventID protocol.EventID, material WorkerMat
 	}
 	value := invocation.material
 	provider := invocation.request["provider"].(string)
+	if invocation.request["host"] != nil {
+		_, turn, err := f.verifyHostWorker(invocation.request, value)
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		if turn.State != "completed" {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("host worker original turn is not complete")
+		}
+	}
 	evidence, err := verifyNative(provider, directory, source)
 	if err != nil {
 		return protocol.Acceptance{}, Run{}, err

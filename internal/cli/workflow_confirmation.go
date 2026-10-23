@@ -90,18 +90,21 @@ func runWorkflowServe(args []string, streams IO) (int, error) {
 }
 
 func confirmationTools() []any {
-	root := map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory. The confirmation shows its absolute path."}
+	root := map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory. The program resolves its absolute path."}
 	position := func(description string) any {
 		return map[string]any{"type": "integer", "minimum": 1, "description": description}
 	}
 	tool := func(name, description string, properties map[string]any, required ...string) any {
-		return map[string]any{"name": name, "description": description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
+		return map[string]any{"name": name, "description": description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": append([]string{}, required...), "additionalProperties": false}}
 	}
 	return []any{
-		tool("confirm_start", "Request native confirmation of the complete saved intake and start operation. The host's response directly starts the run.", map[string]any{
+		tool("worker", "Execute only an original issued host worker: claim binds the real calling subagent, workspace and submit use its original managed tools, observe admits completed native facts. For initial work spawn the host's actual child with fork_turns=none and the issued model/effort; when hostWorkers supplies identity, continue that original child with its current material, without inventing a resume action. Never start an independent same-platform session; report HOST_SUBAGENT_UNAVAILABLE when no native child tool exists.", map[string]any{
+			"material": map[string]any{"type": "string", "description": "Exact original published material path. Required for parallel dispatch; derives scope without root/run/child/worker positions."}, "root": root, "run": position("Original run position"), "child": position("Original child position"), "worker": position("Original issued worker position for claim or observe"), "operation": map[string]any{"type": "string", "enum": []string{"claim", "workspace", "submit", "observe"}}, "arguments": map[string]any{"type": "object", "description": "Original workspace operation or direct semantic body from the issued material; program validates its exact schema"},
+		}, "operation"),
+		tool("confirm_start", "Start the workflow after the user explicitly confirms the complete displayed requirements, solution, exact revisions, and saved configuration in conversation. Call only after that reply; selecting a configuration alone is not startup authorization. The program revalidates the saved intake, configuration and installation admission, then starts the run without a native confirmation form; existing CLI workflow start uses the same path when MCP is unavailable. Control decisions and native answers keep their separate native confirmations.", map[string]any{
 			"root": root, "intake": position("Original intake position published by workflow start --precheck"),
-			"summary":       map[string]any{"type": "string", "description": "One-sentence human-readable description of the operation being confirmed; hosts may show it in their permission prompt."},
-			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for the run; the program validates and displays it. Omitted uses the current native snapshot."},
+			"summary":       map[string]any{"type": "string", "description": "Optional human-readable startup summary; it does not supply startup authorization."},
+			"baseSnapshot":  map[string]any{"type": "string", "description": "User-specified native base revision or immutable identity for the run; the program validates and binds it. Omitted uses the current native snapshot."},
 			"vcs":           map[string]any{"type": "string", "description": "Native VCS name, using the existing workflow start selection when omitted."},
 			"configuration": map[string]any{"type": "string", "description": "Saved configuration name or displayed position"},
 		}, "intake"),
@@ -117,7 +120,7 @@ func confirmationTools() []any {
 			"question": position("Original pending question position published by native show"),
 			"decision": position("Original saved decision position published by native respond"),
 		}, "question", "decision"),
-		tool("configure", "Open flow configuration panel and wait for its result without occupying the ordinary control-call slot; native confirmations remain exclusive. Before intake selection, use settings show, settings show --gates and settings execution-options to enumerate current nodes and each choice/configuration option and its consequences; never hardcode node or value lists. Tell the user panel and conversation are not exclusive: while panel is open they may reply with choices, ask the agent to call configure, or run formal-gates config in a terminal; the panel remains available later. panelSelection controls default opening: still open the panel when enabled, while accepting conversation choices without disabling panelSelection or closing the panel first. Save conversation choices through existing settings and pass the original intake and saved configuration to confirm_start; existing selection validation closes that intake window and resolves this configure waiter as selected before independent native startup confirmation. Do not wait for timeout or ask the user to click the panel again. With no open window, conversation selection does not start a panel service or open a window. For an explicitly requested panel, use force if needed. With intake, selected/timeout returns saved configuration for confirm_start; neither panel save nor conversation selection approves startup or starts a formal workflow. Keep native confirm_start and confirm_control confirmation; cancelled startup creates no run. Cancelled or superseded panel results alone do not start anything; a later explicit conversation choice must revalidate the current candidate, refresh/display it if stale, and use independent native confirmation. If disabled/unavailable, explain the reason and use equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
+		tool("configure", "Open flow configuration panel and wait for its result without occupying the ordinary control-call slot; native confirmations remain exclusive. Before intake selection, use settings show, settings show --gates and settings execution-options to enumerate current nodes and each choice/configuration option and its consequences; never hardcode node or value lists. Tell the user panel and conversation are not exclusive: while panel is open they may reply with choices, ask the agent to call configure, or run formal-gates config in a terminal; the panel remains available later. panelSelection controls default opening: still open the panel when enabled, while accepting conversation choices without disabling panelSelection or closing the panel first. Save conversation choices through existing settings; after displaying the complete intake and obtaining the user's explicit conversation startup confirmation, pass the original intake and saved configuration to confirm_start. Existing selection validation closes that intake window and resolves this configure waiter as selected, then starts directly without a native startup form. Do not wait for timeout or ask the user to click the panel again. With no open window, conversation selection does not start a panel service or open a window. For an explicitly requested panel, use force if needed. With intake, selected/timeout returns saved configuration for confirm_start; neither panel save nor conversation selection approves startup or starts a formal workflow. Require an explicit conversation startup decision after displaying the complete intake, and keep confirm_control native confirmation. Cancelled or superseded panel results alone do not start anything; a later explicit conversation choice must revalidate the current candidate, refresh/display it if stale, and obtain explicit conversation startup confirmation. If disabled/unavailable, explain the reason and use equivalent settings/conversation choices. During a run, edit its bound configuration; no rebinding. Mention the panel alongside existing approval/blockage/progress/completion messages, not in a separate unsolicited reminder.", map[string]any{
 			"root":   map[string]any{"type": "string", "description": "Project directory; defaults to the service's current directory."},
 			"intake": position("Original intake position published by workflow start --precheck"),
 			"force":  map[string]any{"type": "boolean", "description": "Open the panel even when panelSelection is disabled"},
@@ -128,16 +131,17 @@ func confirmationTools() []any {
 func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm func(any) error, serveRoot, packageRoot string) (any, error) {
 	var output, errors bytes.Buffer
 	invocation := IO{Stdin: bytes.NewReader(nil), Stdout: &output, Stderr: &errors, Context: streams.Context, confirmation: confirm, owner: streams.owner}
-	// The serve's own installed package selects the host and its confirmation
-	// channel. A permission-gate host decides before the call arrives, so the
-	// arrived call is confirmed without an interactive form.
-	if admission, err := validate.ResolveEngineAdmission(serveRoot, packageRoot); err == nil {
-		if descriptor, derr := host.Lookup(admission.Provider); derr == nil {
-			invocation.confirmationChannel = descriptor.Confirmation
+	// Control decisions and native answers use the serving host's channel.
+	// Startup instead carries the user's conversational decision.
+	if name != "confirm_start" {
+		if admission, err := validate.ResolveEngineAdmission(serveRoot, packageRoot); err == nil {
+			if descriptor, derr := host.Lookup(admission.Provider); derr == nil {
+				invocation.confirmationChannel = descriptor.Confirmation
+			}
 		}
-	}
-	if invocation.confirmationChannel == host.ConfirmationHostPermission {
-		invocation.confirmation = func(any) error { return nil }
+		if invocation.confirmationChannel == host.ConfirmationHostPermission {
+			invocation.confirmation = func(any) error { return nil }
+		}
 	}
 	// The serve's -root is the service's project directory: an omitted call
 	// root means it, and relative call roots resolve against it.
@@ -156,6 +160,19 @@ func callConfirmationTool(name string, raw json.RawMessage, streams IO, confirm 
 	var args []string
 	var execute func([]string, IO) (int, error)
 	switch name {
+	case "worker":
+		var input workflowWorkerInput
+		if err := harness.StrictDecode(raw, &input); err != nil {
+			return nil, err
+		}
+		if input.Material == "" || input.Root != "" {
+			root, err := rootPath(input.Root)
+			if err != nil {
+				return nil, err
+			}
+			input.Root = root
+		}
+		return callWorkflowWorker(input, invocation)
 	case "configure":
 		var input struct {
 			Root   string `json:"root"`

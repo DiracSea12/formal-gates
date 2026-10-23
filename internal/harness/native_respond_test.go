@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -40,6 +39,10 @@ func respondCLI(t *testing.T, args ...string) (int, string) {
 }
 
 func respondWithHost(t *testing.T, args ...string) (int, string) {
+	return respondWithHostDisplay(t, nil, args...)
+}
+
+func respondWithHostDisplay(t *testing.T, display func(string), args ...string) (int, string) {
 	t.Helper()
 	var candidate nativeAnswerCandidate
 	decision := ""
@@ -55,7 +58,7 @@ func respondWithHost(t *testing.T, args ...string) (int, string) {
 	} else {
 		t.Fatal(err)
 	}
-	expected, err := json.MarshalIndent(candidate, "", "  ")
+	expected, err := confirmationMessage(candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,12 +107,14 @@ func respondWithHost(t *testing.T, args ...string) (int, string) {
 			break
 		}
 		params := objectOrEmpty(frame["params"])
+		if display != nil {
+			display(textOf(params["message"]))
+		}
 		schema := objectOrEmpty(params["requestedSchema"])
-		property := objectOrEmpty(getOf(schema["properties"], "confirmOperation"))
-		if frame["method"] != "elicitation/create" || frame["id"] == nil || params["mode"] != "form" || params["message"] != "Confirm this exact operation:\n"+string(expected) || !reflect.DeepEqual(schema["required"], []any{"confirmOperation"}) || property["type"] != "boolean" || property["default"] != nil {
+		if frame["method"] != "elicitation/create" || frame["id"] == nil || params["mode"] != "form" || params["message"] != expected || len(schema["properties"].(map[string]any)) != 0 || schema["required"] != nil {
 			t.Fatal("confirmation differs from the original native answer", frame)
 		}
-		if err := encoder.Encode(map[string]any{"id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+		if err := encoder.Encode(map[string]any{"id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

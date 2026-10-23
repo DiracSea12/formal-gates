@@ -267,6 +267,19 @@ func TestWorkflowColdWorkerConsumesStartFrozenNativePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := facade.WorkerExecutionDirectory(material, "")
+	// A platform without verified host-subagent facts reports the capability gap.
+	// The explicit native executor below still exercises frozen native evidence.
+	for range 2 {
+		result, err := consumeWorkflow(IO{}, f, root, run.RunID)
+		if err != nil || result.Boundary != "BLOCKED" || !strings.Contains(result.Blocked[material.ActionID], "HOST_SUBAGENT_UNAVAILABLE") || len(result.HostWorkers) != 0 {
+			t.Fatalf("same-platform consumption started an independent session: boundary=%s blocked=%v err=%v", result.Boundary, result.Blocked, err)
+		}
+		for _, path := range []string{calls, supervisorCalls, filepath.Join(directory, "native-request.json"), filepath.Join(directory, "owner")} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("host work launched native discovery or execution: %s (%v)", path, err)
+			}
+		}
+	}
 	for range 2 {
 		err := executeWorkflowWorker(context.Background(), context.Background(), f, material, protocol.HostActionIntent{})
 		if err == nil || !strings.Contains(err.Error(), "native supervisor ended without an exit receipt") {

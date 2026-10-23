@@ -113,12 +113,30 @@ func TestClaudeResolvePathsDerivesScriptFromExtensionCliJS(t *testing.T) {
 	if textOf(getOf(launch, "executable")) != node || textOf(getOf(launch, "script")) != script {
 		t.Fatalf("binding launch = %v, want node + cli.js", launch)
 	}
+	settingsPath := filepath.Join(native["claudeConfigRoot"], "settings.json")
+	denyRule := []byte(`{"permissions":{"deny":["mcp__formal-gates__workspace"]}}`)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, denyRule, 0600); err != nil {
+		t.Fatal(err)
+	}
 	argv, _, err := claudeArguments(map[string]any{"read_only": true}, t.TempDir(), launch, home, map[string]string{"CLAUDE_CONFIG_DIR": native["claudeConfigRoot"]}, "prompt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(argv) < 3 || argv[0] != node || argv[1] != script || argv[2] != "-p" {
 		t.Fatalf("spawn argv = %v, want [node cli.js -p ...]", argv)
+	}
+	options := map[string]string{}
+	for i := 2; i+1 < len(argv); i++ {
+		options[argv[i]] = argv[i+1]
+	}
+	if options["--tools"] != "" || options["--allowedTools"] != "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics" || options["--settings"] != settingsPath {
+		t.Fatalf("managed tool selection or native settings changed: %v", argv)
+	}
+	if body, err := os.ReadFile(settingsPath); err != nil || string(body) != string(denyRule) {
+		t.Fatalf("native explicit deny changed: %s %v", body, err)
 	}
 }
 

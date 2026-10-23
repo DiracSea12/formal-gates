@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/persistence"
@@ -37,7 +39,20 @@ func submitControlWithHost(t *testing.T, f *Facade, candidate ControlCandidate) 
 			if name != "control" || json.Unmarshal(arguments, &identity) != nil || identity != candidate.Event.ID {
 				return nil, fmt.Errorf("unexpected original control call %s %s", name, arguments)
 			}
-			accepted, run, submissionErr = f.SubmitControl(candidate, confirm)
+			accepted, run, submissionErr = f.SubmitControl(candidate, func(value any) error {
+				expected, err := json.Marshal(candidate)
+				if err != nil {
+					return err
+				}
+				actual, err := json.Marshal(value)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(actual, expected) {
+					return fmt.Errorf("confirmation lost original candidate: %s", actual)
+				}
+				return confirm(value)
+			})
 			return accepted, submissionErr
 		}, nil)
 		outputWriter.Close()
@@ -75,16 +90,11 @@ func submitControlWithHost(t *testing.T, f *Facade, candidate ControlCandidate) 
 		if frame.Method == "" {
 			break
 		}
-		expected, err := json.MarshalIndent(candidate, "", "  ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		property := frame.Params.Schema.Properties["confirmOperation"]
-		if frame.Method != "elicitation/create" || frame.Params.Mode != "form" || frame.Params.Message != "Confirm this exact operation:\n"+string(expected) || property["type"] != "boolean" || property["default"] != nil || !reflect.DeepEqual(frame.Params.Schema.Required, []string{"confirmOperation"}) {
+		if frame.Method != "elicitation/create" || frame.Params.Mode != "form" || !strings.HasPrefix(frame.Params.Message, "Confirm this exact operation:\n") || utf8.RuneCountInString(frame.Params.Message) > 800 || strings.Count(frame.Params.Message, "\n")+1 > 12 || len(frame.Params.Schema.Properties) != 0 || len(frame.Params.Schema.Required) != 0 {
 			t.Fatalf("confirmation differs from its original candidate: %+v", frame)
 		}
 		elicited++
-		if err := encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+		if err := encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -89,17 +89,10 @@ func TestStartRejectsAllDisabledConfigurationBeforeRunWrite(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	confirmations := 0
-	options := StartOptions{Root: root, ArtifactRoot: root, Configuration: "全禁", Admission: admission, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "rejected-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: preview.IntakeCandidate}, Confirm: func(value any) error {
-		confirmations++
-		return nil
-	}}
+	options := StartOptions{Root: root, ArtifactRoot: root, Configuration: "全禁", Admission: admission, VCSRunner: testkit.NewFrozenGitRepo(), Request: StartRequest{RunID: "rejected-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: preview.IntakeCandidate}}
 	f, run, err := Start(options)
 	if err == nil || !strings.Contains(err.Error(), "at least one enabled") || f != nil || run.RunID != "" {
 		t.Fatal("all-disabled configuration started a run", run, err)
-	}
-	if confirmations != 0 {
-		t.Fatal("rejected configuration reached confirmation")
 	}
 	if _, statErr := os.Stat(filepath.Join(root, EngineNamespace)); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected start created engine namespace: %v", statErr)

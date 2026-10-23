@@ -56,7 +56,7 @@ formal-gates requirement edit --root <repo> --item <原需求序号> \
 不代表用户确认。全部改变产品/流程行为及需要 QA 保证的义务须进入需求点；纯实现位置、
 代码边界与未来约束留在方案正文，不伪装为 QA 的 AC。
 
-**次序固定为：材料预检与结构投影 → 展示完整文件与精确 revision → 校验配置与材料 → 原生真人确认 → start。**
+**次序固定为：材料预检与结构投影 → 展示完整文件与精确 revision → 校验配置与材料 → 用户在对话明确确认开始 → start。**
 启动前预检使用 start 的材料准备模式，保存载荷，不创建 run：
 
 ```bash
@@ -73,7 +73,7 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 固定 transport 均由程序组装，无需手抄。预检默认把完整 candidate 存入项目所属的
 `.gates/tmp/intake` 载荷目录，返回 `intake` 序号；保存候选不代表确认，不创建 run，
 不读取或写入 admission/registry。材料选择 flags 仅供 precheck；正常 start 只接收
-由原生真人确认通道接纳的原载荷。精确 `--requirement/--solution/--artifact` 与
+由宿主原生确认通道接纳的原载荷。精确 `--requirement/--solution/--artifact` 与
 `--save-candidate` 文件接口仅供人工或程序集成。预检总是尝试解析 REQ/AC 结构；
 普通材料也可形成候选，不能把候选已保存当作材料合格。启动确认前严格校验需求结构。
 材料或配置校验失败先修正，不请求确认；材料修改后重新预检、展示和确认。确认前不启动开发 run、不确定拆分拓扑或派发后续代理。预检的通过
@@ -88,14 +88,14 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 也可让代理调用 `configure`，或在终端运行 `formal-gates config`，之后随时还能打开。
 按 `panelSelection` 默认偏好呼出面板，默认开时仍用原 `intake` 序号调用 `configure`。
 `configure` 保持等待结果，但不独占同连接其它控制调用；原生确认操作仍互斥。
-面板打开期间，对话选好后通过既有 `settings` 保存配置，并向 `confirm_start` 提供原 `intake`
+面板打开期间，对话选好后通过既有 `settings` 保存配置；完整展示并取得明确的对话启动确认后，向 `confirm_start` 提供原 `intake`
 和 `configuration`。既有选择校验接纳后关闭该受理的对应窗口，让原 `configure` 得到 `selected`，
-再独立进行原生启动确认；不要求先关开关或面板、不等超时、不要求再点面板。
+并直接启动；不要求先关开关或面板、不等超时、不要求再点面板。
 无已开窗口时，对话选择不启动面板服务或另开窗口。已有 run 不妨碍新受理候选打开面板。
-面板保存和对话选择都不代表启动批准、不自行触发正式流程；保留 `confirm_start` 及控制操作的原生确认。
+面板保存和对话选择都不代表启动批准、不自行触发正式流程；启动需在完整展示后取得用户明确的对话确认；流程内控制操作保留原生确认。
 面板中的“选好了”只返回已保存配置与关闭的节点，不代表用户批准启动。
-`selected` 或 `timeout` 结果沿原 `confirm_start` 确认；结果含校验错误时先处理错误。
-`cancelled` 或 `superseded` 本身不触发启动；用户随后明确对话选择时重新校验当前候选，失效先重新预检与展示，再走原生确认。
+`selected` 或 `timeout` 结果仍须取得用户明确的对话启动确认；结果含校验错误时先处理错误。
+`cancelled` 或 `superseded` 本身不触发启动；用户随后明确对话选择时重新校验当前候选，失效先重新预检与展示，再取得用户明确的对话启动确认。
 `disabled` 或 `unavailable` 时说明原因，用 `settings` 与对话完成同等选择；
 用户明确要求打开可传 `force`。终端 `formal-gates config` 不受选择模式开关限制，
 也不携带受理候选。
@@ -103,19 +103,18 @@ formal-gates workflow start --precheck --document <原需求文档序号>
 ### Typed intake receipt
 
 `intakeCandidate` 只是待确认的材料绑定，不代表用户已确认。展示全部 `materials` 全文与
-精确 revisions。预检已由程序保存完整原对象；调用当前主宿主 MCP 工具 `confirm_start`，
+精确 revisions，并取得用户在对话中明确回复“确认开始”等启动决定。预检已由程序保存完整原对象；模型据此调用 MCP 工具 `confirm_start`，
 传入原 `intake` 序号与保存配置的 `configuration` 名称或原序号。
 程序按该配置的启用节点决定执行行为；配置须至少启用一个节点，
 全部节点关闭或未开发却启用 QA、门或返修的组合拒绝。
-服务生成 run ID，原生弹窗展示原材料、所选配置与完整启动操作；
-只有用户亲自确认才直接启动。`root` 缺省为当前目录，无需模型抄写 run ID、摘要或全文。
-普通 CLI `start --intake` / `--intake-receipt` 不接受自报批准。保存候选不会启动 run。
+服务生成 run ID，校验原材料、所选配置与启动条件后直接启动，不请求原生启动表单。`root` 缺省为当前目录，无需模型抄写 run ID、摘要或全文。
+无 MCP 工具时，模型也可在取得同一对话确认后调用既有 CLI `start --intake` / `--intake-receipt`，沿同一启动路径；CLI 的 `--run-id` 由调用方提供，不新增批准参数。保存候选不会启动 run。
 
 程序固定 `source/authority=stable-driver` 与 `transport=stable-launcher`，登记
 `requirementSource/requirementRevision`、完整 `artifacts`、选定方案的
 `solutionRevision/solutionDigest` 以及 canonical `digest`。可选 `coverage` 仅表达额外
 需确认的方案义务；完整 REQ/AC 投影仍来自同一已确认需求案。预检不制造
-确认、选择后续路线或自动调用 start。
+确认、选择后续路线或自动调用 start。启动收据如实记 `confirmation=conversation`；程序不扫描聊天或鉴别回复来源，模型负责依据明确回复调用。
 
 内容 revision 将 CRLF 规范化为 LF 后计算。路径不能重复或越出项目；start 重算实际
 材料内容，拒绝与 receipt 不符的文件。首次 drive 把确认与 intake digest 恰好登记一次，
@@ -137,9 +136,9 @@ formal-gates workflow diagnose --path <state-or-summary.json>
 
 启动使用主宿主 `confirm_start`；当前候选使用 `confirm_control`，参数 `candidate` 复用原载荷序号。
 三个确认工具由 `formal-gates workflow serve` 提供；`confirm_native` 的 `question/decision` 复用原生问题序号。
-工具只请求显示绑定原操作的原生表单，不能传入 `approved` 或替用户回答。
-表单含必填、无默认值的 `confirmOperation`，服务同时核对 `action=accept` 与该字段为 true；
-取消、拒绝、空回答、无交互能力或已取消的调用均不执行。模型、自动应答 hook 和另起的 headless client 不能作为真人来源。
+`confirm_start` 根据用户的明确对话启动决定执行；`confirm_control` 与 `confirm_native` 使用绑定原操作的宿主原生确认，不能传入 `approved` 或替宿主回答。
+确认请求采用无待填写字段的标准 MCP Form；宿主权限策略决定直接接受还是向用户询问，服务只接纳原请求的 `action=accept`。
+宿主 YOLO/bypass 不额外弹窗，也不透传子执行弹窗；需要询问时使用宿主原生界面。取消、拒绝、缺少有效 action、能力缺失或已取消的调用均不执行；修改后可重新确认当前候选。普通数据收集表单不属于操作确认，不删除其字段，也不自动填写答案。模型、自动应答 hook 和另起的 headless client 不能伪造宿主响应。
 `confirm_control` 接纳当前操作并返回下一边界；完成后沿既有 `workflow drive` 消费已授权工作，
 不在确认工具调用内启动模型，也不为连续机械推进增加逐步确认。
 
@@ -168,7 +167,7 @@ start/show/status/next/drive/submit 默认展示当前语义问题、短选择�
 未决 Ask，再按子 run 的稳定顺序编号已建立的当前子流程 Ask；程序绑定原目标，`--machine` 保留本地投影。
 `choice` 是真实用户选择，`reason` 只填写必要理由。程序保存完整
 Event、原 request/token、当前 revision 和展示材料。`confirm_control` 读取原候选并显示具体操作，
-真人确认后直接接纳原对象；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
+宿主按其权限策略确认后直接接纳原对象；陈旧候选沿原 freshness 检查拒绝，不能重新绑定到另一个 Ask。
 完整确认文件提供原项目和 run 目标；显式提供 `--root` 或 `--run-id` 时只核对一致性。
 同 Event 的精确重放由原接纳台账处理，不重放副作用。
 
@@ -210,8 +209,13 @@ revision 和 freshness，用户不抄 run ID 或工作清单。缺少的输入�
 ## 原生运行时派发
 
 Next 只返回 Ready、HostAction、Ask、Wait、Operator、Complete 六类边界。普通
-`workflow drive` 在本 run 选定的平台自动派发已签发任务、收取原始结果和继续推进，
-到真实用户决定、具体执行阻塞或完成时返回；不在各平台之间混派。控制 submit 接纳后
+`workflow drive` 消费已签发任务、收取原始结果和继续推进。同宿主同平台返回原
+`hostWorkers`，由宿主真正的子代理按原模型与推理强度、`fork_turns=none` 执行；子代理
+先完整读取 `material.path` 再 `worker claim`，以原路径调用受管工作区、提交与观察。
+恢复使用原身份及签发意图；`hostActions` 要求宿主中断原子代理，随后 `drive` 观察真实
+终态。跨平台使用原独立原生运行器，已经领取的独立执行保持原来源。无经核实的宿主
+能力时报告 `HOST_SUBAGENT_UNAVAILABLE`，不另起同平台会话。
+到真实用户决定、具体执行阻塞或完成时返回。控制 submit 接纳后
 使用同一消费者推进，worker receipt/result 接纳不递归启动消费者。
 
 材料、action/TaskKey/Attempt、候选、作用域、配方和原生身份由程序原样组装并在实际
@@ -220,7 +224,8 @@ Next 只返回 Ready、HostAction、Ask、Wait、Operator、Complete 六类边�
 职责执行；程序不猜 NEW/SAME_AS、受影响范围或用户批准。缺少配方、UNKNOWN 或无法
 核实的原执行事实保留具体阻塞，不能靠模型自述、合成 transcript 或其他宿主证据推进。
 
-同一原 job 的 owner、request、process、exit 和 native source 承载正常执行与恢复事实。
+独立运行器由同一原 job 的 owner、request、process、exit 和 native source 承载正常执行与恢复事实；
+宿主子代理由原 request 和真实 thread、turn、原生转录承载这些事实。
 完整原结果只观察并通过原 submit 接纳；原 source 丢响应时先 reconcile，不能盲目重派。
 spawn、result、lifecycle 和 HostAction receipt 绑定同一 action、provider 与 Attempt。
 
@@ -352,7 +357,7 @@ PENDING、SENDING、ACCEPTED、FAILED 是原队列的投递事实；缺原生 ac
 --changed-item <实际改变> --transitive-impact <影响> --carry-reason <保留理由>` 只准备当前未终结
 run 的计划重审：正式需求字节/revision 不变，product/topology 结论保留，逐项 work
 仍由用户选择 carry/redo 并给理由。按各子命令帮助选择原 work/child 的序号和新的影响解释，不写固定 JSON 外壳；
-程序保存完整 RequirementChangeInput，省略 classification/redo。原候选经 `confirm_control` 的真人确认后才重做
+程序保存完整 RequirementChangeInput，省略 classification/redo。原候选经 `confirm_control` 的宿主原生确认后才重做
 start-readiness；优化或增加 Batch 必须由新技审生成完整计划并经 route/plan 再确认。
 不能通过自由任务正文绕过。普通相同需求的重复提交继续拒绝。
 

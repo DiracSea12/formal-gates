@@ -42,7 +42,7 @@ func cliStartRepo(t *testing.T, root string) {
 }
 
 func TestWorkflowStartRejectsPerRunNodeParameters(t *testing.T) {
-	for _, flags := range [][]string{{"--nodes"}, {"--disable-node", "1"}, {"--precheck", "--disable-node", "1"}} {
+	for _, flags := range [][]string{{"--approved", "true"}, {"--confirm"}, {"--nodes"}, {"--disable-node", "1"}, {"--precheck", "--disable-node", "1"}} {
 		root := t.TempDir()
 		var out, stderr bytes.Buffer
 		args := append([]string{"workflow", "start", "--root", root}, flags...)
@@ -55,7 +55,7 @@ func TestWorkflowStartRejectsPerRunNodeParameters(t *testing.T) {
 	}
 }
 
-func TestStartConfirmationRejectsDisabledNodesBeforeHostConfirmation(t *testing.T) {
+func TestStartRejectsUnsupportedNodeArgumentsBeforeExecution(t *testing.T) {
 	called := false
 	_, err := callConfirmationTool("confirm_start", json.RawMessage(`{"intake":1,"disabledNodes":[1]}`), IO{}, func(any) error { called = true; return nil }, "", "")
 	if err == nil || called {

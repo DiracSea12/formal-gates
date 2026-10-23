@@ -18,8 +18,8 @@ intake begins only when the user explicitly requests it.
    requirement and solution into one formal document. Run the deterministic structural precheck,
    show its full content and exact revision.
 2. **Start and register.** Pick the saved configuration that selects the enabled workflow nodes
-   and confirm the complete startup operation in
-   the native form. The program accepts the typed intake and starts the run directly. The first drive registers that confirmation automatically. Product review,
+   and explicitly confirm the complete displayed startup operation in conversation. The model calls
+   `confirm_start` or the existing CLI `workflow start`; the program validates the typed intake and starts the run directly. The first drive registers that confirmation automatically. Product review,
    technical review, development, and QA consume the same confirmed revision.
 3. **Independent reviews.** Product review precedes technical review. The Operator verifies each
    raw finding and the user decides valid findings. Technical review produces Batch→Subtask,
@@ -64,9 +64,8 @@ choices and confirm at the required human nodes. The exhaustive public workflow 
 `replan` / `handoff` / `diagnose` / `guard-preview` / `serve`.
 
 The main host uses `confirm_start`, `confirm_control`, and `confirm_native` from `workflow serve`.
-Natural language requests an operation; a native form displays the exact bound operation and submits
-the original object directly after the person confirms. Models cannot supply approval values or
-replace that response with a receipt or ordinary CLI flag. Installation registers the control MCP
+After the complete requirements, solution, exact revisions and configuration are displayed, the user explicitly confirms startup in conversation. The model calls `confirm_start` or the existing CLI `workflow start`; the program revalidates materials, configuration and admission without a startup form.
+Within the run, `confirm_control` and `confirm_native` retain native forms. Models cannot supply their approval values or replace a human response with a receipt or ordinary CLI flag. Installation registers the control MCP
 for Codex and ZCode; DSH global uses its root agent's native question service. See
 [installation boundaries](references/install-and-hooks.md) for the other hosts.
 
@@ -149,7 +148,7 @@ On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only 
 
 Devin currently integrates host installation, rules, hooks, and control MCP only;
 native execution, model discovery, and usage parsing are not implemented.
-`confirm_start`, `confirm_control`, and `confirm_native` are admitted through Devin's
+During a run, `confirm_control` and `confirm_native` are admitted through Devin's
 own permission prompt and the receipt records `"confirmation": "host-permission"`;
 the approval round trip has been verified end to end. Under `devin -p`
 (print/headless) or permission modes where Devin's policy auto-approves (such as

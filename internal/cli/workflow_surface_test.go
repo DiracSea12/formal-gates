@@ -21,7 +21,7 @@ func TestWorkflowPublicSurface(t *testing.T) {
 		actual = append(actual, entry)
 	}
 	slices.Sort(actual)
-	expected := []string{"diagnose", "drive", "execution-options", "guard-preview", "handoff", "message", "next", "progress", "replan", "serve", "show", "start", "status", "submit"}
+	expected := []string{"diagnose", "drive", "execution-options", "guard-preview", "handoff", "message", "next", "progress", "replan", "serve", "show", "start", "status", "submit", "worker"}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("public workflow entries=%v want=%v", actual, expected)
 	}

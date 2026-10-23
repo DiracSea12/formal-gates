@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/atomicfile"
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
@@ -47,7 +48,7 @@ func engineOverlapPeers(root, runID, transcript string) (peers []string, resolva
 		if other := filepath.Base(filepath.Dir(path)); other == runID {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		data, err := atomicfile.ReadFile(path)
 		if err != nil {
 			return nil, false
 		}
@@ -120,7 +121,7 @@ func engineSummaryOverlap(root, runID, transcript, startedAt string) bool {
 		if filepath.Base(filepath.Dir(path)) == runID {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		data, err := atomicfile.ReadFile(path)
 		if err != nil {
 			return true
 		}

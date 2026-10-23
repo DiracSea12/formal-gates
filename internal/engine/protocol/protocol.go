@@ -721,10 +721,9 @@ type IntakeConfirmationReceipt struct {
 	SolutionRevision string `json:"solutionRevision"`
 	SolutionDigest   string `json:"solutionDigest"`
 	Digest           string `json:"digest,omitempty"`
-	// Confirmation records which channel delivered the host's confirmation:
-	// empty for the interactive form, "host-permission" when the host's own
-	// tool-call permission gate admitted the call. It is provenance, not part
-	// of the material binding, so the canonical digest excludes it.
+	// Confirmation records the source: "conversation" for conversational
+	// startup, empty for a host-policy form response, or "host-permission" for a host
+	// tool-call permission gate. The material digest excludes this provenance.
 	Confirmation string `json:"confirmation,omitempty"`
 }
 

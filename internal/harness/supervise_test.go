@@ -14,6 +14,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if log := os.Getenv("FORMAL_GATES_CODEX_PROFILE_PEER"); log != "" {
+		codexProfilePeer(log)
+		return
+	}
 	code := m.Run()
 	os.RemoveAll(supervisorBuildDirectory)
 	os.Exit(code)

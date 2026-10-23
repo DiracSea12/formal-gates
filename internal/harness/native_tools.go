@@ -24,6 +24,7 @@ import (
 
 const nativeWorkspaceTool = "workspace"
 const nativeSemanticTool = "submit_semantics"
+const nativeAllowedMCPTools = "mcp__formal-gates__" + nativeWorkspaceTool + ",mcp__formal-gates__" + nativeSemanticTool
 const nativeToolCallsFile = "native-tool-calls.jsonl"
 const nativeToolContextFile = "native-tool-context.json"
 
@@ -511,52 +512,72 @@ func (t *nativeWorkspaceTools) workspaceOperation(raw json.RawMessage) (any, err
 			return nil, fmt.Errorf("action has no issued native comparison")
 		}
 		resource := validation.Workspace
-		rows, err := vcs.NewNative(resource.Path, input.VCS, nil).At(resource.Path, resource.Handle).CompareSnapshots(base, head)
+		native := vcs.NewNative(resource.Path, input.VCS, nil).At(resource.Path, resource.Handle)
+		compare := func(base, head string) ([]any, error) {
+			rows, err := native.CompareSnapshots(base, head)
+			if err != nil {
+				return nil, err
+			}
+			readable := make([]any, 0, len(rows))
+			for _, row := range rows {
+				if t.testOwned(row.Path) {
+					readable = append(readable, map[string]any{"path": row.Path, "kind": row.Kind, "testOwned": true})
+					continue
+				}
+				value := map[string]any{"path": row.Path, "kind": row.Kind, "baseMode": row.BaseMode, "mode": row.Mode, "before": row.BaseContent, "after": row.Content}
+				for _, side := range []struct {
+					key, mode string
+					body      []byte
+				}{{"beforeRead", row.BaseMode, row.BaseContent}, {"afterRead", row.Mode, row.Content}} {
+					if side.mode == "" || side.mode == "000000" {
+						continue
+					}
+					read, err := t.publishRead(row.Path, side.body)
+					if err != nil {
+						return nil, err
+					}
+					value[side.key] = read["read"]
+				}
+				if utf8.Valid(row.BaseContent) {
+					value["before"] = string(row.BaseContent)
+				}
+				if utf8.Valid(row.Content) {
+					value["after"] = string(row.Content)
+				}
+				for _, side := range []struct{ key, raw string }{{"baseMetadata", row.BaseMetadata}, {"metadata", row.Metadata}} {
+					if side.raw == "" {
+						continue
+					}
+					var metadata map[string]any
+					if err := json.Unmarshal([]byte(side.raw), &metadata); err != nil {
+						return nil, err
+					}
+					delete(metadata, "content")
+					if len(metadata) > 0 {
+						value[side.key] = metadata
+					}
+				}
+				readable = append(readable, value)
+			}
+			return readable, nil
+		}
+		changes, err := compare(base, head)
 		if err != nil {
 			return nil, err
 		}
-		readable := make([]any, 0, len(rows))
-		for _, row := range rows {
-			if t.testOwned(row.Path) {
-				readable = append(readable, map[string]any{"path": row.Path, "kind": row.Kind, "testOwned": true})
-				continue
-			}
-			value := map[string]any{"path": row.Path, "kind": row.Kind, "baseMode": row.BaseMode, "mode": row.Mode, "before": row.BaseContent, "after": row.Content}
-			for _, side := range []struct {
-				key, mode string
-				body      []byte
-			}{{"beforeRead", row.BaseMode, row.BaseContent}, {"afterRead", row.Mode, row.Content}} {
-				if side.mode == "" || side.mode == "000000" {
-					continue
-				}
-				read, err := t.publishRead(row.Path, side.body)
+		result := map[string]any{"changes": changes}
+		if validation.Gate != nil && len(validation.Gate.Slices) > 0 {
+			children := make([]any, 0, len(validation.Gate.Slices))
+			for _, span := range validation.Gate.Slices {
+				rows, err := compare(span.BaseSnapshot, span.Snapshot)
 				if err != nil {
 					return nil, err
 				}
-				value[side.key] = read["read"]
+				children = append(children, map[string]any{"slice": span.SliceID, "changes": rows})
 			}
-			if utf8.Valid(row.BaseContent) {
-				value["before"] = string(row.BaseContent)
-			}
-			if utf8.Valid(row.Content) {
-				value["after"] = string(row.Content)
-			}
-			for _, side := range []struct{ key, raw string }{{"baseMetadata", row.BaseMetadata}, {"metadata", row.Metadata}} {
-				if side.raw == "" {
-					continue
-				}
-				var metadata map[string]any
-				if err := json.Unmarshal([]byte(side.raw), &metadata); err != nil {
-					return nil, err
-				}
-				delete(metadata, "content")
-				if len(metadata) > 0 {
-					value[side.key] = metadata
-				}
-			}
-			readable = append(readable, value)
+			result["slices"] = children
 		}
-		return map[string]any{"changes": readable}, nil
+		return result, nil
 	case "search":
 		if a.Query == "" {
 			return nil, fmt.Errorf("search requires nonempty literal query text")
@@ -1027,7 +1048,7 @@ func serveNativeTools(in io.Reader, out, errout io.Writer, schemas []any, call f
 // ServeTools keeps confirmation on the requesting host's MCP connection. The
 // callback may execute only after that connection accepts the displayed
 // object. Ordinary requests queue behind the active call and run in arrival
-// order; only a pending human confirmation refuses new calls, which also
+// order; only a pending host confirmation refuses new calls, which also
 // flushes the queue.
 func ServeTools(in io.Reader, out, errout io.Writer, schemas []any, call func(string, json.RawMessage, func(any) error, json.RawMessage) (any, error), record func(json.RawMessage, any) error) int {
 	return serveTools(context.Background(), in, out, errout, schemas,
@@ -1224,19 +1245,13 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			return fmt.Errorf("native confirmation failed: %s", response.Error)
 		}
 		var result struct {
-			Action  string `json:"action"`
-			Content struct {
-				ConfirmOperation bool `json:"confirmOperation"`
-			} `json:"content"`
+			Action string `json:"action"`
 		}
 		if err := json.Unmarshal(response.Result, &result); err != nil {
 			return fmt.Errorf("native confirmation has no supported host action")
 		}
 		switch result.Action {
 		case "accept":
-			if !result.Content.ConfirmOperation {
-				return fmt.Errorf("native confirmation did not explicitly confirm the displayed operation")
-			}
 			return nil
 		case "decline", "cancel":
 			return fmt.Errorf("native confirmation %s; operation was not executed", result.Action)
@@ -1249,7 +1264,7 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			if !formSupported {
 				return fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: the current host does not support MCP form elicitation")
 			}
-			body, err := json.MarshalIndent(value, "", "  ")
+			message, err := confirmationMessage(value)
 			if err != nil {
 				return err
 			}
@@ -1257,7 +1272,7 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 			waiter := &confirmWaiter{reply: make(chan mcpFrame, 1)}
 			confirmMu.Lock()
 			pendingConfirm[id] = waiter
-			// A human is now deciding; anything queued behind this call can
+			// The host is deciding; anything queued behind this call can
 			// never run before it finishes, so queued callers get the busy
 			// refusal up front.
 			flush := queued
@@ -1272,8 +1287,8 @@ func serveTools(ctx context.Context, in io.Reader, out, errout io.Writer, schema
 				confirmMu.Unlock()
 			}()
 			if err := encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": map[string]any{
-				"mode": "form", "message": "Confirm this exact operation:\n" + string(body),
-				"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"confirmOperation": map[string]any{"type": "boolean", "title": "确认并执行所展示的具体操作"}}, "required": []string{"confirmOperation"}, "additionalProperties": false},
+				"mode": "form", "message": message,
+				"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 			}}); err != nil {
 				return err
 			}
@@ -1630,6 +1645,16 @@ func verifySemanticCall(directory string, body []byte) error {
 		success := getOf(result, "isError") == false
 		if getOf(request, "method") == "item/tool/call" {
 			name, success = getOf(params, "tool"), getOf(result, "success") == true
+		}
+		if getOf(request, "method") == "workflow/worker" && getOf(params, "operation") == "submit" {
+			name, success = nativeSemanticTool, getOf(result, "isError") == false
+			ref, _, err := hostWorkerInvocation(directory)
+			if err != nil {
+				return err
+			}
+			if getOf(params, "session") != ref.Session {
+				return fmt.Errorf("semantic worker caller differs from original child")
+			}
 		}
 		if name != nativeSemanticTool || !success {
 			continue

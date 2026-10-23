@@ -435,6 +435,80 @@ func TestNativeWorkspaceComparisonUsesIssuedSnapshots(t *testing.T) {
 	}
 }
 
+func TestNativeWorkspaceComparisonPreservesSliceAndMergedRanges(t *testing.T) {
+	t.Parallel()
+	workspace, _ := nativePathsFixture(t)
+	provider := vcs.New(workspace, nil)
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := (vcs.ExecRunner{}).Run(workspace, "git", args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	commit := func(path, content string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(workspace, path), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.Track([]string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.Commit("Native comparison input"); err != nil {
+			t.Fatal(err)
+		}
+		return git("rev-parse", "HEAD")
+	}
+	base := git("rev-parse", "HEAD")
+	source := commit("shared.txt", "slice source\n")
+	first := commit("left.txt", "first slice\n")
+	git("reset", "--hard", source)
+	second := commit("right.txt", "second slice\n")
+	git("merge", "--no-ff", "--no-edit", first)
+	merged := commit("integration.txt", "integration only\n")
+	directory := t.TempDir()
+	materialPath := filepath.Join(directory, "material.json")
+	material := map[string]any{"readOnly": true, "input": map[string]any{"vcs": "git", "pending": map[string]any{"actionId": "merge-review"}, "validation": map[string]any{
+		"workspace": map[string]any{"path": workspace}, "gate": map[string]any{"baseSnapshot": base, "candidate": map[string]any{"identity": merged}, "slices": []any{
+			map[string]any{"slice": "left", "baseSnapshot": source, "snapshot": first},
+			map[string]any{"slice": "right", "baseSnapshot": source, "snapshot": second},
+		}},
+	}}}
+	if err := writeAtomicJSON(materialPath, material); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicJSON(filepath.Join(directory, "native-request.json"), map[string]any{"workspace": workspace, "read_only": true, "engine": map[string]any{"workerMaterial": map[string]any{"path": materialPath, "actionId": "merge-review"}}}); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := newNativeWorkspaceTools(directory, ExecutionServices{Admit: nativeToolAdmission})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "left.txt"), []byte("later workspace\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	comparison := callWorkspace(t, tools, `{"action":"comparison"}`)
+	if len(comparison["changes"].([]any)) != 4 {
+		t.Fatal("main comparison lost the integration-only change", comparison)
+	}
+	slices, ok := comparison["slices"].([]any)
+	if !ok || len(slices) != 2 {
+		t.Fatal("issued slices are missing from native comparison", comparison)
+	}
+	for i, expected := range []struct{ slice, path, content string }{{"left", "left.txt", "first slice\n"}, {"right", "right.txt", "second slice\n"}} {
+		child := slices[i].(map[string]any)
+		rows := child["changes"].([]any)
+		if child["slice"] != expected.slice || len(rows) != 1 {
+			t.Fatal("slice comparison reused another range", child)
+		}
+		row := rows[0].(map[string]any)
+		if row["path"] != expected.path || row["before"] != "initial\n" || row["after"] != expected.content {
+			t.Fatal("slice comparison used master base, merged source or live bytes", row)
+		}
+	}
+}
+
 func TestNativeWorkspaceParallelProcessesAllocateOriginalFactsInAdmissionWindow(t *testing.T) {
 	t.Parallel()
 	directory, _ := nativeToolFixture(t)

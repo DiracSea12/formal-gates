@@ -220,8 +220,7 @@ func exchangeInstalledConfirmation(input io.Writer, output io.Reader, tool strin
 			return nil, err
 		}
 		if frame.Method != "" {
-			field := frame.Params.Schema.Properties["confirmOperation"]
-			if frame.Method != "elicitation/create" || len(frame.ID) == 0 || frame.Params.Mode != "form" || !reflect.DeepEqual(frame.Params.Schema.Required, []string{"confirmOperation"}) || field.Type != "boolean" || field.Default != nil {
+			if frame.Method != "elicitation/create" || len(frame.ID) == 0 || frame.Params.Mode != "form" || len(frame.Params.Schema.Properties) != 0 || len(frame.Params.Schema.Required) != 0 {
 				return nil, fmt.Errorf("service omitted the original explicit confirmation form: %+v", frame)
 			}
 			var original map[string]any
@@ -231,7 +230,7 @@ func exchangeInstalledConfirmation(input io.Writer, output io.Reader, tool strin
 			if check != nil {
 				check(original)
 			}
-			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{}}}); err != nil {
 				return nil, err
 			}
 			continue
@@ -257,7 +256,6 @@ func exchangeInstalledConfirmation(input io.Writer, output io.Reader, tool strin
 
 func (p installedStartProject) start(t *testing.T, base ...string) string {
 	t.Helper()
-	displayedID := ""
 	expectedBase := p.base
 	if len(base) != 0 && base[0] != "" {
 		expectedBase = base[0]
@@ -266,16 +264,8 @@ func (p installedStartProject) start(t *testing.T, base ...string) string {
 	if len(base) != 0 {
 		arguments["baseSnapshot"] = base[0]
 	}
-	body, err := p.confirmation(t, "confirm_start", arguments, func(original map[string]any) {
-		var materials facade.IntakePreview
-		data := installedJSON(t, original["materials"])
-		if err := json.Unmarshal(data, &materials); err != nil || materials.Content != p.preview.Content || materials.Revision != p.preview.Revision || !reflect.DeepEqual(materials.Materials, p.preview.Materials) || !reflect.DeepEqual(materials.IntakeCandidate, p.preview.IntakeCandidate) || original["root"] != p.project || original["baseSnapshot"] != expectedBase {
-			t.Fatalf("start form changed its original source, revision or project: %v %s", err, data)
-		}
-		displayedID, _ = original["runId"].(string)
-		if displayedID == "" {
-			t.Fatal("start form omitted its generated run identity")
-		}
+	body, err := p.confirmation(t, "confirm_start", arguments, func(map[string]any) {
+		t.Fatal("conversational startup requested an extra host confirmation")
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -283,8 +273,28 @@ func (p installedStartProject) start(t *testing.T, base ...string) string {
 	var response struct {
 		RunID string `json:"runId"`
 	}
-	if err := json.Unmarshal(body, &response); err != nil || response.RunID == "" || response.RunID != displayedID {
-		t.Fatalf("start response changed its displayed run identity: %v %s", err, body)
+	if err := json.Unmarshal(body, &response); err != nil || response.RunID == "" {
+		t.Fatalf("start response omitted its run identity: %v %s", err, body)
+	}
+	directory := filepath.Join(p.project, facade.EngineNamespace, response.RunID)
+	var request facade.StartRequest
+	if err := json.Unmarshal(readInstalledFile(t, filepath.Join(directory, "request.json")), &request); err != nil || request.RunID != response.RunID || request.BaseSnapshot != expectedBase || request.IntakeConfirmationReceipt.Confirmation != "conversation" {
+		t.Fatalf("startup lost its original run, base or conversation source: %+v %v", request, err)
+	}
+	_, state := p.bindings(t, response.RunID, request.Provider)
+	if state.IntakeConfirmationReceipt.Confirmation != "conversation" {
+		t.Fatal("state lost the conversation source")
+	}
+	paths, err := facade.OriginalPayloadPaths(filepath.Join(directory, "payloads", "intake"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("startup omitted its original material: %v %v", paths, err)
+	}
+	var materials facade.IntakePreview
+	data := readInstalledFile(t, paths[0])
+	expectedCandidate := p.preview.IntakeCandidate
+	expectedCandidate.Confirmation = "conversation"
+	if err := json.Unmarshal(data, &materials); err != nil || materials.Content != p.preview.Content || materials.Revision != p.preview.Revision || !reflect.DeepEqual(materials.Materials, p.preview.Materials) || !reflect.DeepEqual(materials.IntakeCandidate, expectedCandidate) || !reflect.DeepEqual(request.IntakeConfirmationReceipt, expectedCandidate) {
+		t.Fatalf("persisted intake changed its original content, revision or bindings: %v %s", err, data)
 	}
 	return response.RunID
 }
@@ -506,8 +516,19 @@ func TestInstalledStartRejectsInvalidInputsBeforeState(t *testing.T) {
 		args[field] = "agent-authored"
 		assertRejected(field, args, "unknown field")
 	}
-	if output, err := p.command(nil, "workflow", "start", "--root", p.project, "--run-id", "agent-authored", "--intake", fmt.Sprint(p.intakePosition)).CombinedOutput(); err == nil || !strings.Contains(string(output), "NATIVE_CONFIRMATION_UNAVAILABLE") {
-		t.Fatalf("agent-authored start bypassed the native channel: %v %s", err, output)
+	const conversationRunID = "conversation-start"
+	output, err := p.command(nil, "workflow", "start", "--root", p.project, "--run-id", conversationRunID, "--intake", fmt.Sprint(p.intakePosition)).CombinedOutput()
+	var started struct {
+		RunID string `json:"runId"`
+	}
+	if err != nil || json.Unmarshal(output, &started) != nil || started.RunID != conversationRunID {
+		t.Fatalf("conversational CLI startup lost its run identity: %v %s", err, output)
+	}
+	cliRequest, cliState := p.bindings(t, conversationRunID, "zcode")
+	expectedIntake := p.intake
+	expectedIntake.Confirmation = "conversation"
+	if cliRequest.RunID != conversationRunID || cliRequest.BaseSnapshot != p.base || !reflect.DeepEqual(cliRequest.IntakeConfirmationReceipt, expectedIntake) || !reflect.DeepEqual(cliState.IntakeConfirmationReceipt, &expectedIntake) {
+		t.Fatalf("conversational CLI startup lost its original intake, source or base: %+v", cliRequest)
 	}
 	if err := os.WriteFile(filepath.Join(p.project, "design.md"), []byte("# Revised solution\n"), 0o600); err != nil {
 		t.Fatal(err)

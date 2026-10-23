@@ -51,7 +51,7 @@ func TestSkillDescriptionDeclaresTriggerModel(t *testing.T) {
 }
 func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
-	for _, rule := range []string{"默认提醒一次", "检测到复杂需求，建议走 formal-gates 流程", "非修改性的提问、解释、诊断和 review 不触发正式流程", "主代理不得自行触发", "先做材料预检并读取结构投影，再展示该文件全文与精确 revision", "REQ/AC 结构须在启动确认前通过校验", "自然语言只提出申请", "调用主宿主 confirm_start 显示绑定原材料的原生确认，用户亲自确认后由程序直接启动 run", "模型不能填写批准值、制作确认收据或用 CLI 自报确认"} {
+	for _, rule := range []string{"默认提醒一次", "检测到复杂需求，建议走 formal-gates 流程", "非修改性的提问、解释、诊断和 review 不触发正式流程", "主代理不得自行触发", "先做材料预检并读取结构投影，再展示该文件全文与精确 revision", "REQ/AC 结构须在启动确认前通过校验", "用户在对话明确回复", "模型据此调用 confirm_start 或既有 workflow start", "程序不扫描聊天或鉴别回复来源", "不再请求启动弹窗"} {
 		assertHasText(t, skill, rule)
 	}
 }
@@ -63,9 +63,11 @@ func TestSkillDelegatesAdvancementToCurrentCLI(t *testing.T) {
 	assertHasText(t, skill, "workflow drive")
 	for _, rule := range []string{
 		"预检自动保存完整 intake 载荷并公布 `intake` 序号",
-		"传入 `intake` 原序号与 `configuration`，原生弹窗确认完整启动操作",
-		"真人在原生表单确认后由程序直接提交原对象",
-		"没有真人交互能力时明确不可执行，不以模型回包、自动批准 hook 或 NativeRespond 代替",
+		"传入 `intake` 原序号与 `configuration`；无 MCP 工具时可调用既有 `workflow start`",
+		"由宿主按其权限策略确认后直接提交原对象",
+		"权限与交互跟随当前宿主",
+		"宿主 YOLO/bypass 时不额外要求真人操作，也不把子执行弹窗透传回来",
+		"不以模型回包、自动批准 hook 或 NativeRespond 伪造宿主批准",
 		"不抄取或重拼已知路径、身份、摘要、全文和收据",
 		"配置须至少启用一个节点才能启动",
 		"全部节点关闭的选择被拒绝",

@@ -170,8 +170,7 @@ func NativeJobStopped(directory string) bool {
 	return nativeProcessTreeStopped(directory, pgid)
 }
 
-// NativeStartEvidence consumes the adapter's actual create/resume/init
-// acknowledgement, saved with identity before the model turn is issued.
+// NativeStartEvidence consumes the original source's actual identity facts.
 func NativeStartEvidence(provider, directory string) (string, error) {
 	impl, err := nativeImplementationFor(provider)
 	if err != nil {
@@ -183,6 +182,10 @@ func NativeStartEvidence(provider, directory string) (string, error) {
 	}
 	if getOf(request, "provider") != provider {
 		return "", fmt.Errorf("native start provider differs from original request")
+	}
+	if getOf(request, "host") != nil {
+		ref, _, err := hostWorkerInvocation(directory)
+		return ref.Session, err
 	}
 	if err := impl.validateBinding(getOf(request, "binding")); err != nil {
 		return "", err
@@ -204,12 +207,15 @@ func NativeStartEvidence(provider, directory string) (string, error) {
 	return identity, nil
 }
 
-// NativeFailureEvidence observes the original failed invocation and supervisor
-// receipt. It does not require or manufacture a successful model answer.
+// NativeFailureEvidence observes the original invocation's proved failure.
+// It does not require or manufacture a successful model answer.
 func NativeFailureEvidence(provider, directory string) ([]byte, string, string, error) {
 	request, err := readJSONFile(filepath.Join(directory, "native-request.json"))
 	if err != nil {
 		return nil, "", "", err
+	}
+	if getOf(request, "host") != nil {
+		return hostWorkerFailureEvidence(provider, directory)
 	}
 	impl, err := nativeImplementationFor(provider)
 	if err != nil {

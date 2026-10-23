@@ -32,6 +32,14 @@ func (f *Facade) driveNative() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	for _, intent := range snap.State.ExecutableHostActions(f.definition) {
+		if intent.Terminate != nil {
+			host, stopped, err := f.observeHostWorkerTermination(intent)
+			if err != nil || host && stopped {
+				return stopped, err
+			}
+		}
+	}
 	if progress, err := f.observeWorkerExecutions(snap.State); progress || err != nil {
 		return progress, err
 	}
@@ -154,6 +162,36 @@ func (f *Facade) observeWorkerExecutions(state *protocol.State) (bool, error) {
 	slices.Sort(directories)
 	for _, directory := range directories {
 		invocation := observed[directory]
+		if invocation.request["host"] != nil {
+			before, err := f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			_, turn, err := f.verifyHostWorker(invocation.request, invocation.material)
+			if err != nil {
+				return false, err
+			}
+			if err := f.observeWorkerExecution(*invocation.binding.WorkerMaterial, directory, f.HostWorkerStartEvidence); err != nil {
+				return false, err
+			}
+			if turn.State == "interrupted" || turn.State == "aborted" {
+				body, err := json.Marshal(turn)
+				if err != nil {
+					return false, err
+				}
+				if err := f.recordWorkerInterruption(invocation, body, "Native host child "+turn.State+": "+turn.Reason); err != nil {
+					return false, err
+				}
+			}
+			after, err := f.engine.Load()
+			if err != nil {
+				return false, err
+			}
+			if after.Revision > before.Revision {
+				return true, nil
+			}
+			continue
+		}
 		_, identityErr := os.Stat(filepath.Join(directory, "identity.json"))
 		if identityErr != nil && !os.IsNotExist(identityErr) {
 			return false, identityErr
@@ -215,45 +253,15 @@ func (f *Facade) observeWorkerExecutions(state *protocol.State) (bool, error) {
 			}
 		}
 		if interrupted {
-			current, err := f.engine.Load()
-			if err != nil {
-				return false, err
-			}
-			for id, intent := range current.State.PendingHostActions {
-				if intent.Resume != nil && id == invocation.binding.ResumeActionID || intent.Terminate != nil && intent.Terminate.WorkerActionID == ref.ActionID && intent.Terminate.AttemptID == ref.AttemptID {
-					if _, _, err := f.engine.ReconcileHostAction(id, "", false, false, protocol.Observation{}); err != nil {
-						return false, err
-					}
-				}
-			}
-			current, err = f.engine.Load()
-			if err != nil {
-				return false, err
-			}
 			reason := "Native invocation lost its process writer before the exit receipt: " + directory
-			_, pending := current.State.PendingActions[ref.ActionID]
-			_, aborted := current.State.AbortDecision()
-			known := workerInvocationDelivered(current.State, invocation)
-			if pending && !aborted && !current.State.ResetPending() && !known {
-				// A stopped writer does not prove the native semantic outcome.
-				if unstarted {
-					process, err = os.ReadFile(filepath.Join(directory, "native-request.json"))
-					if err != nil {
-						return false, err
-					}
-				}
-				digest := sha256.Sum256(process)
-				failure, err := protocol.NewWorkerResultEvent(WorkerFailureEventID(ref, invocation.binding.ResumeActionID), ref.ActionID, invocation.material.Input.Provider, protocol.OutcomeRuntimeError, "sha256:"+hex.EncodeToString(digest[:]), authoring.FailureUserActionRequired)
+			if unstarted {
+				process, err = os.ReadFile(filepath.Join(directory, "native-request.json"))
 				if err != nil {
 					return false, err
 				}
-				failure.Result.InterruptionReason = reason
-				if _, err := f.engine.Submit(failure, protocol.Observation{}); err != nil {
-					return false, err
-				}
-				if _, _, err := f.engine.RecoverAttempt(ref.ActionID, protocol.Interruption{InterruptionReason: reason, Class: authoring.FailureUserActionRequired}, protocol.Observation{}); err != nil {
-					return false, err
-				}
+			}
+			if err := f.recordWorkerInterruption(invocation, process, reason); err != nil {
+				return false, err
 			}
 		}
 		after, err := f.engine.Load()
@@ -265,6 +273,41 @@ func (f *Facade) observeWorkerExecutions(state *protocol.State) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func (f *Facade) recordWorkerInterruption(invocation nativeWorkerInvocation, source []byte, reason string) error {
+	ref := *invocation.binding.WorkerMaterial
+	current, err := f.engine.Load()
+	if err != nil {
+		return err
+	}
+	for id, intent := range current.State.PendingHostActions {
+		if intent.Resume != nil && id == invocation.binding.ResumeActionID || intent.Terminate != nil && intent.Terminate.WorkerActionID == ref.ActionID && intent.Terminate.AttemptID == ref.AttemptID {
+			if _, _, err := f.engine.ReconcileHostAction(id, "", false, false, protocol.Observation{}); err != nil {
+				return err
+			}
+		}
+	}
+	current, err = f.engine.Load()
+	if err != nil {
+		return err
+	}
+	_, pending := current.State.PendingActions[ref.ActionID]
+	_, aborted := current.State.AbortDecision()
+	if !pending || aborted || current.State.ResetPending() || workerInvocationDelivered(current.State, invocation) {
+		return nil
+	}
+	digest := sha256.Sum256(source)
+	failure, err := protocol.NewWorkerResultEvent(WorkerFailureEventID(ref, invocation.binding.ResumeActionID), ref.ActionID, invocation.material.Input.Provider, protocol.OutcomeRuntimeError, "sha256:"+hex.EncodeToString(digest[:]), authoring.FailureUserActionRequired)
+	if err != nil {
+		return err
+	}
+	failure.Result.InterruptionReason = reason
+	if _, err := f.engine.Submit(failure, protocol.Observation{}); err != nil {
+		return err
+	}
+	_, _, err = f.engine.RecoverAttempt(ref.ActionID, protocol.Interruption{InterruptionReason: reason, Class: authoring.FailureUserActionRequired}, protocol.Observation{})
+	return err
 }
 
 // completeNativeIntent uses the caller's existing native window and original

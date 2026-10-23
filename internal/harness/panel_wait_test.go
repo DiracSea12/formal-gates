@@ -85,7 +85,7 @@ func TestServeConfigureWaitDoesNotBlockNativeConfirmation(t *testing.T) {
 			}
 			fmt.Fprintln(feed, `{"id":4,"method":"tools/call","params":{"name":"confirm_control","arguments":{}}}`)
 			waitPanelOutput(t, &out, `a native confirmation is pending`)
-			fmt.Fprintln(feed, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{"confirmOperation":true}}}`)
+			fmt.Fprintln(feed, `{"id":"formal-gates-confirmation-1","result":{"action":"accept","content":{}}}`)
 			waitPanelOutput(t, &out, `approved`)
 			feed.Close()
 			select {

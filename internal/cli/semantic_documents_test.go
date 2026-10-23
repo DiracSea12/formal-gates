@@ -76,6 +76,7 @@ func TestWorkflowStartUsesParsedPackageRootForAdmission(t *testing.T) {
 	if err := saveWorkflowCandidate(candidatePath, candidate); err != nil {
 		t.Fatal(err)
 	}
+	candidate.Confirmation = "conversation"
 	for _, test := range []struct {
 		name  string
 		flags []string
@@ -137,21 +138,11 @@ func TestWorkflowStartBindsConfigurationAfterStructuredPrecheck(t *testing.T) {
 	if err != nil || json.Unmarshal(raw, &candidate) != nil || !reflect.DeepEqual(candidate, preview.IntakeCandidate) {
 		t.Fatal("saved candidate differs from displayed material", err)
 	}
-	for _, args := range [][]string{
-		{"workflow", "start", "--root", root, "--run-id", "unconfirmed-start", "--intake-receipt", candidatePath},
-	} {
-		out.Reset()
-		stderr.Reset()
-		if code := Run("formal-gates", args, streams); code == 0 || !strings.Contains(stderr.String(), "NATIVE_CONFIRMATION_UNAVAILABLE") || out.Len() != 0 {
-			t.Fatalf("agent start bypassed native confirmation: %d %s %s", code, &out, &stderr)
-		}
-		if _, err := os.Stat(filepath.Join(root, facade.EngineNamespace, "unconfirmed-start")); !os.IsNotExist(err) {
-			t.Fatal("unconfirmed start wrote run files", err)
-		}
-	}
+
 	if !reflect.DeepEqual(before, snapshotEngineRunTree(t, root, "writer-exclusive")) {
-		t.Fatal("precheck or rejected start changed existing authority")
+		t.Fatal("precheck changed existing authority")
 	}
+	candidate.Confirmation = "conversation"
 	for _, test := range []struct{ configuration, runID string }{{"", "default-selection"}, {"仅评审", "named-selection"}} {
 		expectSelection := test.configuration == "仅评审"
 		if expectSelection {

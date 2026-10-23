@@ -151,17 +151,7 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 			command := exec.Command(invocation.executable, "workflow", "serve")
 			command.Dir = root
 			command.Env = testkit.HostFilteredEnvironment(launcherChildEnvironment(environment))
-			displayedID := ""
-			output, childErr := launcherConfirmStart(t, command, root, intake, func(original map[string]any) {
-				materials, ok := original["materials"].(map[string]any)
-				if invocation.mode != "stable" || !ok || original["root"] != root || materials["content"] != preview.Content || materials["revision"] != preview.Revision {
-					t.Fatalf("confirmation changed the original launcher operation: %v", original)
-				}
-				displayedID, _ = original["runId"].(string)
-				if displayedID == "" {
-					t.Fatal("confirmation omitted the generated run identity")
-				}
-			})
+			output, childErr := launcherStartIntake(t, command, root, intake)
 			if invocation.mode == "stable" {
 				if childErr != nil {
 					t.Fatalf("stable launcher failed: %v\n%s", childErr, output)
@@ -169,12 +159,24 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 				var started struct {
 					RunID string `json:"runId"`
 				}
-				if err := json.Unmarshal(output, &started); err != nil || started.RunID == "" || started.RunID != displayedID {
-					t.Fatalf("start response changed displayed run identity: %s %v", output, err)
+				if err := json.Unmarshal(output, &started); err != nil || started.RunID == "" {
+					t.Fatalf("start response lost its generated run identity: %s %v", output, err)
 				}
 				persisted := admissionCurrentRequest(t, root, started.RunID)
 				if persisted.AdmissionRegistryPath != registry || persisted.InstalledTargetIdentity != record.ID || persisted.AdmissionRoot != root || persisted.AdmissionTarget != packageRoot || persisted.AdmissionGeneration != record.Generation || persisted.AdmissionLease != record.Lease || persisted.AdmissionToken != record.Token {
 					t.Fatalf("persisted exact launcher binding lost: %+v", persisted)
+				}
+				if persisted.IntakeConfirmationReceipt.Confirmation != "conversation" || persisted.IntakeConfirmationReceipt.Digest != preview.IntakeCandidate.Digest {
+					t.Fatal("launcher startup lost intake or conversation provenance", persisted)
+				}
+				materials, err := facade.OriginalPayloadPaths(filepath.Join(root, facade.EngineNamespace, started.RunID, "payloads", "intake"))
+				if err != nil || len(materials) != 1 {
+					t.Fatal("launcher startup lost original materials", materials, err)
+				}
+				body, err := os.ReadFile(materials[0])
+				var stored facade.IntakePreview
+				if err != nil || json.Unmarshal(body, &stored) != nil || stored.Content != preview.Content || stored.Revision != preview.Revision {
+					t.Fatal("launcher startup changed original material content", stored, err)
 				}
 				after, err := LoadRegistry(registry)
 				if err != nil || after.Epoch != document.Epoch {
@@ -185,16 +187,17 @@ func TestStableLauncherDiscoveryFencesCandidateWrites(t *testing.T) {
 					t.Fatalf("candidate not fenced by actual launcher owner: %v\n%s", childErr, output)
 				}
 				after, err := filepath.Glob(filepath.Join(root, facade.EngineNamespace, "*", "state.json"))
-				if err != nil || strings.Join(before, "\n") != strings.Join(after, "\n") || displayedID != "" {
-					t.Fatalf("candidate rejection created authority or requested approval: before=%v after=%v err=%v", before, after, err)
+				if err != nil || strings.Join(before, "\n") != strings.Join(after, "\n") {
+					t.Fatalf("candidate rejection created authority: before=%v after=%v err=%v", before, after, err)
 				}
 			}
 		})
 	}
 }
 
-// launcherConfirmStart simulates the host's duplex form response, not a human UI.
-func launcherConfirmStart(t *testing.T, command *exec.Cmd, root string, intake int, check func(map[string]any)) ([]byte, error) {
+// launcherStartIntake submits a conversation-authorized startup over the
+// installed service and rejects any unexpected native confirmation request.
+func launcherStartIntake(t *testing.T, command *exec.Cmd, root string, intake int) ([]byte, error) {
 	t.Helper()
 	input, err := command.StdinPipe()
 	if err != nil {
@@ -209,11 +212,11 @@ func launcherConfirmStart(t *testing.T, command *exec.Cmd, root string, intake i
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
-	defer command.Process.Kill()
 	defer command.Wait()
+	defer command.Process.Kill()
 	defer input.Close()
 	encode, decode := json.NewEncoder(input), json.NewDecoder(output)
-	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}}); err != nil {
+	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}}}); err != nil {
 		return nil, err
 	}
 	var initialized struct {
@@ -230,75 +233,38 @@ func launcherConfirmStart(t *testing.T, command *exec.Cmd, root string, intake i
 	if initialized.ID != 1 || initialized.Result.ServerInfo.Name != "formal-gates" {
 		return nil, fmt.Errorf("unexpected initialize response: %+v", initialized)
 	}
-	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
-		return nil, err
-	}
 	if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "confirm_start", "arguments": map[string]any{"root": root, "intake": intake}}}); err != nil {
 		return nil, err
 	}
-	confirmed := false
-	for {
-		var frame struct {
-			ID     json.RawMessage `json:"id"`
-			Method string          `json:"method"`
-			Params struct {
-				Mode    string `json:"mode"`
-				Message string `json:"message"`
-				Schema  struct {
-					Required             []string `json:"required"`
-					AdditionalProperties bool     `json:"additionalProperties"`
-					Properties           map[string]struct {
-						Type    string          `json:"type"`
-						Default json.RawMessage `json:"default"`
-					} `json:"properties"`
-				} `json:"requestedSchema"`
-			} `json:"params"`
-			Result struct {
-				IsError bool `json:"isError"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"result"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := decode.Decode(&frame); err != nil {
-			return nil, fmt.Errorf("%w; stderr=%s", err, stderr.String())
-		}
-		if frame.Method == "elicitation/create" {
-			field := frame.Params.Schema.Properties["confirmOperation"]
-			if confirmed || frame.Params.Mode != "form" || strings.Join(frame.Params.Schema.Required, ",") != "confirmOperation" || frame.Params.Schema.AdditionalProperties || field.Type != "boolean" || len(field.Default) != 0 {
-				return nil, fmt.Errorf("service omitted the explicit unselected confirmation form")
-			}
-			var original map[string]any
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(frame.Params.Message, "Confirm this exact operation:\n")), &original); err != nil {
-				return nil, err
-			}
-			check(original)
-			confirmed = true
-			if err := encode.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if string(frame.ID) != "2" || frame.Method != "" {
-			return nil, fmt.Errorf("response belongs to another request: %s %s", frame.ID, frame.Method)
-		}
-		var body []byte
-		for _, content := range frame.Result.Content {
-			if content.Type == "text" {
-				body = append(body, []byte(content.Text)...)
-			}
-		}
-		if len(frame.Error) != 0 {
-			return body, fmt.Errorf("%s", frame.Error)
-		}
-		if frame.Result.IsError {
-			return body, fmt.Errorf("%s", body)
-		}
-		if !confirmed {
-			return body, fmt.Errorf("service started without its original form")
-		}
-		return body, nil
+	var frame struct {
+		ID     int    `json:"id"`
+		Method string `json:"method"`
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
 	}
+	if err := decode.Decode(&frame); err != nil {
+		return nil, fmt.Errorf("%w; stderr=%s", err, stderr.String())
+	}
+	if frame.ID != 2 || frame.Method != "" {
+		return nil, fmt.Errorf("unexpected startup response: %+v", frame)
+	}
+	var body []byte
+	for _, content := range frame.Result.Content {
+		if content.Type == "text" {
+			body = append(body, []byte(content.Text)...)
+		}
+	}
+	if len(frame.Error) != 0 {
+		return body, fmt.Errorf("%s", frame.Error)
+	}
+	if frame.Result.IsError {
+		return body, fmt.Errorf("%s", body)
+	}
+	return body, nil
 }

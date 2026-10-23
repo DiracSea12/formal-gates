@@ -553,9 +553,13 @@ func TestWorkerExecutionUsesCurrentSingleMaterial(t *testing.T) {
 }
 
 func workerMaterialFacade(t *testing.T) (*Facade, string) {
+	return workerMaterialHostFacade(t, "zcode", OwnerBinding{})
+}
+
+func workerMaterialHostFacade(t *testing.T, provider string, owner OwnerBinding) (*Facade, string) {
 	t.Helper()
 	root := t.TempDir()
-	testkit.ConfigureNativePaths(t, root, "zcode")
+	testkit.ConfigureNativePaths(t, root, provider)
 	write := func(path string, body []byte) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, path), body, 0600); err != nil {
@@ -585,7 +589,7 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	receipt.Artifacts[0].Revision = revision
 	receipt.SolutionRevision = revision
 	receipt.SolutionDigest = "sha256:" + revision
-	admission := testAdmission(t, root, "worker-target", "sha256:worker-package", "zcode")
+	admission := testAdmission(t, root, "worker-target", "sha256:worker-package", provider)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -596,7 +600,7 @@ func workerMaterialFacade(t *testing.T) (*Facade, string) {
 	if _, err := settings.UseConfiguration(root, home, "project", "工作", nil); err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{RunID: "worker-material", Provider: "zcode", VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
+	f, _, err := Start(StartOptions{Root: root, Owner: owner, Request: StartRequest{RunID: "worker-material", Provider: provider, VCS: "git", BaseSnapshot: base, DefinitionSource: DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, Admission: admission, Capacity: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

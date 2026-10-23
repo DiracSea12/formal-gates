@@ -52,6 +52,13 @@ func TestInstallableListsComeFromRegistry(t *testing.T) {
 	}
 }
 
+func TestDSHUsesNativeToolPermissionAuthority(t *testing.T) {
+	d, err := Lookup(DeepSeek)
+	if err != nil || d.Confirmation != ConfirmationHostPermission {
+		t.Fatalf("DSH tool permission channel: %+v %v", d, err)
+	}
+}
+
 func TestDevinDescriptorExposesItsExecutableAndHostContract(t *testing.T) {
 	d, err := Lookup("devin")
 	if err != nil {

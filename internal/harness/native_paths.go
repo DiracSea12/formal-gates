@@ -68,18 +68,27 @@ func nativePathEvidence(directory, raw string, capture bool) (*nativePathFacts, 
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	process, err := readJSONFile(filepath.Join(directory, "process.json"))
-	if err != nil {
-		return nil, err
-	}
-	owned := intOf(getOf(process, "pid")) == os.Getpid()
-	if !owned && intOf(getOf(process, "pid")) == os.Getppid() && supervisorAlive(directory) {
-		outer, err := readJSONFile(filepath.Join(directory, "request.json"))
+	owned := false
+	if request["host"] != nil {
+		_, turn, err := hostWorkerInvocation(directory)
 		if err != nil {
 			return nil, err
 		}
-		argv := extractArgs(getOf(outer, "argv"))
-		owned = len(argv) == 4 && argv[1] == "harness" && argv[2] == "native" && resolveNativePath(argv[3]) == resolveNativePath(directory)
+		owned = turn.State == "completed"
+	} else {
+		process, err := readJSONFile(filepath.Join(directory, "process.json"))
+		if err != nil {
+			return nil, err
+		}
+		owned = intOf(getOf(process, "pid")) == os.Getpid()
+		if !owned && intOf(getOf(process, "pid")) == os.Getppid() && supervisorAlive(directory) {
+			outer, err := readJSONFile(filepath.Join(directory, "request.json"))
+			if err != nil {
+				return nil, err
+			}
+			argv := extractArgs(getOf(outer, "argv"))
+			owned = len(argv) == 4 && argv[1] == "harness" && argv[2] == "native" && resolveNativePath(argv[3]) == resolveNativePath(directory)
+		}
 	}
 	if !owned {
 		return nil, fmt.Errorf("native terminal path capture requires the original live execution owner")

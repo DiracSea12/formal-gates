@@ -187,7 +187,7 @@ func (s *claudeScenario) save(t *testing.T, toolExecutable ...string) {
 		executable = toolExecutable[0]
 	}
 	mcpConfig := mustCanonical(t, map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{"command": executable, "args": []any{"harness", "native-tools", s.directory}}}})
-	s.peer.Args = append(s.peer.Args, "--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig)
+	s.peer.Args = append(s.peer.Args, "--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig, "--allowedTools", "mcp__formal-gates__workspace,mcp__formal-gates__submit_semantics")
 	for _, option := range []struct{ key, flag string }{{"identity", "--resume"}, {"model", "--model"}, {"reasoning_effort", "--effort"}} {
 		if value, _ := s.request[option.key].(string); value != "" {
 			s.peer.Args = append(s.peer.Args, option.flag, value)

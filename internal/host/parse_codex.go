@@ -1,6 +1,8 @@
 package host
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,11 +20,60 @@ type codexTokenUsage struct {
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
 
-// parseCodexTranscript supports token_usage_record and event_msg/token_count.
+// parseCodexTranscript meters native subagent rollouts over their local turns.
+// Other Codex sources support token_usage_record and event_msg/token_count.
 // Request records are deduplicated by response ID; token_count events mirror
 // them once requests are present. Token_count-only sources use cumulative deltas
 // and timestamp/model/usage keys. Any preceding cumulative prefix remains counted.
 func parseCodexTranscript(reader io.Reader) (Usage, error) {
+	buffered := bufio.NewReader(reader)
+	var prefix bytes.Buffer
+	for {
+		line, err := buffered.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return Usage{}, err
+		}
+		prefix.Write(line)
+		if len(bytes.TrimSpace(line)) != 0 || err == io.EOF {
+			break
+		}
+	}
+	reader = io.MultiReader(bytes.NewReader(prefix.Bytes()), buffered)
+	var first struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Source struct {
+				Subagent *struct {
+					ThreadSpawn json.RawMessage `json:"thread_spawn"`
+				} `json:"subagent"`
+			} `json:"source"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(prefix.Bytes()), &first) == nil && first.Type == "session_meta" && first.Payload.Source.Subagent != nil && len(first.Payload.Source.Subagent.ThreadSpawn) != 0 && string(first.Payload.Source.Subagent.ThreadSpawn) != "null" {
+		raw, err := io.ReadAll(reader)
+		if err != nil {
+			return Usage{}, err
+		}
+		thread, err := parseCodexThread(raw)
+		if err != nil {
+			return Usage{}, err
+		}
+		total, available := Usage{}, false
+		for _, turn := range thread.Turns {
+			total.InputCacheHitTokens += turn.Usage.InputCacheHitTokens
+			total.InputCacheMissTokens += turn.Usage.InputCacheMissTokens
+			total.OutputTokens += turn.Usage.OutputTokens
+			available = available || turn.UsageAvailable
+		}
+		if !available {
+			return Usage{}, fmt.Errorf("Codex subagent transcript contains no local response token usage")
+		}
+		return total, nil
+	}
+	return parseCodexUsageRecords(reader)
+}
+
+func parseCodexUsageRecords(reader io.Reader) (Usage, error) {
 	total := Usage{}
 	seen := map[string]bool{}
 	previousTotal := codexTokenUsage{}

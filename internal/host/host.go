@@ -37,13 +37,16 @@ const (
 	ProtocolZCode   HookProtocol = "zcode"
 )
 
-// ConfirmationChannel is the host's native confirmation transport.
+// ConfirmationChannel records the source of an accepted confirmation.
 type ConfirmationChannel string
 
 const (
-	// ConfirmationElicitation confirms through the host's interactive form:
-	// the service sends the original operation as a form request and the
-	// human's answer gates it. It is the zero-value default.
+	// ConfirmationConversation records startup requested by the model after
+	// the user confirms the displayed intake and configuration in conversation.
+	ConfirmationConversation ConfirmationChannel = "conversation"
+	// ConfirmationElicitation sends a confirmation-only form for the original
+	// operation. The host's permission policy decides whether to prompt or
+	// accept without interaction. It is the zero-value default.
 	ConfirmationElicitation ConfirmationChannel = ""
 	// ConfirmationHostPermission treats the host's tool-call permission gate
 	// as the approval authority: the host decides before the call reaches the
@@ -86,7 +89,7 @@ type Descriptor struct {
 	EnvironmentKeys   []string `json:"-"`
 	LifecycleRequired bool
 	// Confirmation is the host's native confirmation channel; the zero value
-	// means interactive form elicitation.
+	// means host-policy form confirmation.
 	Confirmation ConfirmationChannel
 }
 
@@ -143,6 +146,7 @@ var descriptors = []*Descriptor{
 		Paths:             PathLayout{ProjectManaged: "AGENTS.md"},
 		Hook:              HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*", BindProvider: true},
 		LifecycleRequired: true,
+		Confirmation:      ConfirmationHostPermission,
 	},
 	{
 		ID: ZCode, ReadUsage: parseZCodeTranscript, EnvironmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},

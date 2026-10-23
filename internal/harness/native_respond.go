@@ -55,6 +55,39 @@ type nativeAnswerCandidate struct {
 	Pending   map[string]any  `json:"pending"`
 	Selection nativeSelection `json:"selection"`
 }
+
+func nativeAnswerConfirmationView(candidate nativeAnswerCandidate) (map[string]any, error) {
+	answer, err := assembleNativeAnswer(candidate.Pending, candidate.Selection)
+	if err != nil {
+		return nil, err
+	}
+	question := nativeQuestionView(candidate.Pending, 1)
+	text := question["summary"]
+	selection := any(candidate.Selection)
+	choices := listOf(question["options"])
+	if rows := listOf(question["questions"]); len(choices) == 0 && len(rows) == 1 {
+		choices = listOf(getOf(rows[0], "options"))
+	}
+	if candidate.Selection.Choice > 0 && candidate.Selection.Choice <= len(choices) {
+		selection = getOf(choices[candidate.Selection.Choice-1], "label")
+	}
+	if questions := listOf(candidate.Pending["questions"]); len(questions) != 0 {
+		texts := []any{}
+		for _, row := range questions {
+			texts = append(texts, getOf(row, "question"))
+		}
+		text = texts
+	}
+	displayedAnswer := any(answer)
+	if content, ok := answer["answers"]; ok {
+		displayedAnswer = content
+	}
+	return map[string]any{"directory": candidate.Directory,
+		"pending":   map[string]any{"request_id": candidate.Pending["request_id"], "method": candidate.Pending["method"]},
+		"question":  map[string]any{"text": text, "operation": question["operation"]},
+		"selection": selection, "answer": displayedAnswer}, nil
+}
+
 type nativeHeldQuestion struct {
 	Directory string
 	Record    map[string]any

@@ -28,16 +28,32 @@ import (
 // Consumption reports the original engine projection and foreground boundary.
 // Active calls below are local waits; original jobs own all execution facts.
 type workflowConsumption struct {
-	Run        facade.Run                     `json:"run"`
-	Boundary   string                         `json:"boundary"`
-	Blocked    map[string]string              `json:"blocked,omitempty"`
-	Acceptance *protocol.Acceptance           `json:"acceptance,omitempty"`
-	Children   map[string]workflowConsumption `json:"children,omitempty"`
-	Progress   struct {
+	Run         facade.Run                     `json:"run"`
+	Boundary    string                         `json:"boundary"`
+	Blocked     map[string]string              `json:"blocked,omitempty"`
+	Acceptance  *protocol.Acceptance           `json:"acceptance,omitempty"`
+	Children    map[string]workflowConsumption `json:"children,omitempty"`
+	HostWorkers map[string]workflowHostWorker  `json:"hostWorkers,omitempty"`
+	HostActions []protocol.HostActionIntent    `json:"hostActions,omitempty"`
+	Progress    struct {
 		Issued    int `json:"issued"`
 		Running   int `json:"running"`
 		Decisions int `json:"decisions"`
 	} `json:"progress"`
+}
+
+// workflowHostWorker projects original issued work for the controlling host.
+// The host creates its real subagent; this value does not claim execution.
+type workflowHostWorker struct {
+	Material        facade.WorkerMaterial `json:"material"`
+	Provider        string                `json:"provider"`
+	Workspace       string                `json:"workspace"`
+	Model           string                `json:"model,omitempty"`
+	ReasoningEffort string                `json:"reasoningEffort,omitempty"`
+	ResumeActionID  string                `json:"resumeActionId,omitempty"`
+	Identity        string                `json:"identity,omitempty"`
+	State           string                `json:"state,omitempty"`
+	Worker          int                   `json:"worker"`
 }
 
 // Only foreground controls consume subsequent work. Native worker evidence
@@ -131,6 +147,8 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 			return result, driveErr
 		}
 		result.Run = run
+		result.HostWorkers = nil
+		result.HostActions = nil
 		if run.Status == "COMPLETE" || run.Status == "ABORTED" || run.Status == "SLICE_READY" {
 			if len(active) == 0 {
 				result.Boundary = run.Status
@@ -155,6 +173,11 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 					result.Children = map[string]workflowConsumption{}
 				}
 				observed := result.Children[id]
+				if observed.Run.Revision != current.Revision && (observed.Boundary == "HOST_WORKER" || observed.Boundary == "HOST_ACTION") {
+					observed.Boundary = ""
+					observed.HostWorkers = nil
+					observed.HostActions = nil
+				}
 				observed.Run = current
 				if len(current.PendingAsks) != 0 {
 					observed.Boundary = string(decision.KindAsk)
@@ -173,7 +196,7 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 				key := "child:" + id
 				observed := result.Children[id]
 				current := observed.Run
-				if active[key] || current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 && len(current.WorkerMaterials) == 0 || observed.Boundary == "BLOCKED" {
+				if active[key] || current.Status == "COMPLETE" || current.Status == "ABORTED" || current.Status == "SLICE_READY" || len(current.PendingAsks) != 0 && len(current.WorkerMaterials) == 0 || observed.Boundary == "BLOCKED" || observed.Boundary == "HOST_WORKER" || observed.Boundary == "HOST_ACTION" {
 					continue
 				}
 				active[key] = true
@@ -199,7 +222,12 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 				}
 				if intent.Terminate != nil && result.Blocked[intent.ActionID] == "" {
 					if err := terminateWorkflowWorker(ctx, f, intent); err != nil {
-						result.Blocked[intent.ActionID] = err.Error()
+						var duty *hostWorkerInterrupt
+						if errors.As(err, &duty) {
+							result.HostActions = append(result.HostActions, duty.intent)
+						} else {
+							result.Blocked[intent.ActionID] = err.Error()
+						}
 					}
 				}
 			}
@@ -208,7 +236,7 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 				ids = append(ids, id)
 			}
 			sort.Strings(ids)
-			for _, id := range ids {
+			for index, id := range ids {
 				ref, resume := run.WorkerMaterials[id], resumes[id]
 				waiting := false
 				for _, record := range run.RecoveryRecords {
@@ -227,6 +255,31 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 				if active[key] || result.Blocked[id] != "" {
 					continue
 				}
+				hostWorker, err := workflowWorkerForHost(f, streams, ref, resume)
+				if err != nil {
+					result.Blocked[id] = err.Error()
+					continue
+				}
+				if hostWorker != nil {
+					hostWorker.Worker = index + 1
+					if hostWorker.State == "completed" {
+						directory, _, err := f.HostWorkerExecution(hostWorker.Material, "", true)
+						if err == nil {
+							err = acceptWorkflowHostWorker(f, hostWorker.Material, directory)
+						}
+						if err != nil {
+							result.Blocked[id] = err.Error()
+						} else {
+							advance = true
+						}
+						continue
+					}
+					if result.HostWorkers == nil {
+						result.HostWorkers = map[string]workflowHostWorker{}
+					}
+					result.HostWorkers[id] = *hostWorker
+					continue
+				}
 				active[key] = true
 				waits.Add(1)
 				go func() {
@@ -234,6 +287,9 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 					executionErr := executeWorkflowWorker(ctx, executionContext, f, ref, resume)
 					done <- completion{key: key, action: id, err: executionErr}
 				}()
+			}
+			if advance {
+				continue
 			}
 			if len(run.PendingAsks) != 0 || run.Next.Kind == decision.KindAsk {
 				result.Boundary = string(decision.KindAsk)
@@ -246,6 +302,20 @@ func consumeWorkflowContext(streams IO, f *facade.Facade, root, runID string, ex
 				}
 			}
 			if len(active) == 0 {
+				if len(result.HostActions) != 0 {
+					result.Boundary = "HOST_ACTION"
+					return result, nil
+				}
+				if len(result.HostWorkers) != 0 {
+					result.Boundary = "HOST_WORKER"
+					return result, nil
+				}
+				for _, child := range result.Children {
+					if child.Boundary == "HOST_WORKER" || child.Boundary == "HOST_ACTION" {
+						result.Boundary = child.Boundary
+						return result, nil
+					}
+				}
 				if len(result.Blocked) > 0 {
 					result.Boundary = "BLOCKED"
 					return result, nil
@@ -349,6 +419,80 @@ func executeWorkflowWorker(ctx, executionContext context.Context, f *facade.Faca
 		case <-ticker.C:
 		}
 	}
+}
+
+func workflowWorkerForHost(f *facade.Facade, streams IO, ref facade.WorkerMaterial, resume protocol.HostActionIntent) (*workflowHostWorker, error) {
+	// Claimed independent invocations retain their original executor on reentry.
+	claimed, err := f.HasNativeWorkerExecution(ref)
+	if err != nil {
+		return nil, err
+	}
+	if claimed {
+		return nil, nil
+	}
+	request, _, _, original, err := f.WorkerExecutionRequest(ref, resume.ActionID)
+	if err != nil {
+		return nil, err
+	}
+	var start facade.StartRequest
+	if err := readJSONFileInto(filepath.Join(filepath.Dir(filepath.Dir(ref.Path)), "request.json"), &start); err != nil {
+		return nil, err
+	}
+	controller, err := host.Lookup(start.Provider)
+	if err != nil {
+		return nil, err
+	}
+	provider, err := host.Lookup(request["provider"].(string))
+	if err != nil {
+		return nil, err
+	}
+	if provider.ID != controller.ID {
+		return nil, nil
+	}
+	if provider.ID != host.Codex {
+		return nil, fmt.Errorf("HOST_SUBAGENT_UNAVAILABLE: verified native host worker integration is unavailable for %s", provider.InstallName)
+	}
+	if request["host"] == nil && provider.ID == host.Codex {
+		run, err := f.Show()
+		if err != nil {
+			return nil, err
+		}
+		session, nativeHome, err := workflowWorkerCaller(streams, run)
+		if err != nil {
+			return nil, err
+		}
+		if err := f.PrepareHostWorker(original, resume.ActionID, session, nativeHome); err != nil {
+			return nil, err
+		}
+	}
+	model, _ := request["model"].(string)
+	effort, _ := request["reasoning_effort"].(string)
+	projected := &workflowHostWorker{Material: original, Provider: provider.InstallName, Workspace: request["workspace"].(string), Model: model, ReasoningEffort: effort, ResumeActionID: resume.ActionID}
+	if request["host"] == nil && resume.ActionID == "" {
+		projected.Identity, err = f.HostWorkerContinuation(original)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if request["host"] != nil {
+		var source host.CodexInvocation
+		body, err := json.Marshal(request["host"])
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(body, &source); err != nil {
+			return nil, err
+		}
+		directory, turn, err := f.HostWorkerExecution(original, "", true)
+		if err != nil {
+			return nil, err
+		}
+		if err := f.ObserveWorkerStart(original, directory, f.HostWorkerStartEvidence); err != nil {
+			return nil, err
+		}
+		projected.Identity, projected.State = source.Session, turn.State
+	}
+	return projected, nil
 }
 
 func startWorkflowWorker(ctx context.Context, f *facade.Facade, ref facade.WorkerMaterial, resume protocol.HostActionIntent) (map[string]any, string, facade.WorkerMaterial, <-chan error, error) {
@@ -515,7 +659,21 @@ func acceptWorkflowFailure(f *facade.Facade, ref facade.WorkerMaterial, resume p
 	return err
 }
 
+type hostWorkerInterrupt struct{ intent protocol.HostActionIntent }
+
+func (e *hostWorkerInterrupt) Error() string {
+	return "HOST_INTERRUPT_REQUIRED: interrupt the original native child " + e.intent.Terminate.Identity + " using the host subagent tool, then drive to observe its actual terminal turn"
+}
+
 func terminateWorkflowWorker(ctx context.Context, f *facade.Facade, intent protocol.HostActionIntent) error {
+	if handled, stopped, err := f.HostWorkerTermination(intent); err != nil {
+		return err
+	} else if handled {
+		if !stopped {
+			return &hostWorkerInterrupt{intent: intent}
+		}
+		return nil
+	}
 	provider, directories, release, err := f.AgentExecution(intent)
 	if err != nil {
 		return err

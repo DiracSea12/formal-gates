@@ -30,8 +30,8 @@ type IO struct {
 	Stdout, Stderr io.Writer
 	Context        context.Context
 	confirmation   func(any) error
-	// confirmationChannel is the serving host's declared confirmation channel;
-	// it is provenance stamped onto the records a confirmation leaves behind.
+	// confirmationChannel records conversational startup or the serving host's
+	// channel for control decisions and native answers.
 	confirmationChannel host.ConfirmationChannel
 	owner               *facade.OwnerBinding
 	panelCtl            *panelController
@@ -346,6 +346,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 }
 
 var workflowSubcommands = map[string]func([]string, IO) (int, error){
+	"worker":            runWorkflowWorker,
 	"execution-options": runWorkflowExecutionOptions,
 	"replan":            runWorkflowReplan, "handoff": runWorkflowHandoff, "message": runWorkflowMessage, "progress": runWorkflowProgress, "start": runWorkflowStart, "drive": runWorkflowDrive, "submit": runWorkflowSubmit, "show": runWorkflowShow, "status": runWorkflowStatus, "next": runWorkflowNext, "diagnose": runWorkflowDiagnose, "guard-preview": runWorkflowGuardPreview, "serve": runWorkflowServe,
 }
@@ -421,7 +422,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	receipt.Confirmation = string(streams.confirmationChannel)
+	receipt.Confirmation = string(host.ConfirmationConversation)
 	if strings.TrimSpace(*runID) == "" {
 		return 1, fmt.Errorf("workflow start requires --run-id")
 	}
@@ -432,13 +433,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		}
 	})
 	admission, err := validate.ResolveEngineAdmission(*root, packageRoot)
-	if err != nil {
-		return 1, err
-	}
-	if streams.confirmation == nil {
-		return 1, fmt.Errorf("NATIVE_CONFIRMATION_UNAVAILABLE: run `formal-gates workflow serve` and call the confirm_start tool through the current host's formal-gates MCP service (CLI start does not accept self-reported approval)")
-	}
-	confirmation, err := confirmSavedFile(*intakePath, streams.confirmation)
 	if err != nil {
 		return 1, err
 	}
@@ -459,8 +453,10 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	var owner facade.OwnerBinding
 	if streams.owner != nil {
 		owner = *streams.owner
+	} else if admission.Provider == host.Codex && os.Getenv("CODEX_THREAD_ID") != "" {
+		owner.Session = os.Getenv("CODEX_THREAD_ID")
 	}
-	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Confirm: confirmation, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+	f, run, err := facade.Start(facade.StartOptions{Root: *root, Configuration: *configuration, Owner: owner, Request: facade.StartRequest{VCS: *vcsName, RunID: strings.TrimSpace(*runID), BaseSnapshot: baseIdentity, Provider: admission.Provider, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt}, ArtifactRoot: *root, RuntimeFiles: admission.RuntimeFiles, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, Target: admission.Target, Provider: admission.Provider, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 	if *machine {
 		return printValue(streams.Stdout, run, err)
 	}
@@ -777,6 +773,14 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		confirmation = func(value any) error {
 			candidate := value.(facade.ControlCandidate)
 			view := workflowConfirmationView(candidate)
+			if candidate.Input.Choice != "" {
+				view["decision"] = candidate.Input.Choice
+			}
+			run := view["run"].(map[string]any)
+			if questions := run["questions"].([]map[string]any); len(questions) != 0 {
+				view["question"] = questions
+			}
+			delete(run, "questions")
 			return streams.confirmation(view)
 		}
 	}

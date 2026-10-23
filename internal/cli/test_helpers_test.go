@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
@@ -16,10 +16,13 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-// Successful user-control fixtures use the actual MCP transport. The original
-// command arguments and displayed object are checked before the host responds.
+// Startup fixtures carry a conversational user decision. Other user-control
+// fixtures verify the displayed operation through the actual MCP transport.
 func runWithHostConfirmation(t *testing.T, args []string, streams IO) int {
 	t.Helper()
+	if len(args) >= 2 && args[0] == "workflow" && args[1] == "start" {
+		return Run("formal-gates", args, streams)
+	}
 	code := -1
 	withHostConfirmation(t, args, func(confirm func(any) error) {
 		streams.confirmation = confirm
@@ -68,11 +71,21 @@ func withHostConfirmation(t *testing.T, arguments any, execute func(func(any) er
 			}
 			execute(func(value any) error {
 				var err error
-				displayed, err = json.MarshalIndent(value, "", "  ")
+				displayed, err = json.Marshal(value)
 				if err != nil {
 					return err
 				}
-				return confirm(value)
+				if err := confirm(value); err != nil {
+					return err
+				}
+				after, err := json.Marshal(value)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(displayed, after) {
+					return fmt.Errorf("confirmation changed the complete original candidate")
+				}
+				return nil
 			})
 			return nil, nil
 		}, nil)
@@ -103,11 +116,15 @@ func withHostConfirmation(t *testing.T, arguments any, execute func(func(any) er
 		}
 		params := frame["params"].(map[string]any)
 		schema := params["requestedSchema"].(map[string]any)
-		field := schema["properties"].(map[string]any)["confirmOperation"].(map[string]any)
-		if frame["method"] != "elicitation/create" || frame["id"] == nil || params["mode"] != "form" || params["message"] != "Confirm this exact operation:\n"+string(displayed) || !reflect.DeepEqual(schema["required"], []any{"confirmOperation"}) || field["default"] != nil || field["type"] != "boolean" {
+		message := params["message"].(string)
+		if frame["method"] != "elicitation/create" || frame["id"] == nil || params["mode"] != "form" || utf8.RuneCountInString(message) > 800 || strings.Count(message, "\n")+1 > 12 || len(schema["properties"].(map[string]any)) != 0 || schema["required"] != nil {
 			t.Fatal("fixture did not receive its actual original operation", frame)
 		}
-		if err := encoder.Encode(map[string]any{"id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{"confirmOperation": true}}}); err != nil {
+		var visible map[string]any
+		if !json.Valid(displayed) || !strings.HasPrefix(message, "Confirm this exact operation:\n") || json.Unmarshal([]byte(strings.TrimPrefix(message, "Confirm this exact operation:\n")), &visible) != nil {
+			t.Fatal("confirmation did not describe its original operation")
+		}
+		if err := encoder.Encode(map[string]any{"id": frame["id"], "result": map[string]any{"action": "accept", "content": map[string]any{}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/testkit"
+	"formal-gates/internal/engine/vcs"
 	"formal-gates/internal/settings"
 )
 
@@ -25,6 +26,23 @@ func configurationBindingIntake(t *testing.T, root string) IntakeConfirmationRec
 		t.Fatal(err)
 	}
 	return preview.IntakeCandidate
+}
+
+// Configuration edits occur while startup resolves its native base, before
+// the original configuration lock commits the selected binding.
+type configurationChangeRunner struct {
+	vcs.Runner
+	change func() error
+}
+
+func (r *configurationChangeRunner) Run(dir, command string, args ...string) (string, error) {
+	if change := r.change; change != nil {
+		r.change = nil
+		if err := change(); err != nil {
+			return "", err
+		}
+	}
+	return r.Runner.Run(dir, command, args...)
 }
 
 func waitForConfigurationWindow(t *testing.T, path string, finished <-chan error) {
@@ -136,7 +154,7 @@ func TestConfigurationChangesRejectACommittingStart(t *testing.T) {
 	}
 }
 
-func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
+func TestConfigurationChangesPrecedeAWaitingStart(t *testing.T) {
 	for _, operation := range []string{"delete", "rename"} {
 		t.Run(operation, func(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
@@ -179,27 +197,22 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 				changed <- err
 			}()
 			waitForConfigurationWindow(t, filepath.Join(home, ".config", "formal-gates", "config.json.lock"), changed)
-			confirmations := 0
-			confirmed := make(chan struct{})
-			options.Confirm = func(value any) error {
-				confirmations++
-				if value.(map[string]any)["runId"] != options.Request.RunID || value.(map[string]any)["baseSnapshot"] != options.Request.BaseSnapshot {
-					return fmt.Errorf("confirmation lost the displayed start binding")
-				}
-				close(confirmed)
+			resolved := make(chan struct{})
+			options.VCSRunner = &configurationChangeRunner{Runner: testkit.NewFrozenGitRepo(), change: func() error {
+				close(resolved)
 				return nil
-			}
+			}}
 			started := make(chan error, 1)
 			go func() {
 				_, _, err := Start(options)
 				started <- err
 			}()
 			select {
-			case <-confirmed:
+			case <-resolved:
 			case err := <-started:
-				t.Fatalf("startup failed before confirmation: %v", err)
+				t.Fatalf("startup failed before resolving its native base: %v", err)
 			case <-time.After(10 * time.Second):
-				t.Fatal("startup waited for overlays before user confirmation")
+				t.Fatal("startup did not reach its native base before binding")
 			}
 			releaseProject()
 			releaseProject = nil
@@ -216,8 +229,8 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("startup deadlocked with configuration change")
 			}
-			if err == nil || !strings.Contains(err.Error(), "工作") || !strings.Contains(err.Error(), "does not exist") || confirmations != 1 {
-				t.Fatalf("stale startup was not rejected: confirmations=%d error=%v", confirmations, err)
+			if err == nil || !strings.Contains(err.Error(), "工作") || !strings.Contains(err.Error(), "does not exist") {
+				t.Fatalf("stale startup was not rejected: %v", err)
 			}
 			for _, path := range []string{filepath.Join(root, EngineNamespace, options.Request.RunID), startIntentPath(root, options.Request.RunID)} {
 				if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -231,10 +244,9 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 				t.Fatal(err)
 			}
 			verifiedStartFixture(t, root)
-			options.Confirm = func(any) error { confirmations++; return nil }
 			f, run, err := Start(options)
-			if err != nil || run.Status != "ACTIVE" || run.Configuration.Name != "工作" || confirmations != 2 {
-				t.Fatalf("same-path restart failed: status=%s binding=%q confirmations=%d error=%v", run.Status, run.Configuration.Name, confirmations, err)
+			if err != nil || run.Status != "ACTIVE" || run.Configuration.Name != "工作" {
+				t.Fatalf("same-path restart failed: status=%s binding=%q error=%v", run.Status, run.Configuration.Name, err)
 			}
 			snapshot, err := f.engine.Load()
 			if err != nil || snapshot.State.ConfigurationName() != "工作" || len(snapshot.State.AppliedConfigurations) == 0 {
@@ -244,7 +256,7 @@ func TestConfigurationChangesPrecedeAConfirmedWaitingStart(t *testing.T) {
 	}
 }
 
-func TestStartRevalidatesSelectionAndInitialApplicationAfterConfirmation(t *testing.T) {
+func TestStartRevalidatesSelectionAndInitialApplicationBeforeBinding(t *testing.T) {
 	for _, disableAll := range []bool{false, true} {
 		t.Run(fmt.Sprintf("selection-disabled=%t", disableAll), func(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
@@ -263,7 +275,8 @@ func TestStartRevalidatesSelectionAndInitialApplicationAfterConfirmation(t *test
 			}
 			options := StartOptions{Root: root, ArtifactRoot: root, VCSRunner: testkit.NewFrozenGitRepo(), Configuration: effective.ConfigurationName, Admission: admission, Request: StartRequest{
 				RunID: "confirmed-start", BaseSnapshot: testkit.FrozenSnapshot, IntakeConfirmationReceipt: configurationBindingIntake(t, root),
-			}, Confirm: func(any) error {
+			}}
+			options.VCSRunner = &configurationChangeRunner{Runner: testkit.NewFrozenGitRepo(), change: func() error {
 				_, err := settings.EditConfiguration(root, home, "project", effective.ConfigurationName, nil, func(configuration *settings.Configuration) error {
 					*configuration = updated
 					return nil
@@ -308,7 +321,7 @@ func TestStartRevalidatesSelectionAndInitialApplicationAfterConfirmation(t *test
 	}
 }
 
-func TestStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
+func TestStartResolvesNativeBaseBeforeBindingItsConfiguration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -318,12 +331,9 @@ func TestStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.RunID, request.FlowSelection = "confirmed-start", nil
-	confirmations := 0
-	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Configuration: "工作", Admission: &original.admission, Request: request, Confirm: func(value any) error {
-		confirmations++
-		if value.(map[string]any)["runId"] != "confirmed-start" || value.(map[string]any)["baseSnapshot"] != request.BaseSnapshot {
-			return fmt.Errorf("confirmation lost the displayed start binding")
-		}
+	resolutions := 0
+	f, run, err := Start(StartOptions{Root: root, ArtifactRoot: root, Configuration: "工作", Admission: &original.admission, Request: request, VCSRunner: &configurationChangeRunner{Runner: vcs.ExecRunner{}, change: func() error {
+		resolutions++
 		for _, path := range []string{
 			filepath.Join(home, ".config", "formal-gates", "config.json.lock"),
 			filepath.Join(root, ".gates", "config.json.lock"),
@@ -339,9 +349,9 @@ func TestStartConfirmsBeforeBindingItsConfiguration(t *testing.T) {
 			return nil
 		})
 		return err
-	}})
-	if err != nil || confirmations != 1 || run.Status != "ACTIVE" || run.Configuration.Name != "工作" {
-		t.Fatalf("configuration startup failed: confirmations=%d status=%s binding=%q error=%v", confirmations, run.Status, run.Configuration.Name, err)
+	}}})
+	if err != nil || resolutions != 1 || run.Status != "ACTIVE" || run.Configuration.Name != "工作" {
+		t.Fatalf("configuration startup failed: resolutions=%d status=%s binding=%q error=%v", resolutions, run.Status, run.Configuration.Name, err)
 	}
 	snapshot, err := f.engine.Load()
 	if err != nil || snapshot.State.ConfigurationName() != "工作" || snapshot.State.AppliedConfigurations[0].Configuration.RoundLimit("product-review") != 5 {

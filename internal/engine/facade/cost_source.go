@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
@@ -92,7 +93,28 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 		}
 		directory := filepath.Join(actionDir, entry.Name())
 		if _, err := os.Stat(filepath.Join(directory, "owner")); os.IsNotExist(err) {
-			continue
+			var source struct {
+				Host *host.CodexInvocation `json:"host"`
+			}
+			body, readErr := os.ReadFile(filepath.Join(directory, "native-request.json"))
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			if readErr != nil {
+				missing = errors.Join(missing, readErr)
+				continue
+			}
+			if err := json.Unmarshal(body, &source); err != nil {
+				missing = errors.Join(missing, err)
+				continue
+			}
+			if source.Host == nil {
+				continue
+			}
+			if _, _, err := source.Host.Observe(); err != nil {
+				missing = errors.Join(missing, err)
+				continue
+			}
 		} else if err != nil {
 			missing = errors.Join(missing, err)
 			continue
@@ -103,7 +125,8 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 			continue
 		}
 		var request struct {
-			Provider string `json:"provider"`
+			Provider string                `json:"provider"`
+			Host     *host.CodexInvocation `json:"host"`
 			Engine   struct {
 				Root           string         `json:"root"`
 				RunID          string         `json:"runId"`
@@ -130,6 +153,26 @@ func nativeCostSourcePaths(root string, ref protocol.CostSourceRef, identity str
 			continue
 		}
 		attempt = material.AttemptID
+		if request.Host != nil {
+			if _, err := readNativeWorkerInvocation(root, ref.RunID, directory); err != nil {
+				missing = errors.Join(missing, err)
+				continue
+			}
+			_, turn, err := request.Host.Observe()
+			if err != nil || request.Host.Session != identity || turn.State == "running" {
+				missing = errors.Join(missing, err, fmt.Errorf("host metering source has no terminal original identity"))
+				continue
+			}
+			path := request.Host.Transcript
+			if _, err := cost.ParseTranscript(ref.Provider, path); err != nil {
+				missing = errors.Join(missing, err)
+				continue
+			}
+			if !slices.Contains(paths, path) {
+				paths = append(paths, path)
+			}
+			continue
+		}
 		file, err := os.Open(filepath.Join(directory, "source.json"))
 		if err != nil {
 			missing = errors.Join(missing, err)

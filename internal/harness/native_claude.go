@@ -231,7 +231,7 @@ func claudeArguments(request any, directory string, launch map[string]any, works
 	if err != nil {
 		return nil, "", err
 	}
-	argv = append(argv, "--tools", "", "--strict-mcp-config", "--mcp-config", string(config))
+	argv = append(argv, "--tools", "", "--strict-mcp-config", "--mcp-config", string(config), "--allowedTools", nativeAllowedMCPTools)
 	for _, option := range []struct{ key, flag string }{{"identity", "--resume"}, {"model", "--model"}, {"reasoning_effort", "--effort"}} {
 		if value, _ := getOf(request, option.key).(string); value != "" {
 			argv = append(argv, option.flag, value)

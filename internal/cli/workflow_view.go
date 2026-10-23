@@ -326,8 +326,25 @@ func workflowConfirmationView(candidate facade.ControlCandidate) map[string]any 
 func workflowConsumptionView(value workflowConsumption, runs map[string]map[string]any) map[string]any {
 	run := runs[value.Run.RunID]
 	view := map[string]any{"run": run, "boundary": value.Boundary, "progress": value.Progress}
+	if len(value.HostWorkers) != 0 {
+		keys := make([]string, 0, len(value.HostWorkers))
+		for key := range value.HostWorkers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		workers := make([]workflowHostWorker, 0, len(keys))
+		for _, key := range keys {
+			workers = append(workers, value.HostWorkers[key])
+		}
+		view["hostWorkers"] = workers
+		view["hostInstruction"] = "For unclaimed materials use the host's actual native subagent tool with fork_turns=none and issued model/effort. Tell the child to read its original material path completely before worker operation=claim; claim binds managed tools and disallows native file reads or edits. Use the exact material path for all calls. A claimed identity must be observed or resumed through its original intent, never spawned again. If unavailable, report HOST_SUBAGENT_UNAVAILABLE; do not start an independent same-platform session."
+	}
 	if value.Acceptance != nil {
 		view["acceptance"] = map[string]any{"status": value.Acceptance.Status, "revision": value.Acceptance.Revision}
+	}
+	if len(value.HostActions) != 0 {
+		view["hostActions"] = value.HostActions
+		view["hostActionInstruction"] = "Use the host's actual subagent interrupt tool for each original terminate.identity, then drive again. Only the original native terminal turn admits the signed stop receipt."
 	}
 	keys := []string{}
 	for key := range value.Blocked {

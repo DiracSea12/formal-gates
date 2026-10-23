@@ -50,19 +50,27 @@ ZCode 全局写 `.zcode/cli/config.json`、项目写 `.zcode/config.json` 的 `m
 无关配置与服务器保留；名称已被其他命令占用时安装拒绝覆盖。`--skip-hooks` 同时跳过此注册。
 卸载删除自有项及只由安装器创建的空配置文件，故障恢复沿同一安装 journal，不留下配置备份。
 
+启动由模型依据明确的对话确认调用 `confirm_start` 或既有 `workflow start`，不依赖配置面板或原生启动表单；材料、配置与准入校验使用同一程序路径。流程内的控制决定与受管原生回答使用当前宿主的原生权限通道。
+
+Codex 的流程内业务确认使用无待填写字段的标准 MCP Form。宿主按当前权限策略决定是否询问；
+YOLO/bypass 下由宿主直接回应，不增加勾选项迫使宿主弹窗。父代理、子代理与跨平台子执行
+传递当前宿主的权限语义；子执行不能额外要求宿主已经免除的确认，也不能把此类弹窗透传回来。
+服务接纳的是原请求的宿主 `accept` 响应，不把 `decline` 改写为同意，不伪称发生真人点击。
+需填写信息的原生表单保留原字段，不能由权限放行推导出答案。安装器不修改用户安全策略。
+字段及语义见 [Codex 配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。
+
 同一 `workflow serve` 服务还发布 `configure` 工具，不新增独立 MCP 配置。
 安装后须通过宿主实际的工具发现确认它可见；已有连接可能需要重新连接才能刷新工具列表。
-`configure` 只打开配置面板并返回选择，不能代替 `confirm_start`、`confirm_control`
-或 `confirm_native` 的真人确认。无桌面时使用同一配置库的 `settings` 与对话入口。
+`configure` 只打开配置面板并返回选择，不能代替启动的明确对话确认或流程内 `confirm_control`、`confirm_native` 的宿主权限决定。无配置面板时使用同一配置库的 `settings` 与对话入口；宿主既无原生确认响应、也无工具权限通道时停在原确认边界，不伪造批准或另建无交互流程。
 
 Devin 3000.3 及以上版本的宿主薄适配复用同一安装事务、通用写入拦截 hook 和 `workflow serve`，
 不新增审批界面。项目 skill 位于 `.devin/skills/formal-gates`，规则位于 `AGENTS.md`；
 全局使用 Devin 原生配置目录（Windows 为 `%APPDATA%/devin`，其他系统为
 `$XDG_CONFIG_HOME/devin` 或 `~/.config/devin`）。hook 合并到 `config.json`，
 控制 MCP 写入独立 `mcp_config.json` 的 `mcpServers`，由 Devin 展示原生审批：
-`confirm_start`/`confirm_control`/`confirm_native` 经 Devin 自身工具调用权限提示放行，
+`confirm_control`/`confirm_native` 经 Devin 自身工具调用权限提示放行，
 到达服务的调用即视为已确认，收据记 `"confirmation": "host-permission"`；审批往返
-已实测（权限决定 → 工具调用 → run 启动）。`devin -p`（print/headless）或 Devin
+已实测（权限决定 → 工具调用 → 控制接纳）。`devin -p`（print/headless）或 Devin
 策略自动放行的权限模式（如 smart/bypass）下，宿主可能不经真人提示直接放行调用；
 这属 Devin 平台行为，收据仍如实记 `host-permission`。
 Devin 原生配置按 local、project、user 的优先级逐层覆盖；项目
@@ -72,15 +80,14 @@ Devin 原生配置按 local、project、user 的优先级逐层覆盖；项目
 安装、工具发现、审批操作及原生执行是不同能力，不得用安装成功代替后面几项。
 在 Devin 中控制流程时，各执行节点须选择已有原生执行适配的平台；Devin 本身尚不进入执行平台列表。
 
-DSH global 的既有 Cordis 插件从同一控制服务发现工具合同，使用当前根代理的
-`ctx.userQuestions.ask` 显示原生问题；只有实际选择“确认并执行”才回应原请求。
-无默认预选、自定义文字不充当批准，取消后不接纳迟到回答。DSH project 仍不加载 home 插件，
-需要此交互时使用 global。接入需要宿主实际加载配置并提供真人 UI；安装成功只证明配置事务。
+DSH global 的既有 Cordis 插件从同一控制服务发现工具合同。DSH 的原生 `tools/pre-execute`
+先按当前代理的权限处理 allow、ask、deny 和取消，只有获准的工具才进入插件执行；插件复用这个
+权限决定，不增加第二个问题，收据记 `host-permission`。启动工具直接使用对话启动决定。
+DSH project 仍不加载 home 插件，需要此集成时使用 global；安装成功只证明配置事务。
 
-Claude Code 原生 MCP elicitation 有用户对话框，但其 Elicitation/ElicitationResult hooks 可以
-自动回答或改写结果，本安装器未声明隔离该来源的主宿主确认接入。WorkBuddy、Cursor 的通用
-真人表单接入同样未验证。缺少真实主宿主确认通道时，HUMAN 操作不可执行，不回退到模型回答、
-自动批准权限、CLI 自报确认或 headless `NativeRespond`。
+Claude Code 原生 MCP elicitation 的显示与响应由其宿主权限策略及 Elicitation/ElicitationResult hooks 管理。
+WorkBuddy、Cursor 的通用原生确认接入尚未完成真实主宿主验证；不能仅凭安装成功宣称可用。
+缺少真实主宿主确认通道时，HUMAN 操作不可执行，不回退到模型回答、CLI 自报确认或 headless `NativeRespond`。
 
 只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
 host 的全局安装当作回退。

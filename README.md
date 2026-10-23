@@ -15,15 +15,15 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
 
 1. **澄清与确认。** 主代理读取仓库事实，解决重大未决选择，把完整需求与方案写入唯一
    正式文件。先确定性结构预检，再展示全文和精确 revision。
-2. **启动与登记。** 选定启用节点的保存配置，通过原生表单确认完整启动操作，程序直接接纳 typed intake 并启动 run。
+2. **启动与登记。** 选定启用节点的保存配置，用户在对话明确确认完整启动操作，程序直接接纳 typed intake 并启动 run。
    首次 drive 自动登记确认；后续产品审、技术审、开发与 QA 消费同一确认 revision。
 3. **独立双审。** 先产品审、再技术审。Operator 逐项核实 finding，用户处置有效问题。
    技术审形成 Batch→Subtask、依赖、DoD 与恢复计划。
 4. **计划与路线。** 技术审后绑定 split 精确拓扑或 no-split 理由，再确认所选门与开发计划。
    命名流程配置同时保存流程节点开关和各执行组的平台、模型、推理强度，黑盒与白盒各为一组；
-   初始仅有“默认”配置：主流程节点启用、无普通 QA、全部普通门，执行选择继承宿主。
-   当前候选门可选任意子集（含空集）或全集，每个 child 独立确认；child 不选普通 QA。
-   master 按所选职责执行合并 QA 与合并门。
+   内置“默认”和“全量路线”：默认不选普通 QA，全量路线选择全部节点、两类 QA 和全部普通门。
+   run 绑定配置名，child 继承同名配置的统一普通门选择、不执行普通 QA，仍独立确认各自精确开发计划；
+   master 按所选职责执行合并 QA 与合并门。配置合同见[用户与项目设置](references/user-configuration.md)。
 5. **并发开发。** 选择黑盒时，开发与其设计/审查并发。黑盒只读基线，开发者与审查者隔离。
    每个 Batch 新建开发会话，批内重试与恢复沿用原身份。
 6. **冻结候选。** adapter 校验 manifest 后跟踪、提交和快照；选择白盒时独立核对覆盖与测试。
@@ -52,8 +52,8 @@ formal-gates 把写、审、测放在互相隔离的会话中，由 engine 执�
 `replan` / `handoff` / `diagnose` / `guard-preview` / `serve`。
 
 主宿主的 `confirm_start`、`confirm_control`、`confirm_native` 由 `workflow serve` 提供。
-自然语言只提出申请；服务显示绑定具体操作的原生确认，用户点击后直接提交原对象。
-模型不能填写批准值、制作确认收据或以普通 CLI 参数代替真人响应。
+完整展示需求、方案、精确 revisions 和配置后，用户在对话明确确认开始，模型调用 `confirm_start` 或既有 CLI `workflow start`，程序重核材料、配置与准入后启动，不弹启动确认。
+流程内 `confirm_control` 和 `confirm_native` 保留原生表单；模型不能替用户回答或制作确认收据。
 Codex、ZCode 安装控制 MCP；DSH global 复用根代理原生问题服务，其他宿主的接入边界见[安装与 Hook](references/install-and-hooks.md)。
 
 start 是 bootstrap，drive 执行确定性推进与恢复，submit 接纳业务结果与已确认决定；
@@ -125,7 +125,7 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | Devin（宿主接入） | 原生配置目录下的 `skills/formal-gates` | 所选项目 `.devin/skills/formal-gates` |
 
 Devin 当前仅接入宿主安装、规则、hook 与控制 MCP，不包含原生执行、模型目录和用量解析。
-`confirm_start`/`confirm_control`/`confirm_native` 经 Devin 自身权限提示放行，收据记
+流程内 `confirm_control`/`confirm_native` 经 Devin 自身权限提示放行，收据记
 `"confirmation": "host-permission"`，审批往返已实测。`devin -p`（print/headless）或
 策略自动放行的权限模式（如 smart/bypass）下，宿主可能不经真人提示直接放行；这属
 Devin 平台行为，收据仍如实记 `host-permission`，适配器不另加审批界面。带注释的
