@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
@@ -147,6 +148,9 @@ func (d *candidateDriver) prepareControl(input facade.ControlInput) candidateAcc
 	if err := json.Unmarshal(body, &response); err != nil || response.Position < 1 {
 		d.t.Fatalf("prepare original control: %v %s", err, body)
 	}
+	if !reflect.DeepEqual(response.Input, input) {
+		d.t.Fatalf("prepared control changed the original input: %+v", response.Input)
+	}
 	return candidateAcceptance{event: response.Event, confirmation: response.Position, candidate: response.ControlCandidate}
 }
 
@@ -163,25 +167,46 @@ func (d *candidateDriver) control(input facade.ControlInput) candidateAcceptance
 
 func (d *candidateDriver) confirmControl(record candidateAcceptance) (protocol.Acceptance, facade.Run) {
 	d.t.Helper()
+	paths, err := facade.OriginalPayloadPaths(filepath.Join(d.p.project, facade.EngineNamespace, d.runID, "payloads", "control"))
+	if err != nil || record.confirmation < 1 || record.confirmation > len(paths) {
+		d.t.Fatalf("original control candidate missing: %v", err)
+	}
+	var saved facade.ControlCandidate
+	if err := json.Unmarshal(readInstalledFile(d.t, paths[record.confirmation-1]), &saved); err != nil || !reflect.DeepEqual(saved, record.candidate) {
+		d.t.Fatalf("saved control changed the complete original candidate: %v", err)
+	}
 	displayed := false
 	body, err := d.p.confirmation(d.t, "confirm_control", map[string]any{"root": d.p.project, "candidate": record.confirmation}, func(original map[string]any) {
 		displayed = true
 		candidate := record.candidate
-		var displayed struct {
-			Root  string              `json:"root"`
-			Input facade.ControlInput `json:"input"`
-			Run   struct {
-				RunID    string `json:"runId"`
-				Revision uint64 `json:"revision"`
-			} `json:"run"`
-			Proposal   *protocol.GranularityReview `json:"proposal"`
-			PlanDigest string                      `json:"planDigest"`
+		lines := []string{}
+		for key, value := range original {
+			name, _ := json.Marshal(key)
+			content, err := json.Marshal(value)
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			lines = append(lines, "  "+string(name)+": "+string(content))
 		}
-		if err := json.Unmarshal(installedJSON(d.t, original), &displayed); err != nil || displayed.Root != candidate.Root || displayed.Run.RunID != candidate.Run.RunID || displayed.Run.Revision != candidate.Run.Revision || !reflect.DeepEqual(displayed.Input, candidate.Input) {
-			d.t.Fatal("confirmation changed the original control target, revision or choice", original, err)
+		message := "Confirm this exact operation:\n{\n" + strings.Join(lines, ",\n") + "\n}"
+		if utf8.RuneCountInString(message) > 800 || strings.Count(message, "\n")+1 > 12 {
+			d.t.Fatalf("control confirmation exceeded its display budget: %s", message)
 		}
-		if plan := candidate.DevelopmentPlan; plan != nil && (displayed.PlanDigest != plan.Confirmation.Digest || !reflect.DeepEqual(displayed.Proposal, &plan.Proposal)) {
-			d.t.Fatal("confirmation omitted the complete original development plan", original)
+		assertControlDisplayValue(d.t, original, "root", candidate.Root)
+		assertControlDisplayValue(d.t, original, "input", candidate.Input)
+		assertControlDisplayValue(d.t, original, "run", map[string]any{"runId": candidate.Run.RunID, "revision": candidate.Run.Revision, "status": candidate.Run.Status})
+		if candidate.Input.Choice != "" && original["decision"] != candidate.Input.Choice {
+			d.t.Fatal("confirmation changed the original decision", original)
+		}
+		if plan := candidate.DevelopmentPlan; plan != nil {
+			if original["planDigest"] != plan.Confirmation.Digest {
+				d.t.Fatal("confirmation changed the original development plan binding", original)
+			}
+			if _, present := original["proposal"]; present {
+				assertControlDisplayValue(d.t, original, "proposal", plan.Proposal)
+			} else if original["_display"] == nil {
+				d.t.Fatal("confirmation omitted the plan without a display notice", original)
+			}
 		}
 	}, d.env...)
 	if err != nil {
@@ -200,11 +225,44 @@ func (d *candidateDriver) confirmControl(record candidateAcceptance) (protocol.A
 		d.t.Fatal(err)
 	}
 	_, state := d.p.bindings(d.t, d.runID, "codex")
-	receipt := state.Events[string(record.event.ID)].Acceptance
+	accepted := state.Events[string(record.event.ID)]
+	digest, err := record.event.Digest()
+	if err != nil || accepted.Digest != digest {
+		d.t.Fatalf("native confirmation changed the complete original event: %v %+v", err, accepted)
+	}
+	receipt := accepted.Acceptance
 	if receipt.EventID != string(record.event.ID) || receipt.Status != response.Acceptance.Status || receipt.Revision != response.Acceptance.Revision {
 		d.t.Fatalf("native control response changed its durable event receipt: %s %+v", body, receipt)
 	}
 	return receipt, d.p.run(d.t, "show", d.runID)
+}
+
+// Display excerpts must retain original text; complete business values are
+// checked against the saved candidate and accepted event, never decoded here.
+func assertControlDisplayValue(t *testing.T, display map[string]any, key string, expected any) {
+	t.Helper()
+	body := installedJSON(t, expected)
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(display[key], value) {
+		return
+	}
+	text, ok := value.(string)
+	if !ok {
+		compact, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = string(compact)
+	}
+	excerpt, ok := display[key].(string)
+	parts := strings.Split(excerpt, " … ")
+	text = strings.Join(strings.Fields(text), " ")
+	if !ok || display["_display"] == nil || len(parts) != 2 || parts[0] == "" || parts[1] == "" || !strings.HasPrefix(text, parts[0]) || !strings.HasSuffix(text, parts[1]) {
+		t.Fatalf("confirmation %s differs from the original value: %v", key, display[key])
+	}
 }
 
 // replayAccepted exercises the retained event ledger after candidate payloads
