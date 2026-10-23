@@ -23,6 +23,7 @@ import (
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/requirement"
+	"formal-gates/internal/settings"
 )
 
 func TestWorkflowViewReportsConfigurationStopDetails(t *testing.T) {
@@ -476,6 +477,70 @@ func TestWorkflowOperatorViewLeavesInternalFactsToDrive(t *testing.T) {
 	}
 }
 
+func TestWorkflowSplitFixtureUsesEachReviewExecutionProvider(t *testing.T) {
+	if testkit.RunNativePackageTest(t) {
+		return
+	}
+	root := t.TempDir()
+	runner := vcs.ExecRunner{}
+	mustWriteCLI(t, filepath.Join(root, "README.md"), "two independent command components\n")
+	for _, args := range [][]string{{"init"}, {"add", "README.md"}, {"-c", "user.name=Node Test", "-c", "user.email=node@example.invalid", "commit", "-m", "initial components"}} {
+		if _, err := runner.Run(root, "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := runner.Run(root, "git", "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testkit.ConfigureNativePaths(t, root, "workbuddy")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices := map[string]settings.ExecutionChoice{"product-review": {Provider: "workbuddy"}, "start-readiness": {Provider: "zcode"}}
+	if _, err := settings.SaveConfiguration(root, home, "project", "review-platforms", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.EditConfiguration(root, home, "project", "review-platforms", nil, func(configuration *settings.Configuration) error {
+		configuration.Execution = choices
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", "review-platforms", nil); err != nil {
+		t.Fatal(err)
+	}
+	f := startAdmittedEngineRun(t, root, strings.TrimSpace(base))
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err = facade.Open(root, run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowSplitFixture(t, f, root)
+	run, err = f.Show()
+	if err != nil || len(run.SliceChildren) != 2 {
+		t.Fatal("configured reviews did not reach the original split", err)
+	}
+	for _, id := range append([]string{run.RunID}, run.SliceChildren["core"], run.SliceChildren["tooling"]) {
+		child, err := facade.Open(root, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := child.Show()
+		if err != nil || !reflect.DeepEqual(current.Configuration.Configuration.Execution, choices) {
+			t.Fatal("reopened run lost per-review execution choices", id, err)
+		}
+		var request facade.StartRequest
+		if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, id, "request.json"), &request); err != nil || request.Provider != "zcode" {
+			t.Fatal("worker selection changed the original controller", id, request.Provider, err)
+		}
+	}
+}
+
 // An actual install, Git baseline and ordinary split producer supply both run
 // identities. The CLI receives only the displayed node and Ask numbers.
 func TestWorkflowDirectNodeRequestSelectsOriginalChild(t *testing.T) {
@@ -580,7 +645,6 @@ func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
 	if err := readJSONFileInto(filepath.Join(root, facade.EngineNamespace, run.RunID, "request.json"), &requestBinding); err != nil {
 		t.Fatal(err)
 	}
-	provider := requestBinding.Provider
 	run, err = f.Drive()
 	if err != nil {
 		t.Fatal(err)
@@ -598,6 +662,7 @@ func workflowSplitFixture(t *testing.T, f *facade.Facade, root string) {
 		plan.Batches = append(plan.Batches, protocol.DevelopmentBatch{ID: owner, Owner: owner, Subtasks: []protocol.DevelopmentSubtask{{ID: owner + "-entry", Description: "implement the public " + owner + " responsibility"}}, Deliverable: owner + " public command behavior", PublicEntry: owner + " command", Artifacts: []string{owner + ".go"}, Interfaces: "documented command arguments", StateBoundary: "no persistent command state", Risk: "incorrect command output", DoD: []protocol.DevelopmentCriterion{{ID: owner + "-contract", Description: "public valid and invalid inputs have documented outcomes"}}, Checks: []protocol.DevelopmentCheck{{ID: owner + "-build", Purpose: protocol.CheckFullBuild, Goal: "Build the complete component project"}, {ID: owner + "-tests", Purpose: protocol.CheckFullTests, Goal: "Run the complete component project suite"}}, Rollback: "revert this component", Recovery: "retry from the confirmed source", Handoff: "document the component interface and checks", ContextCost: "one independent command component"})
 	}
 	for _, action := range []review.Action{review.ProductReview, review.StartReadiness} {
+		provider := run.Configuration.Configuration.EffectiveExecutionChoice(string(action), settings.ExecutionChoice{Provider: requestBinding.Provider}).Provider
 		id := ""
 		for key, pending := range run.PendingActions {
 			if pending.ReviewSeries == action {
