@@ -28,6 +28,7 @@ import (
 	"formal-gates/internal/engine/review"
 	"formal-gates/internal/engine/testkit"
 	"formal-gates/internal/engine/worker"
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/requirement"
 	"formal-gates/internal/settings"
@@ -41,6 +42,8 @@ func engineNativeFixture(t *testing.T, installed ...bool) (*facade.Facade, facad
 
 func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*facade.Facade, facade.WorkerMaterial, *codexScenario, string) {
 	t.Helper()
+	// Independent Codex adapter calls require a different controlling platform.
+	const controller = host.WorkBuddy
 	s := newCodexScenario(t)
 	s.runID = "native-execution"
 	project := s.workspace
@@ -51,7 +54,7 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 	if err := os.WriteFile(filepath.Join(project, "app.go"), []byte("package main\nfunc main() {}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte(".gates/\n.codex/\nAGENTS.md\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte(".gates/\n.codebuddy/\nCODEBUDDY.md\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	git := func(args ...string) string {
@@ -71,7 +74,7 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 	git("add", ".")
 	git("commit", "-qm", "Native fixture input")
 	base := git("rev-parse", "HEAD")
-	registry, target, generation, lease, token := testkit.Installation(t, project, "native-target", "sha256:native-package", "codex")
+	registry, target, generation, lease, token := testkit.Installation(t, project, "native-target", "sha256:native-package", controller)
 	source, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +108,7 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 	if err := os.Link(supervisorBinary(t), binary); err != nil {
 		t.Fatal(err)
 	}
-	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: "codex", PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
+	admission := facade.Admission{RegistryPath: registry, Target: target, Root: project, Provider: controller, PackageDigest: "sha256:native-package", InstalledTargetIdentity: "native-target", Generation: generation, Lease: lease, Token: token}
 	if installed {
 		candidate := t.TempDir()
 		inventory, err := validate.PackageReceipt(source)
@@ -136,7 +139,7 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 			t.Fatal(err)
 		}
 		binary = filepath.Join(s.home, ".local", "bin", "formal-gates")
-		options := validate.InstallOptions{Source: candidate, Host: "codex", Scope: "project", Project: project, BinaryTarget: binary, RegistryPath: filepath.Join(s.home, ".formal-gates", "registry.json"), Force: true, SkipHooks: true}
+		options := validate.InstallOptions{Source: candidate, Host: controller, Scope: "project", Project: project, BinaryTarget: binary, RegistryPath: filepath.Join(s.home, ".formal-gates", "registry.json"), Force: true, SkipHooks: true}
 		if _, err := validate.Install(options); err != nil {
 			t.Fatal(err)
 		}
@@ -150,7 +153,7 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 			t.Fatal("installed registry", err)
 		}
 		record := registry.Records[0]
-		admission = facade.Admission{RegistryPath: report.Registry, Target: record.Target, Root: project, Provider: "codex", PackageDigest: record.PackageDigest, InstalledTargetIdentity: record.ID, Generation: record.Generation, Lease: record.Lease, Token: record.Token}
+		admission = facade.Admission{RegistryPath: report.Registry, Target: record.Target, Root: project, Provider: controller, PackageDigest: record.PackageDigest, InstalledTargetIdentity: record.ID, Generation: record.Generation, Lease: record.Lease, Token: record.Token}
 	}
 	if err := writeAtomicJSON(filepath.Join(project, ".gates", "config.json"), map[string]any{"capacity": 2, "codexExecutable": filepath.Join(filepath.Dir(s.home), "codex")}); err != nil {
 		t.Fatal(err)
@@ -161,6 +164,10 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 	if _, err := settings.EditConfiguration(project, s.home, "project", "命令", nil, func(configuration *settings.Configuration) error {
 		gates := []string{"implementation-quality-gate"}
 		configuration.Gates = &gates
+		configuration.Execution = map[string]settings.ExecutionChoice{}
+		for _, node := range definition.ExecutionNodes() {
+			configuration.Execution[node.ID] = settings.ExecutionChoice{Provider: host.Codex}
+		}
 		if len(qaModes) > 0 {
 			configuration.QAModes = slices.Clone(qaModes)
 		}
@@ -186,14 +193,31 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 			t.Fatal(loadErr)
 		}
 		effective.Values.Native = s.nativeSettings().Native
-		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, VCS: "git", Provider: "codex", BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
+		f, _, err = facade.Start(facade.StartOptions{Root: project, Request: facade.StartRequest{RunID: s.runID, VCS: "git", Provider: controller, BaseSnapshot: base, DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: c.confirmedIntake()}, Admission: &admission, Settings: &effective, Capacity: 2})
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start facade.StartRequest
+	startBody, err := os.ReadFile(filepath.Join(project, facade.EngineNamespace, s.runID, "request.json"))
+	if err != nil || json.Unmarshal(startBody, &start) != nil || start.Provider != controller {
+		t.Fatal("independent native fixture lost its original controller", start, err)
+	}
+	f, err = facade.Open(project, s.runID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	run, err := f.Drive()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if run.Configuration.Name != "命令" || len(run.Configuration.Configuration.Execution) != len(definition.ExecutionNodes()) {
+		t.Fatal("reopened native fixture lost its complete saved execution configuration", run.Configuration)
+	}
+	for _, node := range definition.ExecutionNodes() {
+		if choice := run.Configuration.Configuration.Execution[node.ID]; choice != (settings.ExecutionChoice{Provider: host.Codex}) {
+			t.Fatal("reopened native fixture changed its worker platform", node.ID, choice)
+		}
 	}
 	var ref facade.WorkerMaterial
 	for _, value := range run.WorkerMaterials {
@@ -205,6 +229,9 @@ func engineNativeFixtureWith(t *testing.T, installed bool, qaModes []string) (*f
 	request, _, directory, _, err := f.WorkerExecutionRequest(ref, "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if request["provider"] != host.Codex || request["provider"] == start.Provider {
+		t.Fatal("independent native fixture did not retain distinct controller and worker platforms", start.Provider, request["provider"])
 	}
 	s.request = request
 	s.directory = directory
