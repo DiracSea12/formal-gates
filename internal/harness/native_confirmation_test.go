@@ -38,7 +38,9 @@ func TestNativeConfirmationAcceptsOnlyCurrentHostResponse(t *testing.T) {
 			executed := false
 			code := ServeTools(strings.NewReader(wire), &out, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
 				if name != "confirm" || string(arguments) != "{}" {
-					t.Fatalf("unexpected original call: %s %s", name, arguments)
+					err := fmt.Errorf("unexpected original call: %s %s", name, arguments)
+					t.Error(err)
+					return nil, err
 				}
 				if err := confirm(map[string]any{"operation": "original operation", "revision": "original revision"}); err != nil {
 					return nil, err
@@ -95,7 +97,9 @@ func TestNativeConfirmationKeepsOriginalCallWhileAnotherCallIsBusy(t *testing.T)
 	code := ServeTools(strings.NewReader(wire), &output, &errors, nil, func(name string, arguments json.RawMessage, confirm func(any) error, _ json.RawMessage) (any, error) {
 		calls++
 		if name != "original" || string(arguments) != `{"operation":"first"}` {
-			t.Fatalf("another request replaced the original operation: %s %s", name, arguments)
+			err := fmt.Errorf("another request replaced the original operation: %s %s", name, arguments)
+			t.Error(err)
+			return nil, err
 		}
 		if err := confirm(json.RawMessage(arguments)); err != nil {
 			return nil, err
