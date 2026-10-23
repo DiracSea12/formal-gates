@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 改动：COMPLETE/ABORTED 不再刷新已清理的活动子状态，保留历史投影；完全退休结果读取提取原引擎唯一判据，供 Drive、CLI 和控制视图共用。安装更新后可只读原完整终态，活动运行、未完成清理及真正写入仍受原安装身份限制。
 - 验证与限制：隔离安装更新后的 show/status/next/drive 重复读取、原文件树字节不变，以及活动运行/未完清理/新写入拒绝负控通过。最新版稳定入口实际重读原项目返回 COMPLETE、修订 198、exit 0、无 stderr；原主运行和两个子运行活动状态未重建。
 
+### Codex MCP 安装幂等与配置保留（2026-10-22）
+
+- 改动：以原生 TOML 解码和已有工具参数所有权判据识别自有未标记 MCP 配置；匹配时重复安装保持原字节，外来条目拒绝覆盖。卸载仅处理实际自有表，排除多行说明文字中的伪表头。新增 BurntSushi/toml 依赖，避免自行实现 TOML 语法。
+- 验证与限制：自有/外来/裸参数/多行说明伪表头及安装回滚回归通过；正常全局安装成功，注册表仅保留一个全局记录。宿主配置和登录文件摘要保持，源构建、稳定入口、全局安装二进制摘要一致。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

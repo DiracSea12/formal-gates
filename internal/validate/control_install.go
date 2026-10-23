@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 const controlServerName = "formal-gates"
@@ -50,11 +52,48 @@ func configureCodexControl(target installTarget, path string, remove bool) (bool
 		}
 		text = text[:start] + text[end:]
 	}
-	if !remove {
-		conflict := regexp.MustCompile(`(?m)^\s*\[\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*\.\s*(?:formal-gates|"formal-gates"|'formal-gates')\s*(?:\]|\.)`)
-		if conflict.MatchString(text) {
-			return false, fmt.Errorf("MCP server %q already exists outside the installer-owned block in %s", controlServerName, path)
+	conflict := regexp.MustCompile(`(?m)^\s*\[\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*\.\s*(?:formal-gates|"formal-gates"|'formal-gates')\s*(?:\]|\.)`)
+	var config struct {
+		Servers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal([]byte(text), &config); err != nil {
+		return false, fmt.Errorf("existing Codex MCP configuration is invalid in %s: %w", path, err)
+	}
+	if entry, present := config.Servers[controlServerName]; present {
+		desired := []any{"workflow", "serve", "--package-root", filepath.ToSlash(target.targetPath)}
+		if entry["command"] != filepath.ToSlash(targetLauncherPath(target)) || !ownControlArgs(entry["args"], desired) {
+			if remove {
+				return false, nil
+			}
+			return false, fmt.Errorf("MCP server %q in %s is not owned by this installation", controlServerName, path)
 		}
+		if !remove {
+			return false, nil
+		}
+		// Native TOML decoding proves ownership; table spans preserve other settings.
+		candidates := regexp.MustCompile(`(?m)^[ \t]*\[[^\r\n]*\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)`).FindAllStringIndex(text, -1)
+		var headers [][]int
+		for _, span := range candidates {
+			// A table starts after a complete document, not inside a TOML value.
+			var prefix map[string]any
+			if toml.Unmarshal([]byte(text[:span[0]]), &prefix) == nil {
+				headers = append(headers, span)
+			}
+		}
+
+		for i := len(headers) - 1; i >= 0; i-- {
+			span := headers[i]
+			if !conflict.MatchString(text[span[0]:span[1]]) {
+				continue
+			}
+			end := len(text)
+			if i+1 < len(headers) {
+				end = headers[i+1][0]
+			}
+			text = text[:span[0]] + text[end:]
+		}
+	}
+	if !remove {
 		if text != "" && !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}

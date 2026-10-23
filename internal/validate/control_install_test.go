@@ -85,6 +85,56 @@ func TestControlServerConfigurationOwnership(t *testing.T) {
 	}
 }
 
+func TestCodexControlPreservesMatchingUnmarkedEntry(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := installTarget{host: "codex", targetPath: filepath.Join(root, "skills", "formal-gates"), launcherPath: filepath.Join(root, "bin", nativeBinaryName())}
+	path := filepath.Join(root, "config.toml")
+	command, destination := filepath.ToSlash(target.launcherPath), filepath.ToSlash(target.targetPath)
+	for _, header := range []string{"[mcp_servers.formal-gates]", "[ 'mcp_servers' . \"formal-gates\" ]"} {
+		for _, args := range []string{
+			"['workflow','serve']",
+			fmt.Sprintf("[ 'workflow', 'serve', '--package-root', '%s' ]", destination),
+			fmt.Sprintf("[\n  \"workflow\", \"serve\", # native control\n  \"--package-root\", %q,\n]", destination),
+		} {
+			original := "# user preferences\napproval_policy = 'never'\n[sandbox_workspace_write]\nnetwork_access = true\n" + header + fmt.Sprintf("\ncommand = '%s'\nargs = %s\nenabled = true\n[mcp_servers.formal-gates.env]\nKEEP = 'native'\n[mcp_servers.other]\ncommand = 'keep'\n", command, args)
+			mustWriteValidateTest(t, path, original)
+			for range 2 {
+				if changed, err := configureCodexControl(target, path, false); err != nil || changed {
+					t.Fatalf("matching native entry was not preserved: changed=%v error=%v", changed, err)
+				}
+				body, err := os.ReadFile(path)
+				if err != nil || string(body) != original {
+					t.Fatal("matching entry changed native settings or user fields", err)
+				}
+			}
+			if changed, err := configureCodexControl(target, path, true); err != nil || !changed {
+				t.Fatal("uninstall did not remove the same owned entry", changed, err)
+			}
+			want := "# user preferences\napproval_policy = 'never'\n[sandbox_workspace_write]\nnetwork_access = true\n[mcp_servers.other]\ncommand = 'keep'\n"
+			body, err := os.ReadFile(path)
+			if err != nil || string(body) != want {
+				t.Fatalf("uninstall changed unrelated native settings: %s %v", body, err)
+			}
+
+		}
+	}
+	for _, args := range []string{"['workflow','serve','--package-root','other/root']", "['workflow','bogus']"} {
+		original := fmt.Sprintf("[mcp_servers.formal-gates]\ncommand = %q\nargs = %s\n", command, args)
+		mustWriteValidateTest(t, path, original)
+		if _, err := configureCodexControl(target, path, false); err == nil {
+			t.Fatal("entry without the exact package target was accepted", args)
+		}
+		if changed, err := configureCodexControl(target, path, true); err != nil || changed {
+			t.Fatal("uninstall changed foreign args", changed, err)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil || string(body) != original {
+			t.Fatal("foreign entry was changed", err)
+		}
+	}
+}
+
 func TestControlServerConfigurationRefusesUnownedEntry(t *testing.T) {
 	t.Parallel()
 	for _, platform := range []string{"codex", "zcode", "devin"} {
@@ -309,5 +359,53 @@ func TestControlServerInstallRollbackAndUninstall(t *testing.T) {
 				t.Fatalf("owned control entry remains: %v %s", err, body)
 			}
 		})
+	}
+}
+
+func TestControlRemovalPreservesMultilineUserInstructions(t *testing.T) {
+	root := t.TempDir()
+	target := installTarget{host: "codex", targetPath: filepath.Join(root, "skills", "formal-gates"), launcherPath: filepath.Join(root, "bin", nativeBinaryName())}
+	path := filepath.Join(root, "config.toml")
+	prefix := "developer_instructions = \"\"\"\nWhen explaining server settings, use this example:\n[mcp_servers.formal-gates]\nThis is documentation inside the instruction string.\n\"\"\"\n"
+	own := fmt.Sprintf("[mcp_servers.formal-gates]\ncommand = %q\nargs = ['workflow','serve']\n", filepath.ToSlash(target.launcherPath))
+	suffix := "[mcp_servers.other]\ncommand = 'keep'\nnotes = '''\n[mcp_servers.formal-gates]\nThis is also literal documentation.\n'''\n"
+	mustWriteValidateTest(t, path, prefix+own+suffix)
+	if _, err := configureCodexControl(target, path, true); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != prefix+suffix {
+		t.Fatalf("uninstall changed unrelated multiline instructions: %q", actual)
+	}
+}
+
+func TestControlInstallationIgnoresDocumentedServerExample(t *testing.T) {
+	root := t.TempDir()
+	target := installTarget{host: "codex", targetPath: filepath.Join(root, "skills", "formal-gates"), launcherPath: filepath.Join(root, "bin", nativeBinaryName())}
+	path := filepath.Join(root, "config.toml")
+	original := "developer_instructions = \"\"\"\n[mcp_servers.formal-gates]\nUse the example to explain the configuration.\n\"\"\"\n[mcp_servers.other]\ncommand = 'keep'\n"
+	mustWriteValidateTest(t, path, original)
+	if changed, err := configureCodexControl(target, path, true); err != nil || changed {
+		t.Fatal("example was treated as a real server", changed, err)
+	}
+	if changed, err := configureCodexControl(target, path, false); err != nil || !changed {
+		t.Fatal("example prevented installation", changed, err)
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(actual), original) {
+		t.Fatal("installation changed the original settings", err)
+	}
+	if changed, err := configureCodexControl(target, path, false); err != nil || changed {
+		t.Fatal("repeat changed the native configuration", changed, err)
+	}
+	if _, err := configureCodexControl(target, path, true); err != nil {
+		t.Fatal(err)
+	}
+	actual, err = os.ReadFile(path)
+	if err != nil || string(actual) != original {
+		t.Fatalf("uninstall changed original instructions: %q %v", actual, err)
 	}
 }
