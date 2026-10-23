@@ -24,12 +24,62 @@ type FlowProgress struct {
 // ownership; their Status stays empty and the owning slice child's own run
 // supplies its progress instead.
 type DevelopmentBatchProgress struct {
-	ID          string             `json:"id"`
-	Owner       string             `json:"owner,omitempty"`
-	Deliverable string             `json:"deliverable"`
-	DependsOn   []string           `json:"dependsOn,omitempty"`
-	Required    bool               `json:"required"`
-	Status      runtime.TaskStatus `json:"status,omitempty"`
+	Gate        *DevelopmentGateProgress `json:"gate,omitempty"`
+	ID          string                   `json:"id"`
+	Owner       string                   `json:"owner,omitempty"`
+	Deliverable string                   `json:"deliverable"`
+	DependsOn   []string                 `json:"dependsOn,omitempty"`
+	Required    bool                     `json:"required"`
+	Status      runtime.TaskStatus       `json:"status,omitempty"`
+}
+
+// DevelopmentGateProgress is derived from the selected ordinary gates and
+// their original batch/candidate duties; it carries no control authority.
+type DevelopmentGateProgress struct {
+	Status       string   `json:"status"`
+	Selected     []string `json:"selected"`
+	Candidate    string   `json:"candidate,omitempty"`
+	SourceAction string   `json:"sourceAction,omitempty"`
+}
+
+func (s *State) developmentGateProgress(task runtime.TaskKey, batch DevelopmentBatch) *DevelopmentGateProgress {
+	progress := &DevelopmentGateProgress{Status: "QUEUED", Selected: s.developmentGates()}
+	if batch.Spike {
+		progress.Status = "NOT_APPLICABLE"
+	} else if len(progress.Selected) == 0 {
+		progress.Status = "DISABLED"
+	} else if s.developmentGatesComplete(task) {
+		progress.Status = "PASS"
+	}
+	if result := s.developmentResultRecord(task); result != nil {
+		progress.SourceAction = result.ActionID
+		if proof, frozen := s.editSourceProof(result.ActionID); frozen {
+			progress.Candidate = proof.Identity
+		}
+	}
+	if progress.Status != "QUEUED" || s.Validation == nil {
+		return progress
+	}
+	for i := len(s.Validation.Waves) - 1; i >= 0; i-- {
+		wave := &s.Validation.Waves[i]
+		if !slices.Contains(wave.SourceTasks, task) || wave.Generation != s.Validation.Generation || wave.RouteDigest != s.validationRouteDigest() {
+			continue
+		}
+		for _, target := range wave.Targets {
+			if target.Kind != "GATE" || target.BatchID != "" && target.BatchID != batch.ID {
+				continue
+			}
+			if target.Status == "FAIL" {
+				progress.Status = "FAIL"
+				return progress
+			}
+			if s.TaskStatusOf(target.Task) != runtime.TaskQueued && target.Status != "PASS" {
+				progress.Status = "RUNNING"
+			}
+		}
+		break
+	}
+	return progress
 }
 
 // flowProgress reads the plan and slice facts off the loaded state. Batches
@@ -49,7 +99,9 @@ func (s *State) flowProgress(cd *compiler.CompiledDefinition) FlowProgress {
 			}
 			if s.developmentBatchRequired(batch) {
 				entry.Required = true
-				entry.Status = s.TaskStatusOf(s.currentPlanTask(cd, plan, batch.ID))
+				task := s.currentPlanTask(cd, plan, batch.ID)
+				entry.Status = s.TaskStatusOf(task)
+				entry.Gate = s.developmentGateProgress(task, batch)
 			}
 			progress.DevelopmentBatches = append(progress.DevelopmentBatches, entry)
 		}

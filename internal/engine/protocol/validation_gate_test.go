@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/runtime"
 )
@@ -76,5 +77,61 @@ func TestGateInputUsesTheFrozenReviewRangeProof(t *testing.T) {
 				state = &reopened
 			}
 		})
+	}
+}
+
+func TestMergeGateRangesReprojectOriginalReceiptsAfterFreshDispatch(t *testing.T) {
+	t.Parallel()
+	task := runtime.TaskKey{Node: "validation", Step: "validation.gate", Scope: "merge"}
+	cd := &compiler.CompiledDefinition{Steps: []compiler.CompiledStep{{Header: compiler.CompiledHeader{ID: task.Step, NodeID: task.Node}, Payload: compiler.CompiledAgentStep{Handler: "engine.gate.v3"}}}}
+	development := runtime.TaskKey{Node: "validation", Step: "development.worker", Scope: "command"}
+	candidate := coverage.ValidationCandidate{Identity: "merged", Digest: "tree"}
+	wave := ValidationWave{ID: "wave", Candidate: candidate, SourceTasks: []runtime.TaskKey{development}, Targets: map[string]*ValidationTarget{task.String(): {Task: task, Kind: "GATE", Gate: mergeGateID}}}
+	binding := WorkBinding{WaveID: wave.ID, Task: task, Candidate: candidate.Identity}
+	state := &State{BaseSnapshot: "master-base", Topology: &TopologyBinding{Decision: "split", Slices: []string{"left", "right"}}, ChildCreation: &ChildCreation{Source: "slice-source"}, SliceChildren: map[string]string{"left": "child-left", "right": "child-right"}, SliceReceipts: map[string]SliceReceipt{}, Validation: &Validation{RequirementRevision: "confirmed", Generation: 1, Candidate: &candidate, Waves: []ValidationWave{wave}}, HostActionReceipts: map[string]HostActionReceipt{}, ReconciledEffects: map[string]ReconciledEffect{}, DispatchBindings: map[string]WorkBinding{"original": binding, "fresh": binding}}
+	views := map[string]ChildValidationView{}
+	for _, slice := range state.Topology.Slices {
+		id := state.SliceChildren[slice]
+		state.SliceReceipts[id] = SliceReceipt{Digest: "receipt-" + slice, Receipt: SliceTerminalReceipt{ChildRunID: id, SliceID: slice, Snapshot: "snapshot-" + slice}}
+		views[id] = ChildValidationView{BaseSnapshot: state.BaseSnapshot, ReceiptDigest: "receipt-" + slice}
+	}
+	params := CandidateParameters{Stage: "REVIEW_READY", RequirementRevision: "confirmed", Generation: 1, ReviewBase: state.BaseSnapshot, SourceTasks: wave.SourceTasks}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	intent := HostActionIntent{ActionID: "ready", Revision: 2, PayloadDigest: "candidate-parameters", Adapter: &AdapterHostAction{Operation: "op.candidate", Params: fields}}
+	state.ReconciledEffects[intent.ActionID] = ReconciledEffect{Intent: &intent}
+	state.HostActionReceipts[intent.ActionID] = HostActionReceipt{ActionID: intent.ActionID, AdapterOperation: "op.candidate", Status: HostActionStatusExecuted, AdapterEvidence: &AdapterEvidence{Values: map[string]any{"identity": candidate.Identity, "digest": candidate.Digest, "parametersDigest": intent.PayloadDigest, "gateView": GateReviewView{TestOwnedPaths: []string{}}, "childViews": views}}}
+	oldInput := []byte(`{"gate":{"gate":"merge-gate","baseSnapshot":"master-base","candidate":{"identity":"merged","digest":"tree"},"testOwnedPaths":[]}}`)
+	var original ValidationInput
+	if err := json.Unmarshal(oldInput, &original); err != nil || len(original.Gate.Slices) != 0 {
+		t.Fatal("old issued input fixture changed", err)
+	}
+	wanted := []SliceComparison{{SliceID: "left", BaseSnapshot: "slice-source", Snapshot: "snapshot-left"}, {SliceID: "right", BaseSnapshot: "slice-source", Snapshot: "snapshot-right"}}
+	for range 2 {
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reopened State
+		if err := json.Unmarshal(encoded, &reopened); err != nil {
+			t.Fatal(err)
+		}
+		state = &reopened
+		fresh := state.validationInput(PendingAction{ActionID: "fresh", Task: task}, cd)
+		if fresh.Gate == nil || !reflect.DeepEqual(fresh.Gate.Slices, wanted) || fresh.Binding != binding || len(original.Gate.Slices) != 0 {
+			t.Fatalf("fresh input reused immutable old data or another source: %+v", fresh.Gate)
+		}
+	}
+	receipt := state.SliceReceipts["child-left"]
+	receipt.Digest = "another-receipt"
+	state.SliceReceipts["child-left"] = receipt
+	if input := state.gateInput(binding, task); input != nil {
+		t.Fatal("another receipt was substituted into the signed candidate range")
 	}
 }

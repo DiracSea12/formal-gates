@@ -27,10 +27,10 @@ intake begins only when the user explicitly requests it.
 4. **Plan and route.** Bind exact split topology or the no-split reason after technical review,
    then confirm the selected gates and exact development plan. Named configurations save workflow
    nodes and execution-group platform, model and reasoning effort choices; blackbox and whitebox
-   are separate groups. Initially only “默认” exists: main nodes enabled, no ordinary QA, all ordinary
-   gates and inherited host execution choices. Any subset, including none, or all candidates may be
-   selected. Each child confirms independently and selects no ordinary QA; the master runs the
-   merge QA and gates enabled by its selected responsibilities.
+   are separate groups. Built-in “默认” omits ordinary QA; “全量路线” selects every node, both QA
+   modes, and all ordinary gates. A run binds a configuration name; children inherit its shared
+   ordinary gate selection, run no ordinary QA, and independently confirm their exact development plans. The master
+   runs its selected merge QA and gates. See the [configuration contract](references/user-configuration.md).
 5. **Concurrent development.** When blackbox is selected, development runs alongside its design/review in a baseline
    workspace. Developers and reviewers remain isolated. Each Batch starts a new development
    session; retries and recovery within the Batch retain the original identity.

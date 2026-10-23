@@ -174,6 +174,7 @@ func TestConfirmedBatchesPreserveDependenciesAndCandidateSources(t *testing.T) {
 					d.reopen()
 					d.drive()
 				}
+				passDevelopmentBatchGates(d)
 				if tier == "CHECKPOINT" {
 					d.materialize()
 					d.materialize()
@@ -266,6 +267,7 @@ func TestChangedBatchContractUsesExplicitDispositionAndRetainsCarriedResult(t *t
 			d := plannedValidationDriver(t, nil, p, "quality")
 			parser, pi := planBatchAction(d, "parser")
 			d.business(parser, protocol.ValidationResult{Binding: pi.Binding, Status: "PASS", Development: batchEvidence(pi)})
+			passDevelopmentBatchGates(d)
 			old, ci := planBatchAction(d, "command")
 			before, _ := d.f.engine.Load()
 			raw, _ := json.Marshal(before.State.Results[parser])
@@ -380,11 +382,17 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	d := plannedValidationDriver(t, nil, p, "quality")
 	id, in := planBatchAction(d, "command")
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
+	d.drive()
+	passDevelopmentBatchGates(d)
 	d.materialize()
 	d.materialize()
+	checkpoint := len(d.run.Validation.Waves) - 1
 	problem := ""
 	for n := 0; n <= 3; n++ {
 		gate, gi := d.gateAction("quality")
+		if gi.Binding.BatchID != "" || gi.Gate == nil || len(gi.Gate.Batches) != 1 || gi.Gate.Batches[0].ID != "command" {
+			t.Fatal("repair allowance must exercise the confirmed grouped checkpoint", gi.Binding, gi.Gate)
+		}
 		d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "FAIL", Findings: []review.Finding{{Severity: "P1", SeverityRationale: "Supported success path is unusable", Requirement: "AC-001", NormalPath: "app run valid", ActualError: "valid input exits nonzero", DeferralImpact: "command cannot be used", Locations: []string{"app.go:1"}, Message: fmt.Sprintf("Command still rejects supported input in candidate %d", n)}}})
 		wave := d.run.Validation.Waves[len(d.run.Validation.Waves)-1]
 		var finding string
@@ -419,6 +427,12 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 		d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct input dispatch branch"}})
 		d.materialize()
 		d.materialize()
+		for _, input := range d.run.ValidationInputs {
+			if input.Gate != nil && input.Binding.BatchID != "" {
+				passDevelopmentBatchGates(d)
+				break
+			}
+		}
 		d.reopen()
 	}
 	counted := 0
@@ -427,7 +441,7 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 			counted++
 		}
 	}
-	if counted != 3 || d.run.Validation.Waves[0].Counted {
+	if counted != 3 || d.run.Validation.Waves[0].Counted || d.run.Validation.Waves[checkpoint].Counted {
 		t.Fatalf("checkpoint altered shared repair count: %d", counted)
 	}
 	ask := d.validationAsk("REPAIR")
@@ -438,7 +452,16 @@ func TestCheckpointRepairsConsumeTheSharedFiniteAllowance(t *testing.T) {
 	d.business(repair, protocol.ValidationResult{Binding: ri.Binding, Status: "PASS", Development: &protocol.DevelopmentEvidence{Paths: []string{"app.go"}, Summary: "Correct the confirmed command rejection"}})
 	d.materialize()
 	d.materialize()
+	for _, input := range d.run.ValidationInputs {
+		if input.Gate != nil && input.Binding.BatchID != "" {
+			passDevelopmentBatchGates(d)
+			break
+		}
+	}
 	gate, gi := d.gateAction("quality")
+	if gi.Binding.BatchID != "" || gi.Gate == nil || len(gi.Gate.Batches) != 1 || gi.Gate.Batches[0].ID != "command" {
+		t.Fatal("the confirmed grouped checkpoint was replaced by an individual batch gate")
+	}
 	d.business(gate, protocol.ValidationResult{Binding: gi.Binding, Status: "PASS"})
 	d.drive()
 	_, dependent := planBatchAction(d, "dependent")
@@ -480,6 +503,7 @@ func TestSpikeConclusionUnlocksDevelopmentWithoutEnteringCandidate(t *testing.T)
 				t.Fatal("spike conclusion was not handed off")
 			}
 			d.business(parserID, protocol.ValidationResult{Binding: parserInput.Binding, Status: "PASS", Development: batchEvidence(parserInput)})
+			passDevelopmentBatchGates(d)
 			dev, di := planBatchAction(d, "command")
 			if di.Development.Dependencies["parser"].ActionID != parserID {
 				t.Fatal("transitive predecessor evidence missing")

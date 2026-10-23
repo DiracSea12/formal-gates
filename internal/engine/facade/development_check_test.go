@@ -401,6 +401,9 @@ func TestDevelopmentCheckPublicWorkflowReceiptsOwnCompletion(t *testing.T) {
 			if err != nil || string(stdout) != "a b" {
 				t.Fatalf("actual stdout %q %v", stdout, err)
 			}
+			if successful {
+				passDevelopmentBatchGates(d)
+			}
 			state := driverState(t, d)
 			if state.Results[action].Outcome != protocol.OutcomePass {
 				t.Fatal("program changed the original worker transport result")

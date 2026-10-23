@@ -914,7 +914,7 @@ func (s *State) planCheckpoint(cd *compiler.CompiledDefinition, p *GranularityRe
 		cleared := false
 		if s.Validation != nil {
 			for _, w := range s.Validation.Waves {
-				if w.Status == "COMPLETE" && sameTaskSet(w.CheckpointTasks, tasks) && s.validationEvidenceComplete(&w) {
+				if w.Status == "COMPLETE" && !developmentGateWave(&w) && sameTaskSet(w.CheckpointTasks, tasks) && s.validationEvidenceComplete(&w) {
 					cleared = true
 					break
 				}
@@ -968,7 +968,7 @@ func (s *State) projectDevelopmentTasks(view *decision.State, cd *compiler.Compi
 			}
 			task := s.currentPlanTask(cd, p, dep)
 			group.Tasks = append(group.Tasks, task)
-			if s.developmentResult(task) == nil {
+			if s.developmentResult(task) == nil || !s.developmentGatesComplete(task) {
 				blocked = true
 			}
 		}
@@ -1024,6 +1024,9 @@ func (s *State) developmentSources(cd *compiler.CompiledDefinition) ([]runtime.T
 			return nil, nil, "", false
 		}
 		tasks, _ := s.planCheckpoint(cd, p)
+		if repair := s.developmentGateRepair(); repair != nil {
+			tasks = repair.CheckpointTasks
+		}
 		for _, b := range p.Batches {
 			task := s.currentPlanTask(cd, p, b.ID)
 			if !slices.Contains(tasks, task) {

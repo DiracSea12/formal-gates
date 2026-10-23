@@ -69,6 +69,14 @@ func (e *Engine) rebindValidationRoute(s *State) {
 		return
 	}
 	e.retireValidationWave(s, w.ID, "confirmed route changed the validation obligation")
+	if developmentGateWave(w) {
+		if len(s.developmentGates()) == 0 {
+			s.Validation.Candidate = nil
+			return
+		}
+		e.freezeValidationWaveAt(s, w.Scope, "", w.SourceTasks, w.Candidate, w.CheckpointTasks)
+		return
+	}
 	if s.Validation.Candidate != nil {
 		if s.validateFinalCoverage() != nil {
 			s.Validation.Candidate = nil

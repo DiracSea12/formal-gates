@@ -62,10 +62,20 @@ type GateInput struct {
 	BaseSnapshot   string                       `json:"baseSnapshot"`
 	Candidate      coverage.ValidationCandidate `json:"candidate"`
 	TestOwnedPaths []string                     `json:"testOwnedPaths"`
+	Slices         []SliceComparison            `json:"slices,omitempty"`
+}
+
+type SliceComparison struct {
+	SliceID      string `json:"slice"`
+	BaseSnapshot string `json:"baseSnapshot"`
+	Snapshot     string `json:"snapshot"`
 }
 
 func (s *State) gateInput(binding WorkBinding, task runtime.TaskKey) *GateInput {
 	if input := s.repairGateInput(binding); input != nil {
+		return input
+	}
+	if input := s.developmentGateInput(binding); input != nil {
 		return input
 	}
 	wave := s.validationWave(binding.WaveID)
@@ -96,5 +106,20 @@ func (s *State) gateInput(binding WorkBinding, task runtime.TaskKey) *GateInput 
 		return nil
 	}
 	_, batches := s.gateRequirementContext(binding)
-	return &GateInput{Batches: batches, Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(proof.GateView.TestOwnedPaths)}
+	input := &GateInput{Batches: batches, Gate: target.Gate, BaseSnapshot: s.BaseSnapshot, Candidate: wave.Candidate, TestOwnedPaths: slices.Clone(proof.GateView.TestOwnedPaths)}
+	if target.Gate == mergeGateID && s.mergeMaster() {
+		if s.ChildCreation == nil || s.ChildCreation.Source == "" {
+			return nil
+		}
+		for _, sliceID := range s.Topology.Slices {
+			childID := s.SliceChildren[sliceID]
+			receipt := s.SliceReceipts[childID]
+			view, found := proof.ChildViews[childID]
+			if !found || view.ReceiptDigest != receipt.Digest || view.BaseSnapshot != s.BaseSnapshot || receipt.Receipt.Snapshot == "" {
+				return nil
+			}
+			input.Slices = append(input.Slices, SliceComparison{SliceID: sliceID, BaseSnapshot: s.ChildCreation.Source, Snapshot: receipt.Receipt.Snapshot})
+		}
+	}
+	return input
 }

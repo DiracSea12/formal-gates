@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 本组及以下七项从原汇总提交 `59ef3a3f` 按功能重组，共涉及原 139 个文件；除本变更日志外，最终跟踪文件内容保持相同。累计原实现的独立复杂度门、实现质量门均 PASS，冻结输入 SHA256 为 `20a6e841a24c01f52e6f5293f1007dd005b260939acf79d25dfb76596c0d18cd`。这些事实不代表 CI 全绿：[原推送流水线](https://github.com/DiracSea12/formal-gates/actions/runs/39882713458) 的三项 Unix race 检查已失败，其余结果以 Actions 为准；新提交继续跟进 CI。原始日志和运行证据保留本地，不将临时状态、登录资料或无关材料提交入库。
 
+### 每批质量门与统一配置（2026-10-22）
+
+- 改动：每个开发批次具有独立执行职责，是否启用及所选门由命名配置统一控制；依赖批次等待前批所选门。处理分片、独立批次并行、取消后重开和返修配置恢复；合并评审携带各分片原始 base/head 比较。技审前弹出配置面板的时机保持原产品策略。
+- 验证与限制：真实 Git/引擎边界、配置反复保存与恢复回归通过；真实项目为两分片各两批、八次普通门通过，原执行时间戳证明并行。返修关闭时业务 FAIL 阻断由协议负控验证，真实模型运行未产生该 FAIL finding。
+
 ### Added
 
 - 新增 DeepSeek Harness (`dsh`) 宿主目标：global 安装把 skill 装到 `$DSH_HOME/skills/formal-gates`，维护 `$DSH_HOME/AGENTS.md` 规则，并把包内最小 Cordis 插件挂进 home 级 `cordis.patch.yml`，把 `tools/pre-execute` 转发到原生 `hook decide`；project 安装只装 skill 与 `AGENTS.md`（DSH 只自动加载 home 级补丁）。写墙通过 lifecycle claim 绑定反查子代理类型，保证 development-worker / qa-design 放行、审查类代理阻断。实机阻断仍须同宿主 live canary。

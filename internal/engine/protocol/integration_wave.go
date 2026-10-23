@@ -44,7 +44,7 @@ func (s *State) addChildValidationTargets(w *ValidationWave, cd *compiler.Compil
 }
 
 func sameTarget(a, b *ValidationTarget) bool {
-	return a.Kind == b.Kind && a.Mode == b.Mode && a.Gate == b.Gate && a.SliceID == b.SliceID
+	return a.Kind == b.Kind && a.Mode == b.Mode && a.Gate == b.Gate && a.SliceID == b.SliceID && a.BatchID == b.BatchID
 }
 
 func (s *State) AffectedChildSet() []string {

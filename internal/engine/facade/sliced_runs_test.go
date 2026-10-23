@@ -238,7 +238,7 @@ func abortRun(t *testing.T, d *validationDriver) {
 
 // TestSplitTopologyBindsACOwnersAndLocksMergeRoute：AC 责任映射逐项拒绝
 // （缺 owner／重复／未知 owner／未知 AC），合法映射（含 master-merge 主责）
-// 绑定成功且同事务锁定 RouteConfirmed=true、SelectedGates=[merge-qa, merge-gate]；
+// 绑定成功且同事务锁定 RouteConfirmed=true，保留普通门并附加合并门；
 // 绑定后 master 不进开发段、不再抬 SELECT_ROUTE。
 func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 	t.Parallel()
@@ -276,7 +276,13 @@ func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 		}
 	})
 
-	d := splitMaster(t)
+	d := splitMasterDriver(t)
+	ordinary := slices.DeleteFunc(slices.Clone(driverState(t, d).SelectedGates), func(gate string) bool {
+		return gate == "blackbox" || gate == "whitebox"
+	})
+	d.control(protocol.ControlConfirmTopology, "split", protocol.ReviewDecisionPayload{
+		Topology: splitTopologyDecision(protocol.ACOwner{AC: "AC-001", Owner: "lane-core"}),
+	})
 	state := driverState(t, d)
 	if state.Topology == nil || state.Topology.Decision != "split" {
 		t.Fatalf("split topology = %+v", state.Topology)
@@ -284,7 +290,7 @@ func TestSplitTopologyBindsACOwnersAndLocksMergeRoute(t *testing.T) {
 	if len(state.Topology.ACOwners) != 1 || state.Topology.ACOwners["AC-001"] != "lane-core" {
 		t.Fatalf("AC owner map = %v", state.Topology.ACOwners)
 	}
-	if !state.RouteConfirmed || !slices.Equal(state.SelectedGates, []string{"merge-gate"}) {
+	if !state.RouteConfirmed || !slices.Equal(state.SelectedGates, append(ordinary, "merge-gate")) {
 		t.Fatalf("merge route lock = %t %v", state.RouteConfirmed, state.SelectedGates)
 	}
 	if state.Phase != runtime.PhaseTopologyAndRoute {

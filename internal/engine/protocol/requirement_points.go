@@ -108,8 +108,16 @@ func (s *State) gateRequirementContextAt(binding WorkBinding, wave *ValidationWa
 	points, _ := s.requirementPoints()
 	var batches []DevelopmentBatch
 	if binding.BatchID != "" {
+		if wave != nil && target != nil && target.BatchID != "" {
+			for _, task := range wave.SourceTasks {
+				if batch, known := s.plannedBatchSource(task); known && batch.ID == binding.BatchID {
+					batches = append(batches, batch)
+					break
+				}
+			}
+		}
 		source := s.Results[binding.PlanRequest].Validation
-		if source != nil && source.GranularityReview != nil {
+		if len(batches) == 0 && source != nil && source.GranularityReview != nil {
 			for _, batch := range source.GranularityReview.Batches {
 				if batch.ID == binding.BatchID {
 					batches = append(batches, batch)
@@ -146,6 +154,11 @@ func (s *State) gateTargetBinding(wave *ValidationWave, target *ValidationTarget
 	}
 	if binding, member := s.repairGateBinding(target.Task, s.repairWork()); member {
 		return binding
+	}
+	if target.BatchID != "" {
+		if binding, known := s.developmentGateBinding(wave, target); known {
+			return binding
+		}
 	}
 	return WorkBinding{WaveID: wave.ID, Task: target.Task}
 }

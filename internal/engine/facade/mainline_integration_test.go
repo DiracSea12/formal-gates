@@ -1071,6 +1071,22 @@ func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
 	for {
 		d.drive()
 		state = driverState(t, d)
+		batchGates := 0
+		for _, input := range d.run.ValidationInputs {
+			if input.Gate != nil && input.Binding.BatchID == master.ID {
+				batchGates++
+				if input.Gate.Gate != "quality" && input.Gate.Gate != "security" {
+					t.Fatal("master delivery batch selected an integration or QA duty as an ordinary gate")
+				}
+			}
+		}
+		if batchGates > 0 {
+			if batchGates != 2 {
+				t.Fatalf("master batch requires both configured ordinary gates, got %d", batchGates)
+			}
+			passDevelopmentBatchGates(d)
+			continue
+		}
 		if state.Validation.DevelopmentSnapshot != "" {
 			break
 		}
@@ -1090,6 +1106,16 @@ func TestMasterPreparesMissingCallsAfterNativeIntegration(t *testing.T) {
 	}
 	if checks != len(master.Checks) {
 		t.Fatalf("master source passed without every actual check: %d", checks)
+	}
+	if !slices.Contains(state.SelectedGates, "quality") || !slices.Contains(state.SelectedGates, "security") || !slices.Contains(state.SelectedGates, "merge-gate") || !slices.Contains(state.SelectedGates, "merge-qa") || slices.Contains(state.SelectedGates, "blackbox") || slices.Contains(state.SelectedGates, "whitebox") {
+		t.Fatalf("master selected duties lost ordinary gates or admitted ordinary QA: %v", state.SelectedGates)
+	}
+	history := len(state.AppliedConfigurations)
+	d.reopen()
+	d.drive()
+	d.drive()
+	if got := len(driverState(t, d).AppliedConfigurations); got != history {
+		t.Fatalf("master ordinary/integration gate projection reapplied unchanged configuration: %d -> %d", history, got)
 	}
 	retainNativeEvidence(t, d.f)
 }

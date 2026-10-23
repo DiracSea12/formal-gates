@@ -952,10 +952,16 @@ ok("master batch label names its role", labelOf("n-dev-b1") === "开发批次 b1
 ok("slice batch label names its role", labelOf("sl-dev-core-sb1") === "开发分片 core · 批次 sb1");
 ok("slice gate label names its role", labelOf("sl-gate-core") === "开发分片 core · 分片门");
 ok("lane header names its role", [...document.querySelectorAll(".group")].some(g => g.textContent.indexOf("开发分片 core") === 0));
+ok("each master batch has its ordinary gate", !!q('.node[data-key="n-gate-b1"]') && !!q('.node[data-key="n-gate-b2"]'));
+ok("slice batch has its ordinary gate before the slice gate", graph.edges.some(e => e.a === "sl-dev-core-sb1" && e.b === "sl-batch-gate-core-sb1") && graph.edges.some(e => e.a === "sl-batch-gate-core-sb1" && e.b === "sl-gate-core"));
+ok("dependent batch follows its predecessor gate", graph.edges.some(e => e.a === "n-gate-b1" && e.b === "n-dev-b2") && !graph.edges.some(e => e.a === "n-dev-b1" && e.b === "n-dev-b2"));
+ok("batch gates show individual engine progress", q('.node[data-key="n-gate-b1"] .st').textContent === "已通过" && q('.node[data-key="n-gate-b2"] .st').textContent === "待验证" && q('.node[data-key="sl-batch-gate-core-sb1"] .st').textContent === "运行中");
+const batchBoxes = [...document.querySelectorAll(".node")].map(n => ({ x: parseFloat(n.style.left), y: parseFloat(n.style.top), w: n.offsetWidth, h: n.offsetHeight }));
+ok("actual batch gate cards never overlap", batchBoxes.every((a, i) => batchBoxes.slice(i + 1).every(b => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)));
 
 // Step "node header": the status pill sits in the title row and never overlaps
 // the label, every pill carries text, an ended card shows no glyph while a
-// closed card stays solid, responsibility rails keep distinct colours, and the
+// unselected card uses a dashed edge, responsibility rails keep distinct colours, and the
 // legend matches what the canvas draws.
 step = "node header";
 const nodes = [...document.querySelectorAll(".node")];
@@ -969,11 +975,19 @@ const overlap = nodes.filter(n => {
 }).length;
 ok("labels never overlap their status pill", overlap === 0);
 ok("finished nodes drop the lock glyph", !/🔒/.test(String(getComputedStyle(q(".node.done .t"), "::after").content)));
-ok("closed nodes are solid cards", getComputedStyle(q(".node.disabled")).borderTopStyle === "solid");
+ok("unselected nodes have dashed outlines", getComputedStyle(q(".node.disabled")).borderTopStyle === "dashed");
 const rail = resp => getComputedStyle(q('.node[data-resp="' + resp + '"]'), "::before").backgroundColor;
 ok("responsibility rails carry distinct colours", rail("development") !== rail("gate") && rail("gate") === "rgb(246, 196, 83)" && rail("repair") !== rail("qa-blackbox"));
-ok("legend lists the repair cycle", document.querySelectorAll(".legend span").length === 5 && getComputedStyle(q(".legend .sw.loop")).borderTopStyle === "dashed");
+ok("legend lists the repair cycle", document.querySelectorAll(".legend span").length === 6 && getComputedStyle(q(".legend .sw.loop")).borderTopStyle === "dashed");
 ok("legend swatch matches the ended node look", getComputedStyle(q(".legend .sw.done")).backgroundColor === getComputedStyle(q(".node.done")).backgroundColor);
+
+step = "shared gate configuration lock";
+click(q('.node[data-key="n-gate-b1"]'));
+await until(() => q(".inspector .tg"));
+ok("batch gate editing uses the existing responsibility lock", !!q(".inspector .tg") && q(".inspector .tg").disabled);
+ok("batch and final gates share the selected responsibility", [...document.querySelectorAll('.node[data-resp="gate"]')].every(n => n.classList.contains("sel")));
+click(q("#insp .iconbtn"));
+await until(() => !q(".inspector.open"));
 
 // Step "seal node": the seal renders as a non-configurable terminal operation —
 // not focusable, not selectable, and it opens no inspector.
@@ -1018,7 +1032,7 @@ ok("every connection is a dashed line (animated unless reduced motion: reduce=" 
 ok("seal link is drawn teal", !!q("#edges path.seal-edge"));
 ok("closed nodes dim their links", document.querySelectorAll("#edges path.off").length > 0);
 ok("running nodes brighten their links", document.querySelectorAll("#edges path.hot-run").length > 0);
-click(q('.node[data-key="v-gate"]'));
+click(q('.node[data-key="v-qa-b"]'));
 await until(() => q(".inspector.open"));
 ok("selected node colours its links", document.querySelectorAll("#edges path.hot-sel").length > 0);
 
@@ -1209,6 +1223,10 @@ func TestPanelDOMFlowCanvasRendering(t *testing.T) {
 	configuration := settings.Configuration{
 		QAModes:       []string{"blackbox", "whitebox"},
 		FlowSelection: &settings.FlowSelection{Disabled: []string{"start-readiness"}},
+		Execution: map[string]settings.ExecutionChoice{
+			"development": {Provider: "codex", Model: "gpt-6.1-sol", ReasoningEffort: "high"},
+			"gate":        {Provider: "codex", Model: "gpt-6.1-sol", ReasoningEffort: "high"},
+		},
 	}
 	if _, err := settings.WriteConfiguration(root, home, "project", "视觉", configuration, false, nil); err != nil {
 		t.Fatal(err)
@@ -1222,14 +1240,15 @@ func TestPanelDOMFlowCanvasRendering(t *testing.T) {
 		Nodes: []protocol.ExecutionNodeState{
 			{Node: "development", Enabled: true, Running: true, Editable: true},
 			{Node: "product-review", Enabled: true, Completed: true},
+			{Node: "gate", Enabled: true, Running: true, Editable: false},
 		},
 		Flow: &protocol.FlowProgress{PlanConfirmed: true, DevelopmentBatches: []protocol.DevelopmentBatchProgress{
-			{ID: "b1", Required: true, Status: runtime.TaskTerminal},
-			{ID: "b2", Required: true, DependsOn: []string{"b1"}, Status: runtime.TaskRunning},
+			{ID: "b1", Required: true, Status: runtime.TaskTerminal, Gate: &protocol.DevelopmentGateProgress{Status: "PASS", Selected: []string{"quality"}}},
+			{ID: "b2", Required: true, DependsOn: []string{"b1"}, Status: runtime.TaskRunning, Gate: &protocol.DevelopmentGateProgress{Status: "QUEUED", Selected: []string{"quality"}}},
 		}},
 		Slices: []SliceProgress{
 			{ID: "core", RunID: "flow-core", Status: "RUNNING", Flow: &protocol.FlowProgress{PlanConfirmed: true,
-				DevelopmentBatches: []protocol.DevelopmentBatchProgress{{ID: "sb1", Required: true, Status: runtime.TaskRunning}}}},
+				DevelopmentBatches: []protocol.DevelopmentBatchProgress{{ID: "sb1", Required: true, Status: runtime.TaskRunning, Gate: &protocol.DevelopmentGateProgress{Status: "RUNNING", Selected: []string{"quality"}}}}}},
 		},
 	}
 	server, _ := startDomServer(t, backend, nil,
@@ -1242,4 +1261,11 @@ func TestPanelDOMFlowCanvasRendering(t *testing.T) {
 	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=flowcanvas", "--window-size=1440,900")
 	domResults(t, dump)
+	mobileServer, _ := startDomServer(t, backend, make(chan struct{}, 4), injectStateMiddleware(backend, []RunSummary{injected}, nil))
+	mobileWindow, err := mobileServer.NewWindow("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepDomWindowAlive(t, mobileServer, mobileWindow.ID)
+	domResults(t, cdpDOM(t, browser, mobileWindow.URL+"&probe=bounds&wantW=390&wantH=844", 390, 844))
 }

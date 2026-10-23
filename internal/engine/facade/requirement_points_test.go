@@ -101,6 +101,7 @@ func TestCheckpointGateUsesCompletedRequirementPoints(t *testing.T) {
 	d.business(action, protocol.ValidationResult{Binding: input.Binding, Status: "PASS", Development: batchEvidence(input)})
 	d.materialize()
 	d.materialize()
+	passDevelopmentBatchGates(d)
 	gate, gin := d.gateAction("quality")
 	wi, ok := driverState(t, d).WorkerInput(gate, d.f.definition)
 	if !ok {
@@ -170,6 +171,7 @@ func TestFinalGateReviewsCompleteScopeForUnchangedCandidate(t *testing.T) {
 	}
 	d.business(id, protocol.ValidationResult{Binding: in.Binding, Status: "PASS", Development: batchEvidence(in)})
 	d.drive()
+	passDevelopmentBatchGates(d)
 	gid, gin := d.gateAction("quality")
 	if len(gin.Gate.Batches) != 1 {
 		t.Fatal("checkpoint did not freeze original contribution")

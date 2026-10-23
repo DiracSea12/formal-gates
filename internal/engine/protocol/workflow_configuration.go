@@ -151,7 +151,9 @@ func (s *State) selectConfiguration(configuration settings.Configuration, gates 
 	s.FlowSelection = configuration.FlowSelection
 	s.SelectedGates = (ConfigurationSelection{Configuration: configuration}).SelectedGates(gates)
 	if s.mergeMaster() {
-		s.SelectedGates = mergeRouteGates()
+		s.SelectedGates = append(slices.DeleteFunc(s.SelectedGates, func(gate string) bool {
+			return gate == "blackbox" || gate == "whitebox" || slices.Contains(reservedRouteGates, gate)
+		}), mergeRouteGates()...)
 		if !configurationNodeEnabled(configuration, "qa-blackbox") && !configurationNodeEnabled(configuration, "qa-whitebox") {
 			s.SelectedGates = slices.DeleteFunc(s.SelectedGates, func(gate string) bool { return gate == mergeQAGateID })
 		}

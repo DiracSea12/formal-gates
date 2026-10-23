@@ -257,6 +257,16 @@ func (e *Engine) advanceValidation(s *State, nextRevision uint64) (changed bool,
 			return changed, nil
 		}
 	}
+	if e.advanceDevelopmentGates(s) {
+		return true, nil
+	}
+	if wave := s.currentValidationWave(); developmentGateWave(wave) && wave.Status == "COMPLETE" && s.Validation.Candidate != nil && *s.Validation.Candidate == wave.Candidate {
+		s.Validation.Candidate = nil
+		changed = true
+	}
+	if wave := s.currentValidationWave(); developmentGateWave(wave) && wave.Status != "COMPLETE" && wave.Status != "INVALIDATED" && wave.Status != "REPAIRED" {
+		return changed, nil
+	}
 	if _, _, _, complete := s.developmentSources(e.cfg.Definition); !complete {
 		if _, integration := s.integrationParameters(e.cfg.Definition); integration {
 			return e.advanceIntegration(s, nextRevision)
@@ -367,8 +377,8 @@ func validateCandidateReceipt(provider string, intent HostActionIntent, receipt 
 			}
 		}
 	}
-	if evidence.GateView != nil && params.Stage != "REVIEW_READY" && !(params.Stage == "DEVELOPMENT" && params.RepairTask != nil) {
-		return params, CandidateEvidence{}, validationError("gate ownership evidence belongs to an issued final or repair source range")
+	if evidence.GateView != nil && params.Stage != "CHECK_SOURCE" && params.Stage != "REVIEW_READY" && !(params.Stage == "DEVELOPMENT" && params.RepairTask != nil) {
+		return params, CandidateEvidence{}, validationError("gate ownership evidence belongs to an issued editing, final or repair source range")
 	}
 	switch params.Stage {
 	case "PROMOTION":
@@ -479,7 +489,7 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	case "QA_ARTIFACT":
 		v.Sets[coverage.ReviewWhitebox].Candidate = evidence.Identity
 	case "REVIEW_READY":
-		if err := s.validateFinalCoverage(); err != nil {
+		if err := s.validateFinalCoverage(); err != nil && s.developmentGateRepair() == nil {
 			return validationReject(err)
 		}
 		v.Candidate = &coverage.ValidationCandidate{Identity: evidence.Identity, Digest: evidence.Digest}
@@ -498,29 +508,50 @@ func (e *Engine) applyCandidateReceipt(s *State, intent HostActionIntent, receip
 	return nil
 }
 func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, authorization string, sources []runtime.TaskKey) bool {
-	if s.validateCoverageRelations() != nil {
+	if repair := s.developmentGateRepair(); repair != nil {
+		return e.freezeValidationWaveAt(s, scope, authorization, sources, *s.Validation.Candidate, repair.CheckpointTasks)
+	}
+	return e.freezeValidationWaveAt(s, scope, authorization, sources, *s.Validation.Candidate, nil)
+}
+
+func (e *Engine) freezeValidationWaveAt(s *State, scope coverage.ScopeMode, authorization string, sources []runtime.TaskKey, candidate coverage.ValidationCandidate, batchTasks []runtime.TaskKey) bool {
+	if len(batchTasks) == 0 && s.validateCoverageRelations() != nil {
 		return false
 	}
 	v := s.Validation
 	versions := map[coverage.ReviewKind]string{}
-	for _, mode := range s.validationKinds() {
-		versions[mode] = v.Sets[mode].Version
+	if len(batchTasks) == 0 {
+		for _, mode := range s.validationKinds() {
+			versions[mode] = v.Sets[mode].Version
+		}
 	}
-	w := ValidationWave{SourceTasks: slices.Clone(sources), AuthorizationRequest: authorization, Candidate: *v.Candidate, RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteDigest: s.validationRouteDigest(), Versions: versions, Status: "COLLECTING", Scope: scope, Targets: map[string]*ValidationTarget{}}
+	w := ValidationWave{SourceTasks: slices.Clone(sources), AuthorizationRequest: authorization, Candidate: candidate, RequirementRevision: v.RequirementRevision, Generation: v.Generation, RouteDigest: s.validationRouteDigest(), Versions: versions, Status: "COLLECTING", Scope: scope, Targets: map[string]*ValidationTarget{}}
 	w.LimitHistory = []review.LimitInterval{s.roundLimitInterval("repair")}
 	if _, plan, _ := s.confirmedDevelopmentPlan(); plan != nil {
 		if tasks, checkpoint := s.planCheckpoint(e.cfg.Definition, plan); checkpoint {
 			w.CheckpointTasks = tasks
 		}
 	}
-	w.Coverage = s.coverageContract(v.Candidate)
-	for _, mode := range s.validationKinds() {
-		if v.Sets[mode].Review != nil {
-			w.Reviews = append(w.Reviews, *v.Sets[mode].Review)
+	if len(batchTasks) > 0 {
+		w.CheckpointTasks = slices.Clone(batchTasks)
+	}
+	w.Coverage = s.coverageContract(&candidate)
+	if len(batchTasks) == 0 {
+		for _, mode := range s.validationKinds() {
+			if v.Sets[mode].Review != nil {
+				w.Reviews = append(w.Reviews, *v.Sets[mode].Review)
+			}
 		}
 	}
-	// Retrying an obligation keeps its TaskKey and frozen expected set.
+	prior := s.currentValidationWave()
+	previous := ""
+	if prior != nil {
+		previous = prior.ID
+	}
+	// A new frozen responsibility follows its predecessor. Retrying an
+	// obligation keeps its original wave, TaskKey and frozen expected set.
 	w.ID = digestOfCanonical(struct {
+		Previous      string
 		Candidate     coverage.ValidationCandidate
 		Versions      map[coverage.ReviewKind]string
 		Route         string
@@ -529,9 +560,8 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 		Authorization string
 		Checkpoint    []runtime.TaskKey
 		Sources       []runtime.TaskKey
-	}{w.Candidate, versions, w.RouteDigest, scope, v.Generation, authorization, w.CheckpointTasks, w.SourceTasks})
+	}{previous, w.Candidate, versions, w.RouteDigest, scope, v.Generation, authorization, w.CheckpointTasks, w.SourceTasks})
 	w.ID = strings.TrimPrefix(w.ID, "sha256:")
-	prior := s.currentValidationWave()
 	if prior != nil && prior.Generation != w.Generation && prior.Candidate != w.Candidate && s.RequirementAssemblyReceipt(prior, &w) == "" {
 		e.retireValidationWave(s, prior.ID, "candidate changed after requirement confirmation")
 	}
@@ -540,8 +570,30 @@ func (e *Engine) freezeValidationWave(s *State, scope coverage.ScopeMode, author
 			w.ExtraAuthorized = prior.ExtraAuthorized
 		}
 	}
+	if len(batchTasks) > 0 {
+		for _, task := range batchTasks {
+			batch, known := s.plannedBatchSource(task)
+			if !known || batch.Spike {
+				continue
+			}
+			for _, gate := range s.developmentGates() {
+				key := s.validationRequiredTask(pipelineTask(e.cfg.Definition, "engine.gate.v3", developmentGateScope(w.ID, task, gate)), &w, e.cfg.Definition)
+				target := &ValidationTarget{Task: key, Kind: "GATE", Gate: gate, BatchID: batch.ID, Status: "PENDING"}
+				if prior != nil {
+					s.carryGateResult(target, prior, &w, e.cfg.Definition)
+				}
+				w.Targets[key.String()] = target
+			}
+		}
+		w.ExpectedDigest = validationExpectedDigest(&w)
+		v.Waves = append(v.Waves, w)
+		return true
+	}
 
 	for _, gate := range s.SelectedGates {
+		if s.mergeMaster() && !slices.Contains(mergeRouteGates(), gate) {
+			continue
+		}
 		mode := coverage.ReviewKind("")
 		switch gate {
 		case "blackbox":
@@ -785,7 +837,7 @@ func (e *Engine) settleValidationWave(s *State, w *ValidationWave) (bool, error)
 			w.Status = "ADJUDICATING"
 			changed = true
 		}
-		if !s.validationEvidenceComplete(w) || s.validateCoverageRelations() != nil {
+		if !s.validationEvidenceComplete(w) || !developmentGateWave(w) && s.validateCoverageRelations() != nil {
 			return changed, nil
 		}
 		if w.Status == "COMPLETE" {

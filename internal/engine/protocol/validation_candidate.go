@@ -276,7 +276,7 @@ func (s *State) candidateEffectApplicable(p CandidateParameters, cd *compiler.Co
 		}
 		return complete && sameTaskSet(p.SourceTasks, sources) && slices.Equal(p.Paths, paths) && p.Base == base
 	}
-	if p.Stage == "REVIEW_READY" && s.RequirementAssemblySource() != "" {
+	if p.Stage == "REVIEW_READY" && (s.RequirementAssemblySource() != "" || s.developmentGateRepair() != nil) {
 		current, ready, err := s.currentCandidateParameters(cd)
 		return ready && err == nil && digestOfCanonical(current) == digestOfCanonical(p)
 	}
@@ -559,6 +559,11 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 		params.Base = base
 	case s.nextRepairWork() != nil:
 		return CandidateParameters{}, false, nil
+	case s.developmentGateRepair() != nil:
+		if v.Candidate != nil {
+			return CandidateParameters{}, false, nil
+		}
+		params.Stage, params.Base, params.ReviewBase, params.Finalize = "REVIEW_READY", v.DevelopmentSnapshot, s.BaseSnapshot, true
 	case slices.Contains(s.validationKinds(), coverage.ReviewWhitebox) && v.AuthoringWorkspace == "" && (v.Sets[coverage.ReviewWhitebox] == nil || v.Sets[coverage.ReviewWhitebox].Status == "DRAFT" || v.Sets[coverage.ReviewWhitebox].Status == "THAWED"):
 		params.Stage = "AUTHORING"
 		params.Base = v.DevelopmentSnapshot
@@ -613,7 +618,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			params.Finalize = true
 		}
 	}
-	if params.Stage == "AUTHORING" || params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY" {
+	if (params.Stage == "AUTHORING" || params.Stage == "QA_ARTIFACT" || params.Stage == "REVIEW_READY") && s.developmentGateRepair() == nil {
 		if set := v.Sets[coverage.ReviewWhitebox]; set != nil {
 			params.TestFiles = set.Manifest.TestFiles()
 			params.ReviewCases = map[string]string{}
@@ -637,7 +642,7 @@ func (s *State) currentCandidateParameters(cd *compiler.CompiledDefinition) (Can
 			params.Base = s.candidateResource(params, cd).Source
 		}
 	}
-	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" {
+	if s.NativeRoot != "" && params.Stage == "REVIEW_READY" && s.developmentGateRepair() == nil {
 		if s.mergeMaster() && slices.Contains(s.validationKinds(), coverage.ReviewMerge) {
 			manifest := v.Sets[coverage.ReviewMerge].Manifest
 			params.MergeManifest = &manifest

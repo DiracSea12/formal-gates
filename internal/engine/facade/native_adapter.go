@@ -1137,7 +1137,7 @@ func (f *Facade) candidateEvidence(s *protocol.State, intent protocol.HostAction
 		// This isolated snapshot is review input; semantic test-only approval
 		// belongs to the accepted independent case-set review.
 	}
-	if p.Stage == "REVIEW_READY" || p.RepairTask != nil {
+	if p.Stage == "CHECK_SOURCE" || p.Stage == "REVIEW_READY" || p.RepairTask != nil {
 		reviewBase := p.ReviewBase
 		if reviewBase == "" {
 			reviewBase = p.Base

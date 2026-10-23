@@ -156,6 +156,7 @@ type GateImpact struct {
 }
 
 type ValidationTarget struct {
+	BatchID    string           `json:"batchId,omitempty"`
 	SliceID    string           `json:"sliceId,omitempty"`
 	Reuse      *ValidationReuse `json:"reuse,omitempty"`
 	GateImpact *GateImpact      `json:"gateImpact,omitempty"`
@@ -574,6 +575,11 @@ func (s *State) validationBinding(key runtime.TaskKey, cd *compiler.CompiledDefi
 	if wave := s.currentValidationWave(); wave != nil && (role == "engine.qa.execution.v4" || role == "engine.gate.v3") {
 		b.WaveID = wave.ID
 		b.Candidate = wave.Candidate.Identity
+		if target := wave.Targets[key.String()]; target != nil && target.BatchID != "" {
+			if batch, known := s.developmentGateBinding(wave, target); known {
+				b = batch
+			}
+		}
 	}
 	if r := s.taskResource(key, cd); r.Status == "READY" {
 		b.WorkspaceID = r.ID
@@ -656,7 +662,7 @@ func (s *State) projectValidationTasks(view *decision.State, cd *compiler.Compil
 	if wave == nil {
 		return
 	}
-	if wave.Status == "COLLECTING" && s.validateCoverageRelations() == nil {
+	if wave.Status == "COLLECTING" && (developmentGateWave(wave) || s.validateCoverageRelations() == nil) {
 		for _, target := range wave.Targets {
 			if target.Status == "PENDING" || target.Status == "RUNTIME_ERROR" || target.Status == "RETRY_EXHAUSTED" {
 				handler := "engine.gate.v3"
