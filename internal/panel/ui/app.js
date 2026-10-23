@@ -29,7 +29,7 @@ const RESP = [
 	{ id: "product-review", t: "产品审查", round: "product-review", rh: "跑满后每加一轮需你授权" },
 	{ id: "start-readiness", t: "开发前技术审查", round: "tech-review", rh: "跑满后每加一轮需你授权" },
 	{ id: "development", t: "初始开发实现" },
-	{ id: "qa-blackbox", t: "黑盒 QA", qa: "blackbox", round: "qa-blackbox", rh: "设计↔审查返工连续 FAIL 的上限" },
+	{ id: "qa-blackbox", t: "黑盒 QA", qa: "blackbox", round: "qa-blackbox", rh: "设计↔审查返工连续 FAIL 的上限", warning: "黑盒 QA 涉及实际操作与验证，工作量、耗时和 token 消耗可能较大。" },
 	{ id: "qa-whitebox", t: "白盒 QA", qa: "whitebox", round: "qa-whitebox", rh: "设计↔审查返工连续 FAIL 的上限" },
 	{ id: "gate", t: "质量门", d: "已选普通门 + 合并门" },
 	{ id: "repair", t: "业务返修", round: "repair", rh: "验证轮与返修轮合计达到上限后需授权", d: "已成立问题的返修" },
@@ -96,9 +96,8 @@ function setExec(work, id, patch) {
 		reasoningEffort: patch.reasoningEffort !== undefined ? patch.reasoningEffort : cur.reasoningEffort || "",
 	};
 }
-// Gates: undefined/null = all-inclusive (含将来新增); array = explicit list.
+// Gates: undefined/null = all discovered ordinary gates; array = explicit list.
 function gatesAll(work) { return work.gates === undefined || work.gates === null; }
-
 // ---------- server state ----------
 async function loadState() {
 	state = await api.get("/api/state");
@@ -268,8 +267,8 @@ async function guardDirtyThen(next) {
 }
 
 // ---------- graph ----------
-// buildGraph draws the real structure per §3.1.1: reviews → serial
-// development batches → dependency-parallel slices (each own dev + slice
+// buildGraph draws the real structure per §3.1.1: reviews → dependency-ordered
+// development batches and their gates → parallel slices (each own dev + slice
 // gates, no QA inside) → mainline merge → merge QA + merge gate →
 // verification QA and ordinary gates in parallel → repair → verification.
 // Before a plan is confirmed the canvas is an explicitly marked schematic.
@@ -293,8 +292,8 @@ function buildGraph() {
 	// and it cannot be selected. terminal marks a display-only end node that
 	// closes the flow (the seal). Both flags describe the graph, not runtime
 	// state.
-	const put = (key, resp, label, sub, col, row, op, terminal) => {
-		nodes.push({ key, resp, label, sub, op: !!op, terminal: !!terminal, x: 40 + col * X, y: 50 + row * Y });
+	const put = (key, resp, label, sub, col, row, op, terminal, gateStatus) => {
+		nodes.push({ key, resp, label, sub, op: !!op, terminal: !!terminal, gateStatus, x: 40 + col * X, y: 50 + row * Y });
 	};
 	const link = (a, b, cls) => edges.push({ a, b, cls });
 	const qaMergeResp = () => nodeEnabled(work, "qa-whitebox") ? "qa-whitebox" : nodeEnabled(work, "qa-blackbox") ? "qa-blackbox" : null;
@@ -357,59 +356,60 @@ function buildGraph() {
 	const planReady = !!(flow && flow.planConfirmed);
 
 	if (!run || !planReady) {
-		// Schematic: intake or a run whose plan is not yet confirmed. Nothing is
-		// scheduled yet, so the placeholder topology is fixed — two serial
-		// batches, two parallel slices, no QA inside a slice — and the lane
-		// header says the real counts come from topology confirmation. The tail
-		// (merge, verification, repair, seal) is already the real one so the
-		// whole flow shape is readable before any plan exists.
+		// Schematic: two serial batches with ordinary gates, then two parallel
+		// slices. The actual counts come from topology confirmation.
 		put("n-product-review", "product-review", "产品审查", "", 0, 1);
 		put("n-start-readiness", "start-readiness", "开发前技术审查", "", 1, 1);
 		put("n-dev-0", "development", "开发批次 1", "", 2, 1);
-		put("n-dev-1", "development", "开发批次 2", "批次串行", 3, 1);
+		put("n-gate-0", "gate", "批次 1 · 质量门", "已选普通门", 3, 1);
+		put("n-dev-1", "development", "开发批次 2", "批次串行", 4, 1);
+		put("n-gate-1", "gate", "批次 2 · 质量门", "已选普通门", 5, 1);
 		put("n-qa-blackbox", "qa-blackbox", "黑盒 QA 设计/审查", "与开发并行", 2.6, 0);
 		put("n-qa-whitebox", "qa-whitebox", "白盒 QA 设计/审查", "与开发并行", 2.6, 2.1);
-		link("n-product-review", "n-start-readiness"); link("n-start-readiness", "n-dev-0"); link("n-dev-0", "n-dev-1");
-		link("n-start-readiness", "n-qa-blackbox");
-		link("n-start-readiness", "n-qa-whitebox");
-		put("s0-dev", "development", "开发分片 A", "", 4, 0.3);
-		put("s0-gate", "gate", "开发分片 A · 分片门", "", 4.95, 0.3);
-		put("s1-dev", "development", "开发分片 B", "", 4, 1.7);
-		put("s1-gate", "gate", "开发分片 B · 分片门", "", 4.95, 1.7);
-		link("n-dev-1", "s0-dev"); link("n-dev-1", "s1-dev"); link("s0-dev", "s0-gate"); link("s1-dev", "s1-gate");
-		mergeTail(["s0-gate", "s1-gate"], 5.95);
+		link("n-product-review", "n-start-readiness"); link("n-start-readiness", "n-dev-0");
+		link("n-dev-0", "n-gate-0"); link("n-gate-0", "n-dev-1"); link("n-dev-1", "n-gate-1");
+		link("n-start-readiness", "n-qa-blackbox"); link("n-start-readiness", "n-qa-whitebox");
+		put("s0-dev", "development", "开发分片 A", "", 6, 0.3);
+		put("s0-gate", "gate", "开发分片 A · 分片门", "", 6.95, 0.3);
+		put("s1-dev", "development", "开发分片 B", "", 6, 1.7);
+		put("s1-gate", "gate", "开发分片 B · 分片门", "", 6.95, 1.7);
+		link("n-gate-1", "s0-dev"); link("n-gate-1", "s1-dev"); link("s0-dev", "s0-gate"); link("s1-dev", "s1-gate");
+		mergeTail(["s0-gate", "s1-gate"], 7.95);
 		groups.push({ x: 16, y: 0, w: 900, h: 26, label: "示意图 · 受理阶段的批次与分片数量以拓扑确认为准；分片内无 QA" });
 		return { nodes, edges, groups, schematic: true };
 	}
 
-	// Actual run: confirmed plan batches serial by DependsOn.
+	// Actual dependencies leave each batch through its own projected gate.
 	put("n-product-review", "product-review", "产品审查", "", 0, 1);
 	put("n-start-readiness", "start-readiness", "开发前技术审查", "", 1, 1);
 	link("n-product-review", "n-start-readiness");
 	const batchKey = {};
+	const batchGateKey = {};
 	batches.forEach((b, i) => {
 		const key = "n-dev-" + b.id;
 		batchKey[b.id] = key;
+		batchGateKey[b.id] = "n-gate-" + b.id;
 		const statusText = { QUEUED: "排队", ISSUED: "已签发", RUNNING: "运行中", VALIDATING: "校验中", TERMINAL: "已完成" }[b.status] || b.status;
-		put(key, "development", "开发批次 " + b.id, [b.owner || "", statusText].filter(Boolean).join(" · "), 2 + i, split ? 0.15 : 0.7);
+		put(key, "development", "开发批次 " + b.id, [b.owner || "", statusText].filter(Boolean).join(" · "), 2 + i * 2, split ? 0.15 : 0.7);
+		put(batchGateKey[b.id], "gate", "批次 " + b.id + " · 质量门", "已选普通门", 3 + i * 2, split ? 0.15 : 0.7, false, false, b.gate && b.gate.status);
+		link(key, batchGateKey[b.id]);
 	});
 	for (const b of batches) {
 		const deps = (b.dependsOn || []).filter(d => batchKey[d]);
-		for (const d of deps) link(batchKey[d], batchKey[b.id]);
+		for (const d of deps) link(batchGateKey[d], batchKey[b.id]);
 		if (!deps.length) link("n-start-readiness", batchKey[b.id]);
 	}
 	if (!batches.length) {
 		put("n-dev", "development", "初始开发实现", "", 2, split ? 0.6 : 1);
 		link("n-start-readiness", "n-dev");
 	}
-	const devHeads = batches.length ? batches.map(b => batchKey[b.id]) : ["n-dev"];
-	const lastDev = batches.length ? batchKey[batches[batches.length - 1].id] : "n-dev";
+	const devHeads = batches.length ? batches.filter(b => !batches.some(next => (next.dependsOn || []).includes(b.id))).map(b => batchGateKey[b.id]) : ["n-dev"];
 	put("n-qa-blackbox", "qa-blackbox", "黑盒 QA 设计/审查", "与开发并行", 2, 1.6); link("n-start-readiness", "n-qa-blackbox");
 	put("n-qa-whitebox", "qa-whitebox", "白盒 QA 设计/审查", "与开发并行", 2, 2.4); link("n-start-readiness", "n-qa-whitebox");
 
 	if (split) {
-		const sliceCol = 2 + Math.max(batches.length, 1) + 0.6;
-		const sliceGateCol = len => sliceCol + Math.max(len * SLICE_DX, SLICE_DX) + 0.15;
+		const sliceCol = 2 + Math.max(batches.length * 2, 1) + 0.6;
+		const sliceGateCol = len => sliceCol + Math.max(len * 2 * SLICE_DX, SLICE_DX) + 0.15;
 		const sliceGates = [];
 		// Owner-plan batches map batch IDs to their owning slice; child-owned
 		// ones carry no master status, the child run supplies its own.
@@ -427,12 +427,16 @@ function buildGraph() {
 			const childBatches = (s.flow && s.flow.developmentBatches) || [];
 			if (childBatches.length > widest) widest = childBatches.length;
 			const localKey = {};
+			const localGateKey = {};
 			childBatches.forEach((b, j) => {
 				const key = "sl-dev-" + s.id + "-" + b.id;
 				localKey[b.id] = key;
+				localGateKey[b.id] = "sl-batch-gate-" + s.id + "-" + b.id;
 				const st = { QUEUED: "待执行", ISSUED: "已派发", RUNNING: "执行中", VALIDATING: "验证中", TERMINAL: "已结束" }[b.status] || "";
 				put(key, "development", "开发分片 " + s.id + " · 批次 " + b.id,
-					(entered ? "已进主线，随主线配置" : st || (s.status || "")), sliceCol + j * SLICE_DX, row);
+					(entered ? "已进主线，随主线配置" : st || (s.status || "")), sliceCol + j * 2 * SLICE_DX, row);
+				put(localGateKey[b.id], "gate", "分片 " + s.id + " · 批次 " + b.id + " 质量门", "已选普通门", sliceCol + (j * 2 + 1) * SLICE_DX, row, false, false, b.gate && b.gate.status);
+				link(key, localGateKey[b.id]);
 			});
 			const gt = "sl-gate-" + s.id;
 			put(gt, "gate", "开发分片 " + s.id + " · 分片门", entered ? "已进主线" : "", sliceGateCol(childBatches.length), row);
@@ -450,26 +454,26 @@ function buildGraph() {
 			// (y = 50 + row*Y), so the strip never covers a node box. The label
 			// is whitespace-nowrap, so it has to stay short enough for that
 			// single fixed line instead of growing the strip.
-			groups.push({ x: 20 + sliceCol * X, y: 22 + row * Y, w: X * Math.max(2, childBatches.length * SLICE_DX + 1.15), h: 26, label: "开发分片 " + s.id + (entered ? " · 已进主线，随主线配置" : "") });
-			return { s, localKey, childBatches, gt };
+			groups.push({ x: 20 + sliceCol * X, y: 22 + row * Y, w: X * Math.max(2, childBatches.length * 2 * SLICE_DX + 1.15), h: 26, label: "开发分片 " + s.id + (entered ? " · 已进主线，随主线配置" : "") });
+			return { s, localKey, localGateKey, childBatches, gt };
 		});
 		// Pass 2: dependency edges can now resolve cross-slice sources.
 		for (const info of sliceInfo) {
-			if (!info.childBatches.length) { link(lastDev, info.localKey[""]); link(info.localKey[""], info.gt); continue; }
+			if (!info.childBatches.length) { for (const d of devHeads) link(d, info.localKey[""]); link(info.localKey[""], info.gt); continue; }
 			for (const b of info.childBatches) {
 				let incoming = false;
 				for (const d of b.dependsOn || []) {
-					if (info.localKey[d]) { link(info.localKey[d], info.localKey[b.id]); incoming = true; continue; }
-					const src = ownerOf[d] && ownerOf[d] !== info.s.id ? "sl-dev-" + ownerOf[d] + "-" + d : null;
+					if (info.localKey[d]) { link(info.localGateKey[d], info.localKey[b.id]); incoming = true; continue; }
+					const src = ownerOf[d] && ownerOf[d] !== info.s.id ? "sl-batch-gate-" + ownerOf[d] + "-" + d : batchGateKey[d];
 					if (src && nodes.some(n => n.key === src)) { link(src, info.localKey[b.id]); incoming = true; }
 				}
-				if (!incoming) link(lastDev, info.localKey[b.id]);
+				if (!incoming) for (const d of devHeads) link(d, info.localKey[b.id]);
 			}
-			link(info.localKey[info.childBatches[info.childBatches.length - 1].id], info.gt);
+			for (const b of info.childBatches.filter(b => !info.childBatches.some(next => (next.dependsOn || []).includes(b.id)))) link(info.localGateKey[b.id], info.gt);
 		}
-		mergeTail(sliceGates, sliceCol + widest * SLICE_DX + 1.2);
+		mergeTail(sliceGates, sliceCol + widest * 2 * SLICE_DX + 1.2);
 	} else {
-		verifyTail(2 + Math.max(batches.length, 1) + 0.8);
+		verifyTail(2 + Math.max(batches.length * 2, 1) + 0.8);
 		for (const d of devHeads) link(d, "v-gate");
 	}
 	// QA design/review feeds its verification-execution counterpart.
@@ -672,21 +676,22 @@ document.addEventListener("keydown", e => {
 
 // ---------- node rendering ----------
 let graph = { nodes: [], edges: [], groups: [] };
-function nodeStatusClass(resp) {
+function nodeStatusClass(resp, gateStatus) {
+	if (gateStatus !== undefined) return gateStatus === "RUNNING" ? " running" : gateStatus === "PASS" || gateStatus === "NOT_APPLICABLE" ? " done" : gateStatus === "FAIL" ? " failed" : "";
 	const st = nodeState(resp);
 	if (!st) return "";
 	if (st.running) return " running";
 	if (st.completed || st.bypassed) return " done";
 	return "";
 }
-function nodeStatusText(resp) {
+function nodeStatusText(resp, gateStatus) {
+	if (gateStatus !== undefined) return { DISABLED: "未启用", NOT_APPLICABLE: "不适用", QUEUED: "待验证", RUNNING: "运行中", PASS: "已通过", FAIL: "未通过" }[gateStatus] || "";
 	const st = nodeState(resp);
 	if (!st) return null;
 	if (st.running) return "运行中";
 	if (st.closing) return "关闭中";
 	if (st.completed) return "已完成";
 	if (st.bypassed) return "已越过";
-	if (!st.enabled) return "已关闭";
 	return "";
 }
 // The graph DOM rebuilds only when its rendered content changes, so the flow
@@ -699,9 +704,9 @@ function nodeStatusText(resp) {
 let nodesSig = "";
 function nodesSignature() {
 	return JSON.stringify([
-		graph.nodes.map(n => [n.key, n.resp, n.label, n.sub, n.op, n.terminal, n.x, n.y]),
+		graph.nodes.map(n => [n.key, n.resp, n.label, n.sub, n.op, n.terminal, n.gateStatus, n.x, n.y]),
 		graph.groups, graph.edges, sel, selKey,
-		graph.nodes.map(n => n.op ? null : [nodeStatusClass(n.resp), nodeStatusText(n.resp), nodeEnabled(work, n.resp), execOf(work, n.resp)]),
+		graph.nodes.map(n => n.op ? null : [nodeStatusClass(n.resp, n.gateStatus), nodeStatusText(n.resp, n.gateStatus), nodeEnabled(work, n.resp), execOf(work, n.resp)]),
 	]);
 }
 // renderNodes rebuilds the graph model on every render and compares only the
@@ -725,22 +730,22 @@ function renderNodes(prev) {
 		// responsibility, so every repeated instance of the selected responsibility
 		// highlights. An op node never takes disabled: it has no configuration to
 		// switch off, and its resp is empty.
-		const e = el("div", "node" + (n.op ? " op" : "") + (n.terminal ? " terminal" : "") + (n.op ? "" : nodeStatusClass(n.resp))
+		const e = el("div", "node" + (n.op ? " op" : "") + (n.terminal ? " terminal" : "") + (n.op ? "" : nodeStatusClass(n.resp, n.gateStatus))
 			+ (n.resp && !nodeEnabled(work, n.resp) ? " disabled" : "") + (sel === n.resp && RESP.find(r => r.id === n.resp) ? " sel" : ""));
 		e.style.left = n.x + "px"; e.style.top = n.y + "px"; e.dataset.key = n.key; if (n.resp) e.dataset.resp = n.resp; e.tabIndex = n.op ? -1 : 0;
+		const meta = RESP.find(r => r.id === n.resp);
+		if (meta && meta.warning) e.title = meta.warning;
 		// Title and status share one header row (.head > .t + .st): a long label
-		// wraps inside its own column instead of running under the status pill. A
-		// node without a status renders no pill at all — never an empty capsule —
-		// so the pill's presence alone means "this node has state"; the text is
-		// the runtime status, or 已关闭 for a configurable node switched off.
-		const status = n.op ? "" : nodeStatusText(n.resp) || (nodeEnabled(work, n.resp) ? "" : "已关闭");
+		// wraps inside its own column instead of running under the status pill.
+		// Configurable nodes show selection unless a runtime status applies.
+		const status = n.op ? "" : nodeStatusText(n.resp, n.gateStatus) || (nodeEnabled(work, n.resp) ? "已选择" : "未选择");
 		const head = el("div", "head");
 		head.appendChild(el("div", "t", n.label));
 		if (status) head.appendChild(el("div", "st", status));
 		e.appendChild(head);
 		const ex = n.resp ? execOf(work, n.resp) : {};
 		if (n.sub) e.appendChild(el("div", "d", n.sub));
-		if (n.key.startsWith("sl-dev-") || n.key.startsWith("sl-gate-") || n.key.startsWith("n-dev-") && graph.nodes.filter(x => x.resp === "development").length > 1) {
+		if (n.key.startsWith("sl-dev-") || n.key.startsWith("sl-gate-") || n.key.startsWith("sl-batch-gate-") || n.key.startsWith("n-gate-") || n.key.startsWith("n-dev-") && graph.nodes.filter(x => x.resp === "development").length > 1) {
 			e.appendChild(el("div", "shared", "共享「" + (LABEL[n.resp] || "") + "」配置"));
 		}
 		if (n.key.startsWith("m-qa")) e.appendChild(el("div", "shared", "随「" + LABEL[n.resp] + "」配置"));
@@ -915,13 +920,21 @@ function inspectorSignature() {
 		optKey: optCache[sigOptKey()] ? (optCache[sigOptKey()].error ? "err" : "ok") : "none",
 	});
 }
-// Options are keyed to the full (configuration, node, provider, model)
-// tuple: each answer is self-contained. A provider's model list is shared
-// across its tuples, so a sibling tuple's cached answer already renders the
-// form while the current model's own answer fills its effort row.
+// The built-in configuration supplies run defaults without node overrides.
+// Native catalogues are shared across nodes and configurations; overlay
+// revisions keep a changed native configuration from reusing an old answer.
+function optPrefix() {
+	return JSON.stringify([(state && state.revisions) || {}, execOf(work, sel).provider || ""]).slice(0, -1) + ",";
+}
 function sigOptKey() {
-	const ex = execOf(work, sel);
-	return editing + "|" + sel + "|" + (ex.provider || "") + "|" + (ex.model || "");
+	return optPrefix() + JSON.stringify(execOf(work, sel).model || "") + "]";
+}
+function effectiveChoice(options, ex) {
+	let value = { ...((options && options.effective) || {}) };
+	if (ex.provider && ex.provider !== value.provider) value = { provider: ex.provider };
+	if (ex.model) value.model = ex.model;
+	if (ex.reasoningEffort) value.reasoningEffort = ex.reasoningEffort;
+	return value;
 }
 // Poll-driven rebuilds keep a focused draft control untouched; a committed
 // control change calls with force so dependent fields refresh immediately.
@@ -936,7 +949,10 @@ async function renderInspector(force) {
 		// status on the controls already rendered.
 		const fst = nodeState(sel);
 		const flocked = !!fst && !fst.editable;
-		i.querySelectorAll("input,select,textarea,button").forEach(c => { if (!c.classList.contains("iconbtn")) c.disabled = flocked; });
+		const gatesUnavailable = !i.querySelector('input[data-f^="gate:"]');
+		i.querySelectorAll("input,select,textarea,button").forEach(c => {
+			if (!c.classList.contains("iconbtn")) c.disabled = flocked || c.dataset.f === "gates:all" && gatesUnavailable;
+		});
 		return;
 	}
 	// The focused field's identity is captured so the rebuilt form can put
@@ -970,6 +986,7 @@ async function renderInspector(force) {
 	if (!bound && run) {
 		i.appendChild(el("div", "lockmsg", `正在编辑「${editing}」，与选中 run 绑定的「${run.configuration}」不同；保存不影响该 run。`));
 	}
+	if (meta.warning) i.appendChild(el("div", "lockmsg warning", meta.warning));
 	const sw = el("div", "switch"); sw.appendChild(el("span", "", "启用这个节点"));
 	const tg = el("button", "tg" + (nodeEnabled(work, sel) ? " on" : ""));
 	tg.disabled = locked; tg.dataset.f = "enabled";
@@ -997,31 +1014,32 @@ async function renderInspector(force) {
 	}
 }
 
-// A fetch that resolves after the user moved on still lands in the cache
-// under its own tuple key; only the rendered form treats it as stale.
+// Late replies remain in their own revision/provider/model cache entry;
+// inspector generations decide whether the reply still owns the rendered form.
 const optCache = {};
-const optInflight = {}; // tuple key -> pending fetch promise
-async function fetchOptions(editingName, node, provider, model) {
-	// The catalogue query needs a stored configuration as its base; an unsaved
-	// draft borrows the built-in entry without changing editing identity.
-	const base = option(editingName) ? editingName : BUILTIN;
-	const q = new URLSearchParams({ configuration: base, node, platform: provider || "", model: model || "", effort: "" });
+const optInflight = {};
+async function fetchOptions(provider, model) {
+	const q = new URLSearchParams({ configuration: BUILTIN, node: "development", platform: provider || "", model: model || "", effort: "" });
 	return api.get("/api/execution-options?" + q);
 }
-// providerOptions returns a cached answer for any tuple that shares the
-// current (configuration, node, provider): a provider's model list is the
-// same across its tuples and an unavailable verdict is provider-wide, so a
-// sibling answer renders the form while the current model's own tuple fills.
+// Model lists are provider-wide; only the requested model's effort list is
+// guaranteed to be present in a native catalogue answer.
 function providerOptions() {
-	const prefix = editing + "|" + sel + "|" + (execOf(work, sel).provider || "") + "|";
+	const prefix = optPrefix();
 	for (const key in optCache) {
 		const value = optCache[key];
 		if (key.startsWith(prefix) && value && (value.catalogue || value.unavailable)) return value;
 	}
 	return undefined;
 }
-async function optionsFor() {
+async function optionsFor(force) {
 	const key = sigOptKey();
+	if (force) {
+		const revisionPrefix = JSON.stringify([(state && state.revisions) || {}]).slice(0, -1) + ",";
+		for (const cache of [optCache, optInflight]) {
+			for (const cachedKey in cache) if (cachedKey.startsWith(revisionPrefix)) delete cache[cachedKey];
+		}
+	}
 	if (optCache[key] !== undefined) return optCache[key];
 	if (optInflight[key]) return optInflight[key];
 	const seq = ++optSeq;
@@ -1029,35 +1047,40 @@ async function optionsFor() {
 	const ex = execOf(work, sel);
 	const pending = (async () => {
 		let result;
-		try { result = await fetchOptions(editingName, node, ex.provider || "", ex.model || ""); }
+		try { result = await fetchOptions(ex.provider || "", ex.model || ""); }
 		catch (e) { result = { error: e.message }; }
-		optCache[key] = result;
-		delete optInflight[key];
+		if (optInflight[key] === pending) {
+			optCache[key] = result;
+			delete optInflight[key];
+		}
 		return result;
 	})();
 	optInflight[key] = pending;
 	const result = await pending;
-	if (seq !== optSeq || sel !== node || editing !== editingName) return optCache[sigOptKey()];
+	if (seq !== optSeq || sel !== node || editing !== editingName || sigOptKey() !== key) return optCache[sigOptKey()];
 	return result;
 }
-// fillEfforts (re)builds the effort button row from a tuple's own answer.
-// pending marks the wait for the current model's tuple while a sibling
-// tuple's shared catalogue keeps the rest of the form mounted.
+// The empty effort value follows defaults without persisting a native value.
 function fillEfforts(efforts, options, ex, locked, pending) {
-	if (pending) { efforts.appendChild(el("span", "hint", "正在获取强度档…")); return; }
 	const cat = (options && options.catalogue) || { models: [] };
-	const eff = (options && options.effective) || {};
-	const effModel = ((ex || {}).model) || eff.model || (cat["default"] && cat["default"].model) || "";
-	const modelEntry = (cat.models || []).find(m => m.value === effModel) || (cat.models || [])[0];
+	const nativeDefault = cat["default"] || {};
+	const eff = effectiveChoice(options, { ...ex, reasoningEffort: "" });
+	const effModel = ex.model || eff.model || nativeDefault.model || "";
+	const modelEntry = (cat.models || []).find(m => m.value === effModel);
 	const effList = (modelEntry && modelEntry.efforts) || [];
-	const effDefault = ex.reasoningEffort || eff.reasoningEffort || (modelEntry && modelEntry.defaultEffort) || (cat["default"] && cat["default"].effort) || "";
-	for (const e of effList) {
-		const b = el("button", e === effDefault ? "on" : "", e);
-		b.dataset.e = e; b.dataset.f = "effort"; b.type = "button"; b.disabled = locked;
-		b.onclick = () => { const prev = snapshot(); setExec(work, sel, { reasoningEffort: e }); change(prev); renderInspector(true); };
+	const effDefault = eff.reasoningEffort || nativeDefault.effort || (modelEntry && modelEntry.defaultEffort) || "";
+	const choices = [["", "跟随默认" + (effDefault ? "（" + effDefault + "）" : "")], ...effList.map(e => [e, e])];
+	for (const [value, label] of choices) {
+		const b = el("button", value === (ex.reasoningEffort || "") ? "on" : "", label);
+		b.dataset.e = value; b.dataset.f = "effort"; b.type = "button"; b.disabled = locked;
+		b.onclick = () => {
+			const prev = snapshot(); setExec(work, sel, { reasoningEffort: value }); change(prev, ["dirty", "exec", "optKey"]);
+			efforts.querySelectorAll("button[data-e]").forEach(button => button.classList.toggle("on", button.dataset.e === value));
+		};
 		efforts.appendChild(b);
 	}
-	if (!effList.length) efforts.appendChild(el("span", "hint", "该平台未报告强度档"));
+	if (pending) efforts.appendChild(el("span", "hint", "正在获取强度档…"));
+	else if (!effList.length) efforts.appendChild(el("span", "hint", "该平台未报告强度档"));
 }
 // platformOption renders one platform entry; a platform whose executable the
 // backend could not resolve on PATH is marked 未安装 and cannot be picked.
@@ -1091,14 +1114,63 @@ function optionsErrorEl(error) {
 	lm.appendChild(el("div", "", "可手工填写平台/模型/强度（原生值）。"));
 	return lm;
 }
-async function renderExecFields(i, meta, locked, editingName, gen) {
-	const wrap = el("div"); i.appendChild(wrap);
+async function renderExecFields(i, meta, locked, editingName, gen, update) {
+	if (gen !== inspGen || sel !== meta.id || editing !== editingName) return;
+	const key = sigOptKey();
+	const controls = el("div", "switch");
+	controls.appendChild(el("span", "", "执行选项"));
+	const refresh = (update && i.querySelector('[data-f="refresh-options"]')) || el("button", "iconbtn", "刷新平台/模型");
+	refresh.type = "button"; refresh.dataset.f = "refresh-options";
+	const syncRefresh = () => {
+		refresh.disabled = !!optInflight[sigOptKey()];
+		refresh.textContent = refresh.disabled ? "正在获取…" : "刷新平台/模型";
+	};
+	syncRefresh();
+	refresh.onclick = async () => {
+		if (refresh.disabled) return;
+		const focused = i.contains(document.activeElement) && document.activeElement.dataset.f;
+		const refreshKey = sigOptKey();
+		const request = optionsFor(true);
+		syncRefresh();
+		await request;
+		if (gen !== inspGen || sel !== meta.id || editing !== editingName || sigOptKey() !== refreshKey) return;
+		await renderInspector(true);
+		const again = focused && [...i.querySelectorAll("[data-f]")].find(c => c.dataset.f === focused);
+		if (again && !again.disabled) again.focus();
+	};
+	if (!update) { controls.appendChild(refresh); i.appendChild(controls); }
+	const wrap = el("div");
+	const target = update ? update.wrap : wrap;
+	if (!update) i.appendChild(wrap);
+	const current = () => gen === inspGen && sel === meta.id && editing === editingName && sigOptKey() === key && target.isConnected;
+	const currentLocked = () => { const st = nodeState(meta.id); return !!st && !st.editable; };
+	const attach = () => {
+		if (!current()) return;
+		locked = currentLocked();
+		if (update) {
+			// Upstream fields stay mounted while only their dependencies move.
+			const previousDefault = target.querySelector('[data-exec="provider"] option[value=""]');
+			const nextDefault = wrap.querySelector('[data-exec="provider"] option[value=""]');
+			if (previousDefault && nextDefault && options && !options.unavailable && !options.error) previousDefault.textContent = nextDefault.textContent;
+			const keep = element => element.dataset.exec === "provider" || update.from === "effort" && element.dataset.exec === "model";
+			[...target.children].filter(element => !keep(element)).forEach(element => element.remove());
+			[...wrap.children].filter(element => !keep(element)).forEach(element => target.appendChild(element));
+		}
+		target.querySelectorAll("input,select,button").forEach(c => { c.disabled = locked; });
+		syncInspectorSignature();
+	};
+	const commit = patch => {
+		const from = patch.provider !== undefined ? "model" : patch.model !== undefined ? "effort" : "";
+		if (from === "model") { patch.model = ""; patch.reasoningEffort = ""; }
+		else if (from === "effort") patch.reasoningEffort = "";
+		const prev = snapshot(); setExec(work, sel, patch); change(prev, ["dirty", "exec", "optKey"]);
+		if (from) renderExecFields(i, meta, currentLocked(), editingName, gen, { wrap: target, from });
+	};
 	// The catalogue query can take seconds; a cached answer renders at once.
-	// The placeholder only marks a true miss — a new (config, node, provider,
-	// model) tuple with no same-provider sibling — while a sibling tuple's
+	// The placeholder only marks a provider/model cache miss without a
+	// same-provider answer, while a sibling model's
 	// shared catalogue renders the form and only the effort row waits for the
 	// current model's own answer.
-	const key = sigOptKey();
 	let options = optCache[key];
 	let pending = false;
 	if (options === undefined) {
@@ -1107,19 +1179,25 @@ async function renderExecFields(i, meta, locked, editingName, gen) {
 	}
 	if (options === undefined) {
 		wrap.appendChild(el("div", "lockmsg load", "正在获取平台/模型选项…"));
-		options = await optionsFor();
-		if (gen !== inspGen || sel !== meta.id || editing !== editingName) return; // a newer rebuild owns the form now
+		attach();
+		const request = optionsFor(); syncRefresh();
+		options = await request;
+		syncRefresh();
+		if (!current()) return;
+		locked = currentLocked();
 		if (!options) return; // a stale fetch lost to a newer one; the placeholder stays
 	} else if (pending) {
-		optionsFor().then(landed => {
-			if (gen !== inspGen || sel !== meta.id || editing !== editingName || sigOptKey() !== key) return;
-			const live = $("#insp .efforts");
+		const request = optionsFor(); syncRefresh();
+		request.then(landed => {
+			if (!current()) return;
+			syncRefresh();
+			const live = target.querySelector(".efforts");
 			if (!live) return;
 			live.textContent = "";
 			// The current model's tuple answers the row; anything else (error,
 			// unavailable) replaces the sibling-rendered form with its own view.
-			if (landed && landed.catalogue) { fillEfforts(live, landed, execOf(work, sel), locked, false); return; }
-			renderInspector(true);
+			if (landed && landed.catalogue) { fillEfforts(live, landed, execOf(work, sel), currentLocked(), false); syncInspectorSignature(); return; }
+			renderExecFields(i, meta, currentLocked(), editingName, gen, { wrap: target, from: update ? update.from : "model" });
 		});
 	}
 	wrap.textContent = "";
@@ -1135,84 +1213,115 @@ async function renderExecFields(i, meta, locked, editingName, gen) {
 			lm.appendChild(el("div", "", "该平台不提供执行选择，不能作为执行平台；改选其他平台后保存生效。"));
 		}
 		wrap.appendChild(lm);
-		const pf = el("div", "field"); pf.appendChild(el("label", "", "平台"));
+		const pf = el("div", "field"); pf.dataset.exec = "provider"; pf.appendChild(el("label", "", "平台"));
 		const selP = document.createElement("select"); selP.disabled = locked; selP.dataset.f = "provider";
 		// The resolved value is not an execution platform, so the select holds
 		// an explicit unset entry and lists only adaptered platforms.
 		selP.appendChild(new Option("未选定执行平台", "", false, true));
 		for (const p of options.platforms || []) selP.appendChild(platformOption(options, p, false));
-		selP.onchange = () => { const prev = snapshot(); setExec(work, sel, { provider: selP.value, model: "", reasoningEffort: "" }); change(prev); renderInspector(true); };
+		selP.onchange = () => commit({ provider: selP.value });
 		pf.appendChild(selP); wrap.appendChild(pf);
 		for (const [key, label] of [["model", "模型"], ["reasoningEffort", "推理强度"]]) {
-			const f = el("div", "field"); f.appendChild(el("label", "", label));
+			const f = el("div", "field"); f.dataset.exec = key === "provider" ? "provider" : key === "model" ? "model" : "effort"; f.appendChild(el("label", "", label));
 			const inp = document.createElement("input"); inp.type = "text"; inp.value = ex[key] || ""; inp.disabled = locked; inp.dataset.f = "exec:" + key;
-			inp.onchange = () => { const prev = snapshot(); setExec(work, sel, { [key]: inp.value }); change(prev); renderInspector(true); };
+			inp.onchange = () => commit({ [key]: inp.value });
 			f.appendChild(inp); wrap.appendChild(f);
 		}
-		return;
+		attach(); return;
 	}
 	if (options.error) {
 		wrap.appendChild(optionsErrorEl(options.error));
 		const ex = execOf(work, sel);
 		for (const [key, label] of [["provider", "平台"], ["model", "模型"], ["reasoningEffort", "推理强度"]]) {
-			const f = el("div", "field"); f.appendChild(el("label", "", label));
+			const f = el("div", "field"); f.dataset.exec = key === "provider" ? "provider" : key === "model" ? "model" : "effort"; f.appendChild(el("label", "", label));
 			const inp = document.createElement("input"); inp.type = "text"; inp.value = ex[key] || ""; inp.disabled = locked; inp.dataset.f = "exec:" + key;
-			inp.onchange = () => { const prev = snapshot(); setExec(work, sel, { [key]: inp.value }); change(prev); renderInspector(true); };
+			inp.onchange = () => commit({ [key]: inp.value });
 			f.appendChild(inp); wrap.appendChild(f);
 		}
-		return;
+		attach(); return;
 	}
 	const ex = execOf(work, sel);
-	const eff = options.effective || {};
-	const pf = el("div", "field"); pf.appendChild(el("label", "", "平台"));
+	const eff = effectiveChoice(options, { provider: ex.provider });
+	const pf = el("div", "field"); pf.dataset.exec = "provider"; pf.appendChild(el("label", "", "平台"));
 	const selP = document.createElement("select"); selP.disabled = locked; selP.dataset.f = "provider";
-	const effProvider = eff.provider || options.platform || "?";
+	const effProvider = (options.effective || {}).provider || "?";
 	const effMark = options.installed && options.installed[effProvider] === false ? "·未安装" : "";
 	selP.appendChild(new Option("跟随 run 默认（" + effProvider + effMark + "）", "", false, !ex.provider));
 	for (const p of options.platforms || []) selP.appendChild(platformOption(options, p, p === ex.provider));
+	if (ex.provider && !(options.platforms || []).includes(ex.provider)) selP.appendChild(platformOption(options, ex.provider, true));
 	pf.appendChild(selP); wrap.appendChild(pf);
 	const cat = options.catalogue || { models: [] };
-	const mf = el("div", "field"); mf.appendChild(el("label", "", "模型（按平台实时获取）"));
+	const defaultModel = eff.model || (cat["default"] || {}).model || (cat.current || {}).model || "";
+	const defaultEntry = (cat.models || []).find(m => m.value === defaultModel);
+	const defaultLabel = (defaultEntry && defaultEntry.label) || defaultModel || "未知";
+	const mf = el("div", "field"); mf.dataset.exec = "model"; mf.appendChild(el("label", "", "模型（按平台实时获取）"));
 	const selM = document.createElement("select"); selM.disabled = locked; selM.dataset.f = "model";
-	selM.appendChild(new Option("跟随默认（" + (eff.model || "目录默认") + "）", "", false, !ex.model));
+	selM.appendChild(new Option("跟随默认（" + defaultLabel + "）", "", false, !ex.model));
 	for (const m of cat.models || []) selM.appendChild(new Option(m.label || m.value, m.value, false, m.value === ex.model));
+	if (ex.model && !(cat.models || []).some(m => m.value === ex.model)) selM.appendChild(new Option(ex.model + "（目录未报告）", ex.model, false, true));
 	mf.appendChild(selM); wrap.appendChild(mf);
-	const ef = el("div", "field"); ef.appendChild(el("label", "", "推理强度"));
+	const ef = el("div", "field"); ef.dataset.exec = "effort"; ef.appendChild(el("label", "", "推理强度"));
 	const efforts = el("div", "efforts");
 	fillEfforts(efforts, options, ex, locked, pending);
 	ef.appendChild(efforts); wrap.appendChild(ef);
 	selP.onchange = () => {
-		const prev = snapshot(); setExec(work, sel, { provider: selP.value, model: "", reasoningEffort: "" }); change(prev); renderInspector(true);
+		commit({ provider: selP.value });
 	};
 	selM.onchange = () => {
-		const prev = snapshot(); setExec(work, sel, { model: selM.value, reasoningEffort: "" }); change(prev); renderInspector(true);
+		commit({ model: selM.value });
 	};
+	attach();
 }
 async function renderGateField(i, locked, editingName, gen) {
 	const f = el("div", "field"); f.appendChild(el("label", "", "普通门（合并门、分片门随质量门节点开关，不并入普通列表）"));
-	const list = el("div", "checks");
-	const all = el("label"); const allCb = document.createElement("input"); allCb.type = "checkbox"; allCb.checked = gatesAll(work); allCb.disabled = locked; allCb.dataset.f = "gates:all";
-	allCb.onchange = () => { const prev = snapshot(); work.gates = allCb.checked ? undefined : []; change(prev); renderInspector(true); };
-	all.appendChild(allCb); all.appendChild(document.createTextNode(" 全部门（含将来新增）"));
-	list.appendChild(all);
-	let available = [];
-	try { available = (await api.get("/api/gates")).gates || []; } catch (e) { available = []; }
-	if (gen !== inspGen || sel !== "gate" || editing !== editingName) return; // a newer rebuild owns the form now
-	if (gatesAll(work)) {
-		list.appendChild(el("div", "hint", "当前包含全部已发现普通门及将来新增门。"));
-	} else {
-		for (const g of available) {
-			const lab = el("label"); const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = work.gates.includes(g); cb.disabled = locked; cb.dataset.f = "gate:" + g;
-			cb.onchange = () => { const prev = snapshot(); work.gates = setSel(work.gates, g, cb.checked); change(prev); renderInspector(true); };
-			lab.appendChild(cb); lab.appendChild(document.createTextNode(" " + g)); list.appendChild(lab);
+	const list = el("div", "checks gate-picker");
+	const all = el("label", "gate-summary"), allCb = document.createElement("input");
+	allCb.type = "checkbox"; allCb.disabled = true; allCb.dataset.f = "gates:all";
+	all.appendChild(allCb); all.appendChild(document.createTextNode(" 全部门")); list.appendChild(all);
+	let gates = [], loaded = true;
+	try { gates = (await api.get("/api/gates")).gates || []; } catch (e) { loaded = false; }
+	const available = gates.map(gate => gate.id);
+	if (gen !== inspGen || sel !== "gate" || editing !== editingName) return;
+	const currentLocked = () => { const st = nodeState("gate"); return !!st && !st.editable; };
+	const sync = () => {
+		const selected = gate => gatesAll(work) || work.gates.includes(gate);
+		const count = available.filter(selected).length;
+		allCb.checked = available.length > 0 && count === available.length;
+		allCb.indeterminate = count > 0 && count < available.length;
+		allCb.disabled = currentLocked() || !available.length;
+		list.querySelectorAll('input[data-f^="gate:"]').forEach(cb => {
+			cb.checked = selected(cb.dataset.f.slice(5)); cb.disabled = currentLocked();
+		});
+	};
+	const commit = edit => {
+		if (!currentLocked() && available.length) {
+			const prev = snapshot(); edit(); change(prev, ["dirty", "gates"]);
 		}
-		if (!available.length) list.appendChild(el("div", "hint", "未能获取门列表；显式列表保留原样保存。"));
+		sync();
+	};
+	allCb.onchange = () => commit(() => { work.gates = allCb.checked ? undefined : []; });
+	const options = el("div", "gate-options"); list.appendChild(options);
+	for (const gate of gates) {
+		const label = el("label", "gate-option"), cb = document.createElement("input");
+		cb.type = "checkbox"; cb.dataset.f = "gate:" + gate.id;
+		cb.onchange = () => commit(() => { work.gates = setSel(gatesAll(work) ? available : work.gates, gate.id, cb.checked); });
+		const text = el("span", "gate-copy"); text.appendChild(el("span", "gate-name", gate.id));
+		if (gate.description && gate.description.trim()) text.appendChild(el("span", "gate-description", gate.description));
+		label.appendChild(cb); label.appendChild(text); options.appendChild(label);
 	}
+	if (!available.length) list.appendChild(el("div", "hint", loaded ? "暂无普通门；保留当前选择。" : "未能获取门列表；保留当前选择。"));
 	if (!nodeEnabled(work, "gate")) list.appendChild(el("div", "hint", "质量门节点已关闭：普通门、分片门、合并门均不派发。"));
-	f.appendChild(list); i.appendChild(f);
+	sync(); f.appendChild(list); i.appendChild(f);
 }
+
 function snapshot() { const o = {}; for (const n of RESP) o[n.id] = nodeSig(n.id); return o; }
-function change() { dirty = true; render(); }
+function syncInspectorSignature(keys = ["dirty", "exec", "optKey"]) {
+	if (!inspSig) return;
+	const previous = JSON.parse(inspSig), current = JSON.parse(inspectorSignature());
+	for (const key of keys) previous[key] = current[key];
+	inspSig = JSON.stringify(previous);
+}
+function change(_, signatureKeys) { dirty = true; if (signatureKeys) syncInspectorSignature(signatureKeys); render(); }
 
 // ---------- drawer ----------
 // The library overlays the canvas from the left, so opening it fits the graph
@@ -1233,7 +1342,8 @@ $("#scrim").onclick = () => closeDrawer();
 $("#libBtn").onclick = () => { $("#drawer").classList.contains("open") ? closeDrawer() : openDrawer(); };
 }
 
-function scopeLabel(o) { return o.name === BUILTIN ? "内置" : o.scope === "user" ? "用户层" : o.scope === "project" ? "项目层" : "未知层"; }
+function isBuiltin(o) { return !!o && o.source === "default"; }
+function scopeLabel(o) { return isBuiltin(o) ? "内置" : o.scope === "user" ? "用户层" : o.scope === "project" ? "项目层" : "未知层"; }
 
 // In save mode a list click is a save target per §3.4.2; otherwise it picks
 // the configuration to edit (through the dirty guard).
@@ -1242,7 +1352,7 @@ async function listClick(o) {
 	await guardDirtyThen(() => pickConfiguration(o.name));
 }
 async function saveTarget(o) {
-	if (o.name === BUILTIN) { toast("内建「默认」不能作为覆盖目标"); return; }
+	if (isBuiltin(o)) { toast("内置配置不能作为覆盖目标"); return; }
 	if (o.name === editing && option(editing)) { await doSave(o.scope || "project", o.name, true); return; }
 	const ok = await dlg({ title: "覆盖确认", msg: `用当前草稿覆盖「${o.name}」（${scopeLabel(o)}）？`, ok: "覆盖", danger: true });
 	if (ok) await doSave(o.scope || "project", o.name, true);
@@ -1250,11 +1360,11 @@ async function saveTarget(o) {
 function renderDrawer() {
 	const list = $("#cfgList"); list.textContent = "";
 	for (const o of state.configurations || []) {
-		const item = el("div", "cfg" + (o.name === editing ? " on" : "") + (saveMode && o.name === BUILTIN ? " skip" : ""));
+		const item = el("div", "cfg" + (o.name === editing ? " on" : "") + (saveMode && isBuiltin(o) ? " skip" : ""));
 		const n = el("div", "n");
 		n.appendChild(el("span", "", o.name));
 		if (o.name === currentName()) n.appendChild(el("span", "curmark", "（当前）"));
-		if (o.name === BUILTIN) n.appendChild(el("span", "badge end", "内置"));
+		if (isBuiltin(o)) n.appendChild(el("span", "badge end", "内置"));
 		else n.appendChild(el("span", "badge end", o.scope === "user" ? "用户" : "项目"));
 		const bound = boundRuns(o.name);
 		// Up to two bound runs name themselves inline; more collapse to a count
@@ -1282,8 +1392,8 @@ function renderDrawer() {
 			item.appendChild(det);
 		}
 		const acts = el("div", "acts");
-		const isBuiltin = o.name === BUILTIN;
-		const canRD = !isBuiltin && !bound.length;
+		const builtin = isBuiltin(o);
+		const canRD = !builtin && !bound.length;
 		if (canRD) {
 			const rn = el("button", "", "重命名");
 			rn.onclick = async ev => {
@@ -1356,7 +1466,7 @@ if (DOM) $("#newCfg").onclick = async () => {
 		for (;;) {
 			const name = await dlg({ title: "新建配置", input: uniqueName("新配置"), ok: "创建" });
 			if (!name) return;
-			if (option(name) || name === BUILTIN) { toast(`「${name}」已存在，请换一个名字`); continue; }
+			if (option(name)) { toast(`「${name}」已存在，请换一个名字`); continue; }
 			editing = name; editingScope = "project";
 			work = { qaModes: [], flowSelection: undefined, gates: undefined, execution: {}, roundLimits: {} };
 			dirty = true; sel = null; selKey = null;
@@ -1428,7 +1538,7 @@ async function doSave(scope, name, overwrite) {
 }
 function openSaveMode() { saveMode = true; openDrawer(); renderSaveBar(); renderDrawer(); }
 if (DOM) $("#save").onclick = () => {
-	if (!dirty && option(editing) && editing !== BUILTIN) { toast("没有未保存的修改"); return; }
+	if (!dirty && option(editing) && !isBuiltin(option(editing))) { toast("没有未保存的修改"); return; }
 	openSaveMode();
 };
 
@@ -1641,7 +1751,7 @@ async function doSelect() {
 		}
 		if (res.status && res.status !== "selected") { toast(res.reason || res.status); return; }
 		closing = true;
-		showClosed("已选择「" + editing + "」。这不是启动批准——宿主还会弹出原生确认。");
+		showClosed("已选择「" + editing + "」。请在对话中确认开始，配置选择本身不启动流程。");
 	} catch (e) { toast(e.message); }
 }
 if (DOM) $("#apply").onclick = async () => {
@@ -1717,7 +1827,7 @@ async function init() {
 if (DOM) init();
 
 if (typeof module !== "undefined") {
-	module.exports = { RESP, dis, setSel, nodeEnabled, setNodeEnabled, roundKey, roundOf, setRound, execOf, setExec, gatesAll, layersChanged, selectedRun, selectedRunTerminal, settleTerminal, buildGraph, scopeLabel, optionsFor, optCache, optionsErrorText, optionsErrorEl, shortRunId, runLabel, runRef, currentName, poll, POLL_DEAD_MS, NODE_W,
+	module.exports = { RESP, dis, setSel, nodeEnabled, setNodeEnabled, roundKey, roundOf, setRound, execOf, setExec, gatesAll, isBuiltin, layersChanged, selectedRun, selectedRunTerminal, settleTerminal, buildGraph, scopeLabel, optionsFor, optCache, sigOptKey, effectiveChoice, fillEfforts, nodeStatusText, optionsErrorText, optionsErrorEl, shortRunId, runLabel, runRef, currentName, poll, POLL_DEAD_MS, NODE_W,
 		env: {
 			get state() { return state; }, set state(v) { state = v; },
 			get winInfo() { return winInfo; }, set winInfo(v) { winInfo = v; },

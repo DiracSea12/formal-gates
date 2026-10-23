@@ -373,7 +373,7 @@ func TestPanelDOMIntakeIgnoresExistingRun(t *testing.T) {
 
 // cdpDOM drives the panel through the test-only CDP probe so the page runs at
 // an exact CSS device viewport --window-size cannot guarantee.
-func cdpDOM(t *testing.T, browser, url string, width, height int) string {
+func cdpDOM(t *testing.T, browser, url string, width, height int, screenshots ...string) string {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -381,8 +381,8 @@ func cdpDOM(t *testing.T, browser, url string, width, height int) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, node, filepath.Join("testdata", "cdp_probe.js"), browser, url,
-		fmt.Sprint(width), fmt.Sprint(height)).CombinedOutput()
+	args := append([]string{filepath.Join("testdata", "cdp_probe.js"), browser, url, fmt.Sprint(width), fmt.Sprint(height)}, screenshots...)
+	out, err := exec.CommandContext(ctx, node, args...).CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("cdp probe timed out:\n%.2000s", out)
 	}
@@ -453,6 +453,64 @@ func TestPanelDOMQAToggles(t *testing.T) {
 	keepDomWindowAlive(t, server, window.ID)
 	dump := runDOM(t, browser, window.URL+"&probe=qa")
 	domResults(t, dump)
+}
+
+func TestPanelDOMGateSelection(t *testing.T) {
+	browser := panelBrowser(t)
+	for _, directory := range []string{"available", "empty", "failed"} {
+		t.Run(directory, func(t *testing.T) {
+			home := panelHome(t)
+			root := t.TempDir()
+			configuration := settings.DefaultConfiguration()
+			if directory != "available" {
+				gates := []string{"unreported-gate"}
+				configuration.Gates = &gates
+			}
+			if _, err := settings.WriteConfiguration(root, home, "project", "门配置", configuration, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := settings.UseConfiguration(root, home, "project", "门配置", nil); err != nil {
+				t.Fatal(err)
+			}
+			gateDirectory := func(next http.Handler) http.Handler {
+				mux := http.NewServeMux()
+				mux.HandleFunc("GET /api/gates", func(w http.ResponseWriter, r *http.Request) {
+					if directory == "failed" {
+						http.Error(w, `{"error":"gate directory unavailable"}`, http.StatusServiceUnavailable)
+						return
+					}
+					gates := []map[string]string{}
+					if directory == "available" {
+						gates = []map[string]string{
+							{"id": "complexity-gate", "description": "检查职责与复杂度。\nCheck ownership and boundaries.\n" + strings.Repeat("UnbrokenGateDescription", 12) + "\n<em>保持文本</em>"},
+							{"id": "implementation-quality-gate"},
+						}
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"gates": gates})
+				})
+				mux.Handle("/", next)
+				return mux
+			}
+			server, _ := startDomServer(t, Backend{Root: root, Home: home}, make(chan struct{}, 4), execselMiddleware(&tupleLog{}), gateDirectory)
+			window, err := server.NewWindow("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			keepDomWindowAlive(t, server, window.ID)
+			dump := cdpDOM(t, browser, window.URL+"&probe=gates&directory="+directory, 1440, 900)
+			domResults(t, dump)
+			if directory == "available" {
+				out := os.Getenv("PANEL_SHOT_DIR")
+				if out == "" {
+					out = t.TempDir()
+				}
+				shot := filepath.Join(out, "gate-descriptions-mobile.png")
+				domResults(t, cdpDOM(t, browser, window.URL+"&probe=gates&directory=available&layout=1", 390, 844, shot))
+				t.Logf("gate description screenshot %s", shot)
+			}
+		})
+	}
 }
 
 // TestPanelDOMTwoRuns switches between two runs bound to different
@@ -541,7 +599,18 @@ type tupleLog struct {
 	entries []string
 }
 
-func (l *tupleLog) add(v string) { l.mu.Lock(); l.entries = append(l.entries, v); l.mu.Unlock() }
+func (l *tupleLog) add(v string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, v)
+	count := 0
+	for _, entry := range l.entries {
+		if entry == v {
+			count++
+		}
+	}
+	return count
+}
 func (l *tupleLog) all() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -563,7 +632,7 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /api/execution-options", func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
-			log.add(q.Get("configuration") + "|" + q.Get("node") + "|" + q.Get("platform") + "|" + q.Get("model"))
+			visit := log.add(q.Get("configuration") + "|" + q.Get("node") + "|" + q.Get("platform") + "|" + q.Get("model"))
 			platform := q.Get("platform")
 			platforms := []string{"codex", "zcode", "devin"}
 			installed := map[string]any{"codex": true, "zcode": true, "devin": false}
@@ -576,7 +645,7 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 					"platform":    "default",
 					"platforms":   platforms,
 					"installed":   installed,
-					"effective":   map[string]any{"provider": "default"},
+					"effective":   map[string]any{"provider": "codex"},
 					"unavailable": true,
 					"host":        true,
 				})
@@ -591,7 +660,7 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 					"platform":  "devin",
 					"platforms": platforms,
 					"installed": installed,
-					"effective": map[string]any{"provider": "devin"},
+					"effective": map[string]any{"provider": "codex"},
 					"catalogue": map[string]any{"models": []any{}, "source": "execsel fixture"},
 				})
 				return
@@ -599,14 +668,22 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 			if platform == "codex" {
 				time.Sleep(400 * time.Millisecond)
 			}
+			if platform == "codex" && q.Get("model") == "model-A" && visit == 2 {
+				http.Error(w, `{"error":"native directory temporarily unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
 			entries := []entry{{"model-A", []string{"a-low", "a-high"}, "a-low"}}
-			def := map[string]any{"model": "model-A", "effort": "a-low"}
+			def := map[string]any{"model": "model-A", "effort": "a-high"}
 			if platform == "zcode" {
 				entries = []entry{
 					{"model-B", []string{"b-low", "b-high"}, "b-low"},
 					{"model-B2", []string{"b2-low", "b2-high"}, "b2-low"},
 				}
-				def = map[string]any{"model": "model-B", "effort": "b-low"}
+				def = map[string]any{"model": "model-B", "effort": "b-high"}
+			}
+			if platform == "codex" && q.Get("model") == "model-A" && visit >= 3 {
+				entries = append(entries, entry{"fast", []string{"a-low", "a-high"}, "a-low"})
+				def = map[string]any{"model": "fast", "effort": "a-high"}
 			}
 			target := q.Get("model")
 			if target == "" {
@@ -615,6 +692,9 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 			models := []map[string]any{}
 			for _, e := range entries {
 				m := map[string]any{"value": e.value, "label": e.value}
+				if e.value == "fast" {
+					m["label"] = "快速"
+				}
 				if e.value == target {
 					m["efforts"] = e.efforts
 					m["defaultEffort"] = e.def
@@ -627,7 +707,7 @@ func execselMiddleware(log *tupleLog) func(http.Handler) http.Handler {
 				"platform":  platform,
 				"platforms": platforms,
 				"installed": installed,
-				"effective": map[string]any{"provider": platform, "model": q.Get("model")},
+				"effective": map[string]any{"provider": "codex"},
 				"catalogue": map[string]any{"models": models, "default": def, "source": "execsel fixture"},
 			})
 		})
@@ -691,22 +771,25 @@ func TestPanelDOMDynamicSelect(t *testing.T) {
 		if len(parts) != 4 {
 			t.Fatalf("recorded tuple malformed: %q", entry)
 		}
-		if parts[0] != "默认" && parts[0] != "devin配置" && parts[0] != "宿主配置" {
-			t.Fatalf("unsaved draft did not borrow the builtin base: %q", entry)
+		if parts[0] != "默认" || parts[1] != "development" {
+			t.Fatalf("catalogue query did not use the shared builtin context: %q", entry)
 		}
 	}
-	// Every queried (configuration, node, provider, model) tuple is its own
-	// cache entry: a cached model tuple answers without a query at all.
+	// Nodes and configurations share provider/model answers, including the
+	// same native catalogue reached through different saved overrides.
 	want := []string{
-		"默认|repair||",
-		"默认|repair|zcode|",
-		"默认|repair|zcode|model-B2",
-		"默认|repair|zcode|model-B",
-		"默认|repair|codex|",
-		"devin配置|repair|devin|",
-		"devin配置|repair|codex|",
-		"宿主配置|repair|default|",
-		"宿主配置|repair|codex|",
+		"默认|development||",
+		"默认|development|zcode|",
+		"默认|development|zcode|model-B2",
+		"默认|development|zcode|model-B",
+		"默认|development|codex|",
+		"默认|development|devin|",
+		"默认|development|default|",
+		"默认|development|codex|model-A",
+		"默认|development|codex|model-A",
+		"默认|development|codex|model-A",
+		"默认|development|codex|model-A",
+		"默认|development|zcode|",
 	}
 	if got := log.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("option queries = %v, want exactly %v", got, want)

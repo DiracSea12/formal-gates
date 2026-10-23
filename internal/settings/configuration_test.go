@@ -21,7 +21,7 @@ import (
 func TestNamedConfigurationsPreserveWorkflowChoicesAndScope(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	effective, options, err := LoadConfigurations(root, home)
-	if err != nil || len(options) != 1 || options[0].Name != DefaultConfigurationName || !options[0].Active || options[0].Source != "default" || effective.Configuration.FlowSelection != nil || effective.Configuration.Gates != nil || len(effective.Configuration.QAModes) != 0 || len(effective.Configuration.Execution) != 0 {
+	if err != nil || len(options) != 2 || options[0].Name != DefaultConfigurationName || !options[0].Active || options[0].Source != "default" || effective.Configuration.FlowSelection != nil || effective.Configuration.Gates != nil || len(effective.Configuration.QAModes) != 0 || len(effective.Configuration.Execution) != 0 {
 		t.Fatalf("built-in configuration: %+v %+v %v", effective, options, err)
 	}
 	user := filepath.Join(home, ".config", "formal-gates", "config.json")
@@ -40,7 +40,7 @@ func TestNamedConfigurationsPreserveWorkflowChoicesAndScope(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := UseConfiguration(root, home, "user", "2", nil); err != nil {
+	if _, err := UseConfiguration(root, home, "user", "3", nil); err != nil {
 		t.Fatal(err)
 	}
 	effective, _, err = LoadConfigurations(root, home)
@@ -63,7 +63,7 @@ func TestNamedConfigurationsPreserveWorkflowChoicesAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	effective, options, err = LoadConfigurations(root, home)
-	if err != nil || len(options) != 3 || effective.ConfigurationSource != project || !reflect.DeepEqual(effective.Configuration.QAModes, []string{"whitebox"}) || effective.Configuration.Gates == nil || len(*effective.Configuration.Gates) != 0 {
+	if err != nil || len(options) != 4 || effective.ConfigurationSource != project || !reflect.DeepEqual(effective.Configuration.QAModes, []string{"whitebox"}) || effective.Configuration.Gates == nil || len(*effective.Configuration.Gates) != 0 {
 		t.Fatalf("project override: %+v %v", effective, err)
 	}
 	var original Effective
@@ -104,59 +104,66 @@ func TestNamedConfigurationsPreserveWorkflowChoicesAndScope(t *testing.T) {
 }
 
 func TestBuiltinConfigurationCannotBeSavedOverEditedRenamedOrDeleted(t *testing.T) {
-	root, home := t.TempDir(), t.TempDir()
-	if _, err := SaveConfiguration(root, home, "project", "甲", "", nil); err != nil {
-		t.Fatal(err)
-	}
-	path := overlayPaths(root, home)[1]
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for operation, run := range map[string]func() error{
-		"save": func() error {
-			_, err := SaveConfiguration(root, home, "project", DefaultConfigurationName, "甲", nil)
-			return err
-		},
-		"set": func() error {
-			_, err := EditConfiguration(root, home, "project", DefaultConfigurationName, nil, func(*Configuration) error { return nil })
-			return err
-		},
-		"set active": func() error {
-			_, err := EditConfiguration(root, home, "project", "", nil, func(*Configuration) error { return nil })
-			return err
-		},
-		"delete": func() error {
-			_, err := DeleteConfiguration(root, home, "project", "1", configurationBindings(nil), nil)
-			return err
-		},
-		"rename from": func() error {
-			_, err := RenameConfiguration(root, home, "project", DefaultConfigurationName, "乙", configurationBindings(nil), nil)
-			return err
-		},
-		"rename onto": func() error {
-			_, err := RenameConfiguration(root, home, "project", "甲", DefaultConfigurationName, configurationBindings(nil), nil)
-			return err
-		},
-		"user save": func() error {
-			_, err := SaveConfiguration(root, home, "user", DefaultConfigurationName, "", nil)
-			return err
-		},
-		"user delete": func() error {
-			_, err := DeleteConfiguration(root, home, "user", DefaultConfigurationName, configurationBindings(nil), nil)
-			return err
-		},
-	} {
-		if err := run(); err == nil || !strings.Contains(err.Error(), "built-in configuration") {
-			t.Fatalf("%s of the built-in configuration was not rejected: %v", operation, err)
-		}
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("rejected built-in change wrote the project file: %s %v", after, err)
-	}
-	if _, err := os.Stat(overlayPaths(root, home)[0]); !os.IsNotExist(err) {
-		t.Fatalf("rejected built-in change wrote the user file: %v", err)
+	for _, name := range []string{DefaultConfigurationName, FullConfigurationName} {
+		t.Run(name, func(t *testing.T) {
+			root, home := t.TempDir(), t.TempDir()
+			if _, err := SaveConfiguration(root, home, "project", "甲", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := UseConfiguration(root, home, "project", name, nil); err != nil {
+				t.Fatal(err)
+			}
+			path := overlayPaths(root, home)[1]
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for operation, run := range map[string]func() error{
+				"save": func() error {
+					_, err := SaveConfiguration(root, home, "project", name, "甲", nil)
+					return err
+				},
+				"set": func() error {
+					_, err := EditConfiguration(root, home, "project", name, nil, func(*Configuration) error { return nil })
+					return err
+				},
+				"set active": func() error {
+					_, err := EditConfiguration(root, home, "project", "", nil, func(*Configuration) error { return nil })
+					return err
+				},
+				"delete": func() error {
+					_, err := DeleteConfiguration(root, home, "project", name, configurationBindings(nil), nil)
+					return err
+				},
+				"rename from": func() error {
+					_, err := RenameConfiguration(root, home, "project", name, "乙", configurationBindings(nil), nil)
+					return err
+				},
+				"rename onto": func() error {
+					_, err := RenameConfiguration(root, home, "project", "甲", name, configurationBindings(nil), nil)
+					return err
+				},
+				"user save": func() error {
+					_, err := SaveConfiguration(root, home, "user", name, "", nil)
+					return err
+				},
+				"user delete": func() error {
+					_, err := DeleteConfiguration(root, home, "user", name, configurationBindings(nil), nil)
+					return err
+				},
+			} {
+				if err := run(); err == nil || !strings.Contains(err.Error(), "built-in configuration") {
+					t.Fatalf("%s of the built-in configuration was not rejected: %v", operation, err)
+				}
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("rejected built-in change wrote the project file: %s %v", after, err)
+			}
+			if _, err := os.Stat(overlayPaths(root, home)[0]); !os.IsNotExist(err) {
+				t.Fatalf("rejected built-in change wrote the user file: %v", err)
+			}
+		})
 	}
 }
 
@@ -169,8 +176,50 @@ func TestSavedEntriesNamedLikeTheBuiltinAreIgnoredAndReported(t *testing.T) {
 	if err != nil || effective.ConfigurationName != DefaultConfigurationName || effective.ConfigurationSource != "default" || len(effective.Configuration.QAModes) != 0 {
 		t.Fatalf("shadowing entry replaced the built-in configuration: %+v %v", effective, err)
 	}
-	if len(options) != 2 || options[0].Source != "default" || !reflect.DeepEqual(options[0].Shadowed, []string{user, project}) || options[1].Name != "甲" || options[1].Shadowed != nil {
+	if len(options) != 3 || options[0].Source != "default" || !reflect.DeepEqual(options[0].Shadowed, []string{user, project}) || options[2].Name != "甲" || options[2].Shadowed != nil {
 		t.Fatalf("shadowing sources were not reported on the built-in option: %+v", options)
+	}
+}
+
+func TestFullRouteBuiltinSelectionCopyAndShadowing(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	effective, options, err := LoadConfigurations(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := SelectConfiguration(options, FullConfigurationName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.ConfigurationName != DefaultConfigurationName || len(effective.Configuration.QAModes) != 0 || full.Source != "default" || full.Configuration.FlowSelection != nil || full.Configuration.Gates != nil || len(full.Configuration.Execution) != 0 || len(full.Configuration.RoundLimits) != 0 || !reflect.DeepEqual(full.Configuration.QAModes, []string{"blackbox", "whitebox"}) {
+		t.Fatalf("builtin route values = %+v %+v", effective, full)
+	}
+	position, err := SelectConfiguration(options, strconv.Itoa(full.Position))
+	if err != nil || position.Name != FullConfigurationName {
+		t.Fatalf("full route position = %+v %v", position, err)
+	}
+	full.Configuration.QAModes[0] = "changed"
+	user, project := overlayPaths(root, home)[0], overlayPaths(root, home)[1]
+	putConfig(t, user, `{"configurations":{"全量路线":{"qaModes":["unknown"]}}}`)
+	putConfig(t, project, `{"configurations":{"全量路线":{"gates":[]}}}`)
+	_, options, err = LoadConfigurations(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err = SelectConfiguration(options, FullConfigurationName)
+	if err != nil || !reflect.DeepEqual(full.Configuration.QAModes, []string{"blackbox", "whitebox"}) || full.Configuration.Gates != nil || !reflect.DeepEqual(full.Shadowed, []string{user, project}) || len(options[0].Shadowed) != 0 {
+		t.Fatalf("builtin authority or shadow ownership = %+v %v", options, err)
+	}
+	if _, err := SaveConfiguration(root, home, "project", "全量副本", FullConfigurationName, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UseConfiguration(root, home, "project", FullConfigurationName, nil); err != nil {
+		t.Fatal(err)
+	}
+	effective, options, err = LoadConfigurations(root, home)
+	copy, selectErr := SelectConfiguration(options, "全量副本")
+	if err != nil || selectErr != nil || effective.ConfigurationName != FullConfigurationName || effective.ConfigurationSource != "default" || !reflect.DeepEqual(copy.Configuration, full.Configuration) {
+		t.Fatalf("copied/active full route = %+v %+v %v %v", effective, copy, err, selectErr)
 	}
 }
 
@@ -469,7 +518,7 @@ func TestDeleteAndRenameRejectConfigurationsBoundToUnfinishedRuns(t *testing.T) 
 	}
 	bound := configurationBindings(map[string][]string{"甲": {"run-one", "run-two"}})
 	_, deleteErr := DeleteConfiguration(root, home, "project", "甲", bound, nil)
-	_, renameErr := RenameConfiguration(root, home, "project", "2", "乙", bound, nil)
+	_, renameErr := RenameConfiguration(root, home, "project", "3", "乙", bound, nil)
 	for _, err := range []error{deleteErr, renameErr} {
 		if err == nil || !strings.Contains(err.Error(), "run-one") || !strings.Contains(err.Error(), "run-two") {
 			t.Fatalf("bound configuration change was not rejected with its runs: %v", err)
@@ -613,7 +662,7 @@ func TestConfigurationCopiesSerializeNamesAcrossLayers(t *testing.T) {
 				count = 1
 			}
 			effective, options, err := LoadConfigurations(root, home)
-			if err != nil || len(names) != count || len(options) != count+2 || effective.ConfigurationName != DefaultConfigurationName {
+			if err != nil || len(names) != count || len(options) != count+3 || effective.ConfigurationName != DefaultConfigurationName {
 				t.Fatalf("concurrent copies lost writes or bypassed revisions: %v %+v %v", names, options, err)
 			}
 			for i := 1; i <= count; i++ {
@@ -796,6 +845,14 @@ func TestWriteConfigurationRejectionsLeaveBothOverlaysUntouched(t *testing.T) {
 		},
 		"built-in name on overwrite": func() error {
 			_, err := WriteConfiguration(root, home, "project", DefaultConfigurationName, draft, true, nil)
+			return err
+		},
+		"full route on create": func() error {
+			_, err := WriteConfiguration(root, home, "project", FullConfigurationName, draft, false, nil)
+			return err
+		},
+		"full route on overwrite": func() error {
+			_, err := WriteConfiguration(root, home, "project", FullConfigurationName, draft, true, nil)
 			return err
 		},
 		"invalid round limit": func() error {

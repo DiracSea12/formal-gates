@@ -394,20 +394,29 @@ func (b Backend) EditPanelSetting(name, value string, expected map[string]string
 	return settings.Effective{}, fmt.Errorf("unknown setting %q", name)
 }
 
+type GateOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+}
+
 // Gates lists the gate candidates for the selected configuration the same way
 // the CLI does: package candidates minus the QA gates.
-func (b Backend) Gates() ([]string, error) {
+func (b Backend) Gates() ([]GateOption, error) {
 	admission, err := validate.ResolveEngineAdmission(b.Root, "")
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := prompts.PackageRouteCandidates(admission.Target)
+	catalog, err := prompts.LoadPromptCatalog(admission.Target)
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(candidates, func(gate string) bool {
-		return gate == prompts.BlackboxQAID || gate == prompts.WhiteboxQAID
-	}), nil
+	gates := []GateOption{}
+	for _, id := range catalog.RouteCandidates() {
+		if gate, found := catalog.Gate(id); found {
+			gates = append(gates, GateOption{ID: gate.ID, Description: gate.Description})
+		}
+	}
+	return gates, nil
 }
 
 // ExecutionOptions reads the native choices for one node of the selected

@@ -216,7 +216,7 @@ func TestSettingsNamedConfigurationCommandsUsePublishedChoices(t *testing.T) {
 			Node int `json:"node"`
 		} `json:"executionNodes"`
 	}
-	if err := json.Unmarshal(shown, &view); err != nil || !view.Effective.Values.PanelSelection || len(view.Fields) == 0 || len(view.QAModes) == 0 || len(view.RoundLimits) != len(settings.RoundLimitNodes) || len(view.Configurations) != 1 || view.Configurations[0].Name != "默认" || len(view.FlowNodes) != len(definition.MainFlowNodes()) || len(view.ExecutionNodes) != len(definition.ExecutionNodes()) {
+	if err := json.Unmarshal(shown, &view); err != nil || !view.Effective.Values.PanelSelection || len(view.Fields) == 0 || len(view.QAModes) == 0 || len(view.RoundLimits) != len(settings.RoundLimitNodes) || len(view.Configurations) != 2 || view.Configurations[0].Name != "默认" || len(view.FlowNodes) != len(definition.MainFlowNodes()) || len(view.ExecutionNodes) != len(definition.ExecutionNodes()) {
 		t.Fatalf("initial named choices: %s %v", shown, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
@@ -448,7 +448,7 @@ func TestSettingsRoundLimitsPanelFieldsRenameAndRevisions(t *testing.T) {
 	}
 	settingsCommand(t, root, home, "rename", "--configuration", "甲", "--name", "乙", "--revision", "project="+current.Revisions["project"], "--revision", "user=")
 	_, options, err := settings.LoadConfigurations(root, home)
-	if err != nil || len(options) != 2 || options[1].Name != "乙" || options[1].Configuration.RoundLimit("product-review") != 1 {
+	if err != nil || len(options) != 3 || options[1].Name != "乙" || options[1].Configuration.RoundLimit("product-review") != 1 {
 		t.Fatalf("renamed configuration: %+v %v", options, err)
 	}
 }

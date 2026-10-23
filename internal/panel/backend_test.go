@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -304,7 +305,7 @@ func TestPanelStateReadsMergedLibraryBindingsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Active != "项目层" || len(state.Configurations) != 3 || len(state.Runs) != 0 || len(state.Bindings) != 0 {
+	if state.Active != "项目层" || len(state.Configurations) != 4 || len(state.Runs) != 0 || len(state.Bindings) != 0 {
 		t.Fatalf("empty library projection = %+v", state)
 	}
 	sources := map[string]string{}
@@ -338,6 +339,38 @@ func TestPanelStateReadsMergedLibraryBindingsAndRuns(t *testing.T) {
 	}
 }
 
+func TestFullRouteBuiltinBindsByNameAcrossActivationAndReopen(t *testing.T) {
+	home := panelHome(t)
+	root, _, original := panelRun(t, home)
+	base := panelGit(t, root, "rev-parse", "HEAD")
+	admission, _ := panelAdmission(t, root, "full-route-target", "zcode")
+	_, run, err := facade.Start(facade.StartOptions{Root: root, Configuration: settings.FullConfigurationName,
+		Request: facade.StartRequest{RunID: "full-route-run", Provider: "zcode", VCS: "git", BaseSnapshot: base,
+			DefinitionSource: facade.DefaultDefinitionSource, DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: panelReceipt(root, "requirements.md")},
+		Admission: admission, Capacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Configuration.Name != settings.FullConfigurationName || !run.Configuration.Configuration.QAModeEnabled("blackbox") || !run.Configuration.Configuration.QAModeEnabled("whitebox") || run.Configuration.Configuration.Gates != nil {
+		t.Fatalf("bound full route = %+v", run.Configuration)
+	}
+	if _, err := settings.UseConfiguration(root, home, "project", settings.DefaultConfigurationName, nil); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := facade.Open(root, run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, err := reopened.Show()
+	if err != nil || shown.Configuration.Name != settings.FullConfigurationName || !shown.Configuration.Configuration.QAModeEnabled("blackbox") || !shown.Configuration.Configuration.QAModeEnabled("whitebox") {
+		t.Fatalf("bound name changed with active pointer = %+v %v", shown.Configuration, err)
+	}
+	state, err := (Backend{Root: root, Home: home}).State()
+	if err != nil || !slices.Contains(state.Bindings[settings.FullConfigurationName], run.RunID) || !slices.Contains(state.Bindings["工作"], original.RunID) {
+		t.Fatalf("configuration bindings = %+v %v", state.Bindings, err)
+	}
+}
+
 func TestPanelStateReportsEmptyProjectAndDanglingPointer(t *testing.T) {
 	home := panelHome(t)
 	root := t.TempDir()
@@ -346,7 +379,7 @@ func TestPanelStateReportsEmptyProjectAndDanglingPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Error != "" || state.Active != "默认" || len(state.Configurations) != 1 || len(state.Runs) != 0 {
+	if state.Error != "" || state.Active != "默认" || len(state.Configurations) != 2 || len(state.Runs) != 0 {
 		t.Fatalf("empty projection = %+v", state)
 	}
 	putJSON(t, projectConfigPath(root), `{"configuration":"不存在","configurations":{"甲":{}}}`)
@@ -357,7 +390,7 @@ func TestPanelStateReportsEmptyProjectAndDanglingPointer(t *testing.T) {
 	if !strings.Contains(state.Error, `configuration "不存在" does not exist`) {
 		t.Fatalf("dangling pointer error = %q", state.Error)
 	}
-	if len(state.Configurations) != 2 {
+	if len(state.Configurations) != 3 {
 		t.Fatalf("dangling projection fell back: %+v", state.Configurations)
 	}
 }
@@ -742,6 +775,9 @@ func TestPanelExecutionOptionsAndGatesNeedRegisteredRuntime(t *testing.T) {
 	// needs a real installed package identity and the launcher's invocation
 	// path, exactly as a project-scope install would leave them.
 	admission, registryPath := panelAdmission(t, root, "panel-gates", "zcode")
+	putJSON(t, filepath.Join(admission.Target, "gates", "quality.md"), "---\r\n简介: |\r\n  安装目录的简介\r\n  第二行\r\n---\r\nQUALITY_PROMPT_BODY")
+	putJSON(t, filepath.Join(admission.Target, "gates", "security.md"), "# 安全门\n简介: 正文不是简介字段")
+	putJSON(t, filepath.Join(admission.Target, "gates", "performance.md"), "---\ndescription: Installed performance description\n---\nPERFORMANCE_PROMPT_BODY")
 	putJSON(t, filepath.Join(admission.Target, "formal-gates.manifest.json"), `{}`)
 	receipt, err := validate.PackageReceipt(admission.Target)
 	if err != nil {
@@ -791,7 +827,25 @@ func TestPanelExecutionOptionsAndGatesNeedRegisteredRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(gates, "blackbox") || slices.Contains(gates, "whitebox") || !slices.Contains(gates, "quality") {
+	if slices.ContainsFunc(gates, func(gate GateOption) bool {
+		return gate.ID == "blackbox" || gate.ID == "whitebox" || gate.ID == "merge-gate"
+	}) || !slices.Contains(gates, GateOption{ID: "quality", Description: "安装目录的简介\n第二行"}) || !slices.Contains(gates, GateOption{ID: "security"}) || !slices.Contains(gates, GateOption{ID: "performance", Description: "Installed performance description"}) {
 		t.Fatalf("gates = %v", gates)
+	}
+	recorder := httptest.NewRecorder()
+	NewHandler(b, "127.0.0.1:1234", "token").ServeHTTP(recorder, httptest.NewRequest("GET", "http://127.0.0.1:1234/api/gates", nil))
+	if recorder.Code != 200 {
+		t.Fatalf("gate API: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Gates []GateOption `json:"gates"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || !slices.Equal(response.Gates, gates) {
+		t.Fatalf("gate API metadata differs: %+v %v", response, err)
+	}
+	for _, unwanted := range []string{"Content", "content", "QUALITY_PROMPT_BODY", "PERFORMANCE_PROMPT_BODY", `"description":""`} {
+		if strings.Contains(recorder.Body.String(), unwanted) {
+			t.Fatalf("gate API exposed content or empty metadata: %s", recorder.Body.String())
+		}
 	}
 }

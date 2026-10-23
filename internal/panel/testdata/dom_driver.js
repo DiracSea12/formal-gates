@@ -57,7 +57,13 @@ if (params.get("probe") === "bounds") {
 	const wantW = parseInt(params.get("wantW") || "390"), wantH = parseInt(params.get("wantH") || "844");
 	ok("viewport is exactly " + wantW + "x" + wantH + " css px (got " + window.innerWidth + "x" + window.innerHeight + ")", window.innerWidth === wantW && window.innerHeight === wantH);
 	ok("no horizontal overflow (scrollWidth=" + document.documentElement.scrollWidth + ")", document.documentElement.scrollWidth <= window.innerWidth + 1);
-	for (const b of [...document.querySelectorAll(".footer button")]) await inside(b, "footer button " + b.textContent.trim().slice(0, 8));
+	const boxes = [...document.querySelectorAll(".node")].map(n => ({ x: parseFloat(n.style.left), y: parseFloat(n.style.top), w: n.offsetWidth, h: n.offsetHeight }));
+	ok("graph cards do not overlap at narrow viewport", boxes.every((a, i) => boxes.slice(i + 1).every(b => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)));
+	const footerButtons = [...document.querySelectorAll(".footer button")].filter(b => b.getClientRects().length > 0);
+	ok("primary footer action is visible", footerButtons.length > 0 && footerButtons.includes(q("#apply")));
+	if (BOOT.mode !== "intake" && selectedRun()) ok("run footer hides standalone save and keeps one apply action", q("#save").getClientRects().length === 0 && footerButtons.length === 1);
+	else ok("library and intake expose save and apply", footerButtons.includes(q("#save")) && footerButtons.length === 2);
+	for (const b of footerButtons) await inside(b, "footer button " + b.textContent.trim().slice(0, 8));
 	await inside(q(".win"), ".win itself");
 	await inside(q(".footer"), "footer");
 	await inside(q("#winClose"), "window close button");
@@ -70,7 +76,8 @@ if (params.get("probe") === "bounds") {
 	await until(() => !q(".drawer.open"), 60);
 	// In-viewport is not enough: buttons must be clickable through their
 	// clipping ancestors too.
-	for (const b of [...document.querySelectorAll(".footer button")]) {
+	for (const b of footerButtons) {
+		await inside(b, "footer button after drawer closes " + b.textContent.trim().slice(0, 8));
 		const r = b.getBoundingClientRect();
 		const tag = b.textContent.trim().slice(0, 8);
 		// Edge midpoints avoid border-radius corners while still covering
@@ -81,7 +88,7 @@ if (params.get("probe") === "bounds") {
 		for (const [where, x, y] of pts) {
 			const hit = document.elementFromPoint(x, y);
 			const label = hit ? (hit.id || hit.className || hit.tagName) : "null";
-			ok("footer button " + tag + " hit@" + where + " (" + String(label).slice(0, 30) + ")",
+			ok("footer button " + tag + " hit@" + where + " (" + String(label).slice(0, 30) + ", rect " + [r.left, r.top, r.right, r.bottom].map(Math.round).join(",") + ")",
 				hit === b || (hit && b.contains(hit)) || (hit && hit.closest && hit.closest("button") === b));
 		}
 	}
@@ -240,6 +247,136 @@ if (params.get("probe") === "savecancel") {
 	return;
 }
 
+if (params.get("probe") === "gates") {
+	await until(() => nodeByResp("gate"));
+	click(nodeByResp("gate"));
+	await until(() => q('.inspector input[data-f="gates:all"]'), 120);
+	const all = () => q('.inspector input[data-f="gates:all"]');
+	const items = () => [...document.querySelectorAll('.inspector input[data-f^="gate:"]')];
+	const gates = ["complexity-gate", "implementation-quality-gate"];
+	const before = JSON.stringify(work);
+	ok("all gates label contains no future wording", all().parentElement.textContent.trim() === "全部门" && !q("#insp").textContent.includes("将来新增"));
+	if (params.get("directory") !== "available") {
+		ok("unavailable or empty directory cannot claim all selected", all().disabled && !all().checked && !all().indeterminate && items().length === 0);
+		ok("directory failure preserves saved selections", JSON.stringify(work) === before && work.gates[0] === "unreported-gate");
+		fin(); return;
+	}
+	ok("implicit all shows every ordinary gate checked", items().length === gates.length && all().checked && items().every(c => c.checked));
+	if (items().length !== gates.length) { fin(); return; }
+	const summary = q(".gate-summary"), options = q(".gate-options"), descriptions = [...document.querySelectorAll(".gate-description")];
+	const firstEntry = items()[0].closest(".gate-option"), nextEntry = items()[1].closest(".gate-option");
+	ok("all gates is a separate summary above indented entries", !!summary && !!options && summary.parentElement === options.parentElement && !summary.closest(".gate-options") && options.getBoundingClientRect().left > summary.getBoundingClientRect().left);
+	ok("summary has a distinct card surface", getComputedStyle(summary).backgroundColor !== getComputedStyle(firstEntry).backgroundColor && getComputedStyle(summary).borderTopStyle === "solid");
+	const description = firstEntry.querySelector(".gate-description");
+	const expectedDescription = "检查职责与复杂度。\nCheck ownership and boundaries.\n" + "UnbrokenGateDescription".repeat(12) + "\n<em>保持文本</em>";
+	ok("gate description preserves exact multiline metadata as plain text", descriptions.length === 1 && description.textContent === expectedDescription && !description.querySelector("em"));
+	ok("gate without a description has no placeholder", !nextEntry.querySelector(".gate-description") && nextEntry.textContent === gates[1]);
+	const descRect = description.getBoundingClientRect(), nextRect = nextEntry.getBoundingClientRect(), copyRect = firstEntry.querySelector(".gate-copy").getBoundingClientRect();
+	ok("long multiline description wraps within its own gate entry", getComputedStyle(description).whiteSpace === "pre-wrap" && getComputedStyle(description).overflowWrap === "anywhere" && description.scrollWidth <= description.clientWidth + 1 && descRect.right <= copyRect.right + 1 && descRect.bottom <= nextRect.top + 1);
+	if (params.get("layout") === "1") {
+		closeDrawer(); q(".gate-picker").scrollIntoView({ block: "start" });
+		fin(); return;
+	}
+	step = "shared quality gate options";
+	const gateKeys = [...document.querySelectorAll('.node[data-resp="gate"]')].map(n => n.dataset.key);
+	const initialExecution = structuredClone(execOf(work, "gate"));
+	const gateProvider = q('.inspector select[data-f="provider"]');
+	gateProvider.value = "zcode"; fire(gateProvider, "change");
+	const gateModel = await must(() => { const s = q('.inspector select[data-f="model"]'); return s && [...s.options].some(o => o.value === "model-B2") ? s : null; }, "shared gate platform models loaded", 240);
+	gateModel.value = "model-B2"; fire(gateModel, "change");
+	const gateEffort = await must(() => q('.inspector .efforts button[data-e="b2-high"]'), "shared gate effort loaded", 240);
+	click(gateEffort); click(items()[0]);
+	for (const key of gateKeys) {
+		click(q('.node[data-key="' + key + '"]'));
+		await must(() => q('.inspector select[data-f="model"]'), "gate inspector remains available at " + key);
+		ok("gate choices are shared at " + key, !items()[0].checked && items()[1].checked && all().indeterminate);
+		ok("execution choices are shared at " + key, q('.inspector select[data-f="provider"]').value === "zcode" && q('.inspector select[data-f="model"]').value === "model-B2" && q('.inspector .efforts button[data-e="b2-high"]').classList.contains("on"));
+		ok("gate cards share execution chips at " + key, [...document.querySelectorAll('.node[data-resp="gate"]')].every(n => /zcode/.test(n.textContent) && /model-B2/.test(n.textContent) && /b2-high/.test(n.textContent)));
+	}
+	click(q('.inspector button[data-f="enabled"]'));
+	ok("every quality gate closes through the same responsibility", [...document.querySelectorAll('.node[data-resp="gate"]')].every(n => n.classList.contains("disabled")));
+	click(q('.node[data-key="' + gateKeys[0] + '"]'));
+	click(await must(() => q('.inspector button[data-f="enabled"]'), "shared gate toggle restored"));
+	await must(() => all() && items().length === gates.length, "shared gate choices restored");
+	ok("every quality gate reopens through the same responsibility", [...document.querySelectorAll('.node[data-resp="gate"]')].every(n => !n.classList.contains("disabled")));
+	click(items()[0]);
+	const previousExecution = snapshot(); setExec(work, "gate", initialExecution); change(previousExecution); await renderInspector(true);
+	await must(() => all() && items().length === gates.length, "original gate execution restored");
+	const originalAll = all(), originalItems = items(), provider = q('.inspector select[data-f="provider"]');
+	const queries = path => performance.getEntriesByType("resource").filter(r => new URL(r.name).pathname === path).length;
+	const gateQueries = queries("/api/gates"), optionQueries = queries("/api/execution-options");
+	click(items()[0]);
+	ok("deselecting implicit all preserves remaining gates", JSON.stringify(work.gates) === JSON.stringify([gates[1]]) && !all().checked && all().indeterminate && !items()[0].checked && items()[1].checked);
+	click(items()[0]);
+	ok("selecting each gate makes all checked", all().checked && !all().indeterminate && work.gates.length === 2);
+	click(all());
+	ok("all can clear every gate", Array.isArray(work.gates) && work.gates.length === 0 && !all().checked && !all().indeterminate && items().every(c => !c.checked));
+	click(all());
+	ok("all can select every gate using omitted protocol value", gatesAll(work) && all().checked && items().every(c => c.checked));
+	ok("gate toggles retain controls and make no metadata requests", all() === originalAll && items().every((c, i) => c === originalItems[i]) && q('.inspector select[data-f="provider"]') === provider && queries("/api/gates") === gateQueries && queries("/api/execution-options") === optionQueries);
+	work.gates = [...gates, "unreported-gate"];
+	await renderInspector(true);
+	ok("explicit full list also checks all", all().checked && !all().indeterminate && items().every(c => c.checked));
+	click(items()[0]);
+	ok("individual edits preserve unreported saved gates", work.gates.includes("unreported-gate") && work.gates.includes(gates[1]) && !work.gates.includes(gates[0]) && all().indeterminate);
+	const saveGates = async () => {
+		click(q("#save")); await until(() => q("#saveBar .savebar")); click(row("门配置"));
+		await must(() => !dirtyShown() && all() && !all().disabled && items().length === gates.length, "save restores gate selection controls", 180);
+		return (await state()).configurations.find(c => c.name === "门配置").configuration;
+	};
+	let stored = await saveGates();
+	ok("save persists the actual selected gate contents", JSON.stringify(stored.gates) === JSON.stringify([gates[1], "unreported-gate"]));
+	click(row("默认")); await until(() => q("#cfgTitle").textContent === "默认");
+	click(row("门配置")); await until(() => q("#cfgTitle").textContent === "门配置");
+	click(nodeByResp("gate")); await until(() => items().length === 2);
+	ok("reopening restores partial selection and unreported value", all().indeterminate && !items()[0].checked && items()[1].checked && work.gates.includes("unreported-gate"));
+	click(all()); click(all());
+	stored = await saveGates();
+	ok("save persists explicit empty selection", Array.isArray(stored.gates) && stored.gates.length === 0);
+	click(all()); stored = await saveGates();
+	ok("save preserves omitted all selection semantics", stored.gates === undefined || stored.gates === null);
+	click(nodeByResp("repair")); click(nodeByResp("gate")); await until(() => items().length === 2);
+	ok("reopening implicit all still lists every gate", all().checked && items().every(c => c.checked));
+	const projected = await loadState(), previousRuns = projected.runs, previousRunID = runID;
+	projected.runs = [{ runId: "gate-lock", status: "RUNNING", configuration: editing, nodes: [{ node: "gate", enabled: true, editable: false }] }];
+	runID = "gate-lock"; await renderInspector(true);
+	ok("locked gate selection disables all and individual controls", all().disabled && items().every(c => c.disabled));
+	projected.runs = previousRuns; runID = previousRunID; render();
+	step = "complete route uses the same configuration library as other routes";
+	const libraryBefore = await state();
+	ok("full route is a builtin list entry with standard copy and activation actions", !!row("全量路线") && /内置/.test(row("全量路线").textContent) && !!btn(row("全量路线"), "复制") && !!btn(row("全量路线"), "设为默认") && !btn(row("全量路线"), "删除") && !btn(row("全量路线"), "重命名") && ![...document.querySelectorAll(".header button")].some(b => b.textContent === "全量路线"));
+	click(row("全量路线")); await until(() => q("#cfgTitle").textContent === "全量路线");
+	ok("selecting the builtin full route loads all nodes QA and ordinary gates cleanly", RESP.every(n => nodeEnabled(work, n.id)) && gatesAll(work) && !dirtyShown() && editing === "全量路线");
+	const libraryAfter = await state();
+	ok("selecting full route does not activate or start a run", libraryAfter.active === libraryBefore.active && JSON.stringify(libraryAfter.runs) === JSON.stringify(libraryBefore.runs));
+	click(nodeByResp("qa-blackbox"));
+	const warning = await until(() => q(".inspector .warning"));
+	ok("blackbox cost warning is visible and shared with its node tooltip", !!warning && warning.textContent === "黑盒 QA 涉及实际操作与验证，工作量、耗时和 token 消耗可能较大。" && nodeByResp("qa-blackbox").title === warning.textContent);
+	click(nodeByResp("qa-whitebox"));
+	ok("whitebox does not inherit the blackbox warning", !q(".inspector .warning") && !nodeByResp("qa-whitebox").title);
+	click(q("#save"));
+	const fullName = await until(() => q("#saveBar input[type=text]"));
+	setVal(fullName, "全量配置"); fire(fullName, "change"); click(btn(q("#saveBar"), "存为新配置"));
+	await until(() => !dirtyShown() && q("#cfgTitle").textContent === "全量配置", 180);
+	const savedRoute = (await state()).configurations.find(c => c.name === "全量配置").configuration;
+	ok("save-as persists all nodes both QA modes and omitted gates", RESP.every(n => nodeEnabled(savedRoute, n.id)) && savedRoute.qaModes.includes("blackbox") && savedRoute.qaModes.includes("whitebox") && gatesAll(savedRoute));
+	click(row("默认")); await until(() => q("#cfgTitle").textContent === "默认");
+	click(row("全量配置")); await until(() => q("#cfgTitle").textContent === "全量配置");
+	ok("reopening the saved complete route restores its selections", RESP.every(n => nodeEnabled(work, n.id)) && gatesAll(work));
+	click(btn(row("全量路线"), "复制"));
+	await until(() => q("#cfgTitle").textContent === "全量路线 副本" && !dirtyShown());
+	const copiedRoute = (await state()).configurations.find(c => c.name === "全量路线 副本");
+	ok("copy action preserves the actual builtin full selection", !!copiedRoute && RESP.every(n => nodeEnabled(copiedRoute.configuration, n.id)) && gatesAll(copiedRoute.configuration));
+	click(btn(row("全量路线"), "设为默认"));
+	await until(async () => (await state()).active === "全量路线");
+	ok("builtin full route can be activated through the standard list action", (await state()).active === "全量路线");
+	click(row("全量路线")); await until(() => q("#cfgTitle").textContent === "全量路线");
+	click(q("#save")); await until(() => q("#saveBar .savebar"));
+	ok("all builtin entries are excluded from overwrite targets", row("默认").classList.contains("skip") && row("全量路线").classList.contains("skip"));
+	esc();
+	fin(); return;
+}
+
 if (params.get("probe") === "qa") {
 	await until(() => document.querySelectorAll(".node").length >= 1);
 	step = "disabled qa anchors rendered";
@@ -319,22 +456,68 @@ if (params.get("probe") === "execsel") {
 		R.push("FAIL diag selP0-absent " + JSON.stringify({editing, sel, selKey, inspGen, inspSig, active: document.activeElement ? document.activeElement.outerHTML.slice(0, 500) : null, inspector: q("#insp") ? q("#insp").outerHTML.slice(0, 3000) : null, cacheKeys: Object.keys(optCache)}));
 		fin0(); fin(); return;
 	}
+	step = "shared default catalogue and selection tags";
+	ok("enabled stage shows selected tag", nodeByResp("repair").querySelector(".st").textContent === "已选择");
+	ok("disabled stage shows unselected tag", nodeByResp("qa-blackbox").querySelector(".st").textContent === "未选择");
+	const selectedCard = nodeByResp("development"), unselectedCard = nodeByResp("qa-blackbox");
+	const selectedStyle = getComputedStyle(selectedCard), unselectedStyle = getComputedStyle(unselectedCard);
+	ok("selected cards have a bright solid border and glow", selectedStyle.borderTopStyle === "solid" && selectedStyle.boxShadow !== "none");
+	ok("unselected cards use a separate dashed surface", unselectedStyle.borderTopStyle === "dashed" && unselectedStyle.backgroundColor !== selectedStyle.backgroundColor && unselectedStyle.boxShadow === "none");
+	const selectedTag = getComputedStyle(selectedCard.querySelector(".st")), unselectedTag = getComputedStyle(unselectedCard.querySelector(".st"));
+	ok("selection tags have distinct text and background colours", selectedTag.color !== unselectedTag.color && selectedTag.backgroundColor !== unselectedTag.backgroundColor);
+	ok("legend distinguishes selection from current editing", q(".legend").textContent.includes("已选择") && q(".legend").textContent.includes("未选择") && q(".legend").textContent.includes("当前编辑"));
+	const cacheCount = Object.keys(optCache).length;
+	for (const resp of RESP) {
+		click(nodeByResp(resp.id));
+		await until(() => q('.inspector select[data-f="provider"]'), 60);
+		ok("default catalogue renders immediately for " + resp.id, !q(".inspector .lockmsg.load"));
+	}
+	ok("all nodes share one default catalogue entry", Object.keys(optCache).length === cacheCount);
+	click(nodeByResp("repair"));
+	await until(() => q('.inspector select[data-f="provider"]'), 60);
+	const defaultEffort = q('.inspector .efforts button[data-e=""]');
+	ok("omitted effort selects follow default", !!defaultEffort && defaultEffort.classList.contains("on") && !execOf(work, "repair").reasoningEffort);
+	ok("follow default shows configured effort ahead of the model recommendation", defaultEffort.textContent === "跟随默认（a-high）");
+	ok("default model names the reported platform model", q('.inspector select[data-f="model"]').options[0].textContent === "跟随默认（model-A）");
+	ok("current editing keeps a blue border distinct from enabled nodes", getComputedStyle(nodeByResp("repair")).borderTopColor !== getComputedStyle(nodeByResp("development")).borderTopColor);
 	step = "committed provider change refreshes model list in place";
-	selP0.focus();
-	selP0.value = "zcode"; fire(selP0, "change");
+	const sharedProvider = q('.inspector select[data-f="provider"]');
+	sharedProvider.focus();
+	const roundBeforeProvider = q('.inspector input[data-f="round"]'), toggleBeforeProvider = q('.inspector button[data-f="enabled"]');
+	const platformOptionsBefore = [...sharedProvider.options];
+	sharedProvider.value = "zcode"; fire(sharedProvider, "change");
+	ok("provider remains the same object while dependencies load", q('.inspector select[data-f="provider"]') === sharedProvider && [...sharedProvider.options].every((o, i) => o === platformOptionsBefore[i]));
+	ok("provider commit preserves round and toggle objects", q('.inspector input[data-f="round"]') === roundBeforeProvider && q('.inspector button[data-f="enabled"]') === toggleBeforeProvider);
 	const selM = await until(() => { const m = q('.inspector select[data-f="model"]'); return m && [...m.options].some(o => o.value === "model-B") ? m : null; }, 240);
 	ok("model select refreshed to the committed provider", !!selM);
 	ok("old provider model absent after commit", !!selM && ![...selM.options].some(o => o.value === "model-A"));
-	ok("focus restored on the rebuilt provider select", document.activeElement === q('.inspector select[data-f="provider"]'));
+	ok("platform switch follows that platform's configured effort", q('.inspector .efforts button[data-e=""]').textContent === "跟随默认（b-high）" && !execOf(work, "repair").reasoningEffort);
+	ok("platform switch recomputes the default model name", q('.inspector select[data-f="model"]').options[0].textContent === "跟随默认（model-B）");
+	ok("provider focus survives dependent updates", document.activeElement === q('.inspector select[data-f="provider"]'));
 	step = "committed model change fills only the effort row";
 	selM.focus();
+	const modelOptionsBefore = [...selM.options];
 	selM.value = "model-B2"; fire(selM, "change");
+	ok("model commit preserves provider and model objects while efforts load", q('.inspector select[data-f="provider"]') === sharedProvider && q('.inspector select[data-f="model"]') === selM && [...selM.options].every((o, i) => o === modelOptionsBefore[i]));
 	ok("model commit keeps the catalogue mounted", !q(".inspector .lockmsg.load") && !!q('.inspector select[data-f="model"]'));
 	ok("model select holds committed value", q('.inspector select[data-f="model"]') && q('.inspector select[data-f="model"]').value === "model-B2");
 	ok("only the effort row waits for the tuple's own answer", !!q(".inspector .efforts .hint") && /正在获取强度档/.test(q(".inspector .efforts .hint").textContent));
 	ok("model-specific efforts rendered", (await until(() => [...document.querySelectorAll(".inspector .efforts button")].some(b => b.textContent === "b2-high"), 240)) !== null);
 	ok("big placeholder never appeared during the fill", !q(".inspector .lockmsg.load"));
-	ok("focus restored on the rebuilt model select", document.activeElement === q('.inspector select[data-f="model"]'));
+	ok("model focus survives effort updates", document.activeElement === q('.inspector select[data-f="model"]'));
+	ok("model change keeps effort following defaults", q('.inspector .efforts button[data-e=""]').classList.contains("on") && !execOf(work, "repair").reasoningEffort);
+	ok("model switch keeps the platform's configured effort ahead of recommendations", q('.inspector .efforts button[data-e=""]').textContent === "跟随默认（b-high）");
+	ok("explicit model does not replace the follow-default name", q('.inspector select[data-f="model"]').options[0].textContent === "跟随默认（model-B）");
+	const effortButton = q('.inspector .efforts button[data-e="b2-high"]');
+	click(effortButton);
+	ok("effort choice preserves upstream controls and its own button", q('.inspector select[data-f="provider"]') === sharedProvider && q('.inspector select[data-f="model"]') === selM && q('.inspector input[data-f="round"]') === roundBeforeProvider && q('.inspector button[data-f="enabled"]') === toggleBeforeProvider && q('.inspector .efforts button[data-e="b2-high"]') === effortButton);
+	ok("explicit effort is preserved in the draft", execOf(work, "repair").reasoningEffort === "b2-high" && q('.inspector .efforts button[data-e="b2-high"]').classList.contains("on"));
+	click(q('.inspector .efforts button[data-e=""]'));
+	ok("follow default clears the explicit effort", execOf(work, "repair").reasoningEffort === "" && q('.inspector .efforts button[data-e=""]').classList.contains("on"));
+	ok("restoring follow default preserves the native configured value as display only", q('.inspector .efforts button[data-e=""]').textContent === "跟随默认（b-high）" && execOf(work, "repair").reasoningEffort === "");
+	selM.blur(); await poll();
+	ok("polling preserves locally updated control objects", q('.inspector select[data-f="provider"]') === sharedProvider && q('.inspector select[data-f="model"]') === selM && q('.inspector input[data-f="round"]') === roundBeforeProvider && q('.inspector button[data-f="enabled"]') === toggleBeforeProvider);
+
 	step = "a new model tuple fills its own effort row once";
 	const selM2 = q('.inspector select[data-f="model"]');
 	selM2.value = "model-B"; fire(selM2, "change");
@@ -347,9 +530,8 @@ if (params.get("probe") === "execsel") {
 	ok("cached model tuple renders efforts instantly", (await until(() => [...document.querySelectorAll(".inspector .efforts button")].some(b => b.textContent === "b2-high"), 30)) !== null);
 	ok("cached model tuple keeps the catalogue mounted", !q(".inspector .lockmsg.load"));
 	step = "reversed same-node responses keep only latest form";
-	// The first commit detaches the select synchronously while its slower
-	// response is still in flight; dispatching the next commit on that same
-	// element models the user changing their mind before the refresh lands.
+	// The provider stays mounted while its slower response is in flight;
+	// reversing that same control must give ownership to the latest choice.
 	const selP1 = q('.inspector select[data-f="provider"]');
 	selP1.value = "codex"; fire(selP1, "change");
 	selP1.value = "zcode"; fire(selP1, "change");
@@ -361,7 +543,7 @@ if (params.get("probe") === "execsel") {
 	ok("round field rendered exactly once", document.querySelectorAll('.inspector input[data-f="round"]').length === 1);
 	// The late codex reply still lands in the cache — under its own tuple,
 	// where it can never reach the rendered zcode form.
-	const staleEntry = await until(() => optCache["未存配置|repair|codex|"] ? optCache["未存配置|repair|codex|"] : null, 240);
+	const staleEntry = await until(() => Object.values(optCache).find(o => o.platform === "codex" && o.catalogue) || null, 240);
 	ok("stale provider response isolated in its own tuple", !!staleEntry && !!staleEntry.catalogue && staleEntry.catalogue.models.some(m => m.value === "model-A"));
 	step = "saved uninstalled provider stays visible marked";
 	click(row("devin配置"));
@@ -374,7 +556,7 @@ if (params.get("probe") === "execsel") {
 	ok("saved uninstalled provider marked and disabled", !!devOpt && devOpt.disabled && /未安装/.test(devOpt.textContent));
 	ok("uninstalled platform names the PATH check", !!devOpt && devOpt.title === "可执行文件不在 PATH（未安装或未加环境变量）");
 	ok("saved uninstalled provider stays selected", !!devOpt && devOpt.selected && pSel2.value === "devin");
-	ok("effective provider marked in the default label", !!pSel2 && /未安装/.test(pSel2.options[0].textContent));
+	ok("follow-default provider label keeps the run platform", !!pSel2 && /codex/.test(pSel2.options[0].textContent) && !/未安装/.test(pSel2.options[0].textContent));
 	ok("empty catalogue keeps only the default model entry", !!q('.inspector select[data-f="model"]') && q('.inspector select[data-f="model"]').options.length === 1);
 	ok("unreported effort list noted", (await until(() => { const h = q(".inspector .efforts .hint"); return h && /该平台未报告强度档/.test(h.textContent) ? h : null; }, 60)) !== null);
 	if (pSel2) {
@@ -399,7 +581,49 @@ if (params.get("probe") === "execsel") {
 		pSel.value = "codex"; fire(pSel, "change");
 		const fixed2 = await until(() => { const m = q('.inspector select[data-f="model"]'); return m && [...m.options].some(o => o.value === "model-A") ? m : null; }, 240);
 		ok("host path also recovers on an adaptered platform", !!fixed2);
+		ok("host recovery keeps the platform control with an accurate run-default label", q('.inspector select[data-f="provider"]') === pSel && /跟随 run 默认/.test(pSel.options[0].textContent) && /codex/.test(pSel.options[0].textContent));
 	}
+	step = "manual directory refresh preserves draft and retries errors";
+	const explicitModel = q('.inspector select[data-f="model"]');
+	explicitModel.value = "model-A"; fire(explicitModel, "change");
+	await until(() => !q('.inspector button[data-f="refresh-options"]').disabled, 240);
+	const beforeRefresh = JSON.stringify(work), beforeDirty = dirtyShown();
+	const modelFocus = q('.inspector select[data-f="model"]'); modelFocus.focus();
+	const refresh = q('.inspector button[data-f="refresh-options"]');
+	click(refresh); click(refresh);
+	ok("manual refresh disables repeated requests while loading", refresh.disabled && /正在获取/.test(refresh.textContent));
+	ok("manual refresh leaves current selections mounted", q('.inspector select[data-f="model"]').value === "model-A");
+	ok("refresh failure keeps a retry button", (await until(() => q('.inspector input[data-f="exec:model"]') && !q('.inspector button[data-f="refresh-options"]').disabled, 240)) !== null);
+	ok("failure preserves the explicit model", q('.inspector input[data-f="exec:model"]').value === "model-A" && JSON.stringify(work) === beforeRefresh);
+	const retryFocus = q('.inspector input[data-f="exec:model"]'); retryFocus.focus();
+	click(q('.inspector button[data-f="refresh-options"]'));
+	const refreshedModel = await until(() => { const m = q('.inspector select[data-f="model"]'); return m && m.options[0].textContent === "跟随默认（快速）" ? m : null; }, 240);
+	ok("retry obtains refreshed native names and maps the default label", !!refreshedModel);
+	ok("refreshed catalogue preserves explicit model and draft", !!refreshedModel && refreshedModel.value === "model-A" && JSON.stringify(work) === beforeRefresh && dirtyShown() === beforeDirty);
+	ok("refreshed effort still follows the configured native value", q('.inspector .efforts button[data-e=""]').textContent === "跟随默认（a-high）");
+	refreshedModel.focus();
+	click(q('.inspector button[data-f="refresh-options"]'));
+	await until(() => !q('.inspector button[data-f="refresh-options"]').disabled, 240);
+	ok("successful refresh preserves the focused model control", document.activeElement === q('.inspector select[data-f="model"]'));
+	ok("successful refresh preserves the dirty draft and selections", JSON.stringify(work) === beforeRefresh && q('.inspector select[data-f="model"]').value === "model-A");
+	setExec(work, "development", { provider: "codex", model: "model-A" });
+	click(nodeByResp("development"));
+	ok("another node shares the refreshed catalogue without loading", !q('.inspector .lockmsg.load') && q('.inspector select[data-f="model"]').options[0].textContent === "跟随默认（快速）");
+
+	step = "late option replies respect current node locks";
+	click(nodeByResp("repair"));
+	const projected = await loadState(), previousRuns = projected.runs, previousRunID = runID;
+	const lockState = { node: "repair", enabled: true, editable: true };
+	projected.runs = [{ runId: "options-lock", status: "RUNNING", configuration: editing, nodes: [lockState] }];
+	runID = "options-lock"; render();
+	const lockingProvider = q('.inspector select[data-f="provider"]');
+	lockingProvider.value = "zcode"; fire(lockingProvider, "change");
+	lockState.editable = false;
+	await until(() => q('.inspector select[data-f="model"]') && !q('.inspector button[data-f="refresh-options"]').disabled, 240);
+	ok("late response keeps retained provider and new model fields locked", q('.inspector select[data-f="provider"]') === lockingProvider && lockingProvider.disabled && q('.inspector select[data-f="model"]').disabled && [...document.querySelectorAll('.inspector .efforts button')].every(b => b.disabled));
+	ok("read-only option refresh remains available for a locked node", !q('.inspector button[data-f="refresh-options"]').disabled);
+	projected.runs = previousRuns; runID = previousRunID; render();
+
 	fin();
 	return;
 }
@@ -454,6 +678,9 @@ if (params.get("probe") === "intakectx") {
 	ok("run selector hidden during intake", !q("#runSel") || q("#runSel").style.display === "none");
 	ok("intake header announces a new run", !!(q("#runinfo") && q("#runinfo").textContent.includes("受理阶段/新建run")));
 	ok("intake graph marked schematic", [...document.querySelectorAll(".group")].some(g => g.textContent.includes("示意图")));
+	ok("schematic shows an ordinary gate for each development batch", !!q('.node[data-key="n-gate-0"]') && !!q('.node[data-key="n-gate-1"]'));
+	const schematicNodes = [...document.querySelectorAll(".node")].map(n => ({ x: parseFloat(n.style.left), y: parseFloat(n.style.top), w: n.offsetWidth, h: n.offsetHeight }));
+	ok("schematic node boxes do not overlap", schematicNodes.every((a, i) => schematicNodes.slice(i + 1).every(b => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)));
 	for (const id of ["product-review", "start-readiness", "development", "qa-blackbox", "qa-whitebox", "gate", "repair"]) {
 		click(nodeByResp(id));
 		const tg = await until(() => q(".inspector .tg"), 60);
@@ -557,11 +784,11 @@ const copy = await until(() => row("默认 副本"));
 step="builtin copy creates 默认 副本";ok("builtin copy creates 默认 副本", !!copy);
 step="copy carries scope badge";ok("copy carries scope badge", !!(copy && copy.querySelector(".badge.end") && /用户|项目/.test(copy.querySelector(".badge.end").textContent)));
 
-// select copy; toggle a QA node; dirty guard on switch
+// select copy; toggle the gate node; dirty guard on switch
 click(row("默认 副本"));
 await until(() => q("#cfgTitle").textContent === "默认 副本");
 click(nodeByResp("gate"));
-const enabled = await until(() => q(".inspector input[type=checkbox]"));
+const enabled = await until(() => q('.inspector button.tg[data-f="enabled"]'));
 click(enabled);
 step="edit marks draft dirty";ok("edit marks draft dirty", await until(() => q("#dirtyBadge") && q("#dirtyBadge").style.display !== "none", 20) !== null);
 
@@ -582,7 +809,7 @@ step="discard switches cleanly";ok("discard switches cleanly", q("#dirtyBadge").
 click(row("默认 副本"));
 await until(() => q("#cfgTitle").textContent === "默认 副本");
 click(nodeByResp("gate"));
-const enabled2 = await until(() => q(".inspector input[type=checkbox]"));
+const enabled2 = await until(() => q('.inspector button.tg[data-f="enabled"]'));
 click(enabled2);
 click(q("#winClose"));
 const dlg3 = await until(() => q(".dlg"));
@@ -598,7 +825,7 @@ step="save-mode current target writes without extra confirm";ok("save-mode curre
 
 // dirty again; save-mode other target asks once then overwrites
 click(nodeByResp("gate"));
-const enabled3 = await until(() => q(".inspector input[type=checkbox]"));
+const enabled3 = await until(() => q('.inspector button.tg[data-f="enabled"]'));
 click(enabled3);
 click(q("#save"));
 await until(() => !!q("#saveBar .savebar"), 30);
@@ -611,7 +838,7 @@ step="overwrite switched editing to target";ok("overwrite switched editing to ta
 
 // save-as-new through the drawer name field
 click(nodeByResp("gate"));
-const enabled4 = await until(() => q(".inspector input[type=checkbox]"));
+const enabled4 = await until(() => q('.inspector button.tg[data-f="enabled"]'));
 click(enabled4);
 click(q("#save"));
 const nameInput = await until(() => q("#saveBar input[type=text]"));

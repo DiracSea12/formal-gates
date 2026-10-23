@@ -53,6 +53,13 @@ function eq(name, got, want) { check(name, JSON.stringify(got) === JSON.stringif
 	check("non-empty list is explicit", !A.gatesAll({ gates: ["merge"] }));
 }
 
+// --- builtin presentation follows the configuration library source ---
+{
+	check("default-source configurations are builtin regardless of name", A.isBuiltin({ name: "全量路线", source: "default" }));
+	check("saved configurations are writable regardless of display name", !A.isBuiltin({ name: "默认", source: "/project/config.json", scope: "project" }));
+	eq("builtin scope label comes from source", A.scopeLabel({ name: "全量路线", source: "default" }), "内置");
+}
+
 // --- external revision change detection per layer ---
 {
 	A.env.baselineRev = { user: "u1", project: "p1" };
@@ -135,20 +142,21 @@ function eq(name, got, want) { check(name, JSON.stringify(got) === JSON.stringif
 	check("verification->repair edge", g.edges.some(e => e.a === "v-gate" && e.b === "v-repair"));
 	check("repair->verification loop edge", g.edges.some(e => e.a === "v-repair" && e.cls === "loop"));
 	check("schematic merge is a non-configurable operation", g.nodes.some(n => n.key === "op-merge" && n.op === true && !n.resp));
+	check("schematic batch gates separate consecutive development", g.edges.some(e => e.a === "n-dev-0" && e.b === "n-gate-0") && g.edges.some(e => e.a === "n-gate-0" && e.b === "n-dev-1") && g.edges.some(e => e.a === "n-dev-1" && e.b === "n-gate-1"));
 }
 {
 	A.env.state = { runs: [{
 		runId: "r1", status: "RUNNING", configuration: "工作",
 		flow: { planConfirmed: true, developmentBatches: [
-			{ id: "b1", required: true, status: "COMPLETE" },
-			{ id: "b2", required: true, dependsOn: ["b1"], status: "RUNNING" },
+			{ id: "b1", required: true, status: "COMPLETE", gate: { status: "PASS", selected: ["quality"] } },
+			{ id: "b2", required: true, dependsOn: ["b1"], status: "RUNNING", gate: { status: "QUEUED", selected: ["quality"] } },
 			{ id: "sb1", owner: "core", required: false },
 			{ id: "sb2", owner: "core", required: false, dependsOn: ["sb1"] },
 		], enteredMainlineSlices: ["core"] },
 		slices: [{ id: "core", runId: "c1", status: "RUNNING", enteredMainline: true,
 			flow: { planConfirmed: true, developmentBatches: [
-				{ id: "sb1", required: true, status: "COMPLETE" },
-				{ id: "sb2", required: true, dependsOn: ["sb1"], status: "RUNNING" },
+				{ id: "sb1", required: true, status: "COMPLETE", gate: { status: "PASS", selected: ["quality"] } },
+				{ id: "sb2", required: true, dependsOn: ["sb1"], status: "RUNNING", gate: { status: "RUNNING", selected: ["quality"] } },
 			] },
 		}],
 	}] };
@@ -158,10 +166,12 @@ function eq(name, got, want) { check(name, JSON.stringify(got) === JSON.stringif
 	const keys = new Set(g.nodes.map(n => n.key));
 	const edge = (a, b) => g.edges.some(e => e.a === a && e.b === b);
 	check("rooted master batch hangs off readiness", edge("n-start-readiness", "n-dev-b1"));
-	check("master batch dependency edge", edge("n-dev-b1", "n-dev-b2"));
+	check("master batch gate precedes dependent implementation", edge("n-dev-b1", "n-gate-b1") && edge("n-gate-b1", "n-dev-b2") && !edge("n-dev-b1", "n-dev-b2"));
+	check("master batch gate uses its engine status", g.nodes.find(n => n.key === "n-gate-b1").gateStatus === "PASS" && g.nodes.find(n => n.key === "n-gate-b2").gateStatus === "QUEUED");
 	check("slice batches rendered from child flow", keys.has("sl-dev-core-sb1") && keys.has("sl-dev-core-sb2"));
-	check("slice batch serial edge", edge("sl-dev-core-sb1", "sl-dev-core-sb2"));
-	check("slice owns its gate", keys.has("sl-gate-core") && edge("sl-dev-core-sb2", "sl-gate-core"));
+	check("slice batch gate precedes dependent implementation", edge("sl-dev-core-sb1", "sl-batch-gate-core-sb1") && edge("sl-batch-gate-core-sb1", "sl-dev-core-sb2") && !edge("sl-dev-core-sb1", "sl-dev-core-sb2"));
+	check("slice batch gate uses its engine status", g.nodes.find(n => n.key === "sl-batch-gate-core-sb2").gateStatus === "RUNNING");
+	check("slice owns its gate", keys.has("sl-gate-core") && edge("sl-batch-gate-core-sb2", "sl-gate-core"));
 	check("slice batches carry no QA", !g.nodes.some(n => n.key.startsWith("sl-") && n.resp && n.resp.startsWith("qa")));
 	const merge = g.nodes.find(n => n.key === "op-merge");
 	check("merge is a non-configurable operation", !!merge && merge.op === true && !merge.resp);
@@ -236,7 +246,25 @@ function eq(name, got, want) { check(name, JSON.stringify(got) === JSON.stringif
 	A.env.runID = "r1";
 	A.env.work = { flowSelection: { disabled: [] }, qaModes: [] };
 	const g = A.buildGraph();
-	check("forward cross-slice edge resolves", g.edges.some(e => e.a === "sl-dev-z-za" && e.b === "sl-dev-a-ab"));
+	check("forward cross-slice gate edge resolves", g.edges.some(e => e.a === "sl-batch-gate-z-za" && e.b === "sl-dev-a-ab"));
+	A.env.runID = ""; A.env.state = { runs: [] };
+}
+
+// Independent batches have their own gates and retain parallel readiness.
+{
+	A.env.state = { runs: [{ runId: "parallel", configuration: "工作", flow: { planConfirmed: true, developmentBatches: [
+		{ id: "left", required: true, gate: { status: "DISABLED", selected: [] } },
+		{ id: "right", required: true, gate: { status: "NOT_APPLICABLE", selected: [] } },
+	] } }] };
+	A.env.runID = "parallel";
+	A.env.work = { flowSelection: { disabled: ["gate"] }, qaModes: ["blackbox"] };
+	const g = A.buildGraph();
+	const edge = (a, b) => g.edges.some(e => e.a === a && e.b === b);
+	check("independent batches both leave readiness", edge("n-start-readiness", "n-dev-left") && edge("n-start-readiness", "n-dev-right"));
+	check("independent batch gates both feed final verification", edge("n-gate-left", "v-gate") && edge("n-gate-right", "v-gate"));
+	check("independent batches are not serialized by the diagram", !edge("n-gate-left", "n-dev-right") && !edge("n-gate-right", "n-dev-left"));
+	check("disabled and spike gate projection stays explicit", g.nodes.find(n => n.key === "n-gate-left").gateStatus === "DISABLED" && g.nodes.find(n => n.key === "n-gate-right").gateStatus === "NOT_APPLICABLE");
+	for (const [status, label] of Object.entries({ DISABLED: "未启用", NOT_APPLICABLE: "不适用", QUEUED: "待验证", RUNNING: "运行中", PASS: "已通过", FAIL: "未通过" })) eq("batch gate status " + status, A.nodeStatusText("gate", status), label);
 	A.env.runID = ""; A.env.state = { runs: [] };
 }
 
@@ -284,83 +312,148 @@ function eq(name, got, want) { check(name, JSON.stringify(got) === JSON.stringif
 	delete global.document;
 }
 
-// --- stale execution-option responses cannot poison another node's cache ---
+// --- effort labels prefer execution defaults and native configuration ---
+{
+	global.document = { createElement: () => ({ children: [], dataset: {}, appendChild(c) { this.children.push(c); } }) };
+	const answer = {
+		effective: { provider: "p", reasoningEffort: "formal-effort" },
+		catalogue: { models: [{ value: "m", efforts: ["low", "high"], defaultEffort: "low" }, { value: "other", efforts: ["low", "high"], defaultEffort: "low" }], default: { model: "m", effort: "high" } },
+	};
+	const buttons = (options, ex) => {
+		const row = document.createElement("div");
+		A.fillEfforts(row, options, ex, false, false);
+		return row.children;
+	};
+	eq("formal execution effort precedes native configuration", buttons(answer, {})[0].textContent, "跟随默认（formal-effort）");
+	const native = { ...answer, effective: { provider: "p" } };
+	const following = buttons(native, {});
+	eq("native configured high precedes recommended low", following[0].textContent, "跟随默认（high）");
+	check("following defaults highlights only the empty choice", following[0].className === "on" && !following[2].className);
+	eq("changing model keeps native configured effort", buttons(native, { model: "other" })[0].textContent, "跟随默认（high）");
+	const explicit = buttons(native, { reasoningEffort: "low" });
+	check("explicit effort remains selected ahead of the follow choice", !explicit[0].className && explicit[1].className === "on");
+	const otherPlatform = { ...answer, platform: "other-platform", catalogue: { ...answer.catalogue, default: { model: "m", effort: "other-high" } } };
+	eq("another platform clears formal effort and uses its own native default", buttons(otherPlatform, { provider: "other-platform" })[0].textContent, "跟随默认（other-high）");
+	const recommended = { ...native, catalogue: { ...native.catalogue, default: { model: "m" } } };
+	eq("model recommendation fills an unreported native effort", buttons(recommended, {})[0].textContent, "跟随默认（low）");
+	eq("unreported native facts keep the default unspecified", buttons({ effective: {}, catalogue: { models: [] } }, {})[0].textContent, "跟随默认");
+	delete global.document;
+}
+
+// --- idle run projections leave selection labels to the current draft ---
+{
+	const node = { node: "repair", enabled: false, editable: true };
+	A.env.state = { runs: [{ runId: "labels", configuration: "labels", status: "RUNNING", nodes: [node] }] };
+	A.env.editing = "labels"; A.env.runID = "labels";
+	A.env.work = {};
+	eq("idle disabled projection supplies no runtime label", A.nodeStatusText("repair"), "");
+	check("bound idle draft starts selected", A.nodeEnabled(A.env.work, "repair"));
+	A.setNodeEnabled(A.env.work, "repair", false);
+	check("bound idle draft can be unselected", !A.nodeEnabled(A.env.work, "repair") && A.nodeStatusText("repair") === "");
+	A.setNodeEnabled(A.env.work, "repair", true);
+	check("bound idle draft can be selected again", A.nodeEnabled(A.env.work, "repair") && A.nodeStatusText("repair") === "");
+	for (const [flag, label] of [["running", "运行中"], ["closing", "关闭中"], ["completed", "已完成"], ["bypassed", "已越过"]]) {
+		node[flag] = true;
+		eq("runtime " + flag + " retains its label", A.nodeStatusText("repair"), label);
+		delete node[flag];
+	}
+	A.env.runID = "";
+}
+
+// --- shared catalogues preserve node defaults and isolate native models ---
 (async () => {
 	const calls = [];
 	global.fetch = async path => {
 		const u = new URLSearchParams(path.split("?")[1]);
-		calls.push(u.get("node") + "|" + u.get("platform") + "|" + u.get("model"));
-		// The development request resolves after the gate request.
-		await new Promise(r => setTimeout(r, u.get("node") === "development" ? 40 : 0));
-		return new Response(JSON.stringify({ effective: { provider: "p-" + u.get("node") } }), { status: 200 });
-	};
-	A.env.editing = "x";
-	A.env.work = { execution: { gate: { provider: "gp", model: "gm" } } };
-	A.env.sel = "development";
-	const p1 = A.optionsFor();
-	A.env.sel = "gate";
-	const r2 = await A.optionsFor();
-	const r1 = await p1;
-	check("requests carry each node's own tuple", calls.some(c => c === "development||") && calls.some(c => c === "gate|gp|gm"));
-	check("newer selection gets its own catalogue", r2 && r2.effective.provider === "p-gate");
-	check("stale response caches under its own tuple", A.optCache["x|development||"] && A.optCache["x|development||"].effective.provider === "p-development");
-	check("gate result cached under its tuple", A.optCache["x|gate|gp|gm"] && A.optCache["x|gate|gp|gm"].effective.provider === "p-gate");
-	check("stale caller reads the current tuple's cache", !r1 || !r1.effective || r1.effective.provider !== "p-development");
-	A.env.sel = null; A.env.work = {};
-	for (const k of Object.keys(A.optCache)) delete A.optCache[k];
-
-	// --- each (provider, model) tuple owns one cached catalogue answer ---
-	const mcalls = [];
-	global.fetch = async path => {
-		const u = new URLSearchParams(path.split("?")[1]);
-		const sent = u.get("model") || "";
-		mcalls.push(sent || "(none)");
-		// Native catalogues fill effort options only for the queried model.
-		const filled = sent || "m0";
+		calls.push([u.get("configuration"), u.get("node"), u.get("platform"), u.get("model")]);
+		const sent = u.get("model") || "m0";
+		await new Promise(r => setTimeout(r, sent === "slow" ? 40 : 0));
+		if (sent === "bad") return new Response("boom", { status: 500 });
 		return new Response(JSON.stringify({
-			effective: { provider: "zp", model: "m0" },
-			platforms: ["zp"], platform: "zp",
-			catalogue: { models: [
-				{ value: "m0", efforts: filled === "m0" ? ["e0"] : null },
-				{ value: "m1", efforts: filled === "m1" ? ["e1a", "e1b"] : null, defaultEffort: filled === "m1" ? "e1a" : "" },
-				{ value: "m2", efforts: filled === "m2" ? ["e2"] : null },
-			], "default": { model: "m0" } },
+			effective: { provider: "zp", model: "m0", reasoningEffort: "run-effort" },
+			platforms: ["zp", "other"], platform: u.get("platform") || "zp",
+			catalogue: { models: ["m0", "m1", "m2", "slow"].map(value => ({
+				value, efforts: sent === value ? [value + "-low", value + "-high"] : null,
+				defaultEffort: sent === value ? value + "-low" : "",
+			})), "default": { model: "m0", effort: "m0-low" } },
 		}), { status: 200 });
 	};
-	A.env.editing = "y";
+	A.env.state = { revisions: { user: "u1", project: "p1" } };
+	A.env.editing = "x";
+	A.env.work = {};
+	for (const node of A.RESP) { A.env.sel = node.id; await A.optionsFor(); }
+	eq("all default nodes share one native request", calls, [["默认", "development", "", ""]]);
+	A.env.editing = "another configuration";
+	check("another configuration shares the default answer", (await A.optionsFor()).effective.model === "m0" && calls.length === 1);
+	const defaults = await A.optionsFor();
+	eq("shared answer retains run defaults", A.effectiveChoice(defaults, {}), { provider: "zp", model: "m0", reasoningEffort: "run-effort" });
+	eq("node overrides keep inherited effort on the same platform", A.effectiveChoice(defaults, { provider: "zp", model: "m1", reasoningEffort: "" }), { provider: "zp", model: "m1", reasoningEffort: "run-effort" });
+	eq("another platform clears inherited native model and effort", A.effectiveChoice(defaults, { provider: "other" }), { provider: "other" });
+	eq("explicit node effort remains its own value", A.effectiveChoice(defaults, { reasoningEffort: "chosen" }).reasoningEffort, "chosen");
+
 	A.env.sel = "development";
-	A.env.work = { execution: { development: { provider: "zp", model: "m1" } } };
-	await A.optionsFor();
-	eq("first visit queries the current model", mcalls, ["m1"]);
-	A.setExec(A.env.work, "development", { model: "m0" });
-	await A.optionsFor();
-	A.setExec(A.env.work, "development", { model: "m2" });
-	await A.optionsFor();
-	eq("each model tuple fires its own query", mcalls, ["m1", "m0", "m2"]);
-	const effortsOf = (entry, v) => ((((entry || {}).catalogue || {}).models || []).find(m => m.value === v) || {}).efforts;
-	const e0 = A.optCache["y|development|zp|m0"], e1 = A.optCache["y|development|zp|m1"], e2 = A.optCache["y|development|zp|m2"];
-	check("each tuple caches its own answer", !!e0 && !!e1 && !!e2 && e0 !== e1 && e1 !== e2);
-	eq("a tuple's efforts stay inside its own answer", [effortsOf(e0, "m0"), effortsOf(e0, "m1"), effortsOf(e0, "m2")], [["e0"], null, null]);
-	eq("another tuple carries its own model's efforts", [effortsOf(e1, "m1"), effortsOf(e2, "m2")], [["e1a", "e1b"], ["e2"]]);
-	A.setExec(A.env.work, "development", { model: "m1" });
-	const back = await A.optionsFor();
-	check("switching back reuses the tuple's cached answer", back === e1);
-	eq("no refetch for a cached tuple", mcalls, ["m1", "m0", "m2"]);
+	A.env.work = { execution: { development: { provider: "zp", model: "m1" }, gate: { provider: "zp", model: "m1", reasoningEffort: "chosen" } } };
+	const pa = A.optionsFor();
+	A.env.sel = "gate";
+	const pb = A.optionsFor();
+	const [, e1] = await Promise.all([pa, pb]);
+	eq("different nodes share an in-flight model query", calls.filter(c => c[3] === "m1").length, 1);
+	check("cached model answer shared across node effort overrides", await A.optionsFor() === e1);
+	const effortsOf = (entry, v) => entry.catalogue.models.find(m => m.value === v).efforts;
+	eq("only the requested model carries efforts", [effortsOf(e1, "m0"), effortsOf(e1, "m1")], [null, ["m1-low", "m1-high"]]);
+	A.setExec(A.env.work, "gate", { model: "m2" });
+	const e2 = await A.optionsFor();
+	eq("different model gets its own efforts", effortsOf(e2, "m2"), ["m2-low", "m2-high"]);
+	A.setExec(A.env.work, "gate", { model: "m1" });
+	check("revisiting a model reuses its answer", await A.optionsFor() === e1);
 
-	// A repeated call while the tuple's fetch is in flight shares it.
-	A.setExec(A.env.work, "development", { model: "m9" });
-	const pa = A.optionsFor(), pb = A.optionsFor();
-	const [ra, rb] = await Promise.all([pa, pb]);
-	check("in-flight tuple shares one fetch", mcalls.filter(c => c === "m9").length === 1 && ra === rb);
-
-	// A failed tuple caches its own error without touching sibling answers.
-	A.setExec(A.env.work, "development", { model: "bad" });
-	global.fetch = async () => new Response("boom", { status: 500 });
+	A.setExec(A.env.work, "gate", { model: "slow" });
+	const slowKey = A.sigOptKey(), late = A.optionsFor();
+	A.setExec(A.env.work, "gate", { model: "m2" });
+	await A.optionsFor();
+	check("late model cannot replace current answer", await late === e2 && effortsOf(A.optCache[slowKey], "slow")[0] === "slow-low");
+	A.setExec(A.env.work, "gate", { model: "bad" });
 	const failed = await A.optionsFor();
-	check("failed tuple resolves to its own error entry", !!failed && !!failed.error && A.optCache["y|development|zp|bad"] === failed);
-	A.setExec(A.env.work, "development", { model: "m1" });
-	const after = await A.optionsFor();
-	check("a sibling tuple's cached answer survives the failure", after === e1);
+	check("failed model caches its own error", !!failed.error && A.optCache[A.sigOptKey()] === failed);
+	A.setExec(A.env.work, "gate", { model: "m1" });
+	check("model error preserves sibling catalogue", await A.optionsFor() === e1);
+
+	A.setExec(A.env.work, "gate", { provider: "other", model: "m1" });
+	const other = await A.optionsFor();
+	check("platforms have separate cache entries", other !== e1 && calls.filter(c => c[2] === "other" && c[3] === "m1").length === 1);
+	A.setExec(A.env.work, "gate", { model: "slow" });
+	const oldKey = A.sigOptKey(), oldRequest = A.optionsFor();
+	A.env.state.revisions.project = "p2";
+	const freshKey = A.sigOptKey(), freshRequest = A.optionsFor();
+	await Promise.all([oldRequest, freshRequest]);
+	check("revision change refetches without accepting an old cache entry", oldKey !== freshKey && A.optCache[oldKey] !== A.optCache[freshKey] && calls.filter(c => c[2] === "other" && c[3] === "slow").length === 2);
+	// Manual refresh replaces the revision's directory answers and supersedes
+	// older native replies without letting them remove the new pending owner.
+	const refreshCalls = [];
+	global.fetch = (path, init) => new Promise(resolve => refreshCalls.push({ path, init, resolve }));
+	A.env.sel = "gate";
+	A.env.work = { execution: { gate: { provider: "refresh", model: "model", reasoningEffort: "chosen" }, development: { provider: "refresh", model: "model" } } };
+	const draftBefore = JSON.stringify(A.env.work);
+	const old = A.optionsFor(), refreshKey = A.sigOptKey();
+	const fresh = A.optionsFor(true);
+	eq("manual refresh starts one replacement request", refreshCalls.length, 2);
+	refreshCalls[0].resolve(new Response(JSON.stringify({ catalogue: { models: [] }, marker: "old" }), { status: 200 }));
+	await old;
+	check("superseded reply cannot refill the cache", A.optCache[refreshKey] === undefined);
+	A.env.sel = "development";
+	const sharedRefresh = A.optionsFor();
+	eq("another node joins the refreshed in-flight request", refreshCalls.length, 2);
+	refreshCalls[1].resolve(new Response(JSON.stringify({ catalogue: { models: [] }, marker: "fresh" }), { status: 200 }));
+	await Promise.all([fresh, sharedRefresh]);
+	eq("replacement remains the shared authoritative answer", A.optCache[refreshKey].marker, "fresh");
+	eq("manual refresh preserves all draft values", JSON.stringify(A.env.work), draftBefore);
+	const failRefresh = A.optionsFor(true);
+	refreshCalls[2].resolve(new Response(JSON.stringify({ error: "native unavailable" }), { status: 500 }));
+	check("failed refresh exposes its own error", !!(await failRefresh).error);
+	const retryRefresh = A.optionsFor(true);
+	refreshCalls[3].resolve(new Response(JSON.stringify({ catalogue: { models: [] }, marker: "recovered" }), { status: 200 }));
+	eq("manual refresh can retry a failed directory query", (await retryRefresh).marker, "recovered");
+	check("force refresh only sends catalogue reads", refreshCalls.length === 4 && refreshCalls.every(c => c.path.startsWith("/api/execution-options?") && (!c.init || !c.init.method || c.init.method === "GET")));
 	A.env.sel = null; A.env.work = {};
 	for (const k of Object.keys(A.optCache)) delete A.optCache[k];
 	delete global.fetch;

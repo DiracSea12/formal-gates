@@ -39,9 +39,12 @@ type Configuration struct {
 	RoundLimits   map[string]int             `json:"roundLimits,omitempty"`
 }
 
-// DefaultConfigurationName is the built-in configuration. It cannot be saved
-// over, edited, renamed or deleted; file entries with this name are ignored.
-const DefaultConfigurationName = "默认"
+// Built-in configurations cannot be saved over, edited, renamed or deleted;
+// file entries with their names are ignored.
+const (
+	DefaultConfigurationName = "默认"
+	FullConfigurationName    = "全量路线"
+)
 
 // RoundLimitNodes are the responsibilities with a configurable automatic
 // round limit.
@@ -53,7 +56,19 @@ const DefaultRoundLimit = 3
 // configuration in any layer.
 var ErrActiveConfigurationMissing = errors.New("does not exist")
 
-var errBuiltinConfiguration = fmt.Errorf("built-in configuration %q cannot be saved over, edited, renamed or deleted; save a named copy with settings save --name", DefaultConfigurationName)
+var builtinConfigurations = map[string]Configuration{
+	DefaultConfigurationName: DefaultConfiguration(),
+	FullConfigurationName:    {QAModes: []string{"blackbox", "whitebox"}},
+}
+
+func isBuiltinConfiguration(name string) bool {
+	_, found := builtinConfigurations[name]
+	return found
+}
+
+func builtinConfigurationError(name string) error {
+	return fmt.Errorf("built-in configuration %q cannot be saved over, edited, renamed or deleted; save a named copy with settings save --name", name)
+}
 
 func DefaultConfiguration() Configuration {
 	return Configuration{QAModes: []string{}}
@@ -189,7 +204,7 @@ type ConfigurationOption struct {
 	Source        string        `json:"source"`
 	Active        bool          `json:"active"`
 	Configuration Configuration `json:"configuration"`
-	// Shadowed lists the files whose ignored entries reuse the built-in name.
+	// Shadowed lists the files whose ignored entries reuse this built-in name.
 	Shadowed []string `json:"shadowed,omitempty"`
 }
 
@@ -205,11 +220,15 @@ type configurationSet struct {
 	values   map[string]Configuration
 	sources  map[string]string
 	active   string
-	shadowed []string
+	shadowed map[string][]string
 }
 
 func newConfigurationSet() *configurationSet {
-	return &configurationSet{values: map[string]Configuration{DefaultConfigurationName: DefaultConfiguration()}, sources: map[string]string{DefaultConfigurationName: "default"}, active: DefaultConfigurationName}
+	set := &configurationSet{values: map[string]Configuration{}, sources: map[string]string{}, active: DefaultConfigurationName, shadowed: map[string][]string{}}
+	for name, configuration := range builtinConfigurations {
+		set.values[name], set.sources[name] = CloneConfiguration(configuration), "default"
+	}
+	return set
 }
 
 func (set *configurationSet) apply(path string, raw map[string]json.RawMessage) error {
@@ -219,8 +238,8 @@ func (set *configurationSet) apply(path string, raw map[string]json.RawMessage) 
 			return fmt.Errorf("%s: configurations: %w", path, err)
 		}
 		for name, data := range named {
-			if name == DefaultConfigurationName {
-				set.shadowed = append(set.shadowed, path)
+			if isBuiltinConfiguration(name) {
+				set.shadowed[name] = append(set.shadowed[name], path)
 				continue
 			}
 			if strings.TrimSpace(name) == "" {
@@ -284,9 +303,8 @@ func (set *configurationSet) options() []ConfigurationOption {
 	names = append([]string{DefaultConfigurationName}, names...)
 	options := make([]ConfigurationOption, 0, len(names))
 	for i, name := range names {
-		options = append(options, ConfigurationOption{Position: i + 1, Name: name, Source: set.sources[name], Active: name == set.active, Configuration: set.values[name]})
+		options = append(options, ConfigurationOption{Position: i + 1, Name: name, Source: set.sources[name], Active: name == set.active, Configuration: set.values[name], Shadowed: set.shadowed[name]})
 	}
-	options[0].Shadowed = set.shadowed
 	return options
 }
 
@@ -340,8 +358,8 @@ func SaveConfiguration(root, home, scope, name, from string, expected map[string
 	if name != "" && strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("configuration name must be nonempty")
 	}
-	if name == DefaultConfigurationName {
-		return "", errBuiltinConfiguration
+	if isBuiltinConfiguration(name) {
+		return "", builtinConfigurationError(name)
 	}
 	_, err := editOverlay(root, home, scope, expected, func(raw map[string]json.RawMessage, effective Effective, options []ConfigurationOption) error {
 		selected, err := SelectConfiguration(options, from)
@@ -395,8 +413,8 @@ func WriteConfiguration(root, home, scope, name string, configuration Configurat
 	if strings.TrimSpace(name) == "" {
 		return Effective{}, fmt.Errorf("configuration name must be nonempty")
 	}
-	if name == DefaultConfigurationName {
-		return Effective{}, errBuiltinConfiguration
+	if isBuiltinConfiguration(name) {
+		return Effective{}, builtinConfigurationError(name)
 	}
 	return editOverlay(root, home, scope, expected, func(raw map[string]json.RawMessage, effective Effective, options []ConfigurationOption) error {
 		var existing *ConfigurationOption
@@ -434,8 +452,8 @@ func EditConfiguration(root, home, scope, selection string, expected map[string]
 		if err != nil {
 			return err
 		}
-		if selected.Name == DefaultConfigurationName {
-			return errBuiltinConfiguration
+		if selected.Source == "default" {
+			return builtinConfigurationError(selected.Name)
 		}
 		configuration := CloneConfiguration(selected.Configuration)
 		if err := change(&configuration); err != nil {
@@ -446,7 +464,7 @@ func EditConfiguration(root, home, scope, selection string, expected map[string]
 }
 
 // UseConfiguration also repairs a dangling active pointer: its target may be
-// any configuration saved in a layer, or the built-in one.
+// any configuration saved in a layer, or a built-in configuration.
 func UseConfiguration(root, home, scope, selection string, expected map[string]string) (Effective, error) {
 	return editOverlay(root, home, scope, expected, func(raw map[string]json.RawMessage, effective Effective, options []ConfigurationOption) error {
 		selected, err := SelectConfiguration(options, selection)
@@ -479,8 +497,8 @@ func RenameConfiguration(root, home, scope, selection, newName string, resolveBi
 	if strings.TrimSpace(newName) == "" {
 		return Effective{}, fmt.Errorf("new configuration name must be supplied by the user")
 	}
-	if newName == DefaultConfigurationName {
-		return Effective{}, errBuiltinConfiguration
+	if isBuiltinConfiguration(newName) {
+		return Effective{}, builtinConfigurationError(newName)
 	}
 	return editOverlay(root, home, scope, expected, func(raw map[string]json.RawMessage, effective Effective, options []ConfigurationOption) error {
 		name, named, err := unboundSavedConfiguration(raw, effective, options, scope, selection, resolveBindings)
@@ -506,8 +524,8 @@ func unboundSavedConfiguration(raw map[string]json.RawMessage, effective Effecti
 	if err != nil {
 		return "", nil, err
 	}
-	if selected.Name == DefaultConfigurationName {
-		return "", nil, errBuiltinConfiguration
+	if selected.Source == "default" {
+		return "", nil, builtinConfigurationError(selected.Name)
 	}
 	path := effective.Files[1]
 	if scope == "user" {

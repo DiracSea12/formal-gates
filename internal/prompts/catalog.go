@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"formal-gates/internal/lifecycle"
+
+	"gopkg.in/yaml.v3"
 )
 
 var IDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -31,8 +33,9 @@ const (
 )
 
 type PromptDefinition struct {
-	ID      string
-	Content string
+	ID          string
+	Content     string
+	Description string
 }
 
 type PromptCatalog struct {
@@ -170,10 +173,48 @@ func discoverPromptDirectory(dir string) ([]PromptDefinition, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		definitions = append(definitions, PromptDefinition{ID: id, Content: content})
+		description, err := promptDescription(content)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		definitions = append(definitions, PromptDefinition{ID: id, Content: content, Description: description})
 	}
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
 	return definitions, nil
+}
+
+func promptDescription(content string) (string, error) {
+	frontmatter, present := strings.CutPrefix(strings.ReplaceAll(content, "\r\n", "\n"), "---\n")
+	if !present {
+		return "", nil
+	}
+	lines := strings.Split(frontmatter, "\n")
+	for index, line := range lines {
+		if line != "---" {
+			continue
+		}
+		var document yaml.Node
+		if err := yaml.Unmarshal([]byte(strings.Join(lines[:index], "\n")), &document); err != nil {
+			return "", fmt.Errorf("frontmatter: %w", err)
+		}
+		if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+			return "", nil
+		}
+		var metadata map[string]yaml.Node
+		if err := document.Decode(&metadata); err != nil {
+			return "", fmt.Errorf("frontmatter: %w", err)
+		}
+		node, found := metadata["简介"]
+		if !found {
+			node = metadata["description"]
+		}
+		var description string
+		if err := node.Decode(&description); err != nil {
+			return "", fmt.Errorf("frontmatter description: %w", err)
+		}
+		return strings.TrimSpace(description), nil
+	}
+	return "", nil
 }
 
 func readPromptFile(path string) (string, error) {

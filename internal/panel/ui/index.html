@@ -34,10 +34,10 @@
           <marker id="arrSeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3ddba4"/></marker>
         </defs></svg>
       </div>
-      <!-- Legend: five static entries whose swatch classes mirror the canvas —
-           .sw.done/.running/.off/.sel copy the .node state looks and .sw.loop
+      <!-- Legend: six static entries whose swatch classes mirror the canvas —
+           .sw.on/.done/.running/.off/.sel copy the .node state looks and .sw.loop
            the dashed .edge.loop, so keys and canvas cannot drift apart. -->
-      <div class="legend"><span><i class="sw done"></i>已完成（只读）</span><span><i class="sw running"></i>正在运行</span><span><i class="sw off"></i>已关闭</span><span><i class="sw sel"></i>当前选中</span><span><i class="sw loop"></i>返修回环</span></div>
+      <div class="legend"><span><i class="sw on"></i>已选择</span><span><i class="sw done"></i>已完成（只读）</span><span><i class="sw running"></i>正在运行</span><span><i class="sw off"></i>未选择</span><span><i class="sw sel"></i>当前编辑</span><span><i class="sw loop"></i>返修回环</span></div>
     </div>
     <div class="inspector" id="insp"></div>
     <div class="scrim" id="scrim"></div>
